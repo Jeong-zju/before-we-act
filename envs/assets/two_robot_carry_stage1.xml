@@ -1,0 +1,64 @@
+<mujoco model="two_robot_carry_stage1">
+  <compiler angle="radian" coordinate="local"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="RK4"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.78 0.78 0.78" rgb2="0.90 0.90 0.90" width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.1"/>
+    <material name="robot_a_mat" rgba="0.85 0.12 0.10 1"/>
+    <material name="robot_b_mat" rgba="0.10 0.25 0.85 1"/>
+    <material name="object_mat" rgba="0.10 0.60 0.20 1"/>
+    <material name="wall_mat" rgba="0.18 0.18 0.18 1"/>
+    <material name="goal_mat" rgba="0.10 0.80 0.25 0.35"/>
+  </asset>
+
+  <worldbody>
+    <light name="top_light" pos="0 -2 5" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="5 6 0.1" material="grid"/>
+
+    <camera name="fixed" pos="0 -5.2 4.0" xyaxes="1 0 0 0 0.65 0.76"/>
+    <camera name="topdown" pos="0 1.3 7.0" xyaxes="1 0 0 0 1 0"/>
+
+    <geom name="goal_region" type="box" pos="0 3.05 0.006" size="0.95 0.35 0.005" material="goal_mat" contype="0" conaffinity="0"/>
+
+    <geom name="wall_left" type="box" pos="-0.90 1.35 0.32" size="0.08 1.15 0.32" material="wall_mat"/>
+    <geom name="wall_right" type="box" pos="0.90 1.35 0.32" size="0.08 1.15 0.32" material="wall_mat"/>
+
+    <geom name="start_marker" type="box" pos="0 -1.35 0.006" size="1.2 0.04 0.005" rgba="0.1 0.1 0.1 0.45" contype="0" conaffinity="0"/>
+
+    <body name="robot_a" pos="-0.45 -1.20 0.10">
+      <joint name="robot_a_x" type="slide" axis="1 0 0" damping="8" limited="true" range="-2.2 2.2"/>
+      <joint name="robot_a_y" type="slide" axis="0 1 0" damping="8" limited="true" range="-2.2 3.5"/>
+      <joint name="robot_a_yaw" type="hinge" axis="0 0 1" damping="2" limited="true" range="-3.14 3.14"/>
+      <geom name="robot_a_base" type="box" size="0.18 0.14 0.08" material="robot_a_mat" mass="8"/>
+      <site name="robot_a_grip_site" pos="0.0 0.23 0.06" size="0.035" rgba="1 0 0 1"/>
+    </body>
+
+    <body name="robot_b" pos="0.45 -1.20 0.10">
+      <joint name="robot_b_x" type="slide" axis="1 0 0" damping="8" limited="true" range="-2.2 2.2"/>
+      <joint name="robot_b_y" type="slide" axis="0 1 0" damping="8" limited="true" range="-2.2 3.5"/>
+      <joint name="robot_b_yaw" type="hinge" axis="0 0 1" damping="2" limited="true" range="-3.14 3.14"/>
+      <geom name="robot_b_base" type="box" size="0.18 0.14 0.08" material="robot_b_mat" mass="8"/>
+      <site name="robot_b_grip_site" pos="0.0 0.23 0.06" size="0.035" rgba="0 0 1 1"/>
+    </body>
+
+    <body name="carry_object" pos="0 -0.95 0.18">
+      <freejoint name="object_free"/>
+      <geom name="carry_object_geom" type="box" size="0.65 0.07 0.055" material="object_mat" mass="2"/>
+      <site name="object_center_site" pos="0 0 0" size="0.025" rgba="0 1 0 1"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="robot_a_x_motor" joint="robot_a_x" gear="80" ctrlrange="-1 1"/>
+    <motor name="robot_a_y_motor" joint="robot_a_y" gear="80" ctrlrange="-1 1"/>
+    <motor name="robot_a_yaw_motor" joint="robot_a_yaw" gear="25" ctrlrange="-1 1"/>
+    <motor name="robot_b_x_motor" joint="robot_b_x" gear="80" ctrlrange="-1 1"/>
+    <motor name="robot_b_y_motor" joint="robot_b_y" gear="80" ctrlrange="-1 1"/>
+    <motor name="robot_b_yaw_motor" joint="robot_b_yaw" gear="25" ctrlrange="-1 1"/>
+  </actuator>
+</mujoco>
