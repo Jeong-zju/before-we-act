@@ -24,6 +24,10 @@ class CarryEnvConfig:
     max_action_v: float = 0.7
     max_action_w: float = 1.2
     grip_distance: float = 0.42
+    max_robot_distance: float = 1.25
+    max_y_desync: float = 0.55
+    max_object_yaw_abs: float = 0.75
+    max_object_midpoint_error: float = 0.35
     seed: int = 0
 
 
@@ -162,15 +166,42 @@ class TwoRobotCarryNarrowPassageEnv:
         a = self._robot_pose(0)
         b = self._robot_pose(1)
 
+        robot_dist = float(np.linalg.norm(a[:2] - b[:2]))
+        y_desync = float(abs(a[1] - b[1]))
+        obj_yaw_abs = float(abs(((obj[2] + np.pi) % (2 * np.pi)) - np.pi))
+
+        grip_a, grip_b = self._grip_points()
+        midpoint = 0.5 * (grip_a + grip_b)
+        midpoint_error = float(np.linalg.norm(obj[:2] - midpoint))
+
         if force_proxy > self.cfg.max_force_proxy:
             self.failure_reason = "force_violation"
             return True
+
+        if robot_dist > self.cfg.max_robot_distance:
+            self.failure_reason = "robot_too_far"
+            return True
+
+        if 0.0 < obj[1] < 2.65 and y_desync > self.cfg.max_y_desync:
+            self.failure_reason = "desync_in_passage"
+            return True
+
+        if 0.0 < obj[1] < 2.65 and obj_yaw_abs > self.cfg.max_object_yaw_abs:
+            self.failure_reason = "object_yaw_too_large"
+            return True
+
+        if self.grasped and midpoint_error > self.cfg.max_object_midpoint_error:
+            self.failure_reason = "object_dropped"
+            return True
+
         if obj[1] < -2.0 or obj[1] > 3.7 or abs(obj[0]) > 2.2:
             self.failure_reason = "object_out_of_bounds"
             return True
+
         if np.any(np.abs(a[:2]) > np.array([2.25, 3.7])) or np.any(np.abs(b[:2]) > np.array([2.25, 3.7])):
             self.failure_reason = "robot_out_of_bounds"
             return True
+
         if self.step_count >= self.cfg.episode_len:
             self.failure_reason = "timeout"
             return True
