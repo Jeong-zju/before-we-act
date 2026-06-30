@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from data.stage2_dataset import Stage2WindowDataset
+from data.dataset import Stage2WindowDataset
 
 
 def test_stage2_check_dataset_exists_after_script():

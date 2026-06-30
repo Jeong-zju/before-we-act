@@ -9,8 +9,8 @@ import numpy as np
 from tqdm import trange
 
 from envs.two_robot_carry_env import TwoRobotCarryNarrowPassageEnv
-from data.stage2_policies import Stage2ScriptedPolicy, robot_distance_from_obs
-from data.stage2_schema import failure_to_id, phase_to_id, save_stage2_episode
+from data.policies import Stage2ScriptedPolicy, robot_distance_from_obs
+from data.schema import failure_to_id, phase_to_id, save_stage2_episode
 
 
 def empty_episode_buffers() -> Dict[str, list]:

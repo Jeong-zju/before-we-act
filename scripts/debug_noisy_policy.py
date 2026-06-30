@@ -4,7 +4,7 @@ import inspect
 import numpy as np
 
 from envs.two_robot_carry_env import TwoRobotCarryNarrowPassageEnv
-from data.stage2_policies import Stage2ScriptedPolicy
+from data.policies import Stage2ScriptedPolicy
 
 
 def run_noise(noise: float, n: int = 30):
@@ -38,7 +38,7 @@ def run_noise(noise: float, n: int = 30):
 
 
 def main():
-    import data.stage2_policies as p
+    import data.policies as p
     import envs.two_robot_carry_env as e
 
     print("policy file:", p.__file__)
