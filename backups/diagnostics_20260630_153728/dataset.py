@@ -90,14 +90,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-def summarize_window_dataset(data_dir: str, window: int = 32):
-    ds = Stage2WindowDataset(data_dir, window=window)
-    print("data_dir:", data_dir)
-    print("num_files:", len(ds.paths))
-    print("num_windows:", len(ds))
-    sample = ds[0]
-    for k, v in sample.items():
-        print(k, tuple(v.shape), v.dtype)
-    return ds
