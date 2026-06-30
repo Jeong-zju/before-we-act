@@ -3,7 +3,7 @@ from pathlib import Path
 from data.dataset import Stage2WindowDataset
 
 
-def test_stage2_check_dataset_exists_after_script():
+def test_dataset_window_sampling_after_collection():
     path = Path("datasets/stage2/check_split/train")
     if not path.exists():
         return
