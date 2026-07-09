@@ -99,6 +99,8 @@ class WAMWindowDataset(Dataset):
             actions_r1 = f["actions/robot_1"][t:t + H]
             global_state_future = f["global/global_state"][t:t + H]
             object_pose_future = f["global/object_pose"][t:t + H]
+            global_state_now = f["global/global_state"][t]
+            object_pose_now = f["global/object_pose"][t]
 
             for tau in range(t, t + H + 1):
                 hs = tau - L + 1
@@ -130,6 +132,23 @@ class WAMWindowDataset(Dataset):
         goal_distance = np.maximum(self.goal_y - object_y, 0.0).astype(np.float32)
         progress = object_y.astype(np.float32)
 
+        pose0 = global_state_now[0:3].astype(np.float32)
+        pose1 = global_state_now[3:6].astype(np.float32)
+        obj = object_pose_now.astype(np.float32)
+
+        rel_01 = pose1 - pose0
+        rel_10 = pose0 - pose1
+        rel_01[2] = ((rel_01[2] + np.pi) % (2 * np.pi)) - np.pi
+        rel_10[2] = ((rel_10[2] + np.pi) % (2 * np.pi)) - np.pi
+
+        obj_rel0 = obj - pose0
+        obj_rel1 = obj - pose1
+        obj_rel0[2] = ((obj_rel0[2] + np.pi) % (2 * np.pi)) - np.pi
+        obj_rel1[2] = ((obj_rel1[2] + np.pi) % (2 * np.pi)) - np.pi
+
+        rel_target_pose_agents = np.stack([rel_01, rel_10], axis=0).astype(np.float32)
+        object_rel_pose_agents = np.stack([obj_rel0, obj_rel1], axis=0).astype(np.float32)
+
         return {
             "local_history_seq": torch.tensor(np.stack(local_seq, axis=0), dtype=torch.float32),
             "phase_history_seq": torch.tensor(np.stack(phase_seq, axis=0), dtype=torch.long),
@@ -143,6 +162,8 @@ class WAMWindowDataset(Dataset):
             "target_phase": torch.tensor(target_phase, dtype=torch.long),
             "target_progress": torch.tensor(progress, dtype=torch.float32),
             "target_goal_distance": torch.tensor(goal_distance, dtype=torch.float32),
+            "rel_target_pose_agents": torch.tensor(rel_target_pose_agents, dtype=torch.float32),
+            "object_rel_pose_agents": torch.tensor(object_rel_pose_agents, dtype=torch.float32),
         }
 
 
