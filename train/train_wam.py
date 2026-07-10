@@ -62,6 +62,24 @@ def load_plan_tokenizer(path: str, device: torch.device):
     return model, cfg, norm
 
 
+def sync_args_with_frozen_configs(args, slot_cfg: SlotEncoderConfig, plan_cfg: PlanTokenizerConfig):
+    expected_slots = 2 + int(getattr(slot_cfg, "num_object_slots", 2))
+    overrides = {
+        "history": int(slot_cfg.history),
+        "horizon": int(plan_cfg.horizon),
+        "slots_per_agent": expected_slots,
+        "slot_dim": int(slot_cfg.slot_dim),
+        "plan_codebook_size": int(plan_cfg.codebook_size),
+        "plan_latent_dim": int(plan_cfg.latent_dim),
+    }
+    for name, value in overrides.items():
+        old = getattr(args, name)
+        if old != value:
+            source = "slot checkpoint" if name in {"history", "slots_per_agent", "slot_dim"} else "tokenizer checkpoint"
+            print(f"Overriding {name}: args={old} -> {source}={value}")
+            setattr(args, name, value)
+
+
 @torch.no_grad()
 def build_wam_targets(batch, slot_encoder, slot_norm, plan_tokenizer, plan_norm, device):
     # local_history_seq: [B, H+1, A, L, 17]
@@ -218,6 +236,7 @@ def main():
 
     slot_encoder, slot_cfg, slot_norm = load_slot_encoder(args.slot_ckpt, device)
     plan_tokenizer, plan_cfg, plan_norm = load_plan_tokenizer(args.plan_ckpt, device)
+    sync_args_with_frozen_configs(args, slot_cfg, plan_cfg)
 
     cfg = make_config_from_args(args)
     model = LatentWorldActionModel(cfg).to(device)

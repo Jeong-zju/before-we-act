@@ -44,7 +44,20 @@ def main():
         ep_df = pd.concat(all_ep, ignore_index=True)
         ep_df.to_csv(out_dir / "policy_episode_metrics.csv", index=False)
 
-        metrics = ["success", "collision_count", "max_force", "episode_steps", "comm_rate"]
+        metrics = [
+            "success",
+            "episode_steps",
+            "return",
+            "collision_count",
+            "max_force",
+            "force_violation_rate",
+            "communication_required_rate",
+            "comm_rate",
+            "comm_rate_robot_0",
+            "comm_rate_robot_1",
+            "progress_final",
+            "final_object_goal_distance",
+        ]
         for metric in metrics:
             if metric not in ep_df.columns:
                 continue

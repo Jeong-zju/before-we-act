@@ -4,6 +4,8 @@
 
 This repository implements a research prototype for multi-robot collaborative world-action modeling. The core objective is to enable decentralized robots to infer teammate intent from local observations, roll out candidate collaborative futures, and selectively communicate compact plan latents when communication is expected to reduce free energy.
 
+For a detailed Chinese walkthrough of the model signal flow, codebook, parameters, losses, and evaluation metrics, see [docs/MODEL_SIGNAL_FLOW_ZH.md](docs/MODEL_SIGNAL_FLOW_ZH.md).
+
 ## Current Scope
 
 The current implementation focuses on a minimal but extensible simulation pipeline:

@@ -14,6 +14,31 @@ from data.slot_dataset import SlotWindowDataset, compute_slot_normalization
 from models.slot_encoder import AgentObjectSlotEncoder, compute_slot_losses, make_config_from_args
 
 
+def sync_args_with_tokenizer(args):
+    if not args.tokenizer_ckpt:
+        return
+    ckpt_path = Path(args.tokenizer_ckpt)
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"tokenizer checkpoint not found: {ckpt_path}")
+
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    tokenizer_cfg = ckpt.get("config", {})
+    if "codebook_size" not in tokenizer_cfg:
+        raise KeyError(f"tokenizer checkpoint missing config.codebook_size: {ckpt_path}")
+
+    codebook_size = int(tokenizer_cfg["codebook_size"])
+    if args.plan_codebook_size != codebook_size:
+        print(
+            f"Overriding plan_codebook_size: args={args.plan_codebook_size} "
+            f"-> tokenizer={codebook_size}"
+        )
+        args.plan_codebook_size = codebook_size
+
+    if "horizon" in tokenizer_cfg and args.horizon != int(tokenizer_cfg["horizon"]):
+        print(f"Overriding horizon: args={args.horizon} -> tokenizer={int(tokenizer_cfg['horizon'])}")
+        args.horizon = int(tokenizer_cfg["horizon"])
+
+
 def to_device(batch: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:
     return {k: v.to(device, non_blocking=True) if torch.is_tensor(v) else v for k, v in batch.items()}
 
@@ -137,6 +162,8 @@ def main():
     parser.add_argument("--resume", type=str, default="")
     parser.add_argument("--save_every", type=int, default=10)
     args = parser.parse_args()
+
+    sync_args_with_tokenizer(args)
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
