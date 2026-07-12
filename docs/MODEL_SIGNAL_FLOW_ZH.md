@@ -449,7 +449,7 @@ outputs/policy_rollouts/{no_comm,always_comm,selective_comm}/summary.json
 ## 10. 阅读结果时最重要的检查清单
 
 1. tokenizer 不只看重建 loss：同时看 codebook usage、perplexity、各 code 的样本和阶段纯度。
-2. ***若保持当前 hard-coded `active_codes=(2,3,6,24,32,44,51)`，必须确认它们确实是本次 tokenizer 的活跃 code***。
+2. 源码内固定的 `active_codes` 默认值已移除；必须从当前 tokenizer checkpoint 的 `PlanCodeSupport` 读取真实活跃 code 与逐 code residual 分布。
 3. slot/contact/phase/code 任务可能类别不平衡，accuracy 需要配合混淆矩阵、macro-F1、precision/recall。
 4. intention 的 uncertainty 当前没有直接校准监督；触发通信前应验证“错误样本的不确定性是否更高”。
 5. 离线自由能是模型评分，不是环境真值；最终结论以三种闭环策略在相同 seeds/scenarios 下的成功、安全、回报和消息量为准。

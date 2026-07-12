@@ -7,6 +7,94 @@ import torch
 import torch.nn.functional as F
 
 
+def normalize_hypothesis_weights(weights: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Return a non-negative posterior normalized over the last dimension.
+
+    Hypothesis weights are beliefs, not arbitrary attention logits.  Failing fast
+    on an all-zero row avoids silently turning an invalid belief into an arbitrary
+    uniform distribution.
+    """
+    if weights.ndim < 1:
+        raise ValueError("hypothesis weights must have at least one dimension")
+    if not torch.is_floating_point(weights):
+        weights = weights.float()
+    if not torch.isfinite(weights).all():
+        raise ValueError("hypothesis weights must be finite")
+    if (weights < 0).any():
+        raise ValueError("hypothesis weights must be non-negative")
+
+    total = weights.sum(dim=-1, keepdim=True)
+    if (total <= eps).any():
+        raise ValueError("each hypothesis posterior must have positive mass")
+    return weights / total
+
+
+def multi_hypothesis_expected_free_energy(
+    hypothesis_G: torch.Tensor,
+    hypothesis_weights: torch.Tensor,
+) -> Dict[str, torch.Tensor]:
+    """Aggregate candidate costs under a discrete teammate-plan posterior.
+
+    Args:
+        hypothesis_G: Free energies with shape ``[..., K, M]``, where ``K`` is
+            the number of ego candidates and ``M`` the number of teammate-plan
+            hypotheses.
+        hypothesis_weights: Posterior weights broadcastable to ``[..., M]``.
+
+    The no-message controller must choose one candidate before the latent
+    teammate plan is revealed, hence ``G_no = min_k E_m[G(k,m)]``.  With a
+    perfect reply it may choose a candidate after the reveal, hence
+    ``G_reveal = E_m[min_k G(k,m)]``.  Their difference is the (non-negative,
+    up to numerical error) value of perfect information.
+    """
+    if hypothesis_G.ndim < 2:
+        raise ValueError("hypothesis_G must have shape [..., candidates, hypotheses]")
+    if not torch.is_floating_point(hypothesis_G):
+        hypothesis_G = hypothesis_G.float()
+    if not torch.isfinite(hypothesis_G).all():
+        raise ValueError("hypothesis_G must be finite")
+
+    num_hypotheses = hypothesis_G.shape[-1]
+    if hypothesis_weights.ndim < 1 or hypothesis_weights.shape[-1] != num_hypotheses:
+        raise ValueError(
+            "hypothesis_weights last dimension must match hypothesis_G hypotheses: "
+            f"{tuple(hypothesis_weights.shape)} vs {tuple(hypothesis_G.shape)}"
+        )
+
+    target_shape = hypothesis_G.shape[:-2] + (num_hypotheses,)
+    try:
+        weights = torch.broadcast_to(
+            hypothesis_weights.to(device=hypothesis_G.device, dtype=hypothesis_G.dtype),
+            target_shape,
+        )
+    except RuntimeError as exc:
+        raise ValueError(
+            f"hypothesis_weights shape {tuple(hypothesis_weights.shape)} is not "
+            f"broadcastable to {target_shape}"
+        ) from exc
+    weights = normalize_hypothesis_weights(weights)
+
+    expected_by_candidate = (hypothesis_G * weights.unsqueeze(-2)).sum(dim=-1)
+    G_no, no_comm_plan_index = expected_by_candidate.min(dim=-1)
+
+    revealed_best_by_hypothesis, reveal_plan_index = hypothesis_G.min(dim=-2)
+    G_reveal = (revealed_best_by_hypothesis * weights).sum(dim=-1)
+    raw_vpi = G_no - G_reveal
+    vpi = raw_vpi.clamp_min(0.0)
+
+    return {
+        "hypothesis_weights": weights,
+        "expected_G_by_candidate": expected_by_candidate,
+        "G_no": G_no,
+        "G_reveal": G_reveal,
+        "VPI": vpi,
+        "raw_VPI": raw_vpi,
+        "no_comm_plan_index": no_comm_plan_index,
+        "reveal_plan_index": reveal_plan_index,
+        "revealed_best_G_by_hypothesis": revealed_best_by_hypothesis,
+    }
+
+
 @dataclass
 class FreeEnergyConfig:
     goal_y: float = 3.05
@@ -103,6 +191,56 @@ class FreeEnergyEvaluator:
             "U_intent": unc,
             "C_ctrl": ctrl,
         }
+
+    def total_score_hypotheses(
+        self,
+        rollout: Dict[str, torch.Tensor],
+        hypothesis_weights: torch.Tensor,
+        uncertainty: torch.Tensor | None = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Score rollouts shaped ``[B, K, M, ...]`` and marginalize beliefs.
+
+        ``K`` indexes ego plan candidates and ``M`` indexes teammate-plan
+        hypotheses.  This method deliberately consumes only a posterior over
+        hypotheses; it does not consume a privileged/true teammate plan.
+        """
+        actions = rollout.get("pred_actions")
+        if actions is None or actions.ndim < 5:
+            raise ValueError("rollout['pred_actions'] must have shape [B, K, M, H, action_dim]")
+        B, K, M = actions.shape[:3]
+
+        flat_rollout: Dict[str, torch.Tensor] = {}
+        for key, value in rollout.items():
+            if not torch.is_tensor(value):
+                continue
+            if value.ndim >= 3 and tuple(value.shape[:3]) == (B, K, M):
+                flat_rollout[key] = value.reshape(B * K * M, *value.shape[3:])
+
+        required = {"pred_actions", "pred_progress", "pred_force"}
+        if not required.issubset(flat_rollout):
+            missing = sorted(required.difference(flat_rollout))
+            raise KeyError(f"hypothesis rollout missing required fields: {missing}")
+        if "pred_contact_logits" not in flat_rollout and "pred_contact_prob" not in flat_rollout:
+            raise KeyError("hypothesis rollout needs pred_contact_logits or pred_contact_prob")
+
+        flat_uncertainty = None
+        if uncertainty is not None:
+            expected_shape = (B, K, M)
+            try:
+                uncertainty = torch.broadcast_to(
+                    uncertainty.to(device=actions.device, dtype=actions.dtype),
+                    expected_shape,
+                )
+            except RuntimeError as exc:
+                raise ValueError(
+                    f"uncertainty shape {tuple(uncertainty.shape)} is not broadcastable to {expected_shape}"
+                ) from exc
+            flat_uncertainty = uncertainty.reshape(B * K * M)
+
+        flat_scores = self.total_score(flat_rollout, uncertainty=flat_uncertainty)
+        score_grid = {key: value.reshape(B, K, M) for key, value in flat_scores.items()}
+        aggregate = multi_hypothesis_expected_free_energy(score_grid["G"], hypothesis_weights)
+        return {**score_grid, **aggregate}
 
 
 def make_config_from_args(args) -> FreeEnergyConfig:

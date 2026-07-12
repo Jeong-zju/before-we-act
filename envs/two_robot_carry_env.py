@@ -37,6 +37,7 @@ class CarryEnvConfig:
     false_belief_prob: float = 0.0
     force_limit: float = 1.0
     min_robot_distance_limit: float = 0.25
+    local_force_scale_newtons: float = 1000.0
     object_z: float = 0.061
     seed: int = 0
 
@@ -63,7 +64,7 @@ class TwoRobotCarryNarrowPassageEnv:
         self.cfg = cfg or CarryEnvConfig()
         self._apply_scenario_preset()
         root = Path(__file__).resolve().parent
-        xml_path = self.cfg.xml_path or str(root / "assets" / "two_robot_carry_stage1.xml")
+        xml_path = self.cfg.xml_path or str(root / "assets" / "two_robot_carry.xml")
 
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self._align_robot_joint_frames()
@@ -250,13 +251,17 @@ class TwoRobotCarryNarrowPassageEnv:
         self.min_robot_distance = min(self.min_robot_distance, robot_distance)
 
         in_shared_space = -0.25 < obj[1] < 2.80 or -0.25 < a[1] < 2.80 or -0.25 < b[1] < 2.80
-        occlusion_sample = bool(self.rng.random() < self.cfg.occlusion_prob)
+        # Consume a fixed common-random-number tape every step.  Paired policy
+        # modes may enter the shared space at different times; conditional RNG
+        # draws would otherwise desynchronize all later exogenous occlusions.
+        occlusion_draw, hide_robot_0_draw, hide_robot_1_draw = self.rng.random(3)
+        occlusion_sample = bool(occlusion_draw < self.cfg.occlusion_prob)
         self.occlusion_active = bool(occlusion_sample and in_shared_space)
 
         if self.occlusion_active:
             # Keep at least one viewpoint degraded so the local observations disagree.
-            hide_robot_0 = bool(self.rng.random() < 0.55)
-            hide_robot_1 = bool(self.rng.random() < 0.55)
+            hide_robot_0 = bool(hide_robot_0_draw < 0.55)
+            hide_robot_1 = bool(hide_robot_1_draw < 0.55)
             if not hide_robot_0 and not hide_robot_1:
                 hide_robot_0 = True
             self.teammate_visible = {0: not hide_robot_0, 1: not hide_robot_1}
@@ -302,6 +307,55 @@ class TwoRobotCarryNarrowPassageEnv:
 
     def _compute_force_proxy(self) -> float:
         return self._compute_force_components()["force_proxy"]
+
+    def _local_contact_agents(self) -> np.ndarray:
+        """Return per-robot tactile contact flags from MuJoCo contact pairs."""
+
+        robot_geom_ids = (
+            mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_a_base"
+            ),
+            mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_b_base"
+            ),
+        )
+        flags = np.zeros(2, dtype=np.float32)
+        for contact_index in range(int(self.data.ncon)):
+            contact = self.data.contact[contact_index]
+            pair = {int(contact.geom1), int(contact.geom2)}
+            for agent_id, geom_id in enumerate(robot_geom_ids):
+                if geom_id >= 0 and geom_id in pair:
+                    flags[agent_id] = 1.0
+        return flags
+
+    def _local_force_agents(self) -> np.ndarray:
+        """Return per-robot contact-force magnitudes from local geom contacts."""
+
+        robot_geom_ids = (
+            mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_a_base"
+            ),
+            mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_b_base"
+            ),
+        )
+        forces = np.zeros(2, dtype=np.float32)
+        contact_force = np.zeros(6, dtype=np.float64)
+        for contact_index in range(int(self.data.ncon)):
+            contact = self.data.contact[contact_index]
+            pair = {int(contact.geom1), int(contact.geom2)}
+            contact_force.fill(0.0)
+            mujoco.mj_contactForce(
+                self.model, self.data, contact_index, contact_force
+            )
+            magnitude = float(np.linalg.norm(contact_force[:3]))
+            for agent_id, geom_id in enumerate(robot_geom_ids):
+                if geom_id >= 0 and geom_id in pair:
+                    forces[agent_id] += magnitude
+        scale = float(self.cfg.local_force_scale_newtons)
+        if not np.isfinite(scale) or scale <= 0.0:
+            raise ValueError("local_force_scale_newtons must be finite and positive")
+        return np.clip(forces / scale, 0.0, 1.0).astype(np.float32)
 
     def _success(self) -> bool:
         obj = self._object_pose_xy_yaw()
@@ -472,6 +526,8 @@ class TwoRobotCarryNarrowPassageEnv:
         robot_distance = float(np.linalg.norm(a[:2] - b[:2]))
         min_robot_distance = float(min(self.min_robot_distance, robot_distance))
         contacts = int(self.data.ncon)
+        local_contact_agents = self._local_contact_agents()
+        local_force_agents = self._local_force_agents()
         virtual_collision = bool(
             force_components["wall_violation"] > 0.0
             or force_components["blocked_violation"] > 0.0
@@ -525,6 +581,12 @@ class TwoRobotCarryNarrowPassageEnv:
             "robot_violation": force_components["robot_violation"],
             "ncon": contacts,
             "contacts": contacts,
+            "local_contact_agents": local_contact_agents,
+            "local_force_agents": local_force_agents,
+            "local_force_units": "normalized_0_1",
+            "local_force_scale_newtons": float(
+                self.cfg.local_force_scale_newtons
+            ),
             "object_xy_yaw": obj.copy(),
             "grasped": bool(self.grasped),
             "step_count": int(self.step_count),

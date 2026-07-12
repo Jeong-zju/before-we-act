@@ -1,6 +1,0 @@
-seed: 0
-device: cuda
-batch_size: 128
-lr: 1.0e-4
-num_workers: 4
-output_dir: outputs

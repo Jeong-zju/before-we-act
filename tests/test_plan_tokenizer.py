@@ -1,40 +1,113 @@
+import inspect
+import io
+
 import torch
 
-from models.plan_tokenizer import PlanTokenizer, PlanTokenizerConfig, compute_losses
+from models.plan_tokenizer import (
+    ActionOnlyPlanTokenizer,
+    ActionOnlyPlanTokenizerConfig,
+    PlanCodeSupport,
+    PlanCodeSupportAccumulator,
+    build_plan_code_support,
+    compute_action_only_plan_losses,
+)
 
 
-def test_plan_tokenizer_forward_shapes():
-    cfg = PlanTokenizerConfig(horizon=16, action_dim=4, traj_dim=5, num_phases=9, latent_dim=32, hidden_dim=64, codebook_size=16)
-    model = PlanTokenizer(cfg)
+def test_action_only_tokenizer_excludes_outcomes_and_has_balanced_usage_loss():
+    cfg = ActionOnlyPlanTokenizerConfig(
+        horizon=6,
+        action_dim=3,
+        latent_dim=12,
+        hidden_dim=32,
+        codebook_size=8,
+        residual_dropout=0.0,
+        auxiliary_traj_dim=2,
+        auxiliary_traj_weight=0.5,
+    )
+    model = ActionOnlyPlanTokenizer(cfg)
+    actions = torch.randn(5, 6, 3)
+    trajectory = torch.randn(5, 6, 2)
 
-    batch = {
-        "actions": torch.randn(4, 16, 4),
-        "trajectory": torch.randn(4, 16, 5),
-        "phase": torch.randint(0, 9, (4, 16)),
-    }
+    # There is structurally no trajectory/phase argument on the  encoder.
+    assert tuple(inspect.signature(model.encode).parameters) == ("actions",)
+    out = model(actions)
+    assert out["recon_actions"].shape == (5, 6, 3)
+    assert out["recon_auxiliary_trajectory"].shape == (5, 6, 2)
+    assert out["soft_code_usage"].shape == (8,)
+    assert torch.allclose(out["soft_code_usage"].sum(), torch.tensor(1.0), atol=1e-5)
+    assert out["usage_balance_loss"].ndim == 0
+    assert torch.isfinite(out["usage_balance_loss"])
 
-    out = model(batch["actions"], batch["trajectory"])
-    assert out["recon_actions"].shape == (4, 16, 4)
-    assert out["recon_trajectory"].shape == (4, 16, 5)
-    assert out["phase_logits"].shape == (4, 16, 9)
-    assert out["code_indices"].shape == (4,)
-
-    losses = compute_losses(model, batch)
+    losses = compute_action_only_plan_losses(model, {"actions": actions, "trajectory": trajectory})
+    losses["loss"].backward()
     assert torch.isfinite(losses["loss"])
-    assert losses["code_indices"].shape == (4,)
+    assert model.vq.embedding.weight.grad is not None
+    assert torch.isfinite(model.vq.embedding.weight.grad).all()
 
 
-def test_plan_tokenizer_encode_decode_api():
-    cfg = PlanTokenizerConfig(horizon=8, action_dim=4, traj_dim=5, num_phases=9, latent_dim=16, hidden_dim=32, codebook_size=8)
-    model = PlanTokenizer(cfg)
+def test_action_only_tokenizer_residual_dropout_prevents_continuous_bypass():
+    cfg = ActionOnlyPlanTokenizerConfig(
+        horizon=4,
+        action_dim=2,
+        latent_dim=8,
+        hidden_dim=16,
+        codebook_size=4,
+        residual_dropout=1.0,
+    )
+    model = ActionOnlyPlanTokenizer(cfg).train()
+    z_q = torch.randn(3, 8)
 
-    actions = torch.randn(2, 8, 4)
-    trajectory = torch.randn(2, 8, 5)
+    decoded_a = model.decode(z_q, torch.randn(3, 8))["recon_actions"]
+    decoded_b = model.decode(z_q, torch.randn(3, 8) * 100.0)["recon_actions"]
+    assert torch.equal(decoded_a, decoded_b)
 
-    enc = model.encode_future_segment(actions, trajectory)
-    dec = model.decode_plan_latent(enc["code_indices"], enc["residual"])
 
-    assert enc["code_indices"].shape == (2,)
-    assert enc["residual"].shape == (2, 16)
-    assert dec["recon_actions"].shape == (2, 8, 4)
-    assert dec["recon_trajectory"].shape == (2, 8, 5)
+def test_plan_code_support_uses_empirical_codes_and_residual_statistics():
+    codes = torch.tensor([0, 0, 2, 2, 2, 3])
+    residual = torch.tensor(
+        [
+            [1.0, 2.0],
+            [3.0, 4.0],
+            [10.0, 20.0],
+            [12.0, 22.0],
+            [14.0, 24.0],
+            [99.0, 99.0],
+        ]
+    )
+    support = build_plan_code_support(codes, residual, codebook_size=5, min_count=2, std_floor=1e-4)
+
+    assert torch.equal(support.counts, torch.tensor([2, 0, 3, 1, 0]))
+    assert torch.equal(support.active_codes, torch.tensor([0, 2]))
+    assert torch.allclose(support.residual_mean[0], torch.tensor([2.0, 3.0]))
+    assert torch.allclose(support.residual_std[0], torch.tensor([1.0, 1.0]))
+    assert torch.allclose(support.residual_mean[2], torch.tensor([12.0, 22.0]))
+
+    sampled = support.sample(128, generator=torch.Generator().manual_seed(7))
+    assert sampled["code_indices"].shape == (128,)
+    assert sampled["residual"].shape == (128, 2)
+    assert set(sampled["code_indices"].tolist()) <= {0, 2}
+    diverse = support.sample(
+        2,
+        generator=torch.Generator().manual_seed(4),
+        ensure_code_diversity=True,
+    )
+    assert set(diverse["code_indices"].tolist()) == {0, 2}
+
+    # The support artifact survives ordinary checkpoint serialization.
+    checkpoint = io.BytesIO()
+    torch.save(support.to_dict(), checkpoint)
+    checkpoint.seek(0)
+    restored = PlanCodeSupport.from_dict(torch.load(checkpoint, weights_only=True))
+    assert torch.equal(restored.counts, support.counts)
+    assert torch.equal(restored.active_codes, support.active_codes)
+    assert torch.allclose(restored.residual_mean, support.residual_mean)
+
+
+def test_plan_code_support_accumulator_is_streaming():
+    accumulator = PlanCodeSupportAccumulator(codebook_size=4, residual_dim=2)
+    accumulator.update(torch.tensor([1, 1]), torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+    accumulator.update(torch.tensor([3]), torch.tensor([[5.0, 6.0]]))
+    support = accumulator.build(min_count=1)
+
+    assert torch.equal(support.active_codes, torch.tensor([1, 3]))
+    assert torch.allclose(support.probabilities, torch.tensor([0.0, 2 / 3, 0.0, 1 / 3]))

@@ -1,608 +1,365 @@
+"""Run the complete decentralized FE-PC-WAM training sequence.
+
+Example::
+
+    python scripts/train_fe_pc_wam_pipeline.py \
+        --dataset-root datasets/carry --out-dir checkpoints/carry
+
+Use ``--smoke`` to exercise every stage with one tiny optimization step.
+"""
+
 from __future__ import annotations
 
 import argparse
-import json
-import os
-import shutil
-import subprocess
-import sys
-from dataclasses import dataclass
+from dataclasses import asdict
 from datetime import datetime, timezone
+import json
 from pathlib import Path
+import sys
+import time
 
 
-@dataclass(frozen=True)
-class Profile:
-    epochs: int
-    batch_size: int
-    num_workers: int
-    max_train_episodes: int
-    max_val_episodes: int
-    max_val_batches: int
-    eval_max_batches: int
-    policy_episodes: int
-    policy_render_video: int
-    save_every: int
-    wam_model_dim: int
-    wam_layers: int
-    wam_heads: int
-    wam_ffn_dim: int
-    wam_batch_size: int
-    wam_grad_accum: int
-    intention_model_dim: int
-    intention_layers: int
-    intention_heads: int
-    intention_ffn_dim: int
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from train.train_decentralized import (  # noqa: E402
+    ProgressReporter,
+    TrainingConfig,
+    format_duration,
+    resolve_device,
+    smoke_config,
+    train_stage,
+)
+from train.checkpoint import (  # noqa: E402
+    CONTRACT_TAG,
+    file_sha256,
+    load_checkpoint,
+)
+from data.schema import SCHEMA_VERSION  # noqa: E402
+from data.decentralized_dataset import DecentralizedTransitionDataset  # noqa: E402
 
 
-PROFILES = {
-    "smoke": Profile(
-        epochs=1,
-        batch_size=16,
-        num_workers=0,
-        max_train_episodes=6,
-        max_val_episodes=2,
-        max_val_batches=1,
-        eval_max_batches=1,
-        policy_episodes=1,
-        policy_render_video=0,
-        save_every=1,
-        wam_model_dim=128,
-        wam_layers=2,
-        wam_heads=4,
-        wam_ffn_dim=512,
-        wam_batch_size=2,
-        wam_grad_accum=1,
-        intention_model_dim=128,
-        intention_layers=2,
-        intention_heads=4,
-        intention_ffn_dim=512,
-    ),
-    "full": Profile(
-        epochs=100,
-        batch_size=256,
-        num_workers=4,
-        max_train_episodes=-1,
-        max_val_episodes=-1,
-        max_val_batches=-1,
-        eval_max_batches=50,
-        policy_episodes=20,
-        policy_render_video=0,
-        save_every=10,
-        wam_model_dim=1024,
-        wam_layers=16,
-        wam_heads=16,
-        wam_ffn_dim=4096,
-        wam_batch_size=16,
-        wam_grad_accum=4,
-        intention_model_dim=512,
-        intention_layers=8,
-        intention_heads=8,
-        intention_ffn_dim=2048,
-    ),
+STAGE_ORDER = ("plan", "belief", "wam", "intention", "wam_robust")
+STAGE_UPSTREAMS = {
+    "plan": (),
+    "belief": ("plan",),
+    "wam": ("plan", "belief"),
+    "intention": ("plan", "belief", "wam"),
+    "wam_robust": ("plan", "belief", "wam", "intention"),
 }
 
 
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+def run_pipeline(args: argparse.Namespace) -> dict:
+    if args.log_every <= 0:
+        raise ValueError("--log-every must be positive")
+    pipeline_started = time.monotonic()
+    pipeline_progress = ProgressReporter(
+        enabled=not args.quiet,
+        log_every=args.log_every,
+        prefix="[pipeline]",
+    )
+    dataset_paths = _resolve_dataset_paths(args)
+    data_dir = dataset_paths["train"]
+    out_dir = Path(args.out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    outputs = {
+        stage: out_dir / f"{stage}.pt"
+        for stage in STAGE_ORDER
+    }
+    completed: dict[str, dict] = {}
 
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def command_env(root: Path) -> dict[str, str]:
-    env = dict(os.environ)
-    current = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = str(root) if not current else f"{root}{os.pathsep}{current}"
-    return env
-
-
-def rel(path: Path, root: Path) -> str:
-    return str(path.relative_to(root))
-
-
-def run_command(root: Path, command: list[str], dry_run: bool = False):
-    printable = " ".join(command)
-    print("+", printable)
-    if dry_run:
-        return
-    subprocess.run(command, cwd=root, env=command_env(root), check=True)
-
-
-def run_python(root: Path, args: list[str], dry_run: bool = False):
-    run_command(root, [sys.executable, *args], dry_run=dry_run)
-
-
-def marker_path(artifacts_dir: Path, stage: str) -> Path:
-    return artifacts_dir / "pipeline" / f"{stage}.done.json"
-
-
-def is_stage_done(artifacts_dir: Path, stage: str, outputs: list[Path], resume: bool) -> bool:
-    if not resume:
-        return False
-    marker = marker_path(artifacts_dir, stage)
-    return marker.exists() and all(path.exists() for path in outputs)
-
-
-def write_marker(artifacts_dir: Path, stage: str, outputs: list[Path], dry_run: bool = False):
-    if dry_run:
-        return
-    marker = marker_path(artifacts_dir, stage)
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    with open(marker, "w") as f:
-        json.dump(
-            {
-                "stage": stage,
-                "completed_at_utc": utc_now(),
-                "outputs": [str(path) for path in outputs],
-            },
-            f,
-            indent=2,
+    common = dict(
+        data_dir=str(data_dir),
+        history=args.history,
+        horizon=args.horizon,
+        stride=args.stride,
+        max_episodes=args.max_episodes,
+        batch_size=args.batch_size,
+        max_steps=args.max_steps,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        num_workers=args.num_workers,
+        seed=args.seed,
+        device=args.device,
+        codebook_size=args.codebook_size,
+        plan_latent_dim=args.plan_latent_dim,
+        min_code_count=args.min_code_count,
+        min_active_codes=args.min_active_codes,
+        min_usage_ratio=args.min_usage_ratio,
+        strict_codebook_health=args.strict_codebook_health,
+    )
+    through_index = STAGE_ORDER.index(args.through)
+    stage_epochs = {
+        stage: getattr(args, f"{stage}_epochs") or args.epochs for stage in STAGE_ORDER
+    }
+    indexing_started = time.monotonic()
+    pipeline_progress.emit(f"indexing dataset={data_dir}")
+    try:
+        dataset = DecentralizedTransitionDataset(
+            data_dir,
+            history=args.history,
+            horizon=args.horizon,
+            stride=args.stride,
+            max_episodes=args.max_episodes,
         )
-
-
-def maybe_resume_arg(out_dir: Path, resume: bool) -> list[str]:
-    last = out_dir / "last.pt"
-    if resume and last.exists():
-        return ["--resume", str(last)]
-    return []
-
-
-def export_checkpoint(src_dir: Path, dst: Path, dry_run: bool = False):
-    src = src_dir / "best.pt"
-    if not src.exists():
-        src = src_dir / "last.pt"
-    if dry_run:
-        print(f"export: {src_dir}/best.pt or last.pt -> {dst}")
-        return
-    if not src.exists():
-        raise FileNotFoundError(f"No best.pt or last.pt found in {src_dir}")
-    print(f"export: {src} -> {dst}")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
-
-
-def validate_dataset_stage(root: Path, artifacts_dir: Path, train_dir: Path, val_dir: Path, test_dir: Path, resume: bool, dry_run: bool):
-    stage = "dataset_check"
-    outputs = [marker_path(artifacts_dir, stage)]
-    if is_stage_done(artifacts_dir, stage, outputs, resume):
-        print(f"skip {stage}: already complete")
-        return
-    for data_dir in [train_dir, val_dir, test_dir]:
-        run_python(root, ["data/validate_dataset.py", "--data_dir", rel(data_dir, root)], dry_run=dry_run)
-    write_marker(artifacts_dir, stage, outputs, dry_run=dry_run)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Run FE-PC-WAM staged training and inference artifact export.")
-    parser.add_argument("--profile", choices=sorted(PROFILES), default="full")
-    parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--train_dir", type=str, default="datasets/stage2/train")
-    parser.add_argument("--val_dir", type=str, default="datasets/stage2/val")
-    parser.add_argument("--test_dir", type=str, default="datasets/stage2/test")
-    parser.add_argument("--checkpoints_dir", type=str, default="checkpoints")
-    parser.add_argument("--artifacts_dir", type=str, default="artifacts")
-    parser.add_argument("--outputs_dir", type=str, default="outputs")
-    parser.add_argument("--horizon", type=int, default=16)
-    parser.add_argument("--history", type=int, default=8)
-    parser.add_argument("--plan_codebook_size", type=int, default=64)
-    parser.add_argument("--plan_latent_dim", type=int, default=64)
-    parser.add_argument("--skip_policy_eval", action="store_true")
-    args = parser.parse_args()
-
-    root = repo_root()
-    profile = PROFILES[args.profile]
-    train_dir = (root / args.train_dir).resolve()
-    val_dir = (root / args.val_dir).resolve()
-    test_dir = (root / args.test_dir).resolve()
-    checkpoints_dir = (root / args.checkpoints_dir).resolve()
-    artifacts_dir = (root / args.artifacts_dir).resolve()
-    outputs_dir = (root / args.outputs_dir).resolve()
-
-    plan_ckpt = artifacts_dir / "plan_tokenizer" / "plan_tokenizer.pt"
-    slot_ckpt = artifacts_dir / "slot_encoder" / "slot_encoder.pt"
-    wam_ckpt = artifacts_dir / "wam" / "wam.pt"
-    intention_ckpt = artifacts_dir / "intention" / "intention.pt"
-
-    validate_dataset_stage(root, artifacts_dir, train_dir, val_dir, test_dir, args.resume, args.dry_run)
-
-    stage = "plan_tokenizer"
-    out_dir = checkpoints_dir / stage
-    outputs = [plan_ckpt]
-    if is_stage_done(artifacts_dir, stage, outputs, args.resume):
-        print(f"skip {stage}: already complete")
-    else:
-        run_python(
-            root,
-            [
-                "train/train_plan_tokenizer.py",
-                "--train_dir",
-                rel(train_dir, root),
-                "--val_dir",
-                rel(val_dir, root),
-                "--out_dir",
-                rel(out_dir, root),
-                "--horizon",
-                str(args.horizon),
-                "--codebook_size",
-                str(args.plan_codebook_size),
-                "--latent_dim",
-                str(args.plan_latent_dim),
-                "--batch_size",
-                str(profile.batch_size),
-                "--epochs",
-                str(profile.epochs),
-                "--num_workers",
-                str(profile.num_workers),
-                "--max_train_episodes",
-                str(profile.max_train_episodes),
-                "--max_val_episodes",
-                str(profile.max_val_episodes),
-                "--save_every",
-                str(profile.save_every),
-                *maybe_resume_arg(out_dir, args.resume),
-            ],
-            dry_run=args.dry_run,
+        resolved_device = resolve_device(args.device)
+    except Exception as exc:
+        pipeline_progress.emit(
+            f"failed elapsed={format_duration(time.monotonic() - pipeline_started)} "
+            f"error={type(exc).__name__}: {exc}"
         )
-        export_checkpoint(out_dir, plan_ckpt, dry_run=args.dry_run)
-        run_python(
-            root,
-            [
-                "eval/evaluate_tokenizer.py",
-                "--ckpt",
-                rel(plan_ckpt, root),
-                "--data_dir",
-                rel(val_dir, root),
-                "--out_dir",
-                rel(plan_ckpt.parent, root),
-                "--batch_size",
-                str(profile.batch_size),
-                "--num_workers",
-                str(profile.num_workers),
-                "--max_batches",
-                str(profile.eval_max_batches),
-            ],
-            dry_run=args.dry_run,
+        raise
+    pipeline_progress.emit(
+        f"dataset={data_dir} episodes={len(dataset.paths)} samples={len(dataset)} "
+        f"device={resolved_device.type} stages={through_index + 1} "
+        f"indexing_elapsed={format_duration(time.monotonic() - indexing_started)}"
+    )
+    for index, stage in enumerate(STAGE_ORDER):
+        if index > through_index:
+            break
+        stage_progress = pipeline_progress.child(
+            f"[stage {index + 1}/{through_index + 1}:{stage}]"
         )
-        write_marker(artifacts_dir, stage, outputs, dry_run=args.dry_run)
+        stage_started = time.monotonic()
+        config = TrainingConfig(
+            stage=stage,
+            output=str(outputs[stage]),
+            epochs=stage_epochs[stage],
+            plan_checkpoint=str(outputs["plan"]) if stage != "plan" else None,
+            belief_checkpoint=(
+                str(outputs["belief"])
+                if stage in {"wam", "intention", "wam_robust"}
+                else None
+            ),
+            wam_checkpoint=(
+                str(outputs["wam"])
+                if stage in {"intention", "wam_robust"}
+                else None
+            ),
+            intention_checkpoint=(
+                str(outputs["intention"]) if stage == "wam_robust" else None
+            ),
+            **common,
+        )
+        if args.smoke:
+            config = smoke_config(config)
 
-    stage = "slot_encoder"
-    out_dir = checkpoints_dir / stage
-    outputs = [slot_ckpt]
-    if is_stage_done(artifacts_dir, stage, outputs, args.resume):
-        print(f"skip {stage}: already complete")
-    else:
-        run_python(
-            root,
-            [
-                "train/train_slot_encoder.py",
-                "--train_dir",
-                rel(train_dir, root),
-                "--val_dir",
-                rel(val_dir, root),
-                "--out_dir",
-                rel(out_dir, root),
-                "--tokenizer_ckpt",
-                rel(plan_ckpt, root),
-                "--history",
-                str(args.history),
-                "--horizon",
-                str(args.horizon),
-                "--plan_codebook_size",
-                str(args.plan_codebook_size),
-                "--batch_size",
-                str(profile.batch_size),
-                "--epochs",
-                str(profile.epochs),
-                "--num_workers",
-                str(profile.num_workers),
-                "--max_train_episodes",
-                str(profile.max_train_episodes),
-                "--max_val_episodes",
-                str(profile.max_val_episodes),
-                "--save_every",
-                str(profile.save_every),
-                *maybe_resume_arg(out_dir, args.resume),
-            ],
-            dry_run=args.dry_run,
+        stage_progress.emit(
+            f"start epochs={config.epochs} batch_size={config.batch_size} "
+            f"checkpoint={outputs[stage]}"
         )
-        export_checkpoint(out_dir, slot_ckpt, dry_run=args.dry_run)
-        run_python(
-            root,
-            [
-                "eval/evaluate_slots.py",
-                "--ckpt",
-                rel(slot_ckpt, root),
-                "--data_dir",
-                rel(val_dir, root),
-                "--out_dir",
-                rel(slot_ckpt.parent, root),
-                "--tokenizer_ckpt",
-                rel(plan_ckpt, root),
-                "--batch_size",
-                str(profile.batch_size),
-                "--num_workers",
-                str(profile.num_workers),
-                "--max_batches",
-                str(profile.eval_max_batches),
-            ],
-            dry_run=args.dry_run,
-        )
-        write_marker(artifacts_dir, stage, outputs, dry_run=args.dry_run)
-
-    stage = "wam"
-    out_dir = checkpoints_dir / stage
-    outputs = [wam_ckpt]
-    if is_stage_done(artifacts_dir, stage, outputs, args.resume):
-        print(f"skip {stage}: already complete")
-    else:
-        run_python(
-            root,
-            [
-                "train/train_wam.py",
-                "--train_dir",
-                rel(train_dir, root),
-                "--val_dir",
-                rel(val_dir, root),
-                "--out_dir",
-                rel(out_dir, root),
-                "--slot_ckpt",
-                rel(slot_ckpt, root),
-                "--plan_ckpt",
-                rel(plan_ckpt, root),
-                "--history",
-                str(args.history),
-                "--horizon",
-                str(args.horizon),
-                "--plan_codebook_size",
-                str(args.plan_codebook_size),
-                "--plan_latent_dim",
-                str(args.plan_latent_dim),
-                "--model_dim",
-                str(profile.wam_model_dim),
-                "--num_layers",
-                str(profile.wam_layers),
-                "--num_heads",
-                str(profile.wam_heads),
-                "--ffn_dim",
-                str(profile.wam_ffn_dim),
-                "--batch_size",
-                str(profile.wam_batch_size),
-                "--grad_accum_steps",
-                str(profile.wam_grad_accum),
-                "--epochs",
-                str(profile.epochs),
-                "--num_workers",
-                str(profile.num_workers),
-                "--max_train_episodes",
-                str(profile.max_train_episodes),
-                "--max_val_episodes",
-                str(profile.max_val_episodes),
-                "--max_val_batches",
-                str(profile.max_val_batches),
-                "--save_every",
-                str(max(1, min(5, profile.save_every))),
-                *maybe_resume_arg(out_dir, args.resume),
-            ],
-            dry_run=args.dry_run,
-        )
-        export_checkpoint(out_dir, wam_ckpt, dry_run=args.dry_run)
-        run_python(
-            root,
-            [
-                "eval/evaluate_wam.py",
-                "--ckpt",
-                rel(wam_ckpt, root),
-                "--data_dir",
-                rel(val_dir, root),
-                "--out_dir",
-                rel(wam_ckpt.parent, root),
-                "--slot_ckpt",
-                rel(slot_ckpt, root),
-                "--plan_ckpt",
-                rel(plan_ckpt, root),
-                "--batch_size",
-                str(profile.wam_batch_size),
-                "--num_workers",
-                str(profile.num_workers),
-                "--max_batches",
-                str(profile.eval_max_batches),
-            ],
-            dry_run=args.dry_run,
-        )
-        write_marker(artifacts_dir, stage, outputs, dry_run=args.dry_run)
-
-    stage = "intention"
-    out_dir = checkpoints_dir / stage
-    outputs = [intention_ckpt]
-    if is_stage_done(artifacts_dir, stage, outputs, args.resume):
-        print(f"skip {stage}: already complete")
-    else:
-        run_python(
-            root,
-            [
-                "train/train_intention.py",
-                "--train_dir",
-                rel(train_dir, root),
-                "--val_dir",
-                rel(val_dir, root),
-                "--out_dir",
-                rel(out_dir, root),
-                "--slot_ckpt",
-                rel(slot_ckpt, root),
-                "--plan_ckpt",
-                rel(plan_ckpt, root),
-                "--wam_ckpt",
-                rel(wam_ckpt, root),
-                "--history",
-                str(args.history),
-                "--horizon",
-                str(args.horizon),
-                "--plan_codebook_size",
-                str(args.plan_codebook_size),
-                "--plan_latent_dim",
-                str(args.plan_latent_dim),
-                "--model_dim",
-                str(profile.intention_model_dim),
-                "--num_layers",
-                str(profile.intention_layers),
-                "--num_heads",
-                str(profile.intention_heads),
-                "--ffn_dim",
-                str(profile.intention_ffn_dim),
-                "--batch_size",
-                str(profile.batch_size),
-                "--epochs",
-                str(profile.epochs),
-                "--num_workers",
-                str(profile.num_workers),
-                "--max_train_episodes",
-                str(profile.max_train_episodes),
-                "--max_val_episodes",
-                str(profile.max_val_episodes),
-                "--max_val_batches",
-                str(profile.max_val_batches),
-                "--save_every",
-                str(profile.save_every),
-                *maybe_resume_arg(out_dir, args.resume),
-            ],
-            dry_run=args.dry_run,
-        )
-        export_checkpoint(out_dir, intention_ckpt, dry_run=args.dry_run)
-        run_python(
-            root,
-            [
-                "eval/evaluate_intention.py",
-                "--ckpt",
-                rel(intention_ckpt, root),
-                "--data_dir",
-                rel(val_dir, root),
-                "--out_dir",
-                rel(intention_ckpt.parent, root),
-                "--slot_ckpt",
-                rel(slot_ckpt, root),
-                "--plan_ckpt",
-                rel(plan_ckpt, root),
-                "--batch_size",
-                str(profile.batch_size),
-                "--num_workers",
-                str(profile.num_workers),
-                "--max_batches",
-                str(profile.eval_max_batches),
-            ],
-            dry_run=args.dry_run,
-        )
-        write_marker(artifacts_dir, stage, outputs, dry_run=args.dry_run)
-
-    stage = "free_energy_eval"
-    outputs = [artifacts_dir / "free_energy" / "metrics.json"]
-    if is_stage_done(artifacts_dir, stage, outputs, args.resume):
-        print(f"skip {stage}: already complete")
-    else:
-        run_python(
-            root,
-            [
-                "eval/evaluate_free_energy.py",
-                "--data_dir",
-                rel(val_dir, root),
-                "--out_dir",
-                rel(artifacts_dir / "free_energy", root),
-                "--wam_ckpt",
-                rel(wam_ckpt, root),
-                "--slot_ckpt",
-                rel(slot_ckpt, root),
-                "--plan_ckpt",
-                rel(plan_ckpt, root),
-                "--max_batches",
-                str(profile.eval_max_batches),
-            ],
-            dry_run=args.dry_run,
-        )
-        write_marker(artifacts_dir, stage, outputs, dry_run=args.dry_run)
-
-    stage = "communication_eval"
-    comm_outputs = [
-        artifacts_dir / "communication" / "ego_0" / "metrics.json",
-        artifacts_dir / "communication" / "ego_1" / "metrics.json",
-    ]
-    if is_stage_done(artifacts_dir, stage, comm_outputs, args.resume):
-        print(f"skip {stage}: already complete")
-    else:
-        for ego_id in [0, 1]:
-            run_python(
-                root,
-                [
-                    "eval/evaluate_communication.py",
-                    "--data_dir",
-                    rel(val_dir, root),
-                    "--out_dir",
-                    rel(artifacts_dir / "communication" / f"ego_{ego_id}", root),
-                    "--wam_ckpt",
-                    rel(wam_ckpt, root),
-                    "--slot_ckpt",
-                    rel(slot_ckpt, root),
-                    "--plan_ckpt",
-                    rel(plan_ckpt, root),
-                    "--intention_ckpt",
-                    rel(intention_ckpt, root),
-                    "--ego_id",
-                    str(ego_id),
-                    "--max_batches",
-                    str(profile.eval_max_batches),
-                ],
-                dry_run=args.dry_run,
-            )
-        write_marker(artifacts_dir, stage, comm_outputs, dry_run=args.dry_run)
-
-    if not args.skip_policy_eval:
-        stage = "policy_rollout_eval"
-        policy_root = outputs_dir / "policy_rollouts"
-        policy_outputs = [policy_root / mode / "summary.json" for mode in ["no_comm", "always_comm", "selective_comm"]]
-        if is_stage_done(artifacts_dir, stage, policy_outputs, args.resume):
-            print(f"skip {stage}: already complete")
-        else:
-            for mode in ["no_comm", "always_comm", "selective_comm"]:
-                run_python(
-                    root,
-                    [
-                        "eval/evaluate_policy.py",
-                        "--mode",
-                        mode,
-                        "--out_dir",
-                        rel(policy_root / mode, root),
-                        "--wam_ckpt",
-                        rel(wam_ckpt, root),
-                        "--slot_ckpt",
-                        rel(slot_ckpt, root),
-                        "--plan_ckpt",
-                        rel(plan_ckpt, root),
-                        "--intention_ckpt",
-                        rel(intention_ckpt, root),
-                        "--num_episodes",
-                        str(profile.policy_episodes),
-                        "--render_video",
-                        str(profile.policy_render_video),
-                    ],
-                    dry_run=args.dry_run,
+        try:
+            if args.resume and outputs[stage].is_file():
+                checkpoint = load_checkpoint(outputs[stage], expected_stage=stage)
+                _validate_resume_lineage(stage, checkpoint, outputs)
+                _validate_resume_config(stage, checkpoint, config)
+                status = "reused"
+                stage_progress.emit(
+                    f"reused checkpoint={outputs[stage]} "
+                    f"elapsed={format_duration(time.monotonic() - stage_started)}"
                 )
-            run_python(
-                root,
-                [
-                    "eval/compare_policies.py",
-                    "--root",
-                    rel(policy_root, root),
-                    "--out_dir",
-                    rel(outputs_dir / "policy_reports", root),
-                    "--modes",
-                    "no_comm,always_comm,selective_comm",
-                ],
-                dry_run=args.dry_run,
+            else:
+                if outputs[stage].exists() and not args.force_retrain:
+                    raise FileExistsError(
+                        f"{outputs[stage]} already exists; use --resume to validate/reuse it "
+                        "or --force-retrain to replace it"
+                    )
+                train_stage(config, dataset=dataset, progress=stage_progress)
+                checkpoint = load_checkpoint(outputs[stage], expected_stage=stage)
+                status = "trained"
+                stage_progress.emit(
+                    f"completed checkpoint={outputs[stage]} "
+                    f"elapsed={format_duration(time.monotonic() - stage_started)}"
+                )
+        except Exception as exc:
+            stage_progress.emit(
+                f"failed elapsed={format_duration(time.monotonic() - stage_started)} "
+                f"error={type(exc).__name__}: {exc}"
             )
-            write_marker(artifacts_dir, stage, policy_outputs, dry_run=args.dry_run)
+            raise
+        completed[stage] = {
+            "status": status,
+            "path": str(outputs[stage]),
+            "sha256": file_sha256(outputs[stage]),
+            "metrics": checkpoint["metrics"],
+            "training_config": asdict(config),
+        }
 
-    print("pipeline complete")
+    manifest = {
+        "contract_tag": CONTRACT_TAG,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "data_dir": str(data_dir),
+        "dataset_root": str(dataset_paths["root"]),
+        "validation_data_dir": str(dataset_paths["val"]) if dataset_paths["val"] else None,
+        "test_data_dir": str(dataset_paths["test"]) if dataset_paths["test"] else None,
+        "smoke": bool(args.smoke),
+        "through": args.through,
+        "stage_order": list(STAGE_ORDER[: through_index + 1]),
+        "stages": completed,
+    }
+    manifest_path = out_dir / "pipeline_manifest.json"
+    temporary = manifest_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(manifest, indent=2, default=_json_default), encoding="utf-8")
+    temporary.replace(manifest_path)
+    pipeline_progress.emit(
+        f"completed manifest={manifest_path} "
+        f"elapsed={format_duration(time.monotonic() - pipeline_started)}"
+    )
+    return manifest
+
+
+def _validate_resume_lineage(stage: str, checkpoint: dict, outputs: dict[str, Path]) -> None:
+    for upstream in STAGE_UPSTREAMS[stage]:
+        reference = checkpoint.get("upstream", {}).get(upstream)
+        if not isinstance(reference, dict):
+            raise ValueError(
+                f"cannot resume {stage}: missing {upstream} upstream reference"
+            )
+        actual = file_sha256(outputs[upstream])
+        if reference.get("sha256") != actual:
+            raise ValueError(
+                f"cannot resume {stage}: {upstream} checkpoint changed "
+                f"({reference.get('sha256')} != {actual})"
+            )
+
+
+def _validate_resume_config(stage: str, checkpoint: dict, config: TrainingConfig) -> None:
+    stored = checkpoint.get("training_config")
+    if not isinstance(stored, dict):
+        raise ValueError(f"cannot resume {stage}: checkpoint has no training_config")
+    expected = asdict(config)
+    ignored = {
+        "output",
+        "plan_checkpoint",
+        "belief_checkpoint",
+        "wam_checkpoint",
+        "intention_checkpoint",
+        "device",
+    }
+    mismatches = {}
+    for key, expected_value in expected.items():
+        if key in ignored:
+            continue
+        stored_value = stored.get(key)
+        if key == "data_dir" and stored_value is not None:
+            stored_value = str(Path(stored_value).resolve())
+            expected_value = str(Path(expected_value).resolve())
+        if stored_value != expected_value:
+            mismatches[key] = {"stored": stored_value, "requested": expected_value}
+    if mismatches:
+        raise ValueError(
+            f"cannot resume {stage}: requested configuration differs from checkpoint: "
+            f"{json.dumps(mismatches, sort_keys=True)}"
+        )
+
+
+def _resolve_dataset_paths(args: argparse.Namespace) -> dict[str, Path | None]:
+    if args.dataset_root:
+        root = Path(args.dataset_root).resolve()
+        manifest_path = root / "dataset_manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"{manifest_path} is missing; collect data with collect_fe_pc_wam_dataset.py"
+            )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError(
+                f"dataset manifest schema={manifest.get('schema_version')!r}; "
+                f"expected {SCHEMA_VERSION!r}"
+            )
+        train = root / "train"
+        val = root / "val" if (root / "val").is_dir() else None
+        test = root / "test" if (root / "test").is_dir() else None
+    else:
+        train = Path(args.data_dir).resolve()
+        root = train.parent
+        val = None
+        test = None
+    if not train.is_dir() or not any(train.glob("episode_*.hdf5")):
+        raise FileNotFoundError(f"no training episodes found in {train}")
+    return {"root": root, "train": train, "val": val, "test": test}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run the complete decentralized FE-PC-WAM training pipeline"
+    )
+    data = parser.add_mutually_exclusive_group(required=True)
+    data.add_argument("--dataset-root", help="root containing dataset_manifest.json and train/")
+    data.add_argument("--data-dir", help="direct training split (advanced CLI)")
+    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--through", choices=STAGE_ORDER, default="wam_robust")
+    parser.add_argument("--history", type=int, default=8)
+    parser.add_argument("--horizon", type=int, default=16)
+    parser.add_argument("--stride", type=int, default=1)
+    parser.add_argument("--max-episodes", type=int, default=-1)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--plan-epochs", type=int)
+    parser.add_argument("--belief-epochs", type=int)
+    parser.add_argument("--wam-epochs", type=int)
+    parser.add_argument("--intention-epochs", type=int)
+    parser.add_argument("--wam-robust-epochs", dest="wam_robust_epochs", type=int)
+    parser.add_argument("--max-steps", type=int, default=-1)
+    parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--codebook-size", type=int, default=64)
+    parser.add_argument("--plan-latent-dim", type=int, default=64)
+    parser.add_argument("--min-code-count", type=int, default=1)
+    parser.add_argument("--min-active-codes", type=int, default=4)
+    parser.add_argument("--min-usage-ratio", type=float, default=0.10)
+    parser.add_argument("--strict-codebook-health", action="store_true")
+    parser.add_argument(
+        "--log-every",
+        type=int,
+        default=50,
+        help="refresh loss/throughput postfix after N optimization steps",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="disable progress logs; final manifest JSON remains on stdout",
+    )
+    parser.add_argument("--smoke", action="store_true")
+    parser.add_argument(
+        "--force-retrain",
+        action="store_true",
+        help="explicitly replace existing stage checkpoints instead of resuming",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="reuse an existing stage only after strict checkpoint validation",
+    )
+    return parser
+
+
+def _json_default(value):
+    try:
+        import torch
+
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().tolist()
+    except ImportError:
+        pass
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"cannot serialize {type(value).__name__}")
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.log_every <= 0:
+        parser.error("--log-every must be positive")
+    if args.resume and args.force_retrain:
+        raise ValueError("--resume and --force-retrain are mutually exclusive")
+    manifest = run_pipeline(args)
+    print(json.dumps(manifest, indent=2, default=_json_default))
 
 
 if __name__ == "__main__":

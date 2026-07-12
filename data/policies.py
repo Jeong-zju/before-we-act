@@ -13,7 +13,7 @@ class PolicyOutput:
     phase: str
 
 
-class Stage2ScriptedPolicy:
+class ScriptedPolicy:
     def __init__(self, noise_std: float = 0.0, seed: int = 0, mode: str = "scripted"):
         self.noise_std = float(noise_std)
         self.rng = np.random.default_rng(seed)

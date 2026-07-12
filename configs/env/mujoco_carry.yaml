@@ -1,7 +1,0 @@
-env_name: TwoRobotCarryNarrowPassage-v0
-sim_dt: 0.002
-control_dt: 0.05
-episode_len: 400
-render_width: 640
-render_height: 480
-seed: 0
