@@ -48,7 +48,7 @@ class LocalBeliefSlotEncoderConfig:
     """
 
     history: int = 8
-    local_dim: int = 17
+    local_dim: int = 21
     object_dim: int = 0
     slot_dim: int = 128
     hidden_dim: int = 256

@@ -90,6 +90,8 @@ class ActionOnlyPlanTokenizerConfig:
     residual_dropout: float = 0.2
     auxiliary_traj_dim: int = 0
     auxiliary_traj_weight: float = 0.0
+    maneuver_classes: int = 3
+    maneuver_weight: float = 0.2
 
     def __post_init__(self) -> None:
         if self.horizon <= 0 or self.action_dim <= 0:
@@ -104,7 +106,14 @@ class ActionOnlyPlanTokenizerConfig:
             raise ValueError("residual_dropout must be in [0, 1]")
         if self.auxiliary_traj_dim < 0:
             raise ValueError("auxiliary_traj_dim cannot be negative")
-        if min(self.usage_balance_weight, self.residual_weight, self.auxiliary_traj_weight) < 0:
+        if self.maneuver_classes != 3:
+            raise ValueError("maneuver_classes must represent left/hold/right")
+        if min(
+            self.usage_balance_weight,
+            self.residual_weight,
+            self.auxiliary_traj_weight,
+            self.maneuver_weight,
+        ) < 0:
             raise ValueError("loss weights cannot be negative")
 
 
@@ -191,6 +200,9 @@ class ActionOnlyPlanTokenizer(nn.Module):
             action_flat_dim + auxiliary_flat_dim,
             depth=4,
         )
+        self.maneuver_head = MLP(
+            cfg.latent_dim, cfg.hidden_dim, cfg.maneuver_classes, depth=2
+        )
 
     def _validate_actions(self, actions: torch.Tensor) -> None:
         expected = (self.cfg.horizon, self.cfg.action_dim)
@@ -217,6 +229,7 @@ class ActionOnlyPlanTokenizer(nn.Module):
             "soft_code_usage": vq_out["soft_code_usage"],
             "usage_balance_loss": vq_out["usage_balance_loss"],
             "soft_perplexity": vq_out["soft_perplexity"],
+            "maneuver_logits": self.maneuver_head(z_e),
         }
 
     def decode(self, z_q: torch.Tensor, residual: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -284,6 +297,7 @@ def compute_action_only_plan_losses(
     loss_residual = out["residual"].pow(2).mean()
 
     loss_auxiliary = loss_action.new_zeros(())
+    loss_maneuver = loss_action.new_zeros(())
     if cfg.auxiliary_traj_dim > 0 and cfg.auxiliary_traj_weight > 0:
         if "trajectory" not in batch:
             raise KeyError("batch['trajectory'] is required only for the configured auxiliary decoder loss")
@@ -298,6 +312,13 @@ def compute_action_only_plan_losses(
                 1, 1, -1
             ).clamp_min(1e-6)
         loss_auxiliary = F.mse_loss(out["recon_auxiliary_trajectory"], trajectory)
+    if "maneuver" in batch and cfg.maneuver_weight > 0:
+        maneuver = batch["maneuver"].to(device=actions.device, dtype=torch.long).reshape(-1)
+        if maneuver.shape != (actions.shape[0],) or (maneuver < 0).any() or (
+            maneuver >= cfg.maneuver_classes
+        ).any():
+            raise ValueError("maneuver must contain left/hold/right class ids in [0, 2]")
+        loss_maneuver = F.cross_entropy(out["maneuver_logits"], maneuver)
 
     loss = (
         loss_action
@@ -305,6 +326,7 @@ def compute_action_only_plan_losses(
         + cfg.usage_balance_weight * out["usage_balance_loss"]
         + cfg.residual_weight * loss_residual
         + cfg.auxiliary_traj_weight * loss_auxiliary
+        + cfg.maneuver_weight * loss_maneuver
     )
     return {
         "loss": loss,
@@ -313,6 +335,7 @@ def compute_action_only_plan_losses(
         "loss_usage_balance": out["usage_balance_loss"].detach(),
         "loss_residual": loss_residual.detach(),
         "loss_auxiliary_trajectory": loss_auxiliary.detach(),
+        "loss_maneuver": loss_maneuver.detach(),
         "soft_perplexity": out["soft_perplexity"].detach(),
         "soft_code_usage": out["soft_code_usage"].detach(),
         "code_indices": out["code_indices"].detach(),

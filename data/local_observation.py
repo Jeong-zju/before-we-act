@@ -77,6 +77,7 @@ class LocalObservationSpec:
     joint_dim: int = 0
     force_dim: int = 1
     base_twist_dim: int = 3
+    private_event_cue_dim: int = 3
 
     def __post_init__(self):
         if self.joint_dim < 0:
@@ -85,11 +86,13 @@ class LocalObservationSpec:
             raise ValueError("force_dim must be positive")
         if self.base_twist_dim != 3:
             raise ValueError(" currently requires planar base twist [vx, vy, wz]")
+        if self.private_event_cue_dim != 3:
+            raise ValueError("private event cue must encode left/hold/right with 3 values")
 
     @property
     def flat_dim(self) -> int:
-        # base twist + q/dq/tau + force/contact/grasp + object estimate + goal
-        return 3 + 3 * self.joint_dim + self.force_dim + 2 + 6 + 3
+        # sensors + object estimate + goal + private cue/status + next-gate context
+        return 3 + 3 * self.joint_dim + self.force_dim + 2 + 6 + 3 + 3 + 1 + 1 + 3
 
     @property
     def model_observation_dim(self) -> int:
@@ -111,6 +114,10 @@ class LocalObservationSpec:
             "estimates/object/confidence": (1,),
             "estimates/object/age": (1,),
             "task/goal": (3,),
+            "task/private_event_cue": (self.private_event_cue_dim,),
+            "task/private_event_valid": (1,),
+            "task/private_event_age": (1,),
+            "task/next_gate_context": (3,),
         }
 
     def feature_names(self) -> list[str]:
@@ -130,6 +137,18 @@ class LocalObservationSpec:
             ]
         )
         names.extend(["goal_ego_x", "goal_ego_y", "goal_ego_yaw"])
+        names.extend(
+            [
+                "private_event_left",
+                "private_event_hold",
+                "private_event_right",
+                "private_event_valid",
+                "private_event_age_s",
+                "next_gate_distance_y",
+                "next_gate_index",
+                "next_gate_active",
+            ]
+        )
         return names
 
     def model_field_names(self) -> list[str]:
@@ -144,6 +163,18 @@ class LocalObservationSpec:
         names.extend(f"local_force_{i}" for i in range(self.force_dim))
         names.extend(["local_contact", "local_grasp"])
         names.extend(["goal_ego_x", "goal_ego_y", "goal_ego_yaw"])
+        names.extend(
+            [
+                "private_event_left",
+                "private_event_hold",
+                "private_event_right",
+                "private_event_valid",
+                "private_event_age_s",
+                "next_gate_distance_y",
+                "next_gate_index",
+                "next_gate_active",
+            ]
+        )
         return names
 
 
@@ -180,6 +211,18 @@ class LocalObservationPacket:
     grasp: np.ndarray
     object_estimate: PoseEstimate
     task_goal: np.ndarray
+    private_event_cue: np.ndarray = field(
+        default_factory=lambda: np.zeros(3, dtype=np.float32)
+    )
+    private_event_valid: np.ndarray = field(
+        default_factory=lambda: np.zeros(1, dtype=np.float32)
+    )
+    private_event_age: np.ndarray = field(
+        default_factory=lambda: np.zeros(1, dtype=np.float32)
+    )
+    next_gate_context: np.ndarray = field(
+        default_factory=lambda: np.zeros(3, dtype=np.float32)
+    )
 
     def validate(self, spec: LocalObservationSpec) -> None:
         _require_shape(self.base_twist, (3,), "base_twist")
@@ -190,6 +233,16 @@ class LocalObservationPacket:
         _require_shape(self.contact, (1,), "contact")
         _require_shape(self.grasp, (1,), "grasp")
         _require_shape(self.task_goal, (3,), "task_goal")
+        _require_shape(self.private_event_cue, (3,), "private_event_cue")
+        _require_shape(self.private_event_valid, (1,), "private_event_valid")
+        _require_shape(self.private_event_age, (1,), "private_event_age")
+        _require_shape(self.next_gate_context, (3,), "next_gate_context")
+        if float(self.private_event_valid[0]) not in (0.0, 1.0):
+            raise ValueError("private_event_valid must be binary")
+        if float(self.private_event_age[0]) < 0.0:
+            raise ValueError("private_event_age must be non-negative")
+        if float(self.private_event_valid[0]) == 0.0 and np.any(self.private_event_cue != 0.0):
+            raise ValueError("invalid private event cue must be zeroed")
         self.object_estimate.validate("object_estimate")
 
         for name, value in self.as_mapping().items():
@@ -212,6 +265,10 @@ class LocalObservationPacket:
             "estimates/object/confidence": _float32(self.object_estimate.confidence),
             "estimates/object/age": _float32(self.object_estimate.age),
             "task/goal": _float32(self.task_goal),
+            "task/private_event_cue": _float32(self.private_event_cue),
+            "task/private_event_valid": _float32(self.private_event_valid),
+            "task/private_event_age": _float32(self.private_event_age),
+            "task/next_gate_context": _float32(self.next_gate_context),
         }
 
     def to_flat(self, spec: LocalObservationSpec) -> np.ndarray:
@@ -234,6 +291,10 @@ class PrivilegedAgentState:
     local_force: np.ndarray = field(default_factory=lambda: np.zeros(1, dtype=np.float32))
     contact: bool = False
     grasp: bool = False
+    private_event_cue: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float32))
+    private_event_valid: bool = False
+    private_event_age: float = 0.0
+    next_gate_context: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float32))
 
 
 @dataclass(frozen=True)
@@ -322,6 +383,14 @@ class LocalObservationSimulator:
             grasp=np.asarray([float(truth.grasp)], dtype=np.float32),
             object_estimate=object_estimate,
             task_goal=ego_relative_pose(truth.task_goal_world, truth.ego_pose_world),
+            private_event_cue=(
+                np.asarray(truth.private_event_cue, dtype=np.float32)
+                if truth.private_event_valid
+                else np.zeros(3, dtype=np.float32)
+            ),
+            private_event_valid=np.asarray([float(truth.private_event_valid)], dtype=np.float32),
+            private_event_age=np.asarray([float(truth.private_event_age)], dtype=np.float32),
+            next_gate_context=np.asarray(truth.next_gate_context, dtype=np.float32),
         )
         packet.validate(self.spec)
         return packet
@@ -335,6 +404,10 @@ class LocalObservationSimulator:
         _require_shape(truth.joint_velocity, (self.spec.joint_dim,), "joint_velocity")
         _require_shape(truth.joint_torque, (self.spec.joint_dim,), "joint_torque")
         _require_shape(truth.local_force, (self.spec.force_dim,), "local_force")
+        _require_shape(truth.private_event_cue, (3,), "private_event_cue")
+        _require_shape(truth.next_gate_context, (3,), "next_gate_context")
+        if truth.private_event_age < 0.0:
+            raise ValueError("private_event_age must be non-negative")
 
     def _noisy(self, value: np.ndarray, std: float) -> np.ndarray:
         value = np.asarray(value, dtype=np.float32)

@@ -26,6 +26,8 @@ def test_episode_recipe_is_seed_deterministic_and_uses_current_profiles(tmp_path
         train_episodes=1,
         val_episodes=0,
         test_episodes=0,
+        pilot_episodes=0,
+        profile="balanced",
     )
     assert episode_recipe(1234, config) == episode_recipe(1234, config)
     recipe = episode_recipe(1234, config)
@@ -54,6 +56,7 @@ def test_one_click_collection_and_training_pipeline_from_dataset_root(
             test_episodes=1,
             seed=31,
             episode_len=5,
+            pilot_episodes=0,
         )
     )
     assert manifest["schema_version"] == SCHEMA_VERSION
@@ -79,6 +82,7 @@ def test_one_click_collection_and_training_pipeline_from_dataset_root(
                 test_episodes=1,
                 seed=31,
                 episode_len=5,
+                pilot_episodes=0,
             )
         )
 

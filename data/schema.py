@@ -25,7 +25,7 @@ from data.local_observation import (
 )
 
 
-SCHEMA_VERSION = "fe_pc_wam/decentralized_episode"
+SCHEMA_VERSION = "fe_pc_wam/private_gates_v1"
 STRICT_LOCAL_CONTACT_SEMANTICS = "per_agent_mujoco_geom_contact"
 LEGACY_CONTACT_SEMANTICS = "shared_global_contact_proxy/legacy"
 STRICT_LOCAL_FORCE_SEMANTICS = (
@@ -63,6 +63,7 @@ FAILURE_TO_ID = {
     "robot_too_far": 6,
     "desync_in_passage": 7,
     "object_yaw_too_large": 8,
+    "private_event_mismatch": 9,
     "unknown": 99,
 }
 
@@ -163,6 +164,8 @@ def save_episode(
                 "local/grasp": "local gripper state",
                 "estimates/object/*": "multi-view RGB estimator; synthetic corruption in simulation",
                 "task/goal": "task command transformed to ego frame",
+                "task/private_event_*": "agent-local task cue; invalid cues are zeroed",
+                "task/next_gate_context": "public local context for the next decision gate",
             },
             sort_keys=True,
         )
@@ -245,6 +248,13 @@ def validate_episode(episode: Episode, spec: LocalObservationSpec) -> Dict[str, 
             elif value.shape[0] != observation_count:
                 raise ValueError("all observation arrays must have the same leading length")
 
+        private_valid = np.asarray(fields["task/private_event_valid"]).reshape(-1)
+        private_cue = np.asarray(fields["task/private_event_cue"])
+        if np.any(private_cue[private_valid < 0.5] != 0.0):
+            raise ValueError(
+                f"agent {agent_id} invalid private event cue must be zeroed"
+            )
+
         action = np.asarray(episode.actions[agent_id])
         if action.ndim != 2 or action.shape[1] != 4:
             raise ValueError(
@@ -322,6 +332,7 @@ def _validate_deployable_field_range(
         "local/contact",
         "local/grasp",
         "estimates/object/valid",
+        "task/private_event_valid",
     } and not np.all(np.isin(value, (0.0, 1.0))):
         raise ValueError(f"agent {agent_id} field {name} must contain binary flags")
     if name == "estimates/object/confidence" and np.any(
@@ -332,6 +343,10 @@ def _validate_deployable_field_range(
         )
     if name == "estimates/object/age" and np.any(value < 0.0):
         raise ValueError(f"agent {agent_id} estimates/object/age cannot be negative")
+    if name == "task/private_event_age" and np.any(value < 0.0):
+        raise ValueError(f"agent {agent_id} task/private_event_age cannot be negative")
+    if name == "task/private_event_cue" and np.any((value < 0.0) | (value > 1.0)):
+        raise ValueError(f"agent {agent_id} task/private_event_cue must lie in [0, 1]")
 
 
 def read_local_observations(

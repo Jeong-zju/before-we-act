@@ -28,3 +28,6 @@ datasets/
 backups/
 archive/
 artifacts/
+
+# refs
+refs/

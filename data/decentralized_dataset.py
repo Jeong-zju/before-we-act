@@ -418,8 +418,83 @@ class DecentralizedTransitionDataset(Dataset):
                 "grasp",
             ):
                 value = privileged_tr[key][future_slice]
-                dtype = torch.long if key in {"failure_reason", "phase"} else torch.float32
+                dtype = torch.long if key in {
+                    "failure_reason",
+                    "phase",
+                    "private_event_type",
+                    "private_event_informed_agent",
+                    "private_event_maneuver",
+                } else torch.float32
                 result[f"target_{key}"] = torch.tensor(value, dtype=dtype)
+
+            private_defaults = {
+                "private_event_type": -1,
+                "private_event_informed_agent": -1,
+                "private_event_maneuver": 0,
+                "private_event_error": 0.0,
+            }
+            for key, default in private_defaults.items():
+                if key in privileged_tr:
+                    value = privileged_tr[key][future_slice]
+                else:
+                    value = np.full((self.horizon, 1), default)
+                dtype = torch.long if key != "private_event_error" else torch.float32
+                result[f"target_{key}"] = torch.tensor(value, dtype=dtype)
+
+            reward_values = privileged_tr["reward"][future_slice].reshape(-1)
+            result["target_return"] = torch.tensor(
+                float(np.sum(reward_values)), dtype=torch.float32
+            )
+            result["target_collision"] = result["target_contact"].clone()
+            result["target_force_violation"] = (
+                result["target_force_proxy"].reshape(-1) > 1.0
+            ).to(torch.float32)
+            result["target_maneuver"] = (
+                result["target_private_event_maneuver"].reshape(-1)[0] + 1
+            ).clamp(0, 2).to(torch.long)
+            branch_count = 6
+            if "branch_action" in privileged_tr:
+                branch_action = np.asarray(
+                    privileged_tr["branch_action"][t], dtype=np.float32
+                )
+                branch_count = int(branch_action.shape[0])
+                fitted_action = np.zeros(
+                    (branch_count, 2, self.horizon, self.action_dim),
+                    dtype=np.float32,
+                )
+                copied_horizon = min(self.horizon, int(branch_action.shape[2]))
+                fitted_action[:, :, :copied_horizon] = branch_action[
+                    :, :, :copied_horizon
+                ]
+                branch_valid = np.asarray(
+                    privileged_tr["branch_valid"][t], dtype=np.bool_
+                )
+                branch_plan_pair = privileged_tr["branch_plan_pair"][t]
+                branch_return = privileged_tr["branch_return"][t]
+                branch_success = privileged_tr["branch_success"][t]
+                branch_constraint = privileged_tr[
+                    "branch_constraint_violation"
+                ][t]
+            else:
+                fitted_action = np.zeros(
+                    (branch_count, 2, self.horizon, self.action_dim),
+                    dtype=np.float32,
+                )
+                branch_valid = np.zeros(branch_count, dtype=np.bool_)
+                branch_plan_pair = np.zeros((branch_count, 2), dtype=np.float32)
+                branch_return = np.zeros(branch_count, dtype=np.float32)
+                branch_success = np.zeros(branch_count, dtype=np.float32)
+                branch_constraint = np.zeros(branch_count, dtype=np.float32)
+            result["branch_valid"] = torch.tensor(branch_valid, dtype=torch.bool)
+            result["branch_plan_pair"] = torch.tensor(
+                branch_plan_pair, dtype=torch.float32
+            )
+            result["branch_action"] = torch.tensor(fitted_action, dtype=torch.float32)
+            result["branch_return"] = torch.tensor(branch_return, dtype=torch.float32)
+            result["branch_success"] = torch.tensor(branch_success, dtype=torch.float32)
+            result["branch_constraint_violation"] = torch.tensor(
+                branch_constraint, dtype=torch.float32
+            )
 
             # Progress is a privileged post-transition training target.  Keep
             # the public shape [H] rather than the HDF5 scalar-column shape.

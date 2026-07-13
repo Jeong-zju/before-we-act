@@ -9,6 +9,7 @@ mixed into these directories.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -90,9 +91,11 @@ OBJECT_DROPOUT_BY_SCENARIO = {
 @dataclass(frozen=True)
 class CollectionConfig:
     out_dir: str
-    train_episodes: int = 1000
-    val_episodes: int = 100
-    test_episodes: int = 100
+    train_episodes: int = 2400
+    val_episodes: int = 400
+    test_episodes: int = 400
+    pilot_episodes: int = 100
+    pilot_only: bool = False
     seed: int = 1000
     episode_len: int = 500
     randomize: bool = True
@@ -102,7 +105,7 @@ class CollectionConfig:
     rgb_camera_names: tuple[str, ...] = ()
     rgb_calibration_reference: str = ""
     resume: bool = False
-    profile: str = "balanced"
+    profile: str = "private_gates"
 
     def __post_init__(self) -> None:
         for name in ("train_episodes", "val_episodes", "test_episodes"):
@@ -116,7 +119,9 @@ class CollectionConfig:
             raise ValueError("object measurement standard deviations cannot be negative")
         if not 0.0 <= self.base_object_dropout <= 1.0:
             raise ValueError("base_object_dropout must be in [0, 1]")
-        if self.profile not in {"balanced"}:
+        if self.pilot_episodes < 0:
+            raise ValueError("pilot_episodes cannot be negative")
+        if self.profile not in {"balanced", "private_gates"}:
             raise ValueError(f"unsupported collection profile {self.profile!r}")
 
 
@@ -124,11 +129,17 @@ def episode_recipe(seed: int, config: CollectionConfig) -> dict[str, Any]:
     """Return a deterministic behavior/sensor recipe for one episode seed."""
 
     rng = np.random.default_rng(seed)
-    scenario = str(rng.choice(BALANCED_SCENARIOS))
-    mode = str(rng.choice(BALANCED_MODES))
+    if config.profile == "private_gates":
+        scenario = "private_gates"
+        # The formal dataset is expert data. Counterfactual/off-policy
+        # behavior is generated separately from saved decision snapshots.
+        mode = "scripted"
+    else:
+        scenario = str(rng.choice(BALANCED_SCENARIOS))
+        mode = str(rng.choice(BALANCED_MODES))
     dropout = max(
         float(config.base_object_dropout),
-        float(OBJECT_DROPOUT_BY_SCENARIO[scenario]),
+        float(OBJECT_DROPOUT_BY_SCENARIO.get(scenario, 0.10)),
     )
     return {
         "scenario": scenario,
@@ -141,6 +152,13 @@ def episode_recipe(seed: int, config: CollectionConfig) -> dict[str, Any]:
 def collect_dataset(config: CollectionConfig) -> dict[str, Any]:
     root = Path(config.out_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)
+    pilot_report = None
+    if config.pilot_episodes > 0:
+        pilot_report = _collect_split(root, "pilot", config.pilot_episodes, config)
+        if pilot_report["success_rate"] < 0.95:
+            raise RuntimeError(
+                "pilot success rate is below 95%; fix the task/expert before formal collection"
+            )
     target_counts = {
         "train": config.train_episodes,
         "val": config.val_episodes,
@@ -148,6 +166,8 @@ def collect_dataset(config: CollectionConfig) -> dict[str, Any]:
     }
     split_reports = {}
     for split, target_count in target_counts.items():
+        if config.pilot_only:
+            break
         if target_count == 0:
             continue
         split_reports[split] = _collect_split(root, split, target_count, config)
@@ -155,11 +175,25 @@ def collect_dataset(config: CollectionConfig) -> dict[str, Any]:
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "collection_code_sha256": _collection_code_sha256(),
         "profile": config.profile,
         "root": str(root),
         "config": asdict(config),
         "split_seed_offsets": dict(SPLIT_SEED_OFFSETS),
+        "seed_manifest": {
+            split: {
+                "start": int(config.seed + SPLIT_SEED_OFFSETS[split]),
+                "stop_exclusive": int(
+                    config.seed + SPLIT_SEED_OFFSETS[split] + target_counts[split]
+                ),
+            }
+            for split in target_counts
+            if target_counts[split] > 0
+        },
         "splits": split_reports,
+        "pilot": pilot_report,
+        "split_seeds_frozen_before_collection": True,
+        "old_data_or_checkpoint_compatible": False,
         "legacy_data_compatible": False,
         "deployable_input_contract": (
             "ego-local sensors/task/previous action + optional object estimate; "
@@ -204,7 +238,7 @@ def _collect_split(
 
     environments: dict[str, TwoRobotCarryNarrowPassageEnv] = {}
     start = len(existing)
-    seed_base = config.seed + SPLIT_SEED_OFFSETS[split]
+    seed_base = config.seed + ({**SPLIT_SEED_OFFSETS, "pilot": 3_000_000})[split]
     progress = tqdm(range(start, target_count), desc=f"collect {split}")
     for episode_index in progress:
         seed = seed_base + episode_index
@@ -270,6 +304,9 @@ def _summarize_split(split_dir: Path) -> dict[str, Any]:
     scenarios: Counter[str] = Counter()
     modes: Counter[str] = Counter()
     failures: Counter[str] = Counter()
+    event_types: Counter[str] = Counter()
+    informed_agents: Counter[str] = Counter()
+    maneuvers: Counter[str] = Counter()
     successes = 0
     transitions = 0
     for path in paths:
@@ -301,6 +338,18 @@ def _summarize_split(split_dir: Path) -> dict[str, Any]:
             if not success:
                 failures[str(metadata.get("failure_reason", "unknown"))] += 1
             transitions += int(file.attrs["num_transitions"])
+            event_truth = np.asarray(file["privileged/observations/private_event_truth"][:])
+            if event_truth.size:
+                # Count each event once at its first appearance.
+                seen: set[tuple[int, int, int, int]] = set()
+                for row in event_truth:
+                    key = tuple(int(v) for v in row.tolist())
+                    if key[0] < 0 or key[1] < 0 or key in seen:
+                        continue
+                    seen.add(key)
+                    event_types[str(key[1])] += 1
+                    informed_agents[str(key[2])] += 1
+                    maneuvers[str(key[3])] += 1
     count = len(paths)
     return {
         "path": str(split_dir.resolve()),
@@ -311,6 +360,9 @@ def _summarize_split(split_dir: Path) -> dict[str, Any]:
         "scenario_counts": dict(sorted(scenarios.items())),
         "mode_counts": dict(sorted(modes.items())),
         "failure_reason_counts": dict(sorted(failures.items())),
+        "event_type_counts": dict(sorted(event_types.items())),
+        "informed_agent_counts": dict(sorted(informed_agents.items())),
+        "maneuver_counts": dict(sorted(maneuvers.items())),
     }
 
 
@@ -335,14 +387,31 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _collection_code_sha256() -> str:
+    digest = hashlib.sha256()
+    for relative in (
+        "envs/two_robot_carry_env.py",
+        "data/collect.py",
+        "data/local_observation.py",
+        "data/schema.py",
+        "data/policies.py",
+    ):
+        path = PROJECT_ROOT / relative
+        digest.update(relative.encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Collect a complete decentralized FE-PC-WAM dataset"
     )
     parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--train-episodes", type=int, default=1000)
-    parser.add_argument("--val-episodes", type=int, default=100)
-    parser.add_argument("--test-episodes", type=int, default=100)
+    parser.add_argument("--train-episodes", type=int, default=2400)
+    parser.add_argument("--val-episodes", type=int, default=400)
+    parser.add_argument("--test-episodes", type=int, default=400)
+    parser.add_argument("--pilot-episodes", type=int, default=100)
+    parser.add_argument("--pilot-only", action="store_true")
     parser.add_argument("--seed", type=int, default=1000)
     parser.add_argument("--episode-len", type=int, default=500)
     parser.add_argument("--randomize", type=int, choices=(0, 1), default=1)
@@ -352,7 +421,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rgb-camera-names", nargs="*", default=[])
     parser.add_argument("--rgb-calibration-reference", default="")
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--profile", choices=("balanced",), default="balanced")
+    parser.add_argument(
+        "--profile", choices=("private_gates", "balanced"), default="private_gates"
+    )
     parser.add_argument(
         "--smoke",
         action="store_true",
@@ -371,6 +442,8 @@ def config_from_args(args: argparse.Namespace) -> CollectionConfig:
         train_episodes=train_episodes,
         val_episodes=val_episodes,
         test_episodes=test_episodes,
+        pilot_episodes=0 if args.smoke else args.pilot_episodes,
+        pilot_only=args.pilot_only,
         seed=args.seed,
         episode_len=episode_len,
         randomize=bool(args.randomize),

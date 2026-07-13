@@ -9,6 +9,7 @@ message metadata.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from dataclasses import dataclass, replace
 import json
 import math
@@ -21,6 +22,7 @@ import warnings
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -407,7 +409,10 @@ def _train_plan(
             batch = _to_device(raw_batch, device)
             losses = compute_action_only_plan_losses(
                 model,
-                {"actions": batch["ego_future_action"]},
+                {
+                    "actions": batch["ego_future_action"],
+                    "maneuver": batch["target_maneuver"],
+                },
                 action_mean=action_mean_device,
                 action_std=action_std_device,
             )
@@ -534,12 +539,14 @@ def _train_belief(
             "object_pose": 3,
             "teammate_pose": 3,
             "task_progress": 1,
+            "event_maneuver": 3,
         },
         privileged_aux_roles={
             "self_state": "self",
             "object_pose": "object-belief",
             "teammate_pose": "teammate-belief",
             "task_progress": "task-context",
+            "event_maneuver": "task-context",
         },
     )
     model = LocalBeliefSlotEncoder(model_config).to(device)
@@ -647,6 +654,9 @@ def _train_wam(
                     batch["privileged_teammate_future_action"],
                     normalization,
                 )
+                branch_plan = _encode_branch_plans(
+                    tokenizer, batch["branch_action"], normalization
+                )
             losses = compute_ego_wam_losses(
                 model,
                 ego_slots=beliefs["ego_slots"],
@@ -667,6 +677,15 @@ def _train_wam(
                 target_contact=batch["target_local_contact"],
                 target_force=batch["target_local_force"],
                 target_progress=batch["target_progress"],
+                target_reward=batch["target_reward"],
+                target_success=batch["target_success"],
+                target_failure_reason=batch["target_failure_reason"],
+                target_collision=batch["target_collision"],
+                target_force_violation=batch["target_force_violation"],
+                branch_plan_codes=branch_plan["code_indices"],
+                branch_plan_residuals=branch_plan["residual"],
+                branch_returns=batch["branch_return"],
+                branch_valid=batch["branch_valid"],
             )
             _optimizer_step(optimizer, losses["loss"], model.parameters())
             _accumulate_scalars(running, losses)
@@ -889,6 +908,9 @@ def _train_wam_robust(
                     batch["privileged_teammate_future_action"],
                     normalization,
                 )
+                branch_plan = _encode_branch_plans(
+                    tokenizer, batch["branch_action"], normalization
+                )
                 teammate_condition = _robust_teammate_condition(
                     config=config,
                     intention=intention,
@@ -921,6 +943,15 @@ def _train_wam_robust(
                 target_contact=batch["target_local_contact"],
                 target_force=batch["target_local_force"],
                 target_progress=batch["target_progress"],
+                target_reward=batch["target_reward"],
+                target_success=batch["target_success"],
+                target_failure_reason=batch["target_failure_reason"],
+                target_collision=batch["target_collision"],
+                target_force_violation=batch["target_force_violation"],
+                branch_plan_codes=branch_plan["code_indices"],
+                branch_plan_residuals=branch_plan["residual"],
+                branch_returns=batch["branch_return"],
+                branch_valid=batch["branch_valid"],
             )
             _optimizer_step(optimizer, losses["loss"], model.parameters())
             _accumulate_scalars(running, losses)
@@ -1139,15 +1170,19 @@ def _belief_privileged_targets(
     self_state_dim = 3
     local_width = batch["future_model_observation"].shape[-1]
     # The dataset orders base twist, then q/dq/tau, before local force/contact.
-    # Infer the joint contribution from D_model = 9 + 3J for this schema.
-    if local_width < 9 or (local_width - 9) % 3 != 0:
+    # Private-gates schema: D_model = 17 + 3J. Event fields are task
+    # context, not part of the self-state probe.
+    if local_width < 17 or (local_width - 17) % 3 != 0:
         raise ValueError("future_model_observation has an invalid  sensor layout")
-    self_state_dim += local_width - 9
+    self_state_dim += local_width - 17
     return {
         "self_state": batch["future_model_observation"][:, 0, :self_state_dim],
         "object_pose": batch["target_object_pose_ego"][:, 0],
         "teammate_pose": batch["target_teammate_pose_ego"][:, 0],
         "task_progress": batch["target_progress"][:, :1],
+        "event_maneuver": F.one_hot(
+            batch["target_maneuver"], num_classes=3
+        ).to(torch.float32),
     }
 
 
@@ -1161,6 +1196,29 @@ def _encode_action_plan(
             actions, normalization["action_mean"], normalization["action_std"]
         )
     )
+
+
+def _encode_branch_plans(
+    tokenizer: ActionOnlyPlanTokenizer,
+    actions: torch.Tensor,
+    normalization: Mapping[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Encode fixed counterfactual plan pairs without exposing their outcomes."""
+
+    if actions.ndim != 5 or actions.shape[2] != 2:
+        raise ValueError("branch actions must have shape [B,N,2,H,A]")
+    B, N, _, H, A = actions.shape
+    encoded = tokenizer.encode(
+        _normalize_actions(
+            actions.reshape(B * N * 2, H, A),
+            normalization["action_mean"],
+            normalization["action_std"],
+        )
+    )
+    return {
+        "code_indices": encoded["code_indices"].reshape(B, N, 2),
+        "residual": encoded["residual"].reshape(B, N, 2, -1),
+    }
 
 
 def _normalize_actions(
@@ -1226,11 +1284,20 @@ def _active_code_mask(support: PlanCodeSupport, device: torch.device) -> torch.T
 
 def _dataset_metadata(dataset: DecentralizedTransitionDataset) -> dict[str, Any]:
     assert dataset.spec is not None and dataset.action_dim is not None
+    dataset_digest = hashlib.sha256()
+    for path in dataset.paths:
+        dataset_digest.update(path.name.encode("utf-8"))
+        dataset_digest.update(file_sha256(path).encode("ascii"))
+    manifest_path = dataset.data_dir.parent / "dataset_manifest.json"
+    manifest_digest = file_sha256(manifest_path) if manifest_path.is_file() else None
     return {
         "schema_version": SCHEMA_VERSION,
         "data_dir": str(dataset.data_dir.resolve()),
         "episode_count": len(dataset.paths),
         "sample_count": len(dataset),
+        "dataset_sha256": dataset_digest.hexdigest(),
+        "dataset_manifest_sha256": manifest_digest,
+        "fresh_training_required": True,
         "history": dataset.history,
         "horizon": dataset.horizon,
         "stride": dataset.stride,

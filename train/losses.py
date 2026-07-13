@@ -24,6 +24,14 @@ class EgoWAMLossConfig:
     contact_weight: float = 0.5
     force_weight: float = 0.5
     progress_weight: float = 1.0
+    step_reward_weight: float = 1.0
+    return_quantile_weight: float = 1.0
+    quantile_crossing_weight: float = 0.1
+    terminal_success_weight: float = 0.5
+    terminal_failure_weight: float = 0.25
+    constraint_weight: float = 0.5
+    completion_time_weight: float = 0.1
+    branch_ranking_weight: float = 0.5
 
     def __post_init__(self) -> None:
         for name, value in vars(self).items():
@@ -57,6 +65,15 @@ def compute_ego_wam_losses(
     target_contact: torch.Tensor,
     target_force: torch.Tensor,
     target_progress: torch.Tensor,
+    target_reward: torch.Tensor | None = None,
+    target_success: torch.Tensor | None = None,
+    target_failure_reason: torch.Tensor | None = None,
+    target_collision: torch.Tensor | None = None,
+    target_force_violation: torch.Tensor | None = None,
+    branch_plan_codes: torch.Tensor | None = None,
+    branch_plan_residuals: torch.Tensor | None = None,
+    branch_returns: torch.Tensor | None = None,
+    branch_valid: torch.Tensor | None = None,
     valid_mask: torch.Tensor | None = None,
     config: EgoWAMLossConfig | None = None,
 ) -> Dict[str, torch.Tensor]:
@@ -124,6 +141,122 @@ def compute_ego_wam_losses(
     progress_loss = _masked_mean(
         F.smooth_l1_loss(out["pred_progress"], progress, reduction="none"), mask
     )
+    zero = progress_loss.new_zeros(())
+    step_reward_loss = zero
+    return_quantile_loss = zero
+    quantile_crossing_loss = zero
+    success_loss = zero
+    failure_loss = zero
+    collision_loss = zero
+    force_violation_loss = zero
+    completion_time_loss = zero
+    branch_ranking_loss = zero
+    if target_reward is not None:
+        reward = _as_time_target(target_reward, B, H, pred_actions, "target_reward")
+        step_reward_loss = _masked_mean(
+            F.smooth_l1_loss(out["pred_step_reward"], reward, reduction="none"), mask
+        )
+        realized_return = (reward * mask.to(reward.dtype)).sum(dim=1)
+        quantiles = out["pred_return_quantiles"]
+        levels = quantiles.new_tensor(model.cfg.return_quantiles).view(1, -1)
+        error = realized_return[:, None] - quantiles
+        return_quantile_loss = torch.maximum(
+            levels * error, (levels - 1.0) * error
+        ).mean()
+        if quantiles.shape[1] > 1:
+            quantile_crossing_loss = F.relu(
+                quantiles[:, :-1] - quantiles[:, 1:]
+            ).mean()
+    terminal_success = None
+    if target_success is not None:
+        success_target = _as_time_target(
+            target_success, B, H, pred_actions, "target_success"
+        )
+        terminal_success = success_target.max(dim=1).values
+        success_loss = F.binary_cross_entropy_with_logits(
+            out["pred_success_logits"], terminal_success
+        )
+    if target_failure_reason is not None:
+        reason = target_failure_reason.reshape(B, H).long()[:, -1]
+        reason = reason.clamp(0, model.cfg.failure_classes - 1)
+        failure_loss = F.cross_entropy(out["pred_failure_logits"], reason)
+    if target_collision is not None:
+        collision = _as_time_target(
+            target_collision, B, H, pred_actions, "target_collision"
+        ).max(dim=1).values
+        collision_loss = F.binary_cross_entropy_with_logits(
+            out["pred_collision_logits"], collision.clamp(0.0, 1.0)
+        )
+    if target_force_violation is not None:
+        violation = _as_time_target(
+            target_force_violation, B, H, pred_actions, "target_force_violation"
+        ).max(dim=1).values
+        force_violation_loss = F.binary_cross_entropy_with_logits(
+            out["pred_force_violation_logits"], violation.clamp(0.0, 1.0)
+        )
+    if target_success is not None:
+        done_step = success_target.argmax(dim=1).to(pred_actions.dtype)
+        no_terminal = success_target.max(dim=1).values <= 0
+        done_step = torch.where(no_terminal, done_step.new_full(done_step.shape, H - 1), done_step)
+        completion_target = (done_step + 1.0) / float(H)
+        completion_time_loss = F.smooth_l1_loss(
+            out["pred_completion_time"], completion_target
+        )
+    branch_args = (
+        branch_plan_codes,
+        branch_plan_residuals,
+        branch_returns,
+        branch_valid,
+    )
+    if any(value is not None for value in branch_args):
+        if not all(value is not None for value in branch_args):
+            raise ValueError("all branch-ranking tensors must be supplied together")
+        assert branch_plan_codes is not None
+        assert branch_plan_residuals is not None
+        assert branch_returns is not None
+        assert branch_valid is not None
+        N = int(branch_plan_codes.shape[1])
+        if branch_plan_codes.shape != (B, N, 2):
+            raise ValueError("branch_plan_codes must have shape [B,N,2]")
+        valid = branch_valid.to(device=ego_slots.device, dtype=torch.bool)
+        if valid.any():
+            active_rows = valid.any(dim=1)
+            active_count = int(active_rows.sum().item())
+            branch_out = model(
+                ego_slots=ego_slots[active_rows, None]
+                .expand(-1, N, -1, -1)
+                .reshape(active_count * N, model.cfg.slots_per_agent, model.cfg.slot_dim),
+                plan_codes=branch_plan_codes[active_rows].reshape(active_count * N, 2),
+                plan_residuals=branch_plan_residuals[active_rows].reshape(
+                    active_count * N, 2, model.cfg.plan_latent_dim
+                ),
+                teammate_hypothesis_weight=torch.ones(
+                    active_count * N, device=ego_slots.device, dtype=ego_slots.dtype
+                ),
+            )
+            predicted_return = branch_out["pred_return_quantiles"].mean(dim=-1).reshape(
+                active_count, N
+            )
+            target_branch_return = branch_returns[active_rows].to(
+                device=predicted_return.device, dtype=predicted_return.dtype
+            )
+            active_valid = valid[active_rows]
+            target_difference = (
+                target_branch_return[:, :, None] - target_branch_return[:, None, :]
+            )
+            predicted_difference = (
+                predicted_return[:, :, None] - predicted_return[:, None, :]
+            )
+            pair_valid = (
+                active_valid[:, :, None]
+                & active_valid[:, None, :]
+                & (target_difference.abs() > 1e-4)
+            )
+            if pair_valid.any():
+                branch_ranking_loss = F.softplus(
+                    -target_difference[pair_valid].sign()
+                    * predicted_difference[pair_valid]
+                ).mean()
 
     total = (
         cfg.slot_weight * slot_loss
@@ -132,6 +265,14 @@ def compute_ego_wam_losses(
         + cfg.contact_weight * contact_loss
         + cfg.force_weight * force_loss
         + cfg.progress_weight * progress_loss
+        + cfg.step_reward_weight * step_reward_loss
+        + cfg.return_quantile_weight * return_quantile_loss
+        + cfg.quantile_crossing_weight * quantile_crossing_loss
+        + cfg.terminal_success_weight * success_loss
+        + cfg.terminal_failure_weight * failure_loss
+        + cfg.constraint_weight * (collision_loss + force_violation_loss)
+        + cfg.completion_time_weight * completion_time_loss
+        + cfg.branch_ranking_weight * branch_ranking_loss
     )
     return {
         "loss": total,
@@ -141,6 +282,15 @@ def compute_ego_wam_losses(
         "loss_contact": contact_loss.detach(),
         "loss_force": force_loss.detach(),
         "loss_progress": progress_loss.detach(),
+        "loss_step_reward": step_reward_loss.detach(),
+        "loss_return_quantiles": return_quantile_loss.detach(),
+        "loss_quantile_crossing": quantile_crossing_loss.detach(),
+        "loss_terminal_success": success_loss.detach(),
+        "loss_terminal_failure": failure_loss.detach(),
+        "loss_collision_risk": collision_loss.detach(),
+        "loss_force_violation_risk": force_violation_loss.detach(),
+        "loss_completion_time": completion_time_loss.detach(),
+        "loss_branch_ranking": branch_ranking_loss.detach(),
         "predictions": out,
     }
 

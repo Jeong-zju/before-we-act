@@ -522,6 +522,13 @@ def _runtime_config(
         lambda_delay=float(args.lambda_delay),
         delay_steps=float(args.expected_delay_steps),
         delta_margin=float(args.delta_margin),
+        return_scale=float(args.return_scale),
+        tail_risk_weight=float(args.tail_risk_weight),
+        constraint_risk_weight=float(args.constraint_risk_weight),
+        success_risk_weight=float(args.success_risk_weight),
+        safety_probability_threshold=float(args.safety_probability_threshold),
+        utility_calibration_scale=float(args.utility_calibration_scale),
+        utility_calibration_bias=float(args.utility_calibration_bias),
     )
 
 
@@ -752,6 +759,45 @@ def run_episode(
                 lambda_delay,
             )
             for row in rows:
+                agent_id = int(row.get("agent_id", 0))
+                cue_valid = np.asarray(
+                    next_info.get("private_event_valid_agents", np.zeros(2)),
+                    dtype=np.float32,
+                )
+                cues = np.asarray(
+                    next_info.get("private_event_cue_agents", np.zeros((2, 3))),
+                    dtype=np.float32,
+                )
+                row.update(
+                    {
+                        "private_event_active": bool(
+                            next_info.get("private_event_active", False)
+                        ),
+                        "private_event_index": int(
+                            next_info.get("private_event_index", -1)
+                        ),
+                        "private_event_type": int(
+                            next_info.get("private_event_type", -1)
+                        ),
+                        "private_event_informed_agent": int(
+                            next_info.get("private_event_informed_agent", -1)
+                        ),
+                        "private_event_maneuver": int(
+                            next_info.get("private_event_maneuver", 0)
+                        ),
+                        "private_event_cue_valid": bool(cue_valid[agent_id] > 0.5),
+                        "private_event_cue": cues[agent_id].tolist(),
+                        "private_event_necessary": bool(
+                            next_info.get("private_event_type", -1) == 0
+                        ),
+                        "private_event_redundant": bool(
+                            next_info.get("private_event_type", -1) == 2
+                        ),
+                        "private_event_decision_correct": bool(
+                            next_info.get("private_event_error_steps", 0) == 0
+                        ),
+                    }
+                )
                 candidate_code_counts.update(
                     int(value) for value in row.pop("candidate_codes", ())
                 )
@@ -2119,6 +2165,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lambda-delay", type=float, default=0.05)
     parser.add_argument("--expected-delay-steps", type=float, default=1.0)
     parser.add_argument("--delta-margin", type=float, default=0.0)
+    parser.add_argument("--return-scale", type=float, default=100.0)
+    parser.add_argument("--tail-risk-weight", type=float, default=0.5)
+    parser.add_argument("--constraint-risk-weight", type=float, default=1.0)
+    parser.add_argument("--success-risk-weight", type=float, default=0.5)
+    parser.add_argument("--safety-probability-threshold", type=float, default=0.5)
+    parser.add_argument("--utility-calibration-scale", type=float, default=1.0)
+    parser.add_argument("--utility-calibration-bias", type=float, default=0.0)
     return parser
 
 

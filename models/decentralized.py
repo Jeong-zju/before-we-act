@@ -6,6 +6,7 @@ from typing import Dict
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class MLP(nn.Module):
@@ -46,6 +47,8 @@ class EgoLocalWAMConfig:
     ffn_dim: int = 2048
     dropout: float = 0.1
     hypothesis_weight_epsilon: float = 1e-8
+    return_quantiles: tuple[float, ...] = (0.1, 0.5, 0.9)
+    failure_classes: int = 10
 
 
 class EgoLocalWAM(nn.Module):
@@ -120,6 +123,23 @@ class EgoLocalWAM(nn.Module):
             cfg.model_dim,
             cfg.ffn_dim,
             3,
+            depth=3,
+            dropout=cfg.dropout,
+        )
+        self.step_reward_head = MLP(
+            cfg.model_dim, cfg.ffn_dim, 1, depth=3, dropout=cfg.dropout
+        )
+        self.return_quantile_head = MLP(
+            cfg.model_dim,
+            cfg.ffn_dim,
+            len(cfg.return_quantiles),
+            depth=3,
+            dropout=cfg.dropout,
+        )
+        self.terminal_outcome_head = MLP(
+            cfg.model_dim,
+            cfg.ffn_dim,
+            1 + cfg.failure_classes + 3,  # success, failure class, collision, force, time
             depth=3,
             dropout=cfg.dropout,
         )
@@ -222,6 +242,9 @@ class EgoLocalWAM(nn.Module):
         pred_contact_logits = physical[..., 0]
         pred_force = physical[..., 1]
         pred_progress = physical[..., 2]
+        pred_step_reward = self.step_reward_head(future).squeeze(-1)
+        pred_return_quantiles = self.return_quantile_head(future[:, -1])
+        terminal = self.terminal_outcome_head(future[:, -1])
 
         return {
             "pred_ego_slots": pred_ego_slots,
@@ -232,6 +255,15 @@ class EgoLocalWAM(nn.Module):
             "pred_contact_logits": pred_contact_logits,
             "pred_force": pred_force,
             "pred_progress": pred_progress,
+            "pred_step_reward": pred_step_reward,
+            "pred_return_quantiles": pred_return_quantiles,
+            "pred_success_logits": terminal[:, 0],
+            "pred_failure_logits": terminal[:, 1 : 1 + cfg.failure_classes],
+            "pred_collision_logits": terminal[:, 1 + cfg.failure_classes],
+            "pred_force_violation_logits": terminal[:, 2 + cfg.failure_classes],
+            "pred_completion_time": F.softplus(
+                terminal[:, 3 + cfg.failure_classes]
+            ),
         }
 
     @torch.no_grad()

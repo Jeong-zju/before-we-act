@@ -51,8 +51,8 @@ def test_runtime_rejects_checkpoint_local_sensor_contract_mismatch():
         "schema_version": SCHEMA_VERSION,
         "history": 2,
         "horizon": 2,
-        "model_observation_dim": 9,
-        "local_history_dim": 13,
+        "model_observation_dim": 17,
+        "local_history_dim": 21,
         "action_dim": 4,
         "local_observation_spec": {
             "joint_dim": 0,

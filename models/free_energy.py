@@ -111,6 +111,15 @@ class FreeEnergyConfig:
     gripper_sync_weight: float = 0.5
     base_sync_weight: float = 1.0
     smooth_weight: float = 0.5
+    use_calibrated_utility: bool = True
+    return_scale: float = 100.0
+    tail_risk_weight: float = 0.5
+    constraint_risk_weight: float = 1.0
+    success_risk_weight: float = 0.5
+    safety_probability_threshold: float = 0.5
+    infeasible_penalty: float = 10.0
+    calibration_scale: float = 1.0
+    calibration_bias: float = 0.0
 
 
 class FreeEnergyEvaluator:
@@ -175,7 +184,7 @@ class FreeEnergyEvaluator:
         else:
             unc = uncertainty.to(device=device, dtype=dtype).reshape(B)
 
-        total = (
+        legacy_total = (
             cfg.alpha_goal * goal
             + cfg.alpha_safety * safety
             + cfg.alpha_collab * collab
@@ -183,13 +192,52 @@ class FreeEnergyEvaluator:
             + cfg.alpha_ctrl * ctrl
         )
 
+        utility_available = all(
+            name in rollout
+            for name in (
+                "pred_return_quantiles",
+                "pred_success_logits",
+                "pred_collision_logits",
+                "pred_force_violation_logits",
+            )
+        )
+        if cfg.use_calibrated_utility and utility_available:
+            quantiles = rollout["pred_return_quantiles"] / max(cfg.return_scale, 1e-8)
+            expected_return = quantiles.mean(dim=-1)
+            lower_return = quantiles[..., 0]
+            tail_risk = (expected_return - lower_return).clamp_min(0.0)
+            success_risk = 1.0 - torch.sigmoid(rollout["pred_success_logits"])
+            collision_risk = torch.sigmoid(rollout["pred_collision_logits"])
+            force_risk = torch.sigmoid(rollout["pred_force_violation_logits"])
+            constraint_risk = torch.maximum(collision_risk, force_risk)
+            infeasible = constraint_risk > cfg.safety_probability_threshold
+            raw_utility_cost = (
+                -expected_return
+                + cfg.tail_risk_weight * tail_risk
+                + cfg.constraint_risk_weight * constraint_risk
+                + cfg.success_risk_weight * success_risk
+                + infeasible.to(dtype) * cfg.infeasible_penalty
+            )
+            total = cfg.calibration_scale * raw_utility_cost + cfg.calibration_bias
+        else:
+            expected_return = torch.zeros(B, device=device, dtype=dtype)
+            tail_risk = torch.zeros_like(expected_return)
+            success_risk = torch.zeros_like(expected_return)
+            constraint_risk = torch.zeros_like(expected_return)
+            total = legacy_total
+
         return {
             "G": total,
+            "G_legacy": legacy_total,
             "L_goal": goal,
             "L_safety": safety,
             "L_collab": collab,
             "U_intent": unc,
             "C_ctrl": ctrl,
+            "expected_return": expected_return,
+            "tail_risk": tail_risk,
+            "success_risk": success_risk,
+            "constraint_risk": constraint_risk,
         }
 
     def total_score_hypotheses(

@@ -61,7 +61,7 @@ def test_deployable_packet_has_no_teammate_state_and_occlusion_does_not_leak_tru
     )
     hidden = simulator.observe(0, hidden_truth, object_visible=False)
 
-    assert spec.flat_dim == 15
+    assert spec.flat_dim == 23
     assert all("teammate" not in name for name in spec.field_shapes())
     assert all("teammate" not in name for name in spec.feature_names())
     np.testing.assert_allclose(hidden.object_estimate.pose, visible.object_estimate.pose)
@@ -139,8 +139,8 @@ def test_dataset_previous_action_padding_targets_and_ego_isolation(tmp_path):
     sample = dataset[4]
     assert sample["ego_id"].item() == 0
     assert sample["decision_t"].item() == 2
-    assert dataset.observation_dim == 15
-    assert dataset.local_history_dim == 13
+    assert dataset.observation_dim == 23
+    assert dataset.local_history_dim == 21
     assert all("object" not in name for name in dataset.input_feature_names)
     assert sample["padding_mask"].tolist() == [True, False, False, False]
     assert sample["history_mask"].tolist() == [False, True, True, True]
@@ -153,13 +153,13 @@ def test_dataset_previous_action_padding_targets_and_ego_isolation(tmp_path):
     np.testing.assert_allclose(sample["prev_action_history"][3].numpy(), 0.2)
     assert not np.any(np.isclose(sample["prev_action_history"].numpy(), 0.3))
     np.testing.assert_allclose(sample["ego_future_action"][0].numpy(), 0.3)
-    assert sample["flat_observation_history"].shape == (4, 15)
-    assert sample["model_history"].shape == (4, 13)
+    assert sample["flat_observation_history"].shape == (4, 23)
+    assert sample["model_history"].shape == (4, 21)
     np.testing.assert_allclose(sample["local_history"], sample["model_history"])
     np.testing.assert_allclose(sample["object_observation"].numpy(), [20.0, 0.0, 0.0])
     np.testing.assert_allclose(sample["future_object_observation"][0].numpy(), [30.0, 0.0, 0.0])
-    assert sample["ego_future_observation"].shape == (2, 15)
-    assert sample["future_model_observation"].shape == (2, 9)
+    assert sample["ego_future_observation"].shape == (2, 23)
+    assert sample["future_model_observation"].shape == (2, 17)
     np.testing.assert_allclose(
         sample["future_model_observation"][0, :3].numpy(), [3.0, 3.0, 3.0]
     )

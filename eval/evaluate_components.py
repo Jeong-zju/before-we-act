@@ -96,6 +96,8 @@ class _WeightedScalars:
 
     def add(self, values: Mapping[str, Any], names: tuple[str, ...], weight: int) -> None:
         for name in names:
+            if name not in values:
+                continue
             value = values[name]
             if not isinstance(value, torch.Tensor) or value.numel() != 1:
                 raise TypeError(f"metric {name!r} must be a scalar tensor")
@@ -183,6 +185,7 @@ def evaluate_components(config: ComponentEvaluationConfig) -> dict[str, Any]:
         "loss_usage_balance",
         "loss_residual",
         "loss_auxiliary_trajectory",
+        "loss_maneuver",
         "soft_perplexity",
     )
     belief_loss_names = (
@@ -191,6 +194,7 @@ def evaluate_components(config: ComponentEvaluationConfig) -> dict[str, Any]:
         "loss_aux_object_pose",
         "loss_aux_teammate_pose",
         "loss_aux_task_progress",
+        "loss_aux_event_maneuver",
     )
     wam_loss_names = (
         "loss",
@@ -200,6 +204,15 @@ def evaluate_components(config: ComponentEvaluationConfig) -> dict[str, Any]:
         "loss_contact",
         "loss_force",
         "loss_progress",
+        "loss_step_reward",
+        "loss_return_quantiles",
+        "loss_quantile_crossing",
+        "loss_terminal_success",
+        "loss_terminal_failure",
+        "loss_collision_risk",
+        "loss_force_violation_risk",
+        "loss_completion_time",
+        "loss_branch_ranking",
     )
     intention_loss_names = ("loss", "loss_code", "loss_residual_nll")
 
@@ -230,7 +243,10 @@ def evaluate_components(config: ComponentEvaluationConfig) -> dict[str, Any]:
 
             plan_losses = compute_action_only_plan_losses(
                 plan,
-                {"actions": batch["ego_future_action"]},
+                {
+                    "actions": batch["ego_future_action"],
+                    "maneuver": batch["target_maneuver"],
+                },
                 action_mean=action_mean,
                 action_std=action_std,
             )
@@ -258,10 +274,15 @@ def evaluate_components(config: ComponentEvaluationConfig) -> dict[str, Any]:
             )
             reconstruction_elements += int(action_error.numel())
 
+            belief_targets = {
+                name: value
+                for name, value in _belief_privileged_targets(batch).items()
+                if name in belief.cfg.privileged_aux_dims
+            }
             belief_losses = compute_local_belief_auxiliary_losses(
                 belief,
                 _belief_forward_batch(batch),
-                _belief_privileged_targets(batch),
+                belief_targets,
             )
             belief_metrics.add(belief_losses, belief_loss_names, batch_size)
 
@@ -273,6 +294,21 @@ def evaluate_components(config: ComponentEvaluationConfig) -> dict[str, Any]:
             teammate_plan = plan.encode(
                 _normalize_actions(
                     batch["privileged_teammate_future_action"], action_mean, action_std
+                )
+            )
+            branch_actions = batch["branch_action"]
+            branch_batch, branch_count, _, branch_horizon, branch_action_dim = (
+                branch_actions.shape
+            )
+            encoded_branches = plan.encode(
+                _normalize_actions(
+                    branch_actions.reshape(
+                        branch_batch * branch_count * 2,
+                        branch_horizon,
+                        branch_action_dim,
+                    ),
+                    action_mean,
+                    action_std,
                 )
             )
             wam_losses = compute_ego_wam_losses(
@@ -295,6 +331,19 @@ def evaluate_components(config: ComponentEvaluationConfig) -> dict[str, Any]:
                 target_contact=batch["target_local_contact"],
                 target_force=batch["target_local_force"],
                 target_progress=batch["target_progress"],
+                target_reward=batch["target_reward"],
+                target_success=batch["target_success"],
+                target_failure_reason=batch["target_failure_reason"],
+                target_collision=batch["target_collision"],
+                target_force_violation=batch["target_force_violation"],
+                branch_plan_codes=encoded_branches["code_indices"].reshape(
+                    branch_batch, branch_count, 2
+                ),
+                branch_plan_residuals=encoded_branches["residual"].reshape(
+                    branch_batch, branch_count, 2, -1
+                ),
+                branch_returns=batch["branch_return"],
+                branch_valid=batch["branch_valid"],
             )
             wam_metrics.add(wam_losses, wam_loss_names, batch_size)
 
@@ -799,14 +848,17 @@ def _belief_privileged_targets(
     batch: Mapping[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
     local_width = batch["future_model_observation"].shape[-1]
-    if local_width < 9 or (local_width - 9) % 3 != 0:
+    if local_width < 17 or (local_width - 17) % 3 != 0:
         raise ValueError("future_model_observation has an invalid  sensor layout")
-    self_state_dim = 3 + local_width - 9
+    self_state_dim = 3 + local_width - 17
     return {
         "self_state": batch["future_model_observation"][:, 0, :self_state_dim],
         "object_pose": batch["target_object_pose_ego"][:, 0],
         "teammate_pose": batch["target_teammate_pose_ego"][:, 0],
         "task_progress": batch["target_progress"][:, :1],
+        "event_maneuver": torch.nn.functional.one_hot(
+            batch["target_maneuver"], num_classes=3
+        ).to(torch.float32),
     }
 
 

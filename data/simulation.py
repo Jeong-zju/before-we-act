@@ -185,6 +185,20 @@ class SimulationAdapter:
             [0.0, float(self.env.cfg.goal_y), 0.0], dtype=np.float32
         )
         result: list[LocalObservationPacket] = []
+        event_cues = np.asarray(
+            info.get("private_event_cue_agents", np.zeros((2, 3))),
+            dtype=np.float32,
+        )
+        event_valid = np.asarray(
+            info.get("private_event_valid_agents", np.zeros(2)), dtype=np.float32
+        )
+        event_age = np.asarray(
+            info.get("private_event_age_agents", np.zeros(2)), dtype=np.float32
+        )
+        gate_context = np.asarray(
+            info.get("next_gate_context_agents", np.zeros((2, 3))),
+            dtype=np.float32,
+        )
         for agent_id in range(_NUM_AGENTS):
             truth = PrivilegedAgentState(
                 ego_pose_world=robot_poses[agent_id],
@@ -199,6 +213,10 @@ class SimulationAdapter:
                 ),
                 contact=self._local_contact(info, agent_id),
                 grasp=bool(applied_action[agent_id, 3] > 0.5),
+                private_event_cue=event_cues[agent_id],
+                private_event_valid=bool(event_valid[agent_id] > 0.5),
+                private_event_age=float(event_age[agent_id]),
+                next_gate_context=gate_context[agent_id],
             )
             visible_key = f"object_visible_robot_{agent_id}"
             object_visible = bool(info.get(visible_key, True))

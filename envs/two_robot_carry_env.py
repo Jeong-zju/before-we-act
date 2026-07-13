@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Tuple
+import copy
 
 import mujoco
 import numpy as np
@@ -40,6 +41,15 @@ class CarryEnvConfig:
     local_force_scale_newtons: float = 1000.0
     object_z: float = 0.061
     seed: int = 0
+    private_gate_positions: tuple[float, float, float] = (-0.05, 1.15, 2.30)
+    private_gate_window: float = 0.32
+    private_gate_target_offset: float = 0.16
+    private_gate_error_limit: int = 18
+    reward_progress_scale: float = 20.0
+    reward_time_cost: float = 0.01
+    reward_energy_scale: float = 0.01
+    reward_force_scale: float = 2.0
+    reward_private_event_error: float = 0.25
 
 
 class TwoRobotCarryNarrowPassageEnv:
@@ -90,6 +100,11 @@ class TwoRobotCarryNarrowPassageEnv:
         self.last_visible_teammate_pose: dict[int, np.ndarray | None] = {0: None, 1: None}
         self.min_robot_distance = float("inf")
         self.max_contact_force = 0.0
+        self.private_events: list[dict] = []
+        self.private_event_index = 0
+        self.private_event_error_steps = 0
+        self.private_event_mistakes = 0
+        self._previous_progress = 0.0
 
     def _apply_scenario_preset(self):
         scenario = str(getattr(self.cfg, "scenario", "nominal") or "nominal").lower()
@@ -123,6 +138,11 @@ class TwoRobotCarryNarrowPassageEnv:
             self.cfg.false_belief_prob = max(self.cfg.false_belief_prob, 1.0)
             self.cfg.force_limit = min(self.cfg.force_limit, 0.80)
             self.cfg.min_robot_distance_limit = max(self.cfg.min_robot_distance_limit, 0.35)
+            return
+        if scenario == "private_gates":
+            # Geometry remains feasible for all three maneuvers; uncertainty is
+            # created by agent-local task information, not hidden physics.
+            self.cfg.occlusion_prob = max(self.cfg.occlusion_prob, 0.15)
             return
         raise ValueError(f"Unknown carry scenario: {scenario}")
 
@@ -168,8 +188,10 @@ class TwoRobotCarryNarrowPassageEnv:
 
         mujoco.mj_forward(self.model, self.data)
         self._reset_scenario_state()
+        self._reset_private_events(seed if seed is not None else self.cfg.seed)
         self._record_pose_history()
         self._update_scenario_state()
+        self._previous_progress = self._progress()
         return self.get_obs()
 
     def _set_object_pose(self, x: float, y: float, z: float, yaw: float):
@@ -228,6 +250,93 @@ class TwoRobotCarryNarrowPassageEnv:
         self.last_visible_teammate_pose = {0: self._robot_pose(1), 1: self._robot_pose(0)}
         self.min_robot_distance = float("inf")
         self.max_contact_force = 0.0
+
+    def _reset_private_events(self, seed: int) -> None:
+        """Create balanced private decisions without perturbing pre-event physics."""
+
+        self.private_events = []
+        self.private_event_index = 0
+        self.private_event_error_steps = 0
+        self.private_event_mistakes = 0
+        if self.cfg.scenario != "private_gates":
+            return
+        # Cycling seed/index assignments makes event type, observer and
+        # maneuver balanced over sequential collection seeds.
+        event_types = (0, 1, 2)  # decisive-private, locally-inferable, redundant
+        for gate_index, gate_y in enumerate(self.cfg.private_gate_positions):
+            event_type = event_types[(int(seed) + gate_index) % len(event_types)]
+            informed_agent = (int(seed) + gate_index) % 2
+            maneuver = (-1, 1)[(int(seed) // 2 + gate_index) % 2]
+            if event_type == 2:
+                maneuver = 0
+            self.private_events.append(
+                {
+                    "gate_index": gate_index,
+                    "gate_y": float(gate_y),
+                    "event_type": event_type,
+                    "informed_agent": informed_agent,
+                    "maneuver": maneuver,
+                    "resolved": False,
+                }
+            )
+
+    def _current_private_event(self) -> dict | None:
+        if self.private_event_index >= len(self.private_events):
+            return None
+        return self.private_events[self.private_event_index]
+
+    def _private_event_observations(self, obj_y: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        cues = np.zeros((2, 3), dtype=np.float32)
+        valid = np.zeros(2, dtype=np.float32)
+        ages = np.zeros(2, dtype=np.float32)
+        context = np.zeros((2, 3), dtype=np.float32)
+        event = self._current_private_event()
+        if event is None:
+            return cues, valid, ages, context
+        distance = float(event["gate_y"] - obj_y)
+        active = abs(distance) <= 2.0 * self.cfg.private_gate_window
+        context[:, :] = np.asarray(
+            [distance, event["gate_index"] / max(1, len(self.private_events) - 1), float(active)],
+            dtype=np.float32,
+        )
+        if active:
+            # Locally-inferable events deliberately expose the same cue to both
+            # agents. Decisive/redundant cues remain private to one agent.
+            observers = (0, 1) if event["event_type"] == 1 else (event["informed_agent"],)
+            cue_index = int(event["maneuver"]) + 1
+            for agent_id in observers:
+                cues[agent_id, cue_index] = 1.0
+                valid[agent_id] = 1.0
+        return cues, valid, ages, context
+
+    def _update_private_event(self, action: np.ndarray, obj_y: float, obj_x: float) -> float:
+        event = self._current_private_event()
+        if event is None:
+            return 0.0
+        gate_y = float(event["gate_y"])
+        window = float(self.cfg.private_gate_window)
+        error = 0.0
+        if abs(obj_y - gate_y) <= window:
+            desired = int(event["maneuver"])
+            lateral = np.asarray([action[0], action[4]], dtype=np.float64)
+            if desired == 0:
+                wrong = bool(np.max(np.abs(lateral)) > 0.35)
+            else:
+                route_reached = desired * obj_x >= 0.6 * self.cfg.private_gate_target_offset
+                steering_correctly = bool(np.all(desired * lateral >= 0.05))
+                wrong = not (route_reached or steering_correctly)
+            if wrong:
+                self.private_event_error_steps += 1
+                error = 1.0
+            else:
+                self.private_event_error_steps = max(0, self.private_event_error_steps - 1)
+        if obj_y > gate_y + window:
+            event["resolved"] = True
+            if self.private_event_error_steps > 0:
+                self.private_event_mistakes += 1
+            self.private_event_index += 1
+            self.private_event_error_steps = 0
+        return error
 
     def _record_pose_history(self):
         poses = np.stack([self._robot_pose(0), self._robot_pose(1)], axis=0)
@@ -374,6 +483,10 @@ class TwoRobotCarryNarrowPassageEnv:
         grip_a, grip_b = self._grip_points()
         midpoint = 0.5 * (grip_a + grip_b)
         midpoint_error = float(np.linalg.norm(obj[:2] - midpoint))
+
+        if self.private_event_error_steps >= self.cfg.private_gate_error_limit:
+            self.failure_reason = "private_event_mismatch"
+            return True
 
         if force_proxy > self._force_limit():
             self.failure_reason = "force_violation"
@@ -548,6 +661,15 @@ class TwoRobotCarryNarrowPassageEnv:
         )
         local_obs_agents = self._model_local_obs_agents(obj, a, b, force_proxy, contacts)
         rel_target_pose_agents, object_rel_pose_agents = self._local_pose_context_agents(obj, a, b)
+        event = self._current_private_event()
+        event_cues, event_valid, event_age, next_gate_context = (
+            self._private_event_observations(float(obj[1]))
+        )
+        communication_required = communication_required or bool(
+            event is not None
+            and int(event["event_type"]) == 0
+            and next_gate_context[0, 2] > 0.5
+        )
 
         return {
             "scenario": self.cfg.scenario,
@@ -570,6 +692,17 @@ class TwoRobotCarryNarrowPassageEnv:
             "teammate_visible_robot_0": bool(self.teammate_visible.get(0, True)),
             "teammate_visible_robot_1": bool(self.teammate_visible.get(1, True)),
             "communication_required": communication_required,
+            "private_event_active": bool(event is not None and next_gate_context[0, 2] > 0.5),
+            "private_event_index": int(self.private_event_index),
+            "private_event_type": int(event["event_type"]) if event is not None else -1,
+            "private_event_informed_agent": int(event["informed_agent"]) if event is not None else -1,
+            "private_event_maneuver": int(event["maneuver"]) if event is not None else 0,
+            "private_event_cue_agents": event_cues,
+            "private_event_valid_agents": event_valid,
+            "private_event_age_agents": event_age,
+            "next_gate_context_agents": next_gate_context,
+            "private_event_error_steps": int(self.private_event_error_steps),
+            "private_event_mistakes": int(self.private_event_mistakes),
             "blocked_passage_active": bool(self.blocked_passage_active),
             "blocked_passage_current": bool(self.blocked_passage_active and 0.85 < obj[1] < 1.90),
             "false_belief_active": bool(self.false_belief_active),
@@ -666,6 +799,11 @@ class TwoRobotCarryNarrowPassageEnv:
         self._record_pose_history()
         self._update_scenario_state()
 
+        event_pose = self._object_pose_xy_yaw()
+        event_error = self._update_private_event(
+            action, float(event_pose[1]), float(event_pose[0])
+        )
+
         success = self._success()
         failure = self._failure()
         done = bool(success or failure)
@@ -676,10 +814,16 @@ class TwoRobotCarryNarrowPassageEnv:
         obj = self._object_pose_xy_yaw()
         force_proxy = info["force_proxy"]
 
-        reward = 0.0
-        reward += 0.5 * (obj[1] + 1.2)
-        reward -= 2.0 * force_proxy
-        reward -= 0.01 * float(np.sum(action[:3] ** 2) + np.sum(action[4:7] ** 2))
+        progress = self._progress(obj)
+        progress_delta = progress - self._previous_progress
+        self._previous_progress = progress
+        reward = self.cfg.reward_progress_scale * progress_delta
+        reward -= self.cfg.reward_time_cost
+        reward -= self.cfg.reward_force_scale * force_proxy
+        reward -= self.cfg.reward_energy_scale * float(
+            np.sum(action[:3] ** 2) + np.sum(action[4:7] ** 2)
+        )
+        reward -= self.cfg.reward_private_event_error * event_error
         if success:
             reward += 100.0
         if failure and not success:
@@ -698,8 +842,12 @@ class TwoRobotCarryNarrowPassageEnv:
         b = self._robot_pose(1)
         obj = self._object_pose_xy_yaw()
 
-        target_a_x = -0.42
-        target_b_x = 0.42
+        route_offset = 0.0
+        event = self._current_private_event()
+        if event is not None and abs(float(obj[1]) - float(event["gate_y"])) <= 2.0 * self.cfg.private_gate_window:
+            route_offset = float(event["maneuver"]) * self.cfg.private_gate_target_offset
+        target_a_x = -0.42 + route_offset
+        target_b_x = 0.42 + route_offset
         target_y = 3.15
 
         def ctrl_for_robot(p, target_x):
@@ -722,6 +870,57 @@ class TwoRobotCarryNarrowPassageEnv:
     def get_state_vector(self) -> np.ndarray:
         obs = self.get_obs()
         return obs["global_state"].astype(np.float64)
+
+    def snapshot(self) -> dict:
+        """Capture all simulator/task state needed for deterministic branches."""
+
+        return {
+            "qpos": self.data.qpos.copy(),
+            "qvel": self.data.qvel.copy(),
+            "ctrl": self.data.ctrl.copy(),
+            "step_count": self.step_count,
+            "last_action": self.last_action.copy(),
+            "grasped": self.grasped,
+            "failure_reason": self.failure_reason,
+            "robot_pose_history": copy.deepcopy(self.robot_pose_history),
+            "private_events": copy.deepcopy(self.private_events),
+            "private_event_index": self.private_event_index,
+            "private_event_error_steps": self.private_event_error_steps,
+            "private_event_mistakes": self.private_event_mistakes,
+            "previous_progress": self._previous_progress,
+            "rng_state": copy.deepcopy(self.rng.bit_generator.state),
+            "occlusion_active": self.occlusion_active,
+            "teammate_visible": dict(self.teammate_visible),
+            "last_visible_teammate_pose": copy.deepcopy(self.last_visible_teammate_pose),
+            "min_robot_distance": self.min_robot_distance,
+            "max_contact_force": self.max_contact_force,
+        }
+
+    def restore(self, state: dict) -> None:
+        """Restore :meth:`snapshot` without changing the exogenous RNG tape."""
+
+        self.data.qpos[:] = state["qpos"]
+        self.data.qvel[:] = state["qvel"]
+        self.data.ctrl[:] = state["ctrl"]
+        self.step_count = int(state["step_count"])
+        self.last_action = state["last_action"].copy()
+        self.grasped = bool(state["grasped"])
+        self.failure_reason = str(state["failure_reason"])
+        self.robot_pose_history = copy.deepcopy(state["robot_pose_history"])
+        self.private_events = copy.deepcopy(state["private_events"])
+        self.private_event_index = int(state["private_event_index"])
+        self.private_event_error_steps = int(state["private_event_error_steps"])
+        self.private_event_mistakes = int(state["private_event_mistakes"])
+        self._previous_progress = float(state["previous_progress"])
+        self.rng.bit_generator.state = copy.deepcopy(state["rng_state"])
+        self.occlusion_active = bool(state["occlusion_active"])
+        self.teammate_visible = dict(state["teammate_visible"])
+        self.last_visible_teammate_pose = copy.deepcopy(
+            state["last_visible_teammate_pose"]
+        )
+        self.min_robot_distance = float(state["min_robot_distance"])
+        self.max_contact_force = float(state["max_contact_force"])
+        mujoco.mj_forward(self.model, self.data)
 
 
 def main():

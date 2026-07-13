@@ -232,6 +232,11 @@ def audit_hdf5_file(path: str | Path) -> dict[str, Any]:
             contact = np.asarray(deployable["local/contact"][:])
             grasp = np.asarray(deployable["local/grasp"][:])
             local_force = np.asarray(deployable["local/force"][:])
+            private_valid = np.asarray(
+                deployable["task/private_event_valid"][:]
+            )
+            private_cue = np.asarray(deployable["task/private_event_cue"][:])
+            private_age = np.asarray(deployable["task/private_event_age"][:])
             if not np.all(np.isin(valid, (0.0, 1.0))):
                 raise ContractAuditError(f"{source}: object valid flag is not binary")
             if not np.all(np.isin(contact, (0.0, 1.0))):
@@ -244,6 +249,15 @@ def audit_hdf5_file(path: str | Path) -> dict[str, Any]:
                 raise ContractAuditError(f"{source}: object estimate age is negative")
             if strict_sensors and np.any((local_force < 0) | (local_force > 1)):
                 raise ContractAuditError(f"{source}: strict local force lies outside [0,1]")
+            if not np.all(np.isin(private_valid, (0.0, 1.0))):
+                raise ContractAuditError(f"{source}: private event valid flag is not binary")
+            if np.any(private_age < 0):
+                raise ContractAuditError(f"{source}: private event age is negative")
+            invalid_rows = private_valid.reshape(-1) < 0.5
+            if np.any(private_cue[invalid_rows] != 0.0):
+                raise ContractAuditError(
+                    f"{source}: invalid private event cue leaks event information"
+                )
 
             action = file[f"transitions/actions/{agent_name}"]
             if (
@@ -274,6 +288,24 @@ def audit_hdf5_file(path: str | Path) -> dict[str, Any]:
                     f"{source}: {agent_name} wz/grip action lies outside [-1,1]"
                 )
 
+        required_privileged_observations = {
+            "private_event_truth",
+            "private_event_cue_agents",
+            "private_event_valid_agents",
+            "next_gate_context_agents",
+        }
+        actual_privileged_observations = set(
+            _dataset_paths(file["privileged/observations"])
+        )
+        missing_private = sorted(
+            required_privileged_observations - actual_privileged_observations
+        )
+        scenario = str(file["metadata"].attrs.get("scenario", ""))
+        if scenario == "private_gates" and missing_private:
+            raise ContractAuditError(
+                f"{source}: missing private-gates privileged labels {missing_private}"
+            )
+
         return {
             "path": str(source.resolve()),
             "schema_version": schema,
@@ -286,6 +318,7 @@ def audit_hdf5_file(path: str | Path) -> dict[str, Any]:
             "deployable_fields": list(spec.field_shapes()),
             "deployable_dataset_count": deployable_dataset_count,
             "privileged_policy_input_allowed": False,
+            "private_event_firewall_passed": True,
             "local_contact_semantics": contact_semantics,
             "strict_local_contact_semantics": contact_semantics
             == STRICT_LOCAL_CONTACT_SEMANTICS,

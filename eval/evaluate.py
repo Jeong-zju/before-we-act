@@ -202,7 +202,7 @@ def compare_communication_modes(
 
     paired_comparisons: dict[str, dict[str, Any]] = {}
     comparison_baselines = tuple(
-        mode for mode in ("no_comm", "always_reply") if mode in indexed
+        mode for mode in required if mode in DEPLOYABLE_COMMUNICATION_MODES
     )
     for mode in required:
         mode_comparisons: dict[str, Any] = {}
@@ -338,6 +338,11 @@ def aggregate_episode_records(
     force_violation_rate: list[float] = []
     max_force: list[float] = []
     failure_reason_counts: Counter[str] = Counter()
+    necessary_event_requests: list[float] = []
+    redundant_event_requests: list[float] = []
+    event_decision_correct: list[float] = []
+    event_predicted_vpi: list[float] = []
+    event_realized_value: list[float] = []
     compact_sums: Counter[str] = Counter()
     compact_counts: Counter[str] = Counter()
 
@@ -520,6 +525,24 @@ def aggregate_episode_records(
         reason = record.get("failure_reason")
         if reason is not None:
             failure_reason_counts[str(reason)] += 1
+        for event in record.get("steps", []):
+            if not isinstance(event, Mapping) or not event.get(
+                "private_event_active", False
+            ):
+                continue
+            request_value = float(bool(event.get("request", False)))
+            if event.get("private_event_necessary", False):
+                necessary_event_requests.append(request_value)
+            if event.get("private_event_redundant", False):
+                redundant_event_requests.append(request_value)
+            if "private_event_decision_correct" in event:
+                event_decision_correct.append(
+                    float(bool(event["private_event_decision_correct"]))
+                )
+            if "VPI" in event or "vpi" in event:
+                event_predicted_vpi.append(float(event.get("VPI", event.get("vpi"))))
+            if "realized_information_value" in event:
+                event_realized_value.append(float(event["realized_information_value"]))
 
     # When only episode-level rates are present, use them rather than claiming
     # the event stream was observed.  Otherwise rates use the true decision
@@ -556,6 +579,12 @@ def aggregate_episode_records(
         "force_violation_rate_mean": _mean_or_none(force_violation_rate),
         "max_force_mean": _mean_or_none(max_force),
         "request_rate": request_rate,
+        "necessary_event_request_rate": _mean_or_none(necessary_event_requests),
+        "redundant_event_request_rate": _mean_or_none(redundant_event_requests),
+        "event_decision_accuracy": _mean_or_none(event_decision_correct),
+        "vpi_realized_value_correlation": _pearson_or_none(
+            event_predicted_vpi, event_realized_value
+        ),
         "reply_rate": reply_rate,
         "actual_request_reply_bits_total": bits_total,
         "actual_request_reply_bits_per_episode": float(bits_total / len(records)),
@@ -1131,6 +1160,33 @@ def _selective_vpi_acceptance(
     if selective_bits is not None and always_bits is not None and float(always_bits) > 0.0:
         bits_reduction = 1.0 - float(selective_bits) / float(always_bits)
 
+    selective_comparisons = paired_comparisons.get("selective_vpi", {})
+
+    def baseline_advantage(baseline: str) -> bool | None:
+        comparison = selective_comparisons.get(f"vs_{baseline}")
+        if not isinstance(comparison, Mapping):
+            return None
+        metrics = comparison.get("metrics", {})
+        primary = [metrics.get(name, {}) for name in ("success_rate", "return_mean", "safety_rate")]
+        available = [item.get("ci95") for item in primary if item.get("ci95") is not None]
+        if not available:
+            return None
+        improved = any(float(ci[0]) > 0.0 for ci in available)
+        degraded = any(float(ci[1]) < 0.0 for ci in available)
+        return bool(improved and not degraded)
+
+    periodic_advantage = baseline_advantage("periodic")
+    random_advantage = baseline_advantage("random")
+    private_event_evidence = (
+        selective.get("necessary_event_request_rate") is not None
+        or selective.get("redundant_event_request_rate") is not None
+    )
+    matched_baseline_pass = True if not private_event_evidence else (
+        None
+        if periodic_advantage is None or random_advantage is None
+        else bool(periodic_advantage and random_advantage)
+    )
+
     checks = {
         "success_within_5pp_of_always_reply": {
             "observed_absolute_distance": success_distance,
@@ -1164,6 +1220,31 @@ def _selective_vpi_acceptance(
                 thresholds["minimum_success_delta_vs_no_comm"],
             ),
         },
+        "necessary_request_rate_above_redundant": {
+            "necessary_event_request_rate": selective.get(
+                "necessary_event_request_rate"
+            ),
+            "redundant_event_request_rate": selective.get(
+                "redundant_event_request_rate"
+            ),
+            "passed": (
+                True
+                if selective.get("necessary_event_request_rate") is None
+                and selective.get("redundant_event_request_rate") is None
+                else None
+                if selective.get("necessary_event_request_rate") is None
+                or selective.get("redundant_event_request_rate") is None
+                else bool(
+                    float(selective["necessary_event_request_rate"])
+                    > float(selective["redundant_event_request_rate"])
+                )
+            ),
+        },
+        "advantage_over_budget_matched_periodic_and_random": {
+            "periodic_passed": periodic_advantage,
+            "random_passed": random_advantage,
+            "passed": matched_baseline_pass,
+        },
     }
     check_results = [item["passed"] for item in checks.values()]
     passed = None if any(value is None for value in check_results) else all(check_results)
@@ -1178,13 +1259,22 @@ def _selective_vpi_acceptance(
     ci_supports_advantage = (
         None if success_ci is None else bool(float(success_ci[0]) > 0.0)
     )
+    formal_passed = (
+        None
+        if passed is None or ci_supports_advantage is None
+        else bool(passed and ci_supports_advantage)
+    )
     return {
-        "status": "insufficient_data" if passed is None else ("passed" if passed else "failed"),
-        "passed": passed,
+        "status": (
+            "insufficient_data"
+            if formal_passed is None
+            else ("passed" if formal_passed else "failed")
+        ),
+        "passed": formal_passed,
         "missing_modes": [],
         "thresholds": thresholds,
         "checks": checks,
-        "decision_basis": "predefined paired-run point-estimate gates",
+        "decision_basis": "predefined paired gates plus positive paired success CI",
         "statistical_claim_policy": claim_policy,
         "success_advantage_over_no_comm": {
             "mean_delta": success_stats.get("mean_delta"),
@@ -1394,6 +1484,18 @@ def _safe_ratio(numerator: float, denominator: int) -> float | None:
 
 def _mean_or_none(values: Sequence[float]) -> float | None:
     return None if not values else float(sum(values) / len(values))
+
+
+def _pearson_or_none(left: Sequence[float], right: Sequence[float]) -> float | None:
+    if len(left) != len(right) or len(left) < 2:
+        return None
+    x = np.asarray(left, dtype=np.float64)
+    y = np.asarray(right, dtype=np.float64)
+    if not np.isfinite(x).all() or not np.isfinite(y).all():
+        return None
+    if float(np.std(x)) <= 1e-12 or float(np.std(y)) <= 1e-12:
+        return None
+    return float(np.corrcoef(x, y)[0, 1])
 
 
 def _paired_summary_delta(

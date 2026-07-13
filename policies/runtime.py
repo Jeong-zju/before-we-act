@@ -60,6 +60,13 @@ class RuntimeConfig:
     lambda_delay: float = 0.05
     delay_steps: float = 1.0
     delta_margin: float = 0.0
+    return_scale: float = 100.0
+    tail_risk_weight: float = 0.5
+    constraint_risk_weight: float = 1.0
+    success_risk_weight: float = 0.5
+    safety_probability_threshold: float = 0.5
+    utility_calibration_scale: float = 1.0
+    utility_calibration_bias: float = 0.0
 
     def __post_init__(self) -> None:
         if not np.isfinite(self.progress_target):
@@ -68,6 +75,8 @@ class RuntimeConfig:
             raise ValueError("runtime limits/cost weights are invalid")
         if self.delay_steps < 0:
             raise ValueError("delay_steps cannot be negative")
+        if self.return_scale <= 0 or self.utility_calibration_scale <= 0:
+            raise ValueError("utility return/calibration scales must be positive")
 
 
 class DecentralizedRuntime:
@@ -170,6 +179,13 @@ class DecentralizedRuntime:
                 alpha_collab=cfg.alpha_collab,
                 alpha_unc=cfg.alpha_unc,
                 alpha_ctrl=cfg.alpha_ctrl,
+                return_scale=cfg.return_scale,
+                tail_risk_weight=cfg.tail_risk_weight,
+                constraint_risk_weight=cfg.constraint_risk_weight,
+                success_risk_weight=cfg.success_risk_weight,
+                safety_probability_threshold=cfg.safety_probability_threshold,
+                calibration_scale=cfg.utility_calibration_scale,
+                calibration_bias=cfg.utility_calibration_bias,
             )
         )
         communication = VPICommunicationTrigger(

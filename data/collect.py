@@ -67,6 +67,10 @@ def collect_one_episode(
         "teammate_pose_ego": [],
         "base_twist_ego": [],
         "global_state": [],
+        "private_event_truth": [],
+        "private_event_cue_agents": [],
+        "private_event_valid_agents": [],
+        "next_gate_context_agents": [],
     }
     privileged_tr: Dict[str, list] = {
         "environment_action_world": [],
@@ -80,6 +84,16 @@ def collect_one_episode(
         "force_proxy": [],
         "contact": [],
         "grasp": [],
+        "private_event_type": [],
+        "private_event_informed_agent": [],
+        "private_event_maneuver": [],
+        "private_event_error": [],
+        "branch_valid": [],
+        "branch_plan_pair": [],
+        "branch_action": [],
+        "branch_return": [],
+        "branch_success": [],
+        "branch_constraint_violation": [],
     }
 
     base_twists = np.zeros((2, 3), dtype=np.float32)
@@ -98,7 +112,15 @@ def collect_one_episode(
 
     done = False
     final_info = obs["metrics"]
+    branched_events: set[int] = set()
     while not done:
+        event_index = int(obs["metrics"].get("private_event_index", -1))
+        should_branch = bool(obs["metrics"].get("private_event_active", False)) and (
+            event_index not in branched_events
+        )
+        branch = _counterfactual_branches(env) if should_branch else _empty_branches()
+        if should_branch:
+            branched_events.add(event_index)
         policy_out = policy(env)
         joint_action = np.asarray(policy_out.action, dtype=np.float32).reshape(2, 4)
         # The simulator happens to accept world-axis planar commands.   plan
@@ -122,6 +144,26 @@ def collect_one_episode(
         privileged_tr["force_proxy"].append([float(final_info.get("force_proxy", 0.0))])
         privileged_tr["contact"].append([float(final_info.get("ncon", 0) > 0)])
         privileged_tr["grasp"].append([float(final_info.get("grasped", False))])
+        privileged_tr["private_event_type"].append(
+            [int(final_info.get("private_event_type", -1))]
+        )
+        privileged_tr["private_event_informed_agent"].append(
+            [int(final_info.get("private_event_informed_agent", -1))]
+        )
+        privileged_tr["private_event_maneuver"].append(
+            [int(final_info.get("private_event_maneuver", 0))]
+        )
+        privileged_tr["private_event_error"].append(
+            [float(final_info.get("private_event_error_steps", 0) > 0)]
+        )
+        privileged_tr["branch_valid"].append(branch["valid"])
+        privileged_tr["branch_plan_pair"].append(branch["plan_pair"])
+        privileged_tr["branch_action"].append(branch["action"])
+        privileged_tr["branch_return"].append(branch["return"])
+        privileged_tr["branch_success"].append(branch["success"])
+        privileged_tr["branch_constraint_violation"].append(
+            branch["constraint_violation"]
+        )
 
         base_twists = _base_twists_from_action(env, joint_action, next_obs)
         local_grasps = joint_action[:, 3] > 0.5
@@ -145,7 +187,18 @@ def collect_one_episode(
             name: np.asarray(values, dtype=np.float32) for name, values in privileged_obs.items()
         },
         privileged_transitions={
-            name: np.asarray(values, dtype=np.int32 if name in {"failure_reason", "phase"} else np.float32)
+            name: np.asarray(
+                values,
+                dtype=np.int32
+                if name in {
+                    "failure_reason",
+                    "phase",
+                    "private_event_type",
+                    "private_event_informed_agent",
+                    "private_event_maneuver",
+                }
+                else np.float32,
+            )
             for name, values in privileged_tr.items()
         },
         metadata={
@@ -170,6 +223,77 @@ def collect_one_episode(
         },
     )
     return episode, dict(episode.metadata), spec
+
+
+_BRANCH_PLAN_PAIRS = np.asarray(
+    [(-1, -1), (-1, 1), (1, -1), (1, 1), (0, 0), (-1, 0)],
+    dtype=np.float32,
+)
+
+
+def _empty_branches() -> dict[str, np.ndarray]:
+    count = len(_BRANCH_PLAN_PAIRS)
+    return {
+        "valid": np.zeros(count, dtype=np.float32),
+        "plan_pair": _BRANCH_PLAN_PAIRS.copy(),
+        "action": np.zeros((count, 2, 16, 4), dtype=np.float32),
+        "return": np.zeros(count, dtype=np.float32),
+        "success": np.zeros(count, dtype=np.float32),
+        "constraint_violation": np.zeros(count, dtype=np.float32),
+    }
+
+
+def _counterfactual_branches(
+    env: TwoRobotCarryNarrowPassageEnv,
+    *,
+    horizon: int = 16,
+) -> dict[str, np.ndarray]:
+    """Evaluate six action-plan pairs from one identical simulator snapshot."""
+
+    snapshot = env.snapshot()
+    returns = np.zeros(len(_BRANCH_PLAN_PAIRS), dtype=np.float32)
+    successes = np.zeros_like(returns)
+    constraints = np.zeros_like(returns)
+    branch_actions = np.zeros(
+        (len(_BRANCH_PLAN_PAIRS), 2, horizon, 4), dtype=np.float32
+    )
+    try:
+        for branch_index, plan_pair in enumerate(_BRANCH_PLAN_PAIRS):
+            env.restore(snapshot)
+            done = False
+            info = env.get_obs()["metrics"]
+            for branch_step in range(horizon):
+                action = env.scripted_action().copy()
+                # A plan pair is an ego-local maneuver choice, represented here
+                # by a bounded lateral command for each agent.
+                action[0] = 0.45 * float(plan_pair[0])
+                action[4] = 0.45 * float(plan_pair[1])
+                branch_actions[branch_index, :, branch_step] = _ego_action_commands(
+                    action.reshape(2, 4), env.get_obs()
+                )
+                _, reward, done, info = env.step(action)
+                returns[branch_index] += float(reward)
+                constraints[branch_index] = max(
+                    constraints[branch_index],
+                    float(
+                        info.get("force_violation", False)
+                        or info.get("collision", False)
+                        or info.get("private_event_error_steps", 0) > 0
+                    ),
+                )
+                if done:
+                    break
+            successes[branch_index] = float(info.get("success", False))
+    finally:
+        env.restore(snapshot)
+    return {
+        "valid": np.ones(len(_BRANCH_PLAN_PAIRS), dtype=np.float32),
+        "plan_pair": _BRANCH_PLAN_PAIRS.copy(),
+        "action": branch_actions,
+        "return": returns,
+        "success": successes,
+        "constraint_violation": constraints,
+    }
 
 
 def _append_observation(
@@ -199,6 +323,12 @@ def _append_observation(
     )
     if local_forces.shape != (2,):
         raise ValueError(" collection requires two per-agent local force values")
+    event_cues = np.asarray(info.get("private_event_cue_agents", np.zeros((2, 3))), dtype=np.float32)
+    event_valid = np.asarray(info.get("private_event_valid_agents", np.zeros(2)), dtype=np.float32)
+    event_age = np.asarray(info.get("private_event_age_agents", np.zeros(2)), dtype=np.float32)
+    gate_context = np.asarray(info.get("next_gate_context_agents", np.zeros((2, 3))), dtype=np.float32)
+    if event_cues.shape != (2, 3) or gate_context.shape != (2, 3):
+        raise ValueError("private event cue/context must be per-agent")
 
     object_rel_truth = []
     teammate_rel_truth = []
@@ -214,6 +344,10 @@ def _append_observation(
             local_force=np.asarray([local_forces[agent_id]], dtype=np.float32),
             contact=bool(local_contacts[agent_id] > 0.5),
             grasp=bool(local_grasps[agent_id]),
+            private_event_cue=event_cues[agent_id],
+            private_event_valid=bool(event_valid[agent_id] > 0.5),
+            private_event_age=float(event_age[agent_id]),
+            next_gate_context=gate_context[agent_id],
         )
         # Object visibility can later be supplied by the RGB perception stack.
         # For now stochastic dropout/noise is owned by the sensor simulator.
@@ -232,6 +366,20 @@ def _append_observation(
     privileged["teammate_pose_ego"].append(np.stack(teammate_rel_truth, axis=0))
     privileged["base_twist_ego"].append(np.asarray(base_twists, dtype=np.float32))
     privileged["global_state"].append(global_state)
+    privileged["private_event_truth"].append(
+        np.asarray(
+            [
+                info.get("private_event_index", -1),
+                info.get("private_event_type", -1),
+                info.get("private_event_informed_agent", -1),
+                info.get("private_event_maneuver", 0),
+            ],
+            dtype=np.float32,
+        )
+    )
+    privileged["private_event_cue_agents"].append(event_cues)
+    privileged["private_event_valid_agents"].append(event_valid[:, None])
+    privileged["next_gate_context_agents"].append(gate_context)
 
 
 def _base_twists_from_action(

@@ -12,15 +12,20 @@ Collect a dataset:
 
 ```bash
 python scripts/collect_fe_pc_wam_dataset.py \
-  --out-dir datasets/carry
+  --out-dir datasets/private_gates_v1
 ```
+
+The default collection profile is the incompatible `private_gates_v1` contract:
+100 pilot episodes are collected and audited first, followed by frozen
+2400/400/400 train/validation/test splits. Old datasets and checkpoints cannot
+be loaded under this schema. Use `--pilot-only` to stop after the quality gate.
 
 Run the staged trainer:
 
 ```bash
 python scripts/train_fe_pc_wam_pipeline.py \
-  --dataset-root datasets/carry \
-  --out-dir checkpoints/carry
+  --dataset-root datasets/private_gates_v1 \
+  --out-dir checkpoints/private_gates_v1
 ```
 
 The stages are `plan → belief → wam → intention → wam_robust`. Use `--smoke` only to validate wiring; smoke losses are not model-quality evidence. Every checkpoint records the information contract, dataset schema, empirical `PlanCodeSupport`, and upstream SHA256 lineage.
@@ -45,9 +50,10 @@ Runtime loading is provided by `policies.runtime.DecentralizedRuntime`. Detailed
 For the current base-only simulator (`J=0`), one robot receives:
 
 ```text
-local_history[L,13]
+local_history[L,21]
   = base_twist(3) + local_force/contact/grasp(3)
-  + ego-frame task goal(3) + previous ego action(4)
+  + ego-frame task goal(3) + private cue/valid/age/gate context(8)
+  + previous ego action(4)
 object_history[L,3] + valid/confidence/age + history_mask
 ego_id
 ```
