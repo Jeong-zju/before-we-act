@@ -54,7 +54,7 @@ class CarryEnvConfig:
 
 class TwoRobotCarryNarrowPassageEnv:
     """
-    Stage-1 MVP environment.
+    Two-robot cooperative carrying environment.
 
     Action:
         shape = (8,)
@@ -66,7 +66,7 @@ class TwoRobotCarryNarrowPassageEnv:
     Notes:
         This MVP uses a geometric carrying approximation:
         if both robots grip, the object pose is updated from the midpoint and heading
-        of two robot gripper sites. This keeps Stage 1 stable and makes scripted data
+        of two robot gripper sites. This keeps rollout dynamics stable and makes scripted data
         collection reliable. Later stages can replace this with real grasp/contact dynamics.
     """
 
@@ -97,7 +97,10 @@ class TwoRobotCarryNarrowPassageEnv:
         self.false_belief_active = False
         self.occlusion_active = False
         self.teammate_visible = {0: True, 1: True}
-        self.last_visible_teammate_pose: dict[int, np.ndarray | None] = {0: None, 1: None}
+        self.last_visible_teammate_pose: dict[int, np.ndarray | None] = {
+            0: None,
+            1: None,
+        }
         self.min_robot_distance = float("inf")
         self.max_contact_force = 0.0
         self.private_events: list[dict] = []
@@ -105,6 +108,13 @@ class TwoRobotCarryNarrowPassageEnv:
         self.private_event_error_steps = 0
         self.private_event_mistakes = 0
         self._previous_progress = 0.0
+        self._renderers: dict[tuple[int, int], mujoco.Renderer] = {}
+
+    @property
+    def control_dt(self) -> float:
+        """Public control period used by generic real-time runners."""
+
+        return float(self.cfg.control_dt)
 
     def _apply_scenario_preset(self):
         scenario = str(getattr(self.cfg, "scenario", "nominal") or "nominal").lower()
@@ -137,7 +147,9 @@ class TwoRobotCarryNarrowPassageEnv:
             self.cfg.asymmetric_obstacle = True
             self.cfg.false_belief_prob = max(self.cfg.false_belief_prob, 1.0)
             self.cfg.force_limit = min(self.cfg.force_limit, 0.80)
-            self.cfg.min_robot_distance_limit = max(self.cfg.min_robot_distance_limit, 0.35)
+            self.cfg.min_robot_distance_limit = max(
+                self.cfg.min_robot_distance_limit, 0.35
+            )
             return
         if scenario == "private_gates":
             # Geometry remains feasible for all three maneuvers; uncertainty is
@@ -179,8 +191,16 @@ class TwoRobotCarryNarrowPassageEnv:
         self.data.qvel[:] = 0.0
         self.data.ctrl[:] = 0.0
 
-        self.data.qpos[self.robot_a_qpos_addr:self.robot_a_qpos_addr + 3] = [ax, y0, yaw_a]
-        self.data.qpos[self.robot_b_qpos_addr:self.robot_b_qpos_addr + 3] = [bx, y0, yaw_b]
+        self.data.qpos[self.robot_a_qpos_addr : self.robot_a_qpos_addr + 3] = [
+            ax,
+            y0,
+            yaw_a,
+        ]
+        self.data.qpos[self.robot_b_qpos_addr : self.robot_b_qpos_addr + 3] = [
+            bx,
+            y0,
+            yaw_b,
+        ]
 
         obj_x = 0.0 + self.rng.uniform(-0.04, 0.04) if randomize else 0.0
         obj_y = -0.95 + self.rng.uniform(-0.04, 0.04) if randomize else -0.95
@@ -197,15 +217,23 @@ class TwoRobotCarryNarrowPassageEnv:
     def _set_object_pose(self, x: float, y: float, z: float, yaw: float):
         qw = np.cos(yaw / 2.0)
         qz = np.sin(yaw / 2.0)
-        self.data.qpos[self.object_qpos_addr:self.object_qpos_addr + 7] = [x, y, z, qw, 0.0, 0.0, qz]
+        self.data.qpos[self.object_qpos_addr : self.object_qpos_addr + 7] = [
+            x,
+            y,
+            z,
+            qw,
+            0.0,
+            0.0,
+            qz,
+        ]
         self.data.qvel[6:12] = 0.0
 
     def _robot_pose(self, robot: int) -> np.ndarray:
         addr = self.robot_a_qpos_addr if robot == 0 else self.robot_b_qpos_addr
-        return self.data.qpos[addr:addr + 3].copy()
+        return self.data.qpos[addr : addr + 3].copy()
 
     def _object_pose_xy_yaw(self) -> np.ndarray:
-        q = self.data.qpos[self.object_qpos_addr:self.object_qpos_addr + 7]
+        q = self.data.qpos[self.object_qpos_addr : self.object_qpos_addr + 7]
         x, y = q[0], q[1]
         qw, qz = q[3], q[6]
         yaw = 2.0 * np.arctan2(qz, qw)
@@ -217,7 +245,9 @@ class TwoRobotCarryNarrowPassageEnv:
 
         def front_point(p):
             x, y, yaw = p
-            return np.array([x + 0.23 * np.sin(yaw), y + 0.23 * np.cos(yaw)], dtype=np.float64)
+            return np.array(
+                [x + 0.23 * np.sin(yaw), y + 0.23 * np.cos(yaw)], dtype=np.float64
+            )
 
         return front_point(a), front_point(b)
 
@@ -242,12 +272,17 @@ class TwoRobotCarryNarrowPassageEnv:
 
     def _reset_scenario_state(self):
         self.robot_pose_history = []
-        self.blocked_passage_active = bool(self.rng.random() < self.cfg.blocked_passage_prob)
+        self.blocked_passage_active = bool(
+            self.rng.random() < self.cfg.blocked_passage_prob
+        )
         self.blocked_passage_side = -1 if self.rng.random() < 0.5 else 1
         self.false_belief_active = bool(self.rng.random() < self.cfg.false_belief_prob)
         self.occlusion_active = False
         self.teammate_visible = {0: True, 1: True}
-        self.last_visible_teammate_pose = {0: self._robot_pose(1), 1: self._robot_pose(0)}
+        self.last_visible_teammate_pose = {
+            0: self._robot_pose(1),
+            1: self._robot_pose(0),
+        }
         self.min_robot_distance = float("inf")
         self.max_contact_force = 0.0
 
@@ -285,7 +320,9 @@ class TwoRobotCarryNarrowPassageEnv:
             return None
         return self.private_events[self.private_event_index]
 
-    def _private_event_observations(self, obj_y: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _private_event_observations(
+        self, obj_y: float
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         cues = np.zeros((2, 3), dtype=np.float32)
         valid = np.zeros(2, dtype=np.float32)
         ages = np.zeros(2, dtype=np.float32)
@@ -296,20 +333,28 @@ class TwoRobotCarryNarrowPassageEnv:
         distance = float(event["gate_y"] - obj_y)
         active = abs(distance) <= 2.0 * self.cfg.private_gate_window
         context[:, :] = np.asarray(
-            [distance, event["gate_index"] / max(1, len(self.private_events) - 1), float(active)],
+            [
+                distance,
+                event["gate_index"] / max(1, len(self.private_events) - 1),
+                float(active),
+            ],
             dtype=np.float32,
         )
         if active:
             # Locally-inferable events deliberately expose the same cue to both
             # agents. Decisive/redundant cues remain private to one agent.
-            observers = (0, 1) if event["event_type"] == 1 else (event["informed_agent"],)
+            observers = (
+                (0, 1) if event["event_type"] == 1 else (event["informed_agent"],)
+            )
             cue_index = int(event["maneuver"]) + 1
             for agent_id in observers:
                 cues[agent_id, cue_index] = 1.0
                 valid[agent_id] = 1.0
         return cues, valid, ages, context
 
-    def _update_private_event(self, action: np.ndarray, obj_y: float, obj_x: float) -> float:
+    def _update_private_event(
+        self, action: np.ndarray, obj_y: float, obj_x: float
+    ) -> float:
         event = self._current_private_event()
         if event is None:
             return 0.0
@@ -322,14 +367,18 @@ class TwoRobotCarryNarrowPassageEnv:
             if desired == 0:
                 wrong = bool(np.max(np.abs(lateral)) > 0.35)
             else:
-                route_reached = desired * obj_x >= 0.6 * self.cfg.private_gate_target_offset
+                route_reached = (
+                    desired * obj_x >= 0.6 * self.cfg.private_gate_target_offset
+                )
                 steering_correctly = bool(np.all(desired * lateral >= 0.05))
                 wrong = not (route_reached or steering_correctly)
             if wrong:
                 self.private_event_error_steps += 1
                 error = 1.0
             else:
-                self.private_event_error_steps = max(0, self.private_event_error_steps - 1)
+                self.private_event_error_steps = max(
+                    0, self.private_event_error_steps - 1
+                )
         if obj_y > gate_y + window:
             event["resolved"] = True
             if self.private_event_error_steps > 0:
@@ -359,7 +408,9 @@ class TwoRobotCarryNarrowPassageEnv:
         robot_distance = float(np.linalg.norm(a[:2] - b[:2]))
         self.min_robot_distance = min(self.min_robot_distance, robot_distance)
 
-        in_shared_space = -0.25 < obj[1] < 2.80 or -0.25 < a[1] < 2.80 or -0.25 < b[1] < 2.80
+        in_shared_space = (
+            -0.25 < obj[1] < 2.80 or -0.25 < a[1] < 2.80 or -0.25 < b[1] < 2.80
+        )
         # Consume a fixed common-random-number tape every step.  Paired policy
         # modes may enter the shared space at different times; conditional RNG
         # draws would otherwise desynchronize all later exogenous occlusions.
@@ -382,7 +433,9 @@ class TwoRobotCarryNarrowPassageEnv:
         if self.teammate_visible[1]:
             self.last_visible_teammate_pose[1] = a.copy()
 
-        self.max_contact_force = max(self.max_contact_force, self._compute_force_proxy())
+        self.max_contact_force = max(
+            self.max_contact_force, self._compute_force_proxy()
+        )
 
     def _compute_force_components(self) -> Dict[str, float]:
         obj = self._object_pose_xy_yaw()
@@ -390,23 +443,35 @@ class TwoRobotCarryNarrowPassageEnv:
 
         wall_violation = 0.0
         if 0.15 < y < 2.65:
-            clearance = self._effective_passage_half_width() - abs(x) - self._object_lateral_extent(yaw)
+            clearance = (
+                self._effective_passage_half_width()
+                - abs(x)
+                - self._object_lateral_extent(yaw)
+            )
             wall_violation = max(0.0, -clearance)
 
         blocked_violation = 0.0
         if self.blocked_passage_active and 0.85 < y < 1.90:
             open_lane_center = -0.28 * float(self.blocked_passage_side)
             usable_half_width = 0.62 * self._effective_passage_half_width()
-            clearance = usable_half_width - abs(x - open_lane_center) - self._object_lateral_extent(yaw)
+            clearance = (
+                usable_half_width
+                - abs(x - open_lane_center)
+                - self._object_lateral_extent(yaw)
+            )
             blocked_violation = max(0.0, -clearance)
 
         a = self._robot_pose(0)
         b = self._robot_pose(1)
         robot_dist = np.linalg.norm(a[:2] - b[:2])
-        robot_clearance = max(2 * self.cfg.robot_radius, self.cfg.min_robot_distance_limit)
+        robot_clearance = max(
+            2 * self.cfg.robot_radius, self.cfg.min_robot_distance_limit
+        )
         robot_violation = max(0.0, robot_clearance - robot_dist)
 
-        force_proxy = 10.0 * wall_violation + 8.0 * blocked_violation + 5.0 * robot_violation
+        force_proxy = (
+            10.0 * wall_violation + 8.0 * blocked_violation + 5.0 * robot_violation
+        )
         return {
             "force_proxy": float(force_proxy),
             "wall_violation": float(wall_violation),
@@ -421,12 +486,8 @@ class TwoRobotCarryNarrowPassageEnv:
         """Return per-robot tactile contact flags from MuJoCo contact pairs."""
 
         robot_geom_ids = (
-            mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_a_base"
-            ),
-            mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_b_base"
-            ),
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_a_base"),
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_b_base"),
         )
         flags = np.zeros(2, dtype=np.float32)
         for contact_index in range(int(self.data.ncon)):
@@ -441,12 +502,8 @@ class TwoRobotCarryNarrowPassageEnv:
         """Return per-robot contact-force magnitudes from local geom contacts."""
 
         robot_geom_ids = (
-            mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_a_base"
-            ),
-            mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_b_base"
-            ),
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_a_base"),
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_b_base"),
         )
         forces = np.zeros(2, dtype=np.float32)
         contact_force = np.zeros(6, dtype=np.float64)
@@ -454,9 +511,7 @@ class TwoRobotCarryNarrowPassageEnv:
             contact = self.data.contact[contact_index]
             pair = {int(contact.geom1), int(contact.geom2)}
             contact_force.fill(0.0)
-            mujoco.mj_contactForce(
-                self.model, self.data, contact_index, contact_force
-            )
+            mujoco.mj_contactForce(self.model, self.data, contact_index, contact_force)
             magnitude = float(np.linalg.norm(contact_force[:3]))
             for agent_id, geom_id in enumerate(robot_geom_ids):
                 if geom_id >= 0 and geom_id in pair:
@@ -468,7 +523,10 @@ class TwoRobotCarryNarrowPassageEnv:
 
     def _success(self) -> bool:
         obj = self._object_pose_xy_yaw()
-        return bool(abs(obj[0]) < self.cfg.goal_tol_xy and obj[1] > self.cfg.goal_y - self.cfg.goal_tol_xy)
+        return bool(
+            abs(obj[0]) < self.cfg.goal_tol_xy
+            and obj[1] > self.cfg.goal_y - self.cfg.goal_tol_xy
+        )
 
     def _failure(self) -> bool:
         obj = self._object_pose_xy_yaw()
@@ -512,7 +570,9 @@ class TwoRobotCarryNarrowPassageEnv:
             self.failure_reason = "object_out_of_bounds"
             return True
 
-        if np.any(np.abs(a[:2]) > np.array([2.25, 3.7])) or np.any(np.abs(b[:2]) > np.array([2.25, 3.7])):
+        if np.any(np.abs(a[:2]) > np.array([2.25, 3.7])) or np.any(
+            np.abs(b[:2]) > np.array([2.25, 3.7])
+        ):
             self.failure_reason = "robot_out_of_bounds"
             return True
 
@@ -527,12 +587,17 @@ class TwoRobotCarryNarrowPassageEnv:
     def _wrap_angle(angle: float) -> float:
         return float((angle + np.pi) % (2 * np.pi) - np.pi)
 
-    def _relative_pose(self, target_pose: np.ndarray, reference_pose: np.ndarray) -> np.ndarray:
-        return np.array([
-            target_pose[0] - reference_pose[0],
-            target_pose[1] - reference_pose[1],
-            self._wrap_angle(target_pose[2] - reference_pose[2]),
-        ], dtype=np.float32)
+    def _relative_pose(
+        self, target_pose: np.ndarray, reference_pose: np.ndarray
+    ) -> np.ndarray:
+        return np.array(
+            [
+                target_pose[0] - reference_pose[0],
+                target_pose[1] - reference_pose[1],
+                self._wrap_angle(target_pose[2] - reference_pose[2]),
+            ],
+            dtype=np.float32,
+        )
 
     def _observed_teammate_pose(self, agent_id: int) -> np.ndarray:
         teammate_id = 1 - agent_id
@@ -540,7 +605,11 @@ class TwoRobotCarryNarrowPassageEnv:
             pose = self._delayed_robot_pose(teammate_id)
         else:
             stale_pose = self.last_visible_teammate_pose.get(agent_id)
-            pose = stale_pose.copy() if stale_pose is not None else self._delayed_robot_pose(teammate_id)
+            pose = (
+                stale_pose.copy()
+                if stale_pose is not None
+                else self._delayed_robot_pose(teammate_id)
+            )
 
         if self.false_belief_active:
             sign = -1.0 if agent_id == 0 else 1.0
@@ -558,49 +627,79 @@ class TwoRobotCarryNarrowPassageEnv:
         pose[2] = self._wrap_angle(pose[2])
         return pose
 
-    def _observed_teammate_rel_pose(self, agent_id: int, self_pose: np.ndarray) -> np.ndarray:
+    def _observed_teammate_rel_pose(
+        self, agent_id: int, self_pose: np.ndarray
+    ) -> np.ndarray:
         if not self.teammate_visible.get(agent_id, True):
             return np.zeros(3, dtype=np.float32)
         return self._relative_pose(self._observed_teammate_pose(agent_id), self_pose)
 
-    def _observed_object_rel_pose(self, agent_id: int, self_pose: np.ndarray, obj: np.ndarray) -> np.ndarray:
+    def _observed_object_rel_pose(
+        self, agent_id: int, self_pose: np.ndarray, obj: np.ndarray
+    ) -> np.ndarray:
         return self._relative_pose(self._observed_object_pose(agent_id, obj), self_pose)
 
-    def _perceived_force_proxy(self, agent_id: int, force_proxy: float, obj: np.ndarray) -> float:
+    def _perceived_force_proxy(
+        self, agent_id: int, force_proxy: float, obj: np.ndarray
+    ) -> float:
         perceived = float(force_proxy)
         if self.cfg.asymmetric_obstacle:
             perceived += 0.08 if agent_id == 0 else 0.14
             if -0.25 < obj[1] < 2.80:
                 perceived += 0.10 if agent_id == 0 else 0.18
                 if self.blocked_passage_active:
-                    perceived += 0.20 if self.blocked_passage_side == (-1 if agent_id == 0 else 1) else 0.08
+                    perceived += (
+                        0.20
+                        if self.blocked_passage_side == (-1 if agent_id == 0 else 1)
+                        else 0.08
+                    )
         if self.false_belief_active:
             perceived += 0.15
         if not self.teammate_visible.get(agent_id, True):
             perceived += 0.05
         return float(max(0.0, perceived))
 
-    def _local_obs(self, agent_id: int, self_pose: np.ndarray, obj: np.ndarray, force_proxy: float) -> np.ndarray:
+    def _local_obs(
+        self, agent_id: int, self_pose: np.ndarray, obj: np.ndarray, force_proxy: float
+    ) -> np.ndarray:
         object_rel = self._observed_object_rel_pose(agent_id, self_pose, obj)
         teammate_rel = self._observed_teammate_rel_pose(agent_id, self_pose)
         perceived_force = self._perceived_force_proxy(agent_id, force_proxy, obj)
 
-        return np.array([
-            self_pose[0], self_pose[1], self_pose[2],
-            object_rel[0], object_rel[1], object_rel[2],
-            teammate_rel[0], teammate_rel[1], teammate_rel[2],
-            float(self.grasped), perceived_force,
-        ], dtype=np.float32)
+        return np.array(
+            [
+                self_pose[0],
+                self_pose[1],
+                self_pose[2],
+                object_rel[0],
+                object_rel[1],
+                object_rel[2],
+                teammate_rel[0],
+                teammate_rel[1],
+                teammate_rel[2],
+                float(self.grasped),
+                perceived_force,
+            ],
+            dtype=np.float32,
+        )
 
-    def _local_pose_context_agents(self, obj: np.ndarray, a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        rel_target = np.stack([
-            self._observed_teammate_rel_pose(0, a),
-            self._observed_teammate_rel_pose(1, b),
-        ], axis=0).astype(np.float32)
-        object_rel = np.stack([
-            self._observed_object_rel_pose(0, a, obj),
-            self._observed_object_rel_pose(1, b, obj),
-        ], axis=0).astype(np.float32)
+    def _local_pose_context_agents(
+        self, obj: np.ndarray, a: np.ndarray, b: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        rel_target = np.stack(
+            [
+                self._observed_teammate_rel_pose(0, a),
+                self._observed_teammate_rel_pose(1, b),
+            ],
+            axis=0,
+        ).astype(np.float32)
+        object_rel = np.stack(
+            [
+                self._observed_object_rel_pose(0, a, obj),
+                self._observed_object_rel_pose(1, b, obj),
+            ],
+            axis=0,
+        ).astype(np.float32)
         return rel_target, object_rel
 
     def _model_local_obs_agents(
@@ -611,18 +710,27 @@ class TwoRobotCarryNarrowPassageEnv:
         force_proxy: float,
         contacts: int,
     ) -> np.ndarray:
-        proprio = np.stack([
-            self._local_obs(0, a, obj, force_proxy),
-            self._local_obs(1, b, obj, force_proxy),
-        ], axis=0).astype(np.float32)
+        proprio = np.stack(
+            [
+                self._local_obs(0, a, obj, force_proxy),
+                self._local_obs(1, b, obj, force_proxy),
+            ],
+            axis=0,
+        ).astype(np.float32)
         actions = self.last_action.astype(np.float32).reshape(2, 4)
         local_force = proprio[:, 10:11]
         contact = np.full((2, 1), float(contacts > 0), dtype=np.float32)
-        return np.concatenate([proprio, actions, local_force, contact], axis=-1).astype(np.float32)
+        return np.concatenate([proprio, actions, local_force, contact], axis=-1).astype(
+            np.float32
+        )
 
     def _object_goal_distance(self, obj: np.ndarray | None = None) -> float:
         obj = self._object_pose_xy_yaw() if obj is None else obj
-        return float(np.linalg.norm(np.array([obj[0], obj[1] - self.cfg.goal_y], dtype=np.float64)))
+        return float(
+            np.linalg.norm(
+                np.array([obj[0], obj[1] - self.cfg.goal_y], dtype=np.float64)
+            )
+        )
 
     def _progress(self, obj: np.ndarray | None = None) -> float:
         obj = self._object_pose_xy_yaw() if obj is None else obj
@@ -630,7 +738,9 @@ class TwoRobotCarryNarrowPassageEnv:
         denom = max(1e-6, self.cfg.goal_y - start_y)
         return float(np.clip((obj[1] - start_y) / denom, 0.0, 1.0))
 
-    def _build_info(self, success: bool | None = None, failure: bool | None = None) -> Dict:
+    def _build_info(
+        self, success: bool | None = None, failure: bool | None = None
+    ) -> Dict:
         obj = self._object_pose_xy_yaw()
         a = self._robot_pose(0)
         b = self._robot_pose(1)
@@ -649,7 +759,9 @@ class TwoRobotCarryNarrowPassageEnv:
         collision_count = contacts + int(virtual_collision)
         force_violation = bool(force_proxy > self._force_limit())
         success = self._success() if success is None else bool(success)
-        failure = bool(self.failure_reason != "none") if failure is None else bool(failure)
+        failure = (
+            bool(self.failure_reason != "none") if failure is None else bool(failure)
+        )
         communication_required = bool(
             self.occlusion_active
             or (not self.teammate_visible.get(0, True))
@@ -659,8 +771,12 @@ class TwoRobotCarryNarrowPassageEnv:
             or min_robot_distance < self.cfg.min_robot_distance_limit
             or force_violation
         )
-        local_obs_agents = self._model_local_obs_agents(obj, a, b, force_proxy, contacts)
-        rel_target_pose_agents, object_rel_pose_agents = self._local_pose_context_agents(obj, a, b)
+        local_obs_agents = self._model_local_obs_agents(
+            obj, a, b, force_proxy, contacts
+        )
+        rel_target_pose_agents, object_rel_pose_agents = (
+            self._local_pose_context_agents(obj, a, b)
+        )
         event = self._current_private_event()
         event_cues, event_valid, event_age, next_gate_context = (
             self._private_event_observations(float(obj[1]))
@@ -692,11 +808,17 @@ class TwoRobotCarryNarrowPassageEnv:
             "teammate_visible_robot_0": bool(self.teammate_visible.get(0, True)),
             "teammate_visible_robot_1": bool(self.teammate_visible.get(1, True)),
             "communication_required": communication_required,
-            "private_event_active": bool(event is not None and next_gate_context[0, 2] > 0.5),
+            "private_event_active": bool(
+                event is not None and next_gate_context[0, 2] > 0.5
+            ),
             "private_event_index": int(self.private_event_index),
             "private_event_type": int(event["event_type"]) if event is not None else -1,
-            "private_event_informed_agent": int(event["informed_agent"]) if event is not None else -1,
-            "private_event_maneuver": int(event["maneuver"]) if event is not None else 0,
+            "private_event_informed_agent": (
+                int(event["informed_agent"]) if event is not None else -1
+            ),
+            "private_event_maneuver": (
+                int(event["maneuver"]) if event is not None else 0
+            ),
             "private_event_cue_agents": event_cues,
             "private_event_valid_agents": event_valid,
             "private_event_age_agents": event_age,
@@ -704,7 +826,9 @@ class TwoRobotCarryNarrowPassageEnv:
             "private_event_error_steps": int(self.private_event_error_steps),
             "private_event_mistakes": int(self.private_event_mistakes),
             "blocked_passage_active": bool(self.blocked_passage_active),
-            "blocked_passage_current": bool(self.blocked_passage_active and 0.85 < obj[1] < 1.90),
+            "blocked_passage_current": bool(
+                self.blocked_passage_active and 0.85 < obj[1] < 1.90
+            ),
             "false_belief_active": bool(self.false_belief_active),
             "asymmetric_obstacle": bool(self.cfg.asymmetric_obstacle),
             "effective_passage_half_width": self._effective_passage_half_width(),
@@ -717,9 +841,7 @@ class TwoRobotCarryNarrowPassageEnv:
             "local_contact_agents": local_contact_agents,
             "local_force_agents": local_force_agents,
             "local_force_units": "normalized_0_1",
-            "local_force_scale_newtons": float(
-                self.cfg.local_force_scale_newtons
-            ),
+            "local_force_scale_newtons": float(self.cfg.local_force_scale_newtons),
             "object_xy_yaw": obj.copy(),
             "grasped": bool(self.grasped),
             "step_count": int(self.step_count),
@@ -738,10 +860,17 @@ class TwoRobotCarryNarrowPassageEnv:
         robot_0 = self._local_obs(0, a, obj, force_proxy)
         robot_1 = self._local_obs(1, b, obj, force_proxy)
 
-        global_state = np.concatenate([
-            a, b, obj,
-            np.array([force_proxy, float(success), float(self.step_count)], dtype=np.float64),
-        ]).astype(np.float32)
+        global_state = np.concatenate(
+            [
+                a,
+                b,
+                obj,
+                np.array(
+                    [force_proxy, float(success), float(self.step_count)],
+                    dtype=np.float64,
+                ),
+            ]
+        ).astype(np.float32)
         metrics = self._build_info(success=success, failure=False)
 
         return {
@@ -755,7 +884,9 @@ class TwoRobotCarryNarrowPassageEnv:
     def step(self, action: np.ndarray):
         action = np.asarray(action, dtype=np.float64).reshape(-1)
         if action.shape[0] != self.action_dim:
-            raise ValueError(f"Expected action dim {self.action_dim}, got {action.shape[0]}")
+            raise ValueError(
+                f"Expected action dim {self.action_dim}, got {action.shape[0]}"
+            )
 
         action = np.clip(action, -1.0, 1.0)
         self.last_action = action.copy()
@@ -763,7 +894,7 @@ class TwoRobotCarryNarrowPassageEnv:
         a_vx, a_vy, a_wz, a_grip = action[:4]
         b_vx, b_vy, b_wz, b_grip = action[4:]
 
-        # Stage-1 MVP uses kinematic base control.
+        # The reference task uses kinematic base control.
         # The action represents normalized velocity commands rather than motor force.
         dt = self.cfg.control_dt
 
@@ -782,11 +913,13 @@ class TwoRobotCarryNarrowPassageEnv:
         a[2] = (a[2] + np.pi) % (2 * np.pi) - np.pi
         b[2] = (b[2] + np.pi) % (2 * np.pi) - np.pi
 
-        self.data.qpos[self.robot_a_qpos_addr:self.robot_a_qpos_addr + 3] = a
-        self.data.qpos[self.robot_b_qpos_addr:self.robot_b_qpos_addr + 3] = b
+        self.data.qpos[self.robot_a_qpos_addr : self.robot_a_qpos_addr + 3] = a
+        self.data.qpos[self.robot_b_qpos_addr : self.robot_b_qpos_addr + 3] = b
 
         # Store normalized control for logging compatibility.
-        self.data.ctrl[:] = np.array([a_vx, a_vy, a_wz, b_vx, b_vy, b_wz], dtype=np.float64)
+        self.data.ctrl[:] = np.array(
+            [a_vx, a_vy, a_wz, b_vx, b_vy, b_wz], dtype=np.float64
+        )
 
         self.grasped = bool(a_grip > 0.5 and b_grip > 0.5)
 
@@ -844,8 +977,14 @@ class TwoRobotCarryNarrowPassageEnv:
 
         route_offset = 0.0
         event = self._current_private_event()
-        if event is not None and abs(float(obj[1]) - float(event["gate_y"])) <= 2.0 * self.cfg.private_gate_window:
-            route_offset = float(event["maneuver"]) * self.cfg.private_gate_target_offset
+        if (
+            event is not None
+            and abs(float(obj[1]) - float(event["gate_y"]))
+            <= 2.0 * self.cfg.private_gate_window
+        ):
+            route_offset = (
+                float(event["maneuver"]) * self.cfg.private_gate_target_offset
+            )
         target_a_x = -0.42 + route_offset
         target_b_x = 0.42 + route_offset
         target_y = 3.15
@@ -865,11 +1004,39 @@ class TwoRobotCarryNarrowPassageEnv:
             a_vy *= 0.75
             b_vy *= 0.75
 
-        return np.array([a_vx, a_vy, a_wz, 1.0, b_vx, b_vy, b_wz, 1.0], dtype=np.float64)
+        return np.array(
+            [a_vx, a_vy, a_wz, 1.0, b_vx, b_vy, b_wz, 1.0], dtype=np.float64
+        )
 
     def get_state_vector(self) -> np.ndarray:
         obs = self.get_obs()
         return obs["global_state"].astype(np.float64)
+
+    def render(
+        self,
+        *,
+        camera: str = "fixed",
+        width: int = 640,
+        height: int = 360,
+    ) -> np.ndarray:
+        """Render one RGB frame without importing dataset or model code."""
+
+        if width <= 0 or height <= 0:
+            raise ValueError("render dimensions must be positive")
+        key = (int(height), int(width))
+        renderer = self._renderers.get(key)
+        if renderer is None:
+            renderer = mujoco.Renderer(self.model, height=height, width=width)
+            self._renderers[key] = renderer
+        renderer.update_scene(self.data, camera=camera)
+        return np.asarray(renderer.render(), dtype=np.uint8).copy()
+
+    def close(self) -> None:
+        """Release all lazily created offscreen rendering contexts."""
+
+        for renderer in self._renderers.values():
+            renderer.close()
+        self._renderers.clear()
 
     def snapshot(self) -> dict:
         """Capture all simulator/task state needed for deterministic branches."""
@@ -891,7 +1058,9 @@ class TwoRobotCarryNarrowPassageEnv:
             "rng_state": copy.deepcopy(self.rng.bit_generator.state),
             "occlusion_active": self.occlusion_active,
             "teammate_visible": dict(self.teammate_visible),
-            "last_visible_teammate_pose": copy.deepcopy(self.last_visible_teammate_pose),
+            "last_visible_teammate_pose": copy.deepcopy(
+                self.last_visible_teammate_pose
+            ),
             "min_robot_distance": self.min_robot_distance,
             "max_contact_force": self.max_contact_force,
         }

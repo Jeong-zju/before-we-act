@@ -8,18 +8,43 @@ from envs.two_robot_carry_env import CarryEnvConfig, TwoRobotCarryNarrowPassageE
 
 
 class TwoRobotCarryGymWrapper(gym.Env):
-    metadata = {"render_modes": []}
+    metadata = {"render_modes": ["rgb_array"], "render_fps": 20}
 
-    def __init__(self, cfg: CarryEnvConfig | None = None):
+    def __init__(
+        self,
+        cfg: CarryEnvConfig | None = None,
+        *,
+        render_mode: str | None = None,
+        camera: str = "fixed",
+        render_width: int = 640,
+        render_height: int = 360,
+    ):
         super().__init__()
+        if render_mode not in {None, "rgb_array"}:
+            raise ValueError("render_mode must be None or 'rgb_array'")
         self.env = TwoRobotCarryNarrowPassageEnv(cfg)
+        self.render_mode = render_mode
+        self.camera = camera
+        self.render_width = int(render_width)
+        self.render_height = int(render_height)
+        self.metadata = dict(self.metadata, render_fps=round(1.0 / self.env.control_dt))
 
-        self.observation_space = spaces.Dict({
-            "robot_0": spaces.Box(low=-np.inf, high=np.inf, shape=(11,), dtype=np.float32),
-            "robot_1": spaces.Box(low=-np.inf, high=np.inf, shape=(11,), dtype=np.float32),
-            "object": spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32),
-            "global_state": spaces.Box(low=-np.inf, high=np.inf, shape=(12,), dtype=np.float32),
-        })
+        self.observation_space = spaces.Dict(
+            {
+                "robot_0": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(11,), dtype=np.float32
+                ),
+                "robot_1": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(11,), dtype=np.float32
+                ),
+                "object": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32
+                ),
+                "global_state": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(12,), dtype=np.float32
+                ),
+            }
+        )
 
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(8,), dtype=np.float32)
 
@@ -29,9 +54,21 @@ class TwoRobotCarryGymWrapper(gym.Env):
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
-        terminated = bool(info["success"] or info["failure"])
-        truncated = bool(obs["metrics"]["step_count"] >= self.env.cfg.episode_len)
+        truncated = bool(done and info.get("failure_reason") == "timeout")
+        terminated = bool(done and not truncated)
         return self._filter_obs(obs), reward, terminated, truncated, info
+
+    def render(self):
+        if self.render_mode != "rgb_array":
+            return None
+        return self.env.render(
+            camera=self.camera,
+            width=self.render_width,
+            height=self.render_height,
+        )
+
+    def close(self):
+        self.env.close()
 
     @staticmethod
     def _filter_obs(obs):

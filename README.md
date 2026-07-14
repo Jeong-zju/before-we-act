@@ -1,128 +1,95 @@
-# FE-PC-WAM
+# WAM Modular Runtime
 
-**FE-PC-WAM** stands for **Free-Energy-Guided Selective Plan Communication World Action Model**.
-
-This repository implements decentralized multi-robot collaborative carrying with ego-local sensing, local belief inference, selective plan-latent request/reply, and decentralized execution. Both robots share model weights but keep independent histories, message caches, random state, and cooldown state. Model inference never receives both robots' observations or simulator truth.
-
-The information contract and VPI derivation are documented in [docs/V1_DESIGN_DECENTRALIZED_ZH.md](docs/V1_DESIGN_DECENTRALIZED_ZH.md).
-
-The version-isolated block-causal Research-v2 implementation is documented in [docs/V2_IMPLEMENTATION_RESEARCH_ZH.md](docs/V2_IMPLEMENTATION_RESEARCH_ZH.md).
-
-## Documentation
-
-Files in `docs/` follow `VERSION_TYPE_DESCRIPTION` naming. The version is one of
-`V1`, `V1.4`, or `V2`; the type identifies the document's purpose.
-
-| Version | Type | Document |
-|---|---|---|
-| V1 | Design | [Decentralized information contract](docs/V1_DESIGN_DECENTRALIZED_ZH.md) |
-| V1 | Design | [Model signal flow](docs/V1_DESIGN_MODEL_SIGNAL_FLOW_ZH.md) |
-| V1 | Guide | [Training quickstart](docs/V1_GUIDE_TRAINING_QUICKSTART_ZH.md) |
-| V1 | Guide | [Private Gates collection and acceptance](docs/V1_GUIDE_PRIVATE_GATES_ZH.md) |
-| V1 | Audit | [Manual acceptance audit](docs/V1_AUDIT_ACCEPTANCE_ZH.md) |
-| V1 | Manifest | [Frozen baseline manifest](docs/V1_MANIFEST_BASELINE.json) |
-| V1.4 | Plan | [Research upgrade plan](docs/V1.4_PLAN_RESEARCH_UPGRADE_ZH.md) |
-| V2 | Implementation | [Research-v2 implementation](docs/V2_IMPLEMENTATION_RESEARCH_ZH.md) |
-| V2 | Report | [Stage A report](docs/V2_REPORT_STAGE_A_ZH.md) |
-
-## Workflow
-
-Collect a dataset:
-
-```bash
-python scripts/collect_fe_pc_wam_dataset.py \
-  --out-dir datasets/private_gates_v1
-```
-
-The default collection profile is the incompatible `private_gates_v1` contract:
-100 pilot episodes are collected and audited first, followed by frozen
-2400/400/400 train/validation/test splits. Old datasets and checkpoints cannot
-be loaded under this schema. Use `--pilot-only` to stop after the quality gate.
-
-Run the staged trainer:
-
-```bash
-python scripts/train_fe_pc_wam_pipeline.py \
-  --dataset-root datasets/private_gates_v1 \
-  --out-dir checkpoints/private_gates_v1
-```
-
-The stages are `plan → belief → wam → intention → wam_robust`. Use `--smoke` only to validate wiring; smoke losses are not model-quality evidence. Every checkpoint records the information contract, dataset schema, empirical `PlanCodeSupport`, and upstream SHA256 lineage.
-
-Research-v2 uses separate data and artifact roots and never consumes the V1 checkpoints above:
-
-```bash
-# This workspace's Python environment
-source /home/jeong/miniconda3/etc/profile.d/conda.sh
-conda activate wam-py311
-
-# Fast contract smoke test (CPU)
-python scripts/collect_research_v2_dataset.py \
-  --out-dir datasets/research_v2_smoke --smoke
-python scripts/train_research_v2_pipeline.py \
-  --dataset-root datasets/research_v2_smoke \
-  --out-dir checkpoints/research_v2_smoke --smoke --device cpu
-
-# Formal collection (6400/800/800 plus a 100-episode pilot)
-python scripts/collect_research_v2_dataset.py \
-  --out-dir datasets/research_v2 --workers 16
-
-# Formal training; the default profile is tuned for one RTX 5090 and 64 GB RAM
-python scripts/train_research_v2_pipeline.py \
-  --dataset-root datasets/research_v2 \
-  --out-dir checkpoints/research_v2 \
-  --profile rtx5090 --device cuda
-```
-
-Both formal commands are restartable. Add `--resume` after an interruption; the
-collector audits existing HDF5 files before filling holes, and the trainer
-restores model, optimizer, scaler, early-stopping, and RNG state. The RTX 5090
-profile automatically selects BF16, TF32, fused AdamW, pinned/persistent data
-workers, stage-specific microbatches, and three independently seeded block-world
-members. See [docs/V2_IMPLEMENTATION_RESEARCH_ZH.md](docs/V2_IMPLEMENTATION_RESEARCH_ZH.md)
-for the exact profile and artifact layout.
-
-Audit data and checkpoints before evaluation:
-
-```bash
-python scripts/audit_contract.py \
-  --data datasets/carry/train \
-  --checkpoint checkpoints/carry/plan.pt \
-               checkpoints/carry/belief.pt \
-               checkpoints/carry/wam.pt \
-               checkpoints/carry/intention.pt \
-               checkpoints/carry/wam_robust.pt \
-  --output checkpoints/carry/audit.json
-```
-
-Runtime loading is provided by `policies.runtime.DecentralizedRuntime`. Detailed smoke, full-data, resume, GPU, and evaluation commands are in [docs/V1_GUIDE_TRAINING_QUICKSTART_ZH.md](docs/V1_GUIDE_TRAINING_QUICKSTART_ZH.md).
-
-## Decision input
-
-For the current base-only simulator (`J=0`), one robot receives:
+面向 VLA / World Action Model 实验的模块化仿真与数据基础设施。模型、仿真环境和
+数据集是三个独立模块，依赖方向由测试自动约束。
 
 ```text
-local_history[L,21]
-  = base_twist(3) + local_force/contact/grasp(3)
-  + ego-frame task goal(3) + private cue/valid/age/gate context(8)
-  + previous ego action(4)
-object_history[L,3] + valid/confidence/age + history_mask
-ego_id
+models/   只接收显式张量输入；不导入环境或数据集
+envs/     MuJoCo 环境、独立 runner、实时节拍、RGB/MP4 流
+data/     字段契约、HDF5/LeRobot 流式导出；可消费 envs 的 rollout
+scripts/  组合环境与数据导出的应用入口
 ```
 
-With `J` real joints, `q/dq/tau` add `3J` values. Missing perception is represented by `valid=0`; simulator object truth is never substituted at inference.
+## 仿真独立运行
 
-## Repository structure
+批量运行：
 
-```text
-fe_pc_wam/
-├── data/       # collection, local observation contract, HDF5 schema, dataset
-├── envs/       # two-robot MuJoCo carrying environment
-├── models/     # tokenizer, belief encoder, WAM, intention, communication
-├── policies/   # decentralized planner and checkpoint runtime
-├── train/      # staged training implementation
-├── eval/       # component and paired rollout metrics
-├── scripts/    # collection, training, audit, and evaluation entry points
-├── tests/      # current implementation regression tests
-└── docs/       # design, training, signal-flow, and acceptance notes
+```bash
+python -m envs.run --scenario nominal --episodes 3
 ```
+
+按环境控制周期实时运行：
+
+```bash
+python -m envs.run --scenario private_gates --realtime --viewer
+```
+
+流式写视频，不在内存中缓存整条 episode：
+
+```bash
+MUJOCO_GL=egl python -m envs.run \
+  --realtime --camera fixed --video outputs/live_fixed.mp4
+```
+
+## 数据集采集与导出
+
+HDF5 每个 episode 一个文件，采用可扩展 chunk 逐 transition 写入：
+
+```bash
+python scripts/collect_modular_dataset.py \
+  --out-dir datasets/wam_stream \
+  --format hdf5 --profile wam --episodes 100
+```
+
+同一次 rollout 可以同时导出 HDF5 和 LeRobot：
+
+```bash
+MUJOCO_GL=egl python scripts/collect_modular_dataset.py \
+  --out-dir datasets/modular_carry \
+  --format hdf5 --format lerobot \
+  --profile vla \
+  --camera fixed --camera topdown \
+  --stream-video
+```
+
+默认字段 profile 为 `vla`、`wam`、`robocasa`、`rmbench`。通过
+`--field NAME=SOURCE::DTYPE` 添加或替换字段，通过 `--drop-field NAME` 删除字段，
+也可以使用 `--schema-json` 定义完整 schema。
+
+LeRobot 是可选依赖；HDF5 与仿真不依赖它：
+
+```bash
+pip install -r requirements-dataset-export.txt
+```
+
+## 模型边界
+
+`WorldActionModel` 只执行显式输入的一步预测，不访问环境、采集器或磁盘：
+
+```python
+import torch
+
+from models import WorldActionModel, WorldActionModelConfig, WorldModelInputs
+
+model = WorldActionModel(WorldActionModelConfig(state_dim=32, action_dim=8))
+prediction = model(
+    WorldModelInputs(
+        state=torch.zeros(4, 32),
+        action=torch.zeros(4, 8),
+    )
+)
+```
+
+VLA policy 可实现 `PolicyInputs -> PolicyOutput` 契约；图像、语言 token、mask 和上下文
+都必须由调用方显式传入。
+
+## 验证
+
+```bash
+pytest -q
+ruff check .
+black --check .
+```
+
+架构边界、字段布局、上游格式依据和证伪条件见
+[模块化架构设计](docs/MODULAR_ARCHITECTURE_ZH.md)。

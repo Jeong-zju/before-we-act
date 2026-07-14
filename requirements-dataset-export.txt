@@ -1,0 +1,3 @@
+# Optional dependencies for LeRobotDataset v3 export.
+# HDF5 collection and environment-only runtime do not require these extras.
+lerobot>=0.4.0,<0.6
