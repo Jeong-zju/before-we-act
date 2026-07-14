@@ -163,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--profile",
-        choices=("vla", "wam", "robocasa", "rmbench"),
+        choices=("vla", "wam", "wam_proprio", "robocasa", "rmbench"),
         default="vla",
     )
     parser.add_argument("--schema-json", type=Path, default=None)
@@ -207,7 +207,17 @@ def main(argv: list[str] | None = None) -> int:
         drop=args.drop_field,
     )
 
-    env = TwoRobotCooperativeStopEnv(CooperativeStopEnvConfig(scenario=args.scenario))
+    proprio_only = schema.profile == "wam_proprio"
+    if proprio_only and any(name != "hdf5" for name in args.format):
+        raise ValueError("wam_proprio currently uses the HDF5 backend only")
+    if proprio_only and (args.camera or args.stream_video):
+        raise ValueError("wam_proprio collection does not render or encode images")
+
+    env_config = CooperativeStopEnvConfig(
+        scenario=args.scenario,
+        include_camera_images=not proprio_only,
+    )
+    env = TwoRobotCooperativeStopEnv(env_config)
     fps = 1.0 / env.control_dt
     exporters: list[Any] = []
     for format_name in dict.fromkeys(args.format):
@@ -256,11 +266,28 @@ def main(argv: list[str] | None = None) -> int:
     progress.start()
     try:
         for episode_index in range(args.episodes):
+            episode_seed = args.seed + episode_index
+            episode_metadata = {
+                "schema_version": schema.version,
+                "behavior_id": "scripted_oracle_v1",
+                "perturbation_config": json.dumps({}, sort_keys=True),
+                "environment_config": json.dumps(
+                    asdict(env_config), sort_keys=True
+                ),
+                "randomization_config": json.dumps(
+                    {
+                        "enabled": not args.no_randomize,
+                        "seed": episode_seed,
+                    },
+                    sort_keys=True,
+                ),
+            }
             summary = runner.run_episode(
-                seed=args.seed + episode_index,
+                seed=episode_seed,
                 episode_index=episode_index,
                 randomize=not args.no_randomize,
                 observers=(observer, progress),
+                metadata=episode_metadata,
             )
             payload = asdict(summary)
             payload["final_info"] = {
@@ -288,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest = {
         "formats": list(dict.fromkeys(args.format)),
         "schema_profile": schema.profile,
+        "schema_version": schema.version,
         "fields": [asdict(field) for field in schema.fields],
         "fps": fps,
         "episodes": summaries,

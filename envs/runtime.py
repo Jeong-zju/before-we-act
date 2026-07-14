@@ -72,6 +72,7 @@ class SimulationTransition:
     task: str
     images: Mapping[str, np.ndarray] = field(default_factory=dict)
     next_images: Mapping[str, np.ndarray] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def done(self) -> bool:
@@ -178,7 +179,9 @@ class SimulationRunner:
         episode_index: int = 0,
         randomize: bool = True,
         observers: Sequence[RolloutObserver] = (),
+        metadata: Mapping[str, Any] | None = None,
     ) -> RolloutSummary:
+        episode_metadata = dict(metadata or {})
         observation, reset_info = self._reset(seed=seed, randomize=randomize)
         for observer in observers:
             observer.on_episode_start(
@@ -230,6 +233,7 @@ class SimulationRunner:
                 task=self.config.task,
                 images=images,
                 next_images=next_images,
+                metadata=episode_metadata,
             )
             for observer in observers:
                 observer.on_transition(transition)

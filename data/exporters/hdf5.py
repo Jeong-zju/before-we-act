@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import h5py
 import numpy as np
@@ -39,6 +40,7 @@ class HDF5TrajectoryExporter:
         self._metadata: EpisodeMetadata | None = None
         self._videos: dict[str, StreamingVideoObserver] = {}
         self._steps = 0
+        self._episode_metadata: dict[str, Any] | None = None
 
     def start_episode(self, metadata: EpisodeMetadata) -> None:
         if self._file is not None:
@@ -55,6 +57,7 @@ class HDF5TrajectoryExporter:
             {
                 "format_version": self.FORMAT_VERSION,
                 "schema_profile": self.schema.profile,
+                "schema_version": self.schema.version,
                 "fps": metadata.fps,
                 "episode_index": metadata.episode_index,
                 "seed": -1 if metadata.seed is None else metadata.seed,
@@ -103,6 +106,7 @@ class HDF5TrajectoryExporter:
     def write_transition(self, transition: SimulationTransition) -> None:
         if self._file is None:
             raise RuntimeError("start_episode must be called before write_transition")
+        self._write_episode_metadata(transition.metadata)
         resolved = self.schema.resolve(transition)
         data = self._file.require_group("data")
         for name, value in resolved.items():
@@ -133,6 +137,27 @@ class HDF5TrajectoryExporter:
         self._partial_path = None
         self._final_path = None
         self._metadata = None
+        self._episode_metadata = None
+
+    def _write_episode_metadata(self, metadata: Mapping[str, Any]) -> None:
+        if self._file is None:
+            raise RuntimeError("no HDF5 episode is open")
+        normalized = {
+            str(key): _metadata_value(value) for key, value in metadata.items()
+        }
+        if self._episode_metadata is not None:
+            if normalized != self._episode_metadata:
+                raise ValueError("episode metadata changed within one trajectory")
+            return
+        self._episode_metadata = normalized
+        self._file.attrs["episode_metadata_json"] = json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        for key in ("behavior_id", "schema_version"):
+            if key in normalized:
+                self._file.attrs[key] = normalized[key]
 
     def _append(self, root: h5py.Group, path: str, value: Any) -> None:
         parts = path.split("/")
@@ -174,10 +199,25 @@ class HDF5TrajectoryExporter:
             self._file.flush()
             self._file.close()
             self._file = None
+        self._episode_metadata = None
 
 
 def _hdf5_path(name: str) -> str:
     return name.replace(".", "/").strip("/")
+
+
+def _metadata_value(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Mapping):
+        return {str(key): _metadata_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_metadata_value(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise TypeError(f"episode metadata value {value!r} is not JSON serializable")
 
 
 __all__ = ["HDF5TrajectoryExporter"]

@@ -764,6 +764,8 @@ class TwoRobotCooperativeStopEnv:
             "base_effort_agents": np.stack(
                 [self._robot_base_effort(0), self._robot_base_effort(1)], axis=0
             ),
+            "commanded_action": self.last_action.astype(np.float32, copy=True),
+            "executed_action": self.executed_action.astype(np.float32, copy=True),
             "step_count": int(self.step_count),
         }
 

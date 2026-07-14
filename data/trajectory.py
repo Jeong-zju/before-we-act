@@ -12,6 +12,7 @@ import numpy as np
 from envs.runtime import SimulationTransition
 
 _MISSING = object()
+PROPRIO_WAM_SCHEMA_VERSION = "wam.proprio/1.0"
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class TrajectorySchema:
 
     profile: str
     fields: tuple[FieldSpec, ...]
+    version: str = "trajectory.schema/1"
 
     def __post_init__(self) -> None:
         names = [field.name for field in self.fields]
@@ -81,7 +83,11 @@ class TrajectorySchema:
             else:
                 positions[field.name] = len(ordered)
                 ordered.append(field)
-        return TrajectorySchema(profile=self.profile, fields=tuple(ordered))
+        return TrajectorySchema(
+            profile=self.profile,
+            fields=tuple(ordered),
+            version=self.version,
+        )
 
 
 def schema_profile(
@@ -195,6 +201,45 @@ def schema_profile(
             + images
         )
         return TrajectorySchema(profile=profile, fields=fields)
+    if profile in {"wam_proprio", "proprio_wam", "proprioceptive_wam"}:
+        fields = common + (
+            FieldSpec("observation.state", "observation.proprioception", "float32"),
+            FieldSpec("commanded_action", "action", "float32"),
+            FieldSpec("executed_action", "info.executed_action", "float32"),
+            FieldSpec(
+                "next_observation.state",
+                "next_observation.proprioception",
+                "float32",
+            ),
+            FieldSpec("reward", "reward", "float32"),
+            FieldSpec("terminated", "terminated", "bool"),
+            FieldSpec("truncated", "truncated", "bool"),
+            FieldSpec("done", "done", "bool"),
+            FieldSpec("success", "info.success", "bool"),
+            FieldSpec("failure", "info.failure", "bool"),
+            FieldSpec("failure_reason", "info.failure_reason"),
+            FieldSpec("response_progress", "info.response_progress", "float32"),
+            FieldSpec("coordination_error", "info.coordination_error", "float32"),
+            FieldSpec("schema_version", "metadata.schema_version"),
+            FieldSpec("behavior_id", "metadata.behavior_id"),
+            FieldSpec(
+                "perturbation_config",
+                "metadata.perturbation_config",
+            ),
+            FieldSpec(
+                "environment_config",
+                "metadata.environment_config",
+            ),
+            FieldSpec(
+                "randomization_config",
+                "metadata.randomization_config",
+            ),
+        )
+        return TrajectorySchema(
+            profile="wam_proprio",
+            fields=fields,
+            version=PROPRIO_WAM_SCHEMA_VERSION,
+        )
     if profile in {"rmbench", "robotwin"}:
         fields = (
             common
@@ -226,7 +271,8 @@ def schema_profile(
         )
         return TrajectorySchema(profile=profile, fields=fields)
     raise ValueError(
-        f"unknown schema profile {profile!r}; expected vla, wam, robocasa, or rmbench"
+        f"unknown schema profile {profile!r}; expected vla, wam, wam_proprio, "
+        "robocasa, or rmbench"
     )
 
 
@@ -253,6 +299,7 @@ def extract_source(
         "episode_index": transition.episode_index,
         "images": transition.images,
         "next_images": transition.next_images,
+        "metadata": transition.metadata,
     }
     root_name, separator, remainder = source.partition(".")
     if root_name not in roots:
@@ -296,7 +343,9 @@ def load_schema_json(path: str | Path) -> TrajectorySchema:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     fields = tuple(FieldSpec(**entry) for entry in payload["fields"])
     return TrajectorySchema(
-        profile=str(payload.get("profile", "custom")), fields=fields
+        profile=str(payload.get("profile", "custom")),
+        fields=fields,
+        version=str(payload.get("version", "trajectory.schema/1")),
     )
 
 
@@ -311,6 +360,7 @@ def _coerce(value: Any, dtype: str | None) -> Any:
 
 __all__ = [
     "FieldSpec",
+    "PROPRIO_WAM_SCHEMA_VERSION",
     "TrajectorySchema",
     "extract_source",
     "load_schema_json",

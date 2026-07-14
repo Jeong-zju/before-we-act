@@ -8,9 +8,19 @@ from models.api import (
     WorldModelInputs,
     WorldModelOutput,
 )
+from models.baselines import (
+    ActionPrior,
+    ActionPriorConfig,
+    LinearWorldModel,
+    LinearWorldModelConfig,
+)
 from models.world_action_model import WorldActionModel, WorldActionModelConfig
 
 __all__ = [
+    "ActionPrior",
+    "ActionPriorConfig",
+    "LinearWorldModel",
+    "LinearWorldModelConfig",
     "PolicyInputs",
     "PolicyModel",
     "PolicyOutput",

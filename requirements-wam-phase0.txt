@@ -1,0 +1,5 @@
+# Progress display for collection and baseline training.
+rich>=13.7
+
+# Safe tensor-only baseline checkpoints.
+safetensors>=0.4

@@ -110,6 +110,48 @@ MUJOCO_GL=egl python scripts/collect_modular_dataset.py \
 `robocasa`、`rmbench`；WAM profile 额外保存 `response_progress`、
 `coordination_error` 和 `braking_agent`。
 
+## WAM Phase 0：纯本体感知接口与基线
+
+`wam_proprio` 是不含图像和特权状态的 HDF5 契约。它使用
+`wam.proprio/1.0` schema，并分别保存 policy 发出的 `commanded_action` 与经过环境覆盖、
+限加速度执行后的 `executed_action`，同时记录行为、扰动、环境和随机化配置：
+
+```bash
+python scripts/collect_wam_proprio_dataset.py \
+  --out-dir datasets/cooperative_stop_wam_proprio_v1 \
+  --episodes 100
+```
+
+Phase 0 采集入口使用 `scripted_oracle_v1` 并将其写入 `behavior_id`。该数据适合验证契约
+和训练链路；正式训练 RWM 前仍需按技术方案补充噪声、延迟响应、随机动作和失败行为。
+
+序列 loader 以 episode 为边界构造 `states[32,22]`、`past_actions[31,8]` 和未来
+监督，并通过 `valid_mask`、`forecast_mask` 标识 padding。数据集按 episode/seed 分组为
+80/10/10，禁止随机拆 transition。
+
+在仓库已有 legacy WAM 数据上直接训练线性动力学、单步 MLP 和 action prior：
+
+```bash
+python scripts/train_wam_baselines.py \
+  --data-dir datasets/cooperative_stop_wam/hdf5 \
+  --output-dir outputs/wam_phase0_v1
+```
+
+采集和训练默认显示 Rich 进度条。采集展示 episode、step、成功/失败数、任务阶段和 ETA；
+训练展示数据统计、各模型优化 loss 以及 train/validation/test 评估进度。CI 或重定向日志时
+可显式添加 `--no-progress`。最小进度条依赖可通过
+`pip install -r requirements-wam-phase0.txt` 安装。
+
+训练输出包含 `baseline_metrics.json`、`dataset_manifest.json`、`normalization.npz`、
+三个 `*.safetensors` checkpoint 及对应模型配置。默认允许读取旧 `wam` layout 作为
+基线对照；对正式数据可加 `--no-allow-legacy-wam` 强制使用 `wam.proprio/1.0`。
+
+Phase 0 工程验收已通过：三个 checkpoint 可严格加载，数据 split 无 episode/seed
+泄漏，MLP test state NRMSE 为 `0.02592`，线性模型为 `0.36232`。但该结果来自 100 个
+全成功 legacy scripted-oracle episode；Gate A 数据准入尚未通过，不能把该结果解释为
+done/failure 预测、多步 rollout 或闭环 WAM 已有效。完整证据和进入 Phase 1 前的条件见
+[技术方案 V1.0 第 21 节](docs/PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md#21-phase-0-验收记录)。
+
 ## 验证
 
 ```bash
@@ -120,3 +162,6 @@ git diff --check
 
 任务公式、奖励和数据字段详见
 [模块化架构设计](docs/MODULAR_ARCHITECTURE_ZH.md)。
+
+纯本体感知 WAM 的后续阶段和验收门槛见
+[技术方案 V1.0](docs/PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md)。
