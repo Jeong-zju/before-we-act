@@ -31,8 +31,11 @@ class FieldSpec:
 
     @property
     def is_image(self) -> bool:
-        return self.source.startswith("images.") or self.source.startswith(
-            "next_images."
+        return (
+            self.name.startswith("observation.images.")
+            or self.name.startswith("next_observation.images.")
+            or self.source.startswith("images.")
+            or self.source.startswith("next_images.")
         )
 
 
@@ -52,12 +55,13 @@ class TrajectorySchema:
     def resolve(self, transition: SimulationTransition) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for field in self.fields:
-            value = extract_source(transition, field.source, default=_MISSING)
-            if value is _MISSING:
+            try:
+                value = extract_source(transition, field.source)
+            except KeyError:
                 if field.required:
                     raise KeyError(
                         f"required source {field.source!r} for {field.name!r} is missing"
-                    )
+                    ) from None
                 continue
             result[field.name] = _coerce(value, field.dtype)
         return result
@@ -94,15 +98,28 @@ def schema_profile(
         FieldSpec("episode_index", "episode_index", "int64"),
         FieldSpec("task", "task"),
     )
-    images = tuple(
+    external_images = tuple(
         FieldSpec(f"observation.images.{camera}", f"images.{camera}", "uint8")
         for camera in cameras
     )
+    onboard_images = (
+        FieldSpec(
+            "observation.images.robot_0",
+            "observation.robot_0.image",
+            "uint8",
+        ),
+        FieldSpec(
+            "observation.images.robot_1",
+            "observation.robot_1.image",
+            "uint8",
+        ),
+    )
+    images = onboard_images + external_images
     if profile in {"vla", "lerobot", "robocasa"}:
         fields = (
             common
             + (
-                FieldSpec("observation.state", "observation.global_state", "float32"),
+                FieldSpec("observation.state", "observation.proprioception", "float32"),
                 FieldSpec("action", "action", "float32"),
                 FieldSpec("next.reward", "reward", "float32"),
                 FieldSpec("next.done", "done", "bool"),
@@ -115,33 +132,65 @@ def schema_profile(
         fields = (
             common
             + (
-                FieldSpec("observation.agent_0", "observation.robot_0", "float32"),
-                FieldSpec("observation.agent_1", "observation.robot_1", "float32"),
-                FieldSpec("observation.object", "observation.object", "float32"),
                 FieldSpec(
-                    "observation.global_state", "observation.global_state", "float32"
+                    "observation.agent_0", "observation.robot_0.state", "float32"
+                ),
+                FieldSpec(
+                    "observation.agent_1", "observation.robot_1.state", "float32"
+                ),
+                FieldSpec(
+                    "observation.object",
+                    "observation.privileged_state.object_pose",
+                    "float32",
+                ),
+                FieldSpec(
+                    "observation.privileged_state",
+                    "observation.privileged_state.state",
+                    "float32",
                 ),
                 FieldSpec("action", "action", "float32"),
                 FieldSpec(
-                    "next_observation.agent_0", "next_observation.robot_0", "float32"
+                    "next_observation.agent_0",
+                    "next_observation.robot_0.state",
+                    "float32",
                 ),
                 FieldSpec(
-                    "next_observation.agent_1", "next_observation.robot_1", "float32"
+                    "next_observation.agent_1",
+                    "next_observation.robot_1.state",
+                    "float32",
                 ),
                 FieldSpec(
-                    "next_observation.object", "next_observation.object", "float32"
+                    "next_observation.object",
+                    "next_observation.privileged_state.object_pose",
+                    "float32",
                 ),
                 FieldSpec(
-                    "next_observation.global_state",
-                    "next_observation.global_state",
+                    "next_observation.privileged_state",
+                    "next_observation.privileged_state.state",
                     "float32",
                 ),
                 FieldSpec("reward", "reward", "float32"),
                 FieldSpec("done", "done", "bool"),
                 FieldSpec("success", "info.success", "bool", required=False),
                 FieldSpec("failure", "info.failure", "bool", required=False),
-                FieldSpec("progress", "info.progress", "float32", required=False),
-                FieldSpec("force", "info.force_proxy", "float32", required=False),
+                FieldSpec(
+                    "response_progress",
+                    "info.response_progress",
+                    "float32",
+                    required=False,
+                ),
+                FieldSpec(
+                    "coordination_error",
+                    "info.coordination_error",
+                    "float32",
+                    required=False,
+                ),
+                FieldSpec(
+                    "braking_agent",
+                    "info.braking_agent",
+                    "int64",
+                    required=False,
+                ),
             )
             + images
         )
@@ -150,17 +199,28 @@ def schema_profile(
         fields = (
             common
             + (
-                FieldSpec("observation.state", "observation.global_state", "float32"),
-                FieldSpec("observation.agent_0", "observation.robot_0", "float32"),
-                FieldSpec("observation.agent_1", "observation.robot_1", "float32"),
+                FieldSpec("observation.state", "observation.proprioception", "float32"),
+                FieldSpec(
+                    "observation.agent_0", "observation.robot_0.state", "float32"
+                ),
+                FieldSpec(
+                    "observation.agent_1", "observation.robot_1.state", "float32"
+                ),
                 FieldSpec("action", "action", "float32"),
                 FieldSpec(
-                    "next_observation.state", "next_observation.global_state", "float32"
+                    "next_observation.state",
+                    "next_observation.proprioception",
+                    "float32",
                 ),
                 FieldSpec("reward", "reward", "float32"),
                 FieldSpec("done", "done", "bool"),
                 FieldSpec("success", "info.success", "bool", required=False),
-                FieldSpec("progress", "info.progress", "float32", required=False),
+                FieldSpec(
+                    "response_progress",
+                    "info.response_progress",
+                    "float32",
+                    required=False,
+                ),
             )
             + images
         )

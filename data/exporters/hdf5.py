@@ -9,7 +9,7 @@ import h5py
 import numpy as np
 
 from data.exporters.base import EpisodeMetadata
-from data.trajectory import TrajectorySchema
+from data.trajectory import TrajectorySchema, extract_source
 from envs.runtime import RolloutSummary, SimulationTransition
 from envs.video import StreamingVideoObserver
 
@@ -71,9 +71,11 @@ class HDF5TrajectoryExporter:
 
         if self.stream_videos:
             for field in self.schema.fields:
-                if not field.source.startswith("images."):
+                if not field.is_image:
                     continue
-                stream = field.source.split(".", 1)[1]
+                stream = field.name.removeprefix("observation.images.").replace(
+                    ".", "_"
+                )
                 path = (
                     self.root
                     / "videos"
@@ -85,6 +87,9 @@ class HDF5TrajectoryExporter:
                     stream=stream,
                     fps=metadata.fps,
                     codec=self.video_codec,
+                    frame_getter=lambda transition, source=field.source: extract_source(
+                        transition, source
+                    ),
                 )
                 video.on_episode_start(
                     episode_index=metadata.episode_index,

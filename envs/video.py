@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import cv2
 import numpy as np
@@ -21,6 +21,7 @@ class StreamingVideoObserver:
         stream: str,
         fps: float,
         codec: str = "mp4v",
+        frame_getter: Callable[[SimulationTransition], np.ndarray] | None = None,
     ) -> None:
         if fps <= 0.0:
             raise ValueError("video fps must be positive")
@@ -30,6 +31,7 @@ class StreamingVideoObserver:
         self.stream = stream
         self.fps = float(fps)
         self.codec = codec
+        self.frame_getter = frame_getter
         self._writer: cv2.VideoWriter | None = None
         self._shape: tuple[int, int, int] | None = None
         self.frames_written = 0
@@ -46,9 +48,13 @@ class StreamingVideoObserver:
         del episode_index, seed, observation, info, task
 
     def on_transition(self, transition: SimulationTransition) -> None:
-        if self.stream not in transition.images:
-            raise KeyError(f"rollout does not contain video stream {self.stream!r}")
-        frame = np.asarray(transition.images[self.stream], dtype=np.uint8)
+        if self.frame_getter is None:
+            if self.stream not in transition.images:
+                raise KeyError(f"rollout does not contain video stream {self.stream!r}")
+            value = transition.images[self.stream]
+        else:
+            value = self.frame_getter(transition)
+        frame = np.asarray(value, dtype=np.uint8)
         if frame.ndim != 3 or frame.shape[2] != 3:
             raise ValueError("video frames must have shape [height,width,3]")
         if self._writer is None:

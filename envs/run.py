@@ -11,6 +11,10 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from envs.annotations import (
+    annotate_cooperative_stop_frame,
+    update_cooperative_stop_viewer_labels,
+)
 from envs.runtime import (
     CallablePolicy,
     RenderRequest,
@@ -19,7 +23,11 @@ from envs.runtime import (
     SimulationRunner,
     SimulationTransition,
 )
-from envs.two_robot_carry_env import CarryEnvConfig, TwoRobotCarryNarrowPassageEnv
+from envs.two_robot_carry_env import (
+    DEFAULT_TASK_INSTRUCTION,
+    CooperativeStopEnvConfig,
+    TwoRobotCooperativeStopEnv,
+)
 from envs.video import StreamingVideoObserver
 
 
@@ -27,11 +35,20 @@ class _PassiveViewerObserver:
     def __init__(self, viewer: Any) -> None:
         self.viewer = viewer
 
-    def on_episode_start(self, **_: Any) -> None:
+    def on_episode_start(
+        self,
+        *,
+        observation: Mapping[str, Any],
+        info: Mapping[str, Any],
+        **_: Any,
+    ) -> None:
+        update_cooperative_stop_viewer_labels(self.viewer, observation, info)
         self.viewer.sync()
 
     def on_transition(self, transition: SimulationTransition) -> None:
-        del transition
+        update_cooperative_stop_viewer_labels(
+            self.viewer, transition.next_observation, transition.info
+        )
         self.viewer.sync()
 
     def on_episode_end(self, summary: RolloutSummary) -> None:
@@ -41,9 +58,12 @@ class _PassiveViewerObserver:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the TwoRobotCarry environment without model or dataset modules."
+        description=(
+            "Run the two-robot cooperative stopping environment without model "
+            "or dataset modules."
+        )
     )
-    parser.add_argument("--scenario", default="nominal")
+    parser.add_argument("--scenario", choices=("standard",), default="standard")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=None)
@@ -56,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--video", type=Path, default=None)
     parser.add_argument(
         "--task",
-        default="carry the object through the passage to the goal",
+        default=DEFAULT_TASK_INSTRUCTION,
     )
     return parser
 
@@ -69,10 +89,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.video is not None and not cameras:
         cameras = ["fixed"]
     render = tuple(
-        RenderRequest(name=camera, camera=camera, width=args.width, height=args.height)
+        RenderRequest(
+            name=camera,
+            camera=camera,
+            width=args.width,
+            height=args.height,
+            annotator=annotate_cooperative_stop_frame,
+        )
         for camera in cameras
     )
-    env = TwoRobotCarryNarrowPassageEnv(CarryEnvConfig(scenario=args.scenario))
+    env = TwoRobotCooperativeStopEnv(CooperativeStopEnvConfig(scenario=args.scenario))
     runner = SimulationRunner(
         env,
         CallablePolicy(lambda observation: env.scripted_action()),

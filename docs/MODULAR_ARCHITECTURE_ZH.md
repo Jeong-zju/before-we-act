@@ -1,8 +1,6 @@
 # 模块化仿真与数据管线
 
-## 1. 已落地的边界
-
-本次重构把核心依赖固定为单向关系：
+## 1. 模块边界
 
 ```text
 models/                         envs/
@@ -11,193 +9,258 @@ models/                         envs/
        ▲                            │
        │                            ▼
        └── application adapters   data/
-                                   字段契约、采集适配、HDF5/LeRobot 导出
-                                   允许依赖 envs 的公共 runtime 契约
+                                   字段契约、HDF5/LeRobot 导出
 ```
 
-边界由 `tests/test_modular_architecture.py` 的 AST import guard 自动检查：
+`tests/test_modular_architecture.py` 通过 AST import guard 固定依赖方向：
 
 - `models/` 禁止导入 `data`、`envs`；
 - `envs/` 禁止导入 `data`、`models`；
-- `data/` 可以导入 `envs.runtime`，但 exporter 只消费
-  `SimulationTransition`，不绑定具体 MuJoCo 类；
-- `scripts/` 是应用组合层，可以组合环境与数据导出；模型适配器也应放在这一层。
+- `data/` 只通过 `envs.runtime.SimulationTransition` 消费轨迹；
+- `scripts/` 负责组合环境、策略和导出器。
 
-历史版本的模型、训练、评测、采集脚本和文档已经删除。当前仓库只保留这套模块化
-契约，不提供旧接口兼容层。
+## 2. 当前任务定义
 
-## 2. 仿真环境独立运行
+公共环境类是 `TwoRobotCooperativeStopEnv`，任务指令为：
 
-环境公共契约位于 `envs/runtime.py`：
+> Carry the object together; when one robot slows to a stop, the other robot
+> should gradually slow and stop.
 
-- `SimulationEnvironment`：`reset / step / render / close / control_dt`；
-- `Policy`：只接收当前 observation；
-- `SimulationTransition`：严格表示
-  `observation[t] -> action[t] -> observation[t+1]`；
-- `SimulationRunner`：批量运行和 wall-clock 实时运行共用同一个执行器；
-- `RolloutObserver`：viewer、视频、数据集都是旁路消费者，环境不反向依赖它们。
+两台机器人均为平面全向底盘，动作是：
 
-独立批量运行：
-
-```bash
-python -m envs.run --scenario nominal --episodes 3
+```text
+[r0_vx, r0_vy, r0_wz, r0_grip, r1_vx, r1_vy, r1_wz, r1_grip]
 ```
 
-按环境 `control_dt` 实时运行，并打开 MuJoCo viewer：
+动作位于 `[-1,1]`，`vx/vy` 是世界坐标速度指令。底盘使用加速度受限的运动学更新：
 
-```bash
-python -m envs.run --scenario private_gates --realtime --viewer
+```text
+desired_velocity = normalized_action × velocity_limit
+executed_velocity[t+1] = acceleration_limit(
+    executed_velocity[t], desired_velocity
+)
+pose[t+1] = pose[t] + executed_velocity[t+1] × control_dt
 ```
 
-离屏 RGB 流式写 MP4（逐帧编码，不缓存整条 episode）：
+它不是电机动力学积分；环境只调用 `mj_forward` 更新 MuJoCo 派生状态、接触和渲染。
 
-```bash
-MUJOCO_GL=egl python -m envs.run \
-  --realtime --camera fixed --camera topdown \
-  --video outputs/live_fixed.mp4
+### 2.1 几何抓取
+
+当两个 grip action 都大于 `0.5` 时：
+
+- 物体中心等于两个 XML grip site 的几何中点；
+- 物体 yaw 等于两个 grip site 连线方向；
+- 物体速度由相邻控制步的几何位姿差计算。
+
+建立抓取后任一夹爪松开会触发 `grasp_lost`。当前任务仍不模拟真实夹爪接触、摩擦和
+物体掉落动力学。
+
+### 2.2 随机刹车事件
+
+每次 reset 都通过环境 RNG 采样：
+
+```text
+braking_agent ∈ {0, 1}
+brake_start_time ∈ [2.0 s, 5.0 s]
+responding_agent = 1 - braking_agent
 ```
 
-`TwoRobotCarryNarrowPassageEnv.render()` 使用按分辨率懒创建的 MuJoCo renderer；
-`close()` 会释放全部 renderer context。Gym wrapper 同时支持
-`render_mode="rgb_array"`。
+事件随机性即使在 `randomize=False` 时也保留；该参数只控制出生位姿扰动。相同 seed 在
+两种 reset 模式下产生相同的 braking agent 和 start step。
 
-## 3. 格式无关的数据契约
+到达触发步后，环境忽略 braking agent 的底盘动作，将其目标速度强制置零。实际速度仍
+受与正常控制相同的线加速度和角加速度上限约束，因此不会瞬时跳到零。responding agent
+的底盘动作不被覆盖。
 
-`data/trajectory.py` 将“采什么”与“存成什么”拆开：
+### 2.3 防止伪成功
 
-- `FieldSpec(name, source, dtype, required)` 描述一个字段；
-- `TrajectorySchema` 解析字段但不关心 HDF5 / Parquet / MP4；
-- source 使用稳定的 dotted path，例如：
-  `observation.global_state`、`next_observation.object`、`info.progress`、
-  `images.fixed`；
-- exporter 接收同一个 transition stream，可以同时输出多个格式。
+事件触发时必须满足：
+
+- 两个夹爪已经建立几何抓取；
+- 两台机器人 `+Y` 速度均不低于 `min_cruise_forward_speed`；
+- 两台机器人的速度差不超过 `max_pre_brake_speed_error`。
+
+该条件记录为 `pre_brake_motion_valid`。因此“两台机器人从 reset 起一直不动”即使最终
+速度都是零，也不会满足成功条件。
+
+responding agent 的速度相对事件触发速度至少下降 `response_speed_delta` 后，才记为
+`response_started`。实际底盘受加速度上限约束，并且成功还要求至少经历
+`min_gradual_brake_steps` 个减速步，所以单步将 action 写成零不会在状态层形成瞬时停止。
+
+### 2.4 成功条件
+
+以下条件必须同时成立：
+
+1. 随机刹车事件已经触发；
+2. `pre_brake_motion_valid = true`；
+3. responding agent 已开始响应；
+4. responding agent 的减速过程达到最小步数；
+5. 两台机器人线速度和角速度均低于停止阈值；
+6. 两台机器人保持停止 `stop_hold_steps`，默认 8 步；
+7. 两个夹爪仍闭合。
+
+### 2.5 基础失败条件
+
+当前只保留与新任务直接相关的条件：
+
+| 原因 | 含义 |
+|---|---|
+| `grasp_lost` | 已抓取后任一夹爪松开 |
+| `robot_too_far` | 两台机器人距离超过安全协作上限 |
+| `object_out_of_bounds` | 搬运物体越出 XML 任务边界 |
+| `robot_out_of_bounds` | 任意机器人越出 XML 任务边界 |
+| `response_timeout` | 刹车事件后未在响应时限内完成稳定停止 |
+| `episode_timeout` | episode 达到总步数上限 |
+
+窄道穿透、目标区、私有门、遮挡、false belief、虚拟 blocked lane、物体通道 yaw 和
+private-event mismatch 均已删除。
+
+### 2.6 奖励
+
+公共项：
+
+```text
+- reward_time_cost
+- reward_energy_scale × executed_base_action²
+- reward_ungrasped_cost                    # 当前未保持双夹爪闭合
+```
+
+事件触发前：
+
+```text
++ reward_cruise_scale × 两台机器人共同的 +Y 巡航速度
+- reward_speed_match_scale × 两台机器人速度差
+```
+
+事件触发后：
+
+```text
++ reward_response_progress_scale × responding agent 最佳减速进度增量
+- reward_speed_tracking_scale × 两台机器人速度差
+- reward_acceleration_tracking_scale × 两台机器人减速度差
++ reward_stop_hold                         # 两台机器人均已停止
+```
+
+成功额外 `+50`，失败额外 `-20`。减速进度只对历史最佳值的增加给奖励，避免通过反复
+加速/减速重复获取同一段 shaping reward。
+
+## 3. 标准场景和 XML 真值
+
+场景只接受 `scenario="standard"`。传入旧场景名会立即抛出 `ValueError`。
+
+`envs/assets/two_robot_carry.xml` 是唯一持久化几何入口，定义：
+
+- `home` keyframe：两台机器人和物体的出生位姿；
+- `task_bounds`：基础越界判定；
+- robot/object geom：尺寸和接触几何；
+- robot grip site：几何绑定点；
+- 两个机载相机以及 fixed/topdown 场景相机。
+
+XML 中不再包含 wall、goal、private gate 或 blocked-lane custom numeric。Python 中也不
+维护这些几何的平行常量。
+
+## 4. 观测和特权真值
+
+```text
+robot_0 / robot_1                  # 去中心化策略可用
+  state[11]
+    base_pose[3]                   # x, y, yaw
+    base_velocity[3]               # vx, vy, wz
+    gripper[2]                     # command, closed
+    base_effort[3]                 # Fx, Fy, Tz
+  image[H,W,3]                     # XML body-mounted RGB
+
+proprioception[22]                 # 两台 robot state 拼接
+
+privileged_state                   # critic / WAM / 评测 / 标签
+  object_pose[3]
+  object_velocity[6]
+  task_bounds[4]
+  object_half_size[3]
+  task[10]
+  braking_event[10]
+  contact[5]
+  state[34]
+```
+
+`braking_event` 是随机外生事件真值，包含 braking/responding agent、触发步、响应状态、
+响应延迟、减速步数和稳定停止计数。它不得直接进入去中心化 policy，否则会形成标签
+泄漏。`SimulationRunner` 默认在调用 policy 前删除 `privileged_state`，但 transition 和
+数据导出仍保留完整 observation；只有显式设置
+`RunnerConfig.expose_privileged_state_to_policy=True` 的集中式基线才能读取该字段。
+机器人可以通过自身 `base_velocity`、机载视觉以及时间上下文判断队友是否减速。
+
+`base_effort` 来自 `data.qfrc_actuator`，表示运动学控制器对应的广义执行器 effort，不应
+解释为真实动力学积分后的关节扭矩。
+
+### 4.1 人类可视化标注与训练视频隔离
+
+标注只存在于显式的人类可视化路径：
+
+- Passive viewer：在 `viewer.user_scn` 中为两个机器人添加 `mjGEOM_LABEL`。随机刹车
+  机器人显示 `BRAKE ROBOT | starts/since T`，另一台显示 `RESPONDER`；标签位置每步
+  跟随机器人底盘。
+- `python -m envs.run --video ...`：`RenderRequest.annotator` 在原始 RGB 的副本上绘制
+  braking agent、预定时刻、倒计时/elapsed time、双方速度和响应状态。
+- `scripts/collect_modular_dataset.py`：所有 `RenderRequest` 均不设置 annotator；机载图像
+  也直接来自原始 environment observation。因此 HDF5/LeRobot 数组以及
+  `--stream-video` MP4 都不包含可视化文本。
+
+`annotate_cooperative_stop_frame()` 总是先复制输入帧再绘字，不能反向修改 renderer 或
+observation 中的原始数组。这个隔离避免模型从视频文字直接读取 braking-agent 标签。
+
+## 5. Runtime 与数据字段
+
+`SimulationTransition` 严格表示：
+
+```text
+observation[t] -> action[t] -> observation[t+1]
+```
 
 默认 profile：
 
-| Profile | 默认用途 | 关键默认字段 |
-|---|---|---|
-| `vla` | 通用 VLA / LeRobot | `observation.state`、`observation.images.*`、`action`、`task`、`timestamp`、reward/done |
-| `wam` | World Action Model | 双 agent 当前/下一状态、object/global state、action、reward/done、progress/force |
-| `robocasa` | RoboCasa 风格 VLA | 使用当前 RoboCasa 的 LeRobot 主结构，保留 task、state、action、多相机视频 |
-| `rmbench` | RMBench / RoboTwin 风格 | 单 episode 轨迹、双 agent state、next state、action、instruction、success/progress |
+| Profile | 关键字段 |
+|---|---|
+| `vla` / `robocasa` | 双机器人本体状态、两路机载 RGB、action、task、reward/done |
+| `wam` | 当前/下一步 agent state、object、privileged state、`response_progress`、`coordination_error`、`braking_agent` |
+| `rmbench` / `robotwin` | 当前/下一步 state、action、success、`response_progress` |
 
-[事实] RoboCasa 1.0.1 的训练数据主体使用 LeRobot 结构，并另外保存
-MuJoCo replay extras；RMBench 基于 RoboTwin 2.0，后者按 episode 保存 HDF5，图像可保存为
-bit stream，同时分开保存 instructions 和视频。这里借鉴的是稳定字段语义，不声称逐字节兼容
-所有上游私有版本。
+HDF5 逐 transition 写入 extendable dataset；LeRobot 导出调用官方 writer contract。同一
+rollout 可以同时 fan-out 到多个 exporter，不重复运行仿真。
 
-## 4. 导出后端
-
-### 4.1 HDF5
-
-`HDF5TrajectoryExporter` 每个 episode 写一个文件：
-
-```text
-hdf5/
-├── episode_000000.hdf5
-│   ├── attrs: format_version, profile, fps, task, seed, num_steps, ...
-│   ├── schema/...              # 每个字段的 source / dtype / required
-│   └── data/...
-└── videos/episode_000000/*.mp4 # --stream-video 时生成
-```
-
-特性：
-
-- extendable/chunked dataset，逐 transition append；
-- `.partial.hdf5` 完成后原子改名，异常中断不会伪装成完整 episode；
-- dtype 显式保真，shape 在第一帧确定，后续变化会立即失败；
-- RGB 可同时保存原始数组并实时编码 MP4；
-- 一个文件一个 episode，便于 RMBench/RoboTwin 式并行采集和坏样本隔离。
-
-### 4.2 LeRobotDataset v3
-
-`LeRobotTrajectoryExporter` 不重写 LeRobot 的 Parquet/MP4 细节，而是调用官方
-`LeRobotDataset.create -> add_frame -> save_episode -> finalize` API。启用
-`streaming_encoding=True` 时视频在采集过程中编码；`finalize()` 确保 Parquet footer
-与元数据落盘。
-
-LeRobot 是可选依赖；未安装时 HDF5 和仿真仍可独立工作：
+## 6. 运行和采集
 
 ```bash
-pip install -r requirements-dataset-export.txt
+MUJOCO_GL=egl python -m envs.run --scenario standard --episodes 3
 ```
-
-## 5. 采集命令
-
-同一 rollout 同时导出 HDF5 与 LeRobot：
 
 ```bash
 MUJOCO_GL=egl python scripts/collect_modular_dataset.py \
-  --out-dir datasets/modular_carry \
+  --out-dir datasets/cooperative_stop \
   --format hdf5 --format lerobot \
-  --profile vla \
-  --episodes 100 \
-  --camera fixed --camera topdown \
-  --stream-video \
-  --repo-id local/modular-carry
+  --profile vla --episodes 100 --stream-video
 ```
 
-WAM 默认字段、无视频的轻量采集：
+WAM 数据：
 
 ```bash
-python scripts/collect_modular_dataset.py \
-  --out-dir datasets/wam_stream \
+MUJOCO_GL=egl python scripts/collect_modular_dataset.py \
+  --out-dir datasets/cooperative_stop_wam \
   --format hdf5 --profile wam --episodes 100
 ```
 
-命令结束后根目录会写 `manifest.json`，记录实际格式、fps、字段映射和每个 episode
-结果。
+## 7. 证伪与发布门槛
 
-## 6. 自定义字段
+这一定义成立需要以下测试持续通过：
 
-命令行覆盖：
+- 多个 seed 能覆盖两种 braking agent 和多个 start step；
+- 从 reset 起保持静止不能成功；
+- oracle baseline 在两种 braking agent 下都能逐渐停止并成功；
+- responding agent 不响应时必须以 `response_timeout` 失败；
+- Gym observation space 与实际嵌套 observation 完全匹配；
+- HDF5 的 braking event 标签、图像帧数和 transition 数严格对齐；
+- `pytest -q`、`ruff check .`、`git diff --check` 全部通过。
 
-```bash
-python scripts/collect_modular_dataset.py \
-  --out-dir datasets/custom --format hdf5 --profile wam \
-  --drop-field force \
-  --field diagnostics.robot_distance=info.robot_distance::float32 \
-  --field labels.communication_required=info.communication_required::bool
-```
-
-同名 `--field` 会替换 profile 默认映射。完整自定义可通过 `--schema-json`：
-
-```json
-{
-  "profile": "custom_vla",
-  "fields": [
-    {"name": "observation.state", "source": "observation.global_state", "dtype": "float32"},
-    {"name": "action", "source": "action", "dtype": "float32"},
-    {"name": "task", "source": "task"},
-    {"name": "done", "source": "done", "dtype": "bool"}
-  ]
-}
-```
-
-## 7. 取舍与证伪条件
-
-Bull：单向 import guard + format-neutral transition stream 让新增环境、新相机或新 exporter
-不再改模型；同一 rollout 多格式 fan-out 也避免重复仿真造成的数据漂移。
-
-Bear：LeRobot 的磁盘格式和 writer API 仍由上游演进；本环境尚未安装可选 LeRobot
-依赖，因此仓库内验证覆盖 API contract fake 和 HDF5 真实端到端，不能冒充已完成本机
-LeRobot loader round-trip。当前参考模型是低维 WAM，RGB 已能采集但尚未接入视觉 encoder。
-
-Arbiter：当前采集统一使用模块化入口。安装可选依赖后，必须把
-“官方 LeRobot loader 能读取实际输出、episode/frame/video 数严格一致”作为发布门禁。
-
-可证伪条件：
-
-- 若在 **2026-07-28** 前发现模型或环境包需要反向导入 dataset 才能实现新功能，说明
-  当前公共契约不足，应先扩展 protocol，不能放松依赖方向；
-- 若在 **2026-08-14** 前 LeRobot 官方 loader round-trip 仍不能通过，则
-  `LeRobotTrajectoryExporter` 应标记 experimental，不能宣称格式支持完成；
-- 若 RGB 帧数、transition 行数、video frame count 任一不一致，流式采集设计立即判失败，
-  不允许靠训练端截断来掩盖。
-
-## 8. 上游格式依据
-
-- LeRobotDataset v3：<https://huggingface.co/docs/lerobot/lerobot-dataset-v3>
-- RoboCasa Using Datasets：<https://robocasa.ai/docs/build/html/datasets/using_datasets.html>
-- RoboTwin 2.0 Collect Data：<https://robotwin-platform.github.io/doc/usage/collect-data.html>
-- RMBench：<https://github.com/RoboTwin-Platform/RMBench>
+[判断] 对 VLA 训练而言，这个任务的研究信号来自时间因果响应，而不是静态目标到达。
+因此评测时必须保证 policy 看不到 `privileged_state.braking_event`，并按 seed 分层报告
+braking agent、trigger time、response delay 和成功率，而不能只报告总体平均成功率。

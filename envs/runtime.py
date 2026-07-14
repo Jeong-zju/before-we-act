@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
 import numpy as np
 
 Observation = Mapping[str, Any]
+FrameAnnotator = Callable[[np.ndarray, Mapping[str, Any]], np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class RenderRequest:
     camera: str
     width: int = 640
     height: int = 360
+    annotator: FrameAnnotator | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -42,7 +44,11 @@ class RunnerConfig:
     realtime: bool = False
     max_steps: int | None = None
     render: tuple[RenderRequest, ...] = ()
-    task: str = "carry the object through the passage to the goal"
+    expose_privileged_state_to_policy: bool = False
+    task: str = (
+        "carry the object together; when one robot slows to a stop, "
+        "the other robot should gradually slow and stop"
+    )
 
     def __post_init__(self) -> None:
         if self.max_steps is not None and self.max_steps <= 0:
@@ -183,7 +189,7 @@ class SimulationRunner:
                 task=self.config.task,
             )
 
-        images = self._render()
+        images = self._render(reset_info)
         start = self._clock()
         frame_index = 0
         total_reward = 0.0
@@ -192,7 +198,8 @@ class SimulationRunner:
         final_info: Mapping[str, Any] = reset_info
 
         while not (terminated or truncated):
-            action = np.asarray(self.policy.act(observation), dtype=np.float32)
+            policy_observation = self._policy_observation(observation)
+            action = np.asarray(self.policy.act(policy_observation), dtype=np.float32)
             (
                 next_observation,
                 reward,
@@ -208,7 +215,7 @@ class SimulationRunner:
             ):
                 truncated = True
                 info = dict(info, runner_truncated=True)
-            next_images = self._render()
+            next_images = self._render(info)
             transition = SimulationTransition(
                 episode_index=episode_index,
                 frame_index=frame_index,
@@ -248,6 +255,19 @@ class SimulationRunner:
             observer.on_episode_end(summary)
         return summary
 
+    def _policy_observation(self, observation: Observation) -> Observation:
+        """Hide simulator/task truth from policies unless explicitly requested."""
+
+        if self.config.expose_privileged_state_to_policy:
+            return observation
+        if "privileged_state" not in observation:
+            return observation
+        return {
+            key: value
+            for key, value in observation.items()
+            if key != "privileged_state"
+        }
+
     def _reset(
         self, *, seed: int | None, randomize: bool
     ) -> tuple[Observation, Mapping[str, Any]]:
@@ -280,7 +300,7 @@ class SimulationRunner:
             info,
         )
 
-    def _render(self) -> dict[str, np.ndarray]:
+    def _render(self, info: Mapping[str, Any]) -> dict[str, np.ndarray]:
         frames: dict[str, np.ndarray] = {}
         for request in self.config.render:
             frame = np.asarray(
@@ -296,6 +316,13 @@ class SimulationRunner:
                 raise ValueError(
                     f"camera {request.camera!r} returned {frame.shape}, expected {expected}"
                 )
+            if request.annotator is not None:
+                frame = np.asarray(request.annotator(frame, info), dtype=np.uint8)
+                if frame.shape != expected:
+                    raise ValueError(
+                        f"annotator for {request.name!r} returned {frame.shape}, "
+                        f"expected {expected}"
+                    )
             frames[request.name] = frame.copy()
         return frames
 
@@ -310,6 +337,7 @@ class SimulationRunner:
 
 __all__ = [
     "CallablePolicy",
+    "FrameAnnotator",
     "Observation",
     "Policy",
     "RenderRequest",

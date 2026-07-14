@@ -1,196 +1,309 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Tuple
-import copy
+from typing import Any, Dict, Tuple
 
 import mujoco
 import numpy as np
 
 
+DEFAULT_TASK_INSTRUCTION = (
+    "carry the object together; when one robot slows to a stop, "
+    "the other robot should gradually slow and stop"
+)
+
+
 @dataclass
-class CarryEnvConfig:
+class CooperativeStopEnvConfig:
+    """Configuration for the standard cooperative stopping task."""
+
     xml_path: str | None = None
-    scenario: str = "nominal"
-    sim_dt: float = 0.002
+    scenario: str = "standard"
     control_dt: float = 0.05
-    episode_len: int = 500
-    goal_y: float = 3.05
-    goal_tol_xy: float = 0.28
-    passage_half_width: float = 0.90
-    robot_radius: float = 0.22
-    object_half_length: float = 0.65
-    object_half_width: float = 0.07
-    max_force_proxy: float = 1.0
+    episode_len: int = 300
     max_action_v: float = 0.7
     max_action_w: float = 1.2
-    grip_distance: float = 0.42
+    max_linear_acceleration: float = 0.8
+    max_angular_acceleration: float = 2.0
+    brake_start_time_min: float = 2.0
+    brake_start_time_max: float = 5.0
+    max_response_time: float = 5.0
+    min_cruise_forward_speed: float = 0.20
+    max_pre_brake_speed_error: float = 0.12
+    response_speed_delta: float = 0.05
+    stop_linear_speed: float = 0.04
+    stop_angular_speed: float = 0.08
+    min_gradual_brake_steps: int = 5
+    stop_hold_steps: int = 8
     max_robot_distance: float = 1.25
-    max_y_desync: float = 0.55
-    max_object_yaw_abs: float = 0.75
-    max_object_midpoint_error: float = 0.35
-    occlusion_prob: float = 0.0
-    teammate_delay_steps: int = 0
-    asymmetric_obstacle: bool = False
-    narrow_width_scale: float = 1.0
-    blocked_passage_prob: float = 0.0
-    false_belief_prob: float = 0.0
-    force_limit: float = 1.0
-    min_robot_distance_limit: float = 0.25
-    local_force_scale_newtons: float = 1000.0
-    object_z: float = 0.061
+    agent_camera_width: int = 128
+    agent_camera_height: int = 128
+    include_camera_images: bool = True
     seed: int = 0
-    private_gate_positions: tuple[float, float, float] = (-0.05, 1.15, 2.30)
-    private_gate_window: float = 0.32
-    private_gate_target_offset: float = 0.16
-    private_gate_error_limit: int = 18
-    reward_progress_scale: float = 20.0
+    reward_cruise_scale: float = 0.5
+    reward_speed_match_scale: float = 1.0
+    reward_response_progress_scale: float = 5.0
+    reward_speed_tracking_scale: float = 2.0
+    reward_acceleration_tracking_scale: float = 0.05
+    reward_stop_hold: float = 0.25
     reward_time_cost: float = 0.01
-    reward_energy_scale: float = 0.01
-    reward_force_scale: float = 2.0
-    reward_private_event_error: float = 0.25
+    reward_energy_scale: float = 0.005
+    reward_ungrasped_cost: float = 0.05
+    reward_success: float = 50.0
+    reward_failure: float = 20.0
 
 
-class TwoRobotCarryNarrowPassageEnv:
+@dataclass(frozen=True)
+class CooperativeStopGeometry:
+    """Task geometry resolved exclusively from named MuJoCo XML elements."""
+
+    home_qpos: np.ndarray
+    floor_half_size: np.ndarray
+    task_center: np.ndarray
+    task_half_size: np.ndarray
+    robot_half_sizes: np.ndarray
+    object_half_size: np.ndarray
+    object_height: float
+    grip_offsets: np.ndarray
+
+
+class TwoRobotCooperativeStopEnv:
+    """Geometric two-robot cooperative stopping environment.
+
+    Both planar robots geometrically carry a horizontal bar while moving in
+    the world-frame ``+Y`` direction.  At a seeded random time, one seeded
+    random robot becomes the braking robot.  Its base target velocity is
+    overridden to zero and its executed velocity is reduced by the same
+    acceleration-limited kinematic controller used by both robots.  The task
+    succeeds when the responding robot also decelerates and both robots hold a
+    stable stop.
+
+    Action (8):
+        [r0_vx, r0_vy, r0_wz, r0_grip, r1_vx, r1_vy, r1_wz, r1_grip]
+
+    The task remains geometric: poses are updated directly and MuJoCo is used
+    for named geometry, contact queries, generalized actuator effort, and RGB
+    rendering.  No ``mj_step`` motor-dynamics integration is performed.
     """
-    Two-robot cooperative carrying environment.
 
-    Action:
-        shape = (8,)
-        [a_vx, a_vy, a_wz, a_grip, b_vx, b_vy, b_wz, b_grip]
+    def __init__(self, cfg: CooperativeStopEnvConfig | None = None):
+        self.cfg = cfg or CooperativeStopEnvConfig()
+        self._validate_config()
 
-    Observation:
-        Dict with robot_0, robot_1, object, global_state, metrics.
-
-    Notes:
-        This MVP uses a geometric carrying approximation:
-        if both robots grip, the object pose is updated from the midpoint and heading
-        of two robot gripper sites. This keeps rollout dynamics stable and makes scripted data
-        collection reliable. Later stages can replace this with real grasp/contact dynamics.
-    """
-
-    def __init__(self, cfg: CarryEnvConfig | None = None):
-        self.cfg = cfg or CarryEnvConfig()
-        self._apply_scenario_preset()
         root = Path(__file__).resolve().parent
         xml_path = self.cfg.xml_path or str(root / "assets" / "two_robot_carry.xml")
-
         self.model = mujoco.MjModel.from_xml_path(xml_path)
-        self._align_robot_joint_frames()
+        self.geometry = self._read_geometry_from_model()
         self.data = mujoco.MjData(self.model)
 
+        self.robot_qpos_addrs = (
+            self._joint_qpos_addr("robot_a_x"),
+            self._joint_qpos_addr("robot_b_x"),
+        )
+        self.robot_a_qpos_addr, self.robot_b_qpos_addr = self.robot_qpos_addrs
+        self.robot_dof_addrs = (
+            self._joint_dof_addr("robot_a_x"),
+            self._joint_dof_addr("robot_b_x"),
+        )
+        self.object_qpos_addr = self._joint_qpos_addr("object_free")
+        self.object_dof_addr = self._joint_dof_addr("object_free")
+        self.robot_camera_names = ("robot_0_camera", "robot_1_camera")
+        for camera_name in self.robot_camera_names:
+            self._named_id(mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+
         self.rng = np.random.default_rng(self.cfg.seed)
-        self.frame_skip = max(1, int(round(self.cfg.control_dt / self.cfg.sim_dt)))
         self.step_count = 0
-
-        self.robot_a_qpos_addr = 0
-        self.robot_b_qpos_addr = 3
-        self.object_qpos_addr = 6
-
         self.last_action = np.zeros(8, dtype=np.float64)
+        self.executed_action = np.zeros(8, dtype=np.float64)
+        self.base_velocities = np.zeros((2, 3), dtype=np.float64)
+        self.base_accelerations = np.zeros((2, 3), dtype=np.float64)
+        self.linear_decelerations = np.zeros(2, dtype=np.float64)
         self.grasped = False
+        self.has_grasped = False
         self.failure_reason = "none"
-        self.robot_pose_history: list[np.ndarray] = []
-        self.blocked_passage_active = False
-        self.blocked_passage_side = 1
-        self.false_belief_active = False
-        self.occlusion_active = False
-        self.teammate_visible = {0: True, 1: True}
-        self.last_visible_teammate_pose: dict[int, np.ndarray | None] = {
-            0: None,
-            1: None,
-        }
         self.min_robot_distance = float("inf")
-        self.max_contact_force = 0.0
-        self.private_events: list[dict] = []
-        self.private_event_index = 0
-        self.private_event_error_steps = 0
-        self.private_event_mistakes = 0
-        self._previous_progress = 0.0
+
+        self.braking_agent = 0
+        self.responding_agent = 1
+        self.brake_start_step = 0
+        self.brake_event_active = False
+        self.brake_event_step = -1
+        self.pre_brake_motion_valid = False
+        self.follower_speed_at_brake = 0.0
+        self.response_started = False
+        self.response_start_step = -1
+        self.follower_brake_steps = 0
+        self.stop_hold_count = 0
+        self._best_response_progress = 0.0
+        self._previous_speeds = np.zeros(2, dtype=np.float64)
         self._renderers: dict[tuple[int, int], mujoco.Renderer] = {}
+
+    def _validate_config(self) -> None:
+        if self.cfg.scenario != "standard":
+            raise ValueError(
+                f"Unknown cooperative-stop scenario {self.cfg.scenario!r}; "
+                "only 'standard' is supported"
+            )
+        positive_values = {
+            "control_dt": self.cfg.control_dt,
+            "episode_len": self.cfg.episode_len,
+            "max_action_v": self.cfg.max_action_v,
+            "max_action_w": self.cfg.max_action_w,
+            "max_linear_acceleration": self.cfg.max_linear_acceleration,
+            "max_angular_acceleration": self.cfg.max_angular_acceleration,
+            "max_response_time": self.cfg.max_response_time,
+            "stop_hold_steps": self.cfg.stop_hold_steps,
+            "min_gradual_brake_steps": self.cfg.min_gradual_brake_steps,
+            "agent_camera_width": self.cfg.agent_camera_width,
+            "agent_camera_height": self.cfg.agent_camera_height,
+        }
+        for name, value in positive_values.items():
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if self.cfg.brake_start_time_min < 0.0:
+            raise ValueError("brake_start_time_min cannot be negative")
+        if self.cfg.brake_start_time_max < self.cfg.brake_start_time_min:
+            raise ValueError(
+                "brake_start_time_max must be at least brake_start_time_min"
+            )
+        min_step = int(np.ceil(self.cfg.brake_start_time_min / self.cfg.control_dt))
+        if min_step >= self.cfg.episode_len:
+            raise ValueError("braking event must start before the episode timeout")
 
     @property
     def control_dt(self) -> float:
-        """Public control period used by generic real-time runners."""
-
         return float(self.cfg.control_dt)
-
-    def _apply_scenario_preset(self):
-        scenario = str(getattr(self.cfg, "scenario", "nominal") or "nominal").lower()
-        self.cfg.scenario = scenario
-
-        if scenario == "nominal":
-            return
-        if scenario == "narrow":
-            self.cfg.narrow_width_scale = min(self.cfg.narrow_width_scale, 0.76)
-            self.cfg.force_limit = min(self.cfg.force_limit, 0.80)
-            return
-        if scenario == "occlusion":
-            self.cfg.occlusion_prob = max(self.cfg.occlusion_prob, 0.60)
-            return
-        if scenario == "asymmetric_obstacle":
-            self.cfg.asymmetric_obstacle = True
-            return
-        if scenario == "delayed_teammate":
-            self.cfg.teammate_delay_steps = max(int(self.cfg.teammate_delay_steps), 4)
-            return
-        if scenario == "blocked_passage":
-            self.cfg.blocked_passage_prob = max(self.cfg.blocked_passage_prob, 0.45)
-            return
-        if scenario == "false_belief":
-            self.cfg.false_belief_prob = max(self.cfg.false_belief_prob, 1.0)
-            return
-        if scenario == "hard_comm":
-            self.cfg.narrow_width_scale = min(self.cfg.narrow_width_scale, 0.76)
-            self.cfg.occlusion_prob = max(self.cfg.occlusion_prob, 0.65)
-            self.cfg.asymmetric_obstacle = True
-            self.cfg.false_belief_prob = max(self.cfg.false_belief_prob, 1.0)
-            self.cfg.force_limit = min(self.cfg.force_limit, 0.80)
-            self.cfg.min_robot_distance_limit = max(
-                self.cfg.min_robot_distance_limit, 0.35
-            )
-            return
-        if scenario == "private_gates":
-            # Geometry remains feasible for all three maneuvers; uncertainty is
-            # created by agent-local task information, not hidden physics.
-            self.cfg.occlusion_prob = max(self.cfg.occlusion_prob, 0.15)
-            return
-        raise ValueError(f"Unknown carry scenario: {scenario}")
 
     @property
     def action_dim(self) -> int:
         return 8
 
-    def _align_robot_joint_frames(self):
-        for name in ("robot_a", "robot_b"):
-            body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)
-            if body_id >= 0:
-                self.model.body_pos[body_id, 0:2] = 0.0
+    @property
+    def robot_state_dim(self) -> int:
+        return 11
 
-    def reset(self, seed: int | None = None, randomize: bool = True) -> Dict:
+    @property
+    def proprioception_dim(self) -> int:
+        return 2 * self.robot_state_dim
+
+    @property
+    def privileged_state_dim(self) -> int:
+        return 34
+
+    def _named_id(self, object_type: mujoco.mjtObj, name: str) -> int:
+        object_id = mujoco.mj_name2id(self.model, object_type, name)
+        if object_id < 0:
+            raise ValueError(
+                f"MuJoCo XML is missing required {object_type.name} {name!r}"
+            )
+        return int(object_id)
+
+    def _joint_qpos_addr(self, name: str) -> int:
+        joint_id = self._named_id(mujoco.mjtObj.mjOBJ_JOINT, name)
+        return int(self.model.jnt_qposadr[joint_id])
+
+    def _joint_dof_addr(self, name: str) -> int:
+        joint_id = self._named_id(mujoco.mjtObj.mjOBJ_JOINT, name)
+        return int(self.model.jnt_dofadr[joint_id])
+
+    def _read_geometry_from_model(self) -> CooperativeStopGeometry:
+        home_id = self._named_id(mujoco.mjtObj.mjOBJ_KEY, "home")
+        floor_id = self._named_id(mujoco.mjtObj.mjOBJ_GEOM, "floor")
+        bounds_id = self._named_id(mujoco.mjtObj.mjOBJ_GEOM, "task_bounds")
+        object_id = self._named_id(mujoco.mjtObj.mjOBJ_GEOM, "carry_object_geom")
+        robot_ids = (
+            self._named_id(mujoco.mjtObj.mjOBJ_GEOM, "robot_a_base"),
+            self._named_id(mujoco.mjtObj.mjOBJ_GEOM, "robot_b_base"),
+        )
+        grip_ids = (
+            self._named_id(mujoco.mjtObj.mjOBJ_SITE, "robot_a_grip_site"),
+            self._named_id(mujoco.mjtObj.mjOBJ_SITE, "robot_b_grip_site"),
+        )
+        object_qpos_addr = self._joint_qpos_addr("object_free")
+        home_qpos = self.model.key_qpos[home_id].copy()
+        return CooperativeStopGeometry(
+            home_qpos=home_qpos,
+            floor_half_size=self.model.geom_size[floor_id, :2].copy(),
+            task_center=self.model.geom_pos[bounds_id, :2].copy(),
+            task_half_size=self.model.geom_size[bounds_id, :2].copy(),
+            robot_half_sizes=np.stack(
+                [self.model.geom_size[geom_id].copy() for geom_id in robot_ids]
+            ),
+            object_half_size=self.model.geom_size[object_id].copy(),
+            object_height=float(home_qpos[object_qpos_addr + 2]),
+            grip_offsets=np.stack(
+                [self.model.site_pos[site_id].copy() for site_id in grip_ids]
+            ),
+        )
+
+    def _sample_brake_start_step(self) -> int:
+        min_step = max(
+            1, int(np.ceil(self.cfg.brake_start_time_min / self.cfg.control_dt))
+        )
+        max_step = int(np.floor(self.cfg.brake_start_time_max / self.cfg.control_dt))
+        max_step = min(max_step, self.cfg.episode_len - 1)
+        if max_step < min_step:
+            max_step = min_step
+        return int(self.rng.integers(min_step, max_step + 1))
+
+    def reset(
+        self, seed: int | None = None, randomize: bool = True
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
         if seed is not None:
             self.rng = np.random.default_rng(seed)
 
-        mujoco.mj_resetData(self.model, self.data)
+        home_id = self._named_id(mujoco.mjtObj.mjOBJ_KEY, "home")
+        mujoco.mj_resetDataKeyframe(self.model, self.data, home_id)
+
         self.step_count = 0
         self.last_action[:] = 0.0
+        self.executed_action[:] = 0.0
+        self.base_velocities[:] = 0.0
+        self.base_accelerations[:] = 0.0
+        self.linear_decelerations[:] = 0.0
         self.grasped = False
+        self.has_grasped = False
         self.failure_reason = "none"
+        self.min_robot_distance = float("inf")
 
+        # Event randomness is sampled before pose jitter so a seed identifies
+        # the same braking agent and time in randomized and deterministic reset.
+        self.braking_agent = int(self.rng.integers(0, 2))
+        self.responding_agent = 1 - self.braking_agent
+        self.brake_start_step = self._sample_brake_start_step()
+        self.brake_event_active = False
+        self.brake_event_step = -1
+        self.pre_brake_motion_valid = False
+        self.follower_speed_at_brake = 0.0
+        self.response_started = False
+        self.response_start_step = -1
+        self.follower_brake_steps = 0
+        self.stop_hold_count = 0
+        self._best_response_progress = 0.0
+        self._previous_speeds[:] = 0.0
+
+        home_a = self.geometry.home_qpos[
+            self.robot_a_qpos_addr : self.robot_a_qpos_addr + 3
+        ]
+        home_b = self.geometry.home_qpos[
+            self.robot_b_qpos_addr : self.robot_b_qpos_addr + 3
+        ]
         if randomize:
-            ax = -0.45 + self.rng.uniform(-0.08, 0.08)
-            bx = 0.45 + self.rng.uniform(-0.08, 0.08)
-            y0 = -1.20 + self.rng.uniform(-0.05, 0.05)
-            yaw_a = self.rng.uniform(-0.05, 0.05)
-            yaw_b = self.rng.uniform(-0.05, 0.05)
+            ax = float(home_a[0] + self.rng.uniform(-0.08, 0.08))
+            bx = float(home_b[0] + self.rng.uniform(-0.08, 0.08))
+            y0 = float(0.5 * (home_a[1] + home_b[1]) + self.rng.uniform(-0.05, 0.05))
+            yaw_a = float(self.rng.uniform(-0.05, 0.05))
+            yaw_b = float(self.rng.uniform(-0.05, 0.05))
         else:
-            ax, bx, y0, yaw_a, yaw_b = -0.45, 0.45, -1.20, 0.0, 0.0
+            ax, bx = float(home_a[0]), float(home_b[0])
+            y0 = float(0.5 * (home_a[1] + home_b[1]))
+            yaw_a, yaw_b = float(home_a[2]), float(home_b[2])
 
-        self.data.qpos[:] = 0.0
+        self.data.qpos[:] = self.geometry.home_qpos
         self.data.qvel[:] = 0.0
         self.data.ctrl[:] = 0.0
-
         self.data.qpos[self.robot_a_qpos_addr : self.robot_a_qpos_addr + 3] = [
             ax,
             y0,
@@ -202,19 +315,35 @@ class TwoRobotCarryNarrowPassageEnv:
             yaw_b,
         ]
 
-        obj_x = 0.0 + self.rng.uniform(-0.04, 0.04) if randomize else 0.0
-        obj_y = -0.95 + self.rng.uniform(-0.04, 0.04) if randomize else -0.95
-        self._set_object_pose(obj_x, obj_y, self.cfg.object_z, 0.0)
+        home_object = self.geometry.home_qpos[
+            self.object_qpos_addr : self.object_qpos_addr + 7
+        ]
+        obj_x = (
+            float(home_object[0] + self.rng.uniform(-0.04, 0.04))
+            if randomize
+            else float(home_object[0])
+        )
+        obj_y = (
+            float(home_object[1] + self.rng.uniform(-0.04, 0.04))
+            if randomize
+            else float(home_object[1])
+        )
+        self._set_object_pose(obj_x, obj_y, self.geometry.object_height, 0.0)
 
         mujoco.mj_forward(self.model, self.data)
-        self._reset_scenario_state()
-        self._reset_private_events(seed if seed is not None else self.cfg.seed)
-        self._record_pose_history()
-        self._update_scenario_state()
-        self._previous_progress = self._progress()
-        return self.get_obs()
+        self._update_distance_statistics()
+        observation = self.get_obs()
+        info = self._build_info(success=False, failure=False)
+        return observation, info
 
-    def _set_object_pose(self, x: float, y: float, z: float, yaw: float):
+    def _set_object_pose(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        yaw: float,
+        velocity: np.ndarray | None = None,
+    ) -> None:
         qw = np.cos(yaw / 2.0)
         qz = np.sin(yaw / 2.0)
         self.data.qpos[self.object_qpos_addr : self.object_qpos_addr + 7] = [
@@ -226,791 +355,613 @@ class TwoRobotCarryNarrowPassageEnv:
             0.0,
             qz,
         ]
-        self.data.qvel[6:12] = 0.0
+        object_velocity = np.zeros(6, dtype=np.float64)
+        if velocity is not None:
+            object_velocity[:] = np.asarray(velocity, dtype=np.float64)
+        self.data.qvel[self.object_dof_addr : self.object_dof_addr + 6] = (
+            object_velocity
+        )
 
     def _robot_pose(self, robot: int) -> np.ndarray:
-        addr = self.robot_a_qpos_addr if robot == 0 else self.robot_b_qpos_addr
-        return self.data.qpos[addr : addr + 3].copy()
+        address = self.robot_qpos_addrs[robot]
+        return self.data.qpos[address : address + 3].copy()
 
     def _object_pose_xy_yaw(self) -> np.ndarray:
-        q = self.data.qpos[self.object_qpos_addr : self.object_qpos_addr + 7]
-        x, y = q[0], q[1]
-        qw, qz = q[3], q[6]
-        yaw = 2.0 * np.arctan2(qz, qw)
-        return np.array([x, y, yaw], dtype=np.float64)
+        qpos = self.data.qpos[self.object_qpos_addr : self.object_qpos_addr + 7]
+        yaw = 2.0 * np.arctan2(qpos[6], qpos[3])
+        return np.asarray([qpos[0], qpos[1], yaw], dtype=np.float64)
+
+    @staticmethod
+    def _wrap_angle(angle: float) -> float:
+        return float((angle + np.pi) % (2.0 * np.pi) - np.pi)
 
     def _grip_points(self) -> Tuple[np.ndarray, np.ndarray]:
-        a = self._robot_pose(0)
-        b = self._robot_pose(1)
-
-        def front_point(p):
-            x, y, yaw = p
-            return np.array(
-                [x + 0.23 * np.sin(yaw), y + 0.23 * np.cos(yaw)], dtype=np.float64
+        def site_point(pose: np.ndarray, offset: np.ndarray) -> np.ndarray:
+            x, y, yaw = pose
+            cos_yaw, sin_yaw = np.cos(yaw), np.sin(yaw)
+            return np.asarray(
+                [
+                    x + cos_yaw * offset[0] - sin_yaw * offset[1],
+                    y + sin_yaw * offset[0] + cos_yaw * offset[1],
+                ],
+                dtype=np.float64,
             )
 
-        return front_point(a), front_point(b)
+        return (
+            site_point(self._robot_pose(0), self.geometry.grip_offsets[0]),
+            site_point(self._robot_pose(1), self.geometry.grip_offsets[1]),
+        )
 
-    def _apply_geometric_carry(self):
+    def _apply_geometric_carry(self, previous_pose: np.ndarray) -> None:
         a_grip, b_grip = self._grip_points()
-        mid = 0.5 * (a_grip + b_grip)
-        diff = b_grip - a_grip
-        yaw = np.arctan2(diff[1], diff[0])
-        self._set_object_pose(mid[0], mid[1], self.cfg.object_z, yaw)
-
-    def _effective_passage_half_width(self) -> float:
-        return float(self.cfg.passage_half_width * self.cfg.narrow_width_scale)
-
-    def _force_limit(self) -> float:
-        return float(min(self.cfg.force_limit, self.cfg.max_force_proxy))
-
-    def _object_lateral_extent(self, yaw: float) -> float:
-        return float(
-            self.cfg.object_half_length * abs(np.cos(yaw))
-            + self.cfg.object_half_width * abs(np.sin(yaw))
+        midpoint = 0.5 * (a_grip + b_grip)
+        difference = b_grip - a_grip
+        yaw = float(np.arctan2(difference[1], difference[0]))
+        velocity = np.zeros(6, dtype=np.float64)
+        velocity[:2] = (midpoint - previous_pose[:2]) / self.cfg.control_dt
+        velocity[5] = (
+            self._wrap_angle(yaw - float(previous_pose[2])) / self.cfg.control_dt
+        )
+        self._set_object_pose(
+            midpoint[0],
+            midpoint[1],
+            self.geometry.object_height,
+            yaw,
+            velocity,
         )
 
-    def _reset_scenario_state(self):
-        self.robot_pose_history = []
-        self.blocked_passage_active = bool(
-            self.rng.random() < self.cfg.blocked_passage_prob
+    def _activate_brake_event(self) -> None:
+        speeds = self._linear_speeds()
+        self.brake_event_active = True
+        self.brake_event_step = self.step_count
+        self.follower_speed_at_brake = float(speeds[self.responding_agent])
+        forward_speeds = self.base_velocities[:, 1]
+        self.pre_brake_motion_valid = bool(
+            self.grasped
+            and self.has_grasped
+            and np.all(forward_speeds >= self.cfg.min_cruise_forward_speed)
+            and abs(float(speeds[0] - speeds[1])) <= self.cfg.max_pre_brake_speed_error
         )
-        self.blocked_passage_side = -1 if self.rng.random() < 0.5 else 1
-        self.false_belief_active = bool(self.rng.random() < self.cfg.false_belief_prob)
-        self.occlusion_active = False
-        self.teammate_visible = {0: True, 1: True}
-        self.last_visible_teammate_pose = {
-            0: self._robot_pose(1),
-            1: self._robot_pose(0),
-        }
-        self.min_robot_distance = float("inf")
-        self.max_contact_force = 0.0
 
-    def _reset_private_events(self, seed: int) -> None:
-        """Create balanced private decisions without perturbing pre-event physics."""
+    def _limit_velocity_change(
+        self, current: np.ndarray, desired: np.ndarray
+    ) -> np.ndarray:
+        result = current.copy()
+        linear_delta = desired[:2] - current[:2]
+        max_linear_delta = self.cfg.max_linear_acceleration * self.cfg.control_dt
+        delta_norm = float(np.linalg.norm(linear_delta))
+        if delta_norm > max_linear_delta:
+            linear_delta *= max_linear_delta / delta_norm
+        result[:2] += linear_delta
+        max_angular_delta = self.cfg.max_angular_acceleration * self.cfg.control_dt
+        result[2] += float(
+            np.clip(desired[2] - current[2], -max_angular_delta, max_angular_delta)
+        )
+        return result
 
-        self.private_events = []
-        self.private_event_index = 0
-        self.private_event_error_steps = 0
-        self.private_event_mistakes = 0
-        if self.cfg.scenario != "private_gates":
-            return
-        # Cycling seed/index assignments makes event type, observer and
-        # maneuver balanced over sequential collection seeds.
-        event_types = (0, 1, 2)  # decisive-private, locally-inferable, redundant
-        for gate_index, gate_y in enumerate(self.cfg.private_gate_positions):
-            event_type = event_types[(int(seed) + gate_index) % len(event_types)]
-            informed_agent = (int(seed) + gate_index) % 2
-            maneuver = (-1, 1)[(int(seed) // 2 + gate_index) % 2]
-            if event_type == 2:
-                maneuver = 0
-            self.private_events.append(
-                {
-                    "gate_index": gate_index,
-                    "gate_y": float(gate_y),
-                    "event_type": event_type,
-                    "informed_agent": informed_agent,
-                    "maneuver": maneuver,
-                    "resolved": False,
-                }
-            )
-
-    def _current_private_event(self) -> dict | None:
-        if self.private_event_index >= len(self.private_events):
-            return None
-        return self.private_events[self.private_event_index]
-
-    def _private_event_observations(
-        self, obj_y: float
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        cues = np.zeros((2, 3), dtype=np.float32)
-        valid = np.zeros(2, dtype=np.float32)
-        ages = np.zeros(2, dtype=np.float32)
-        context = np.zeros((2, 3), dtype=np.float32)
-        event = self._current_private_event()
-        if event is None:
-            return cues, valid, ages, context
-        distance = float(event["gate_y"] - obj_y)
-        active = abs(distance) <= 2.0 * self.cfg.private_gate_window
-        context[:, :] = np.asarray(
+    def _integrate_bases(self, action: np.ndarray) -> None:
+        previous_velocities = self.base_velocities.copy()
+        desired = np.asarray(
             [
-                distance,
-                event["gate_index"] / max(1, len(self.private_events) - 1),
-                float(active),
+                [
+                    action[0] * self.cfg.max_action_v,
+                    action[1] * self.cfg.max_action_v,
+                    action[2] * self.cfg.max_action_w,
+                ],
+                [
+                    action[4] * self.cfg.max_action_v,
+                    action[5] * self.cfg.max_action_v,
+                    action[6] * self.cfg.max_action_w,
+                ],
             ],
-            dtype=np.float32,
+            dtype=np.float64,
         )
-        if active:
-            # Locally-inferable events deliberately expose the same cue to both
-            # agents. Decisive/redundant cues remain private to one agent.
-            observers = (
-                (0, 1) if event["event_type"] == 1 else (event["informed_agent"],)
+        if self.brake_event_active:
+            desired[self.braking_agent] = 0.0
+
+        for agent_id in range(2):
+            self.base_velocities[agent_id] = self._limit_velocity_change(
+                previous_velocities[agent_id], desired[agent_id]
             )
-            cue_index = int(event["maneuver"]) + 1
-            for agent_id in observers:
-                cues[agent_id, cue_index] = 1.0
-                valid[agent_id] = 1.0
-        return cues, valid, ages, context
+            pose = self._robot_pose(agent_id)
+            pose += self.base_velocities[agent_id] * self.cfg.control_dt
+            pose[2] = self._wrap_angle(float(pose[2]))
+            qpos_address = self.robot_qpos_addrs[agent_id]
+            dof_address = self.robot_dof_addrs[agent_id]
+            self.data.qpos[qpos_address : qpos_address + 3] = pose
+            self.data.qvel[dof_address : dof_address + 3] = self.base_velocities[
+                agent_id
+            ]
 
-    def _update_private_event(
-        self, action: np.ndarray, obj_y: float, obj_x: float
-    ) -> float:
-        event = self._current_private_event()
-        if event is None:
-            return 0.0
-        gate_y = float(event["gate_y"])
-        window = float(self.cfg.private_gate_window)
-        error = 0.0
-        if abs(obj_y - gate_y) <= window:
-            desired = int(event["maneuver"])
-            lateral = np.asarray([action[0], action[4]], dtype=np.float64)
-            if desired == 0:
-                wrong = bool(np.max(np.abs(lateral)) > 0.35)
-            else:
-                route_reached = (
-                    desired * obj_x >= 0.6 * self.cfg.private_gate_target_offset
-                )
-                steering_correctly = bool(np.all(desired * lateral >= 0.05))
-                wrong = not (route_reached or steering_correctly)
-            if wrong:
-                self.private_event_error_steps += 1
-                error = 1.0
-            else:
-                self.private_event_error_steps = max(
-                    0, self.private_event_error_steps - 1
-                )
-        if obj_y > gate_y + window:
-            event["resolved"] = True
-            if self.private_event_error_steps > 0:
-                self.private_event_mistakes += 1
-            self.private_event_index += 1
-            self.private_event_error_steps = 0
-        return error
-
-    def _record_pose_history(self):
-        poses = np.stack([self._robot_pose(0), self._robot_pose(1)], axis=0)
-        self.robot_pose_history.append(poses)
-        keep = max(2, int(self.cfg.teammate_delay_steps) + 2)
-        if len(self.robot_pose_history) > keep:
-            self.robot_pose_history = self.robot_pose_history[-keep:]
-
-    def _delayed_robot_pose(self, robot: int) -> np.ndarray:
-        delay = max(0, int(self.cfg.teammate_delay_steps))
-        if delay <= 0 or not self.robot_pose_history:
-            return self._robot_pose(robot)
-        idx = max(0, len(self.robot_pose_history) - 1 - delay)
-        return self.robot_pose_history[idx][robot].copy()
-
-    def _update_scenario_state(self):
-        a = self._robot_pose(0)
-        b = self._robot_pose(1)
-        obj = self._object_pose_xy_yaw()
-        robot_distance = float(np.linalg.norm(a[:2] - b[:2]))
-        self.min_robot_distance = min(self.min_robot_distance, robot_distance)
-
-        in_shared_space = (
-            -0.25 < obj[1] < 2.80 or -0.25 < a[1] < 2.80 or -0.25 < b[1] < 2.80
+        self.base_accelerations = (
+            self.base_velocities - previous_velocities
+        ) / self.cfg.control_dt
+        self.executed_action[:] = action
+        for agent_id, offset in ((0, 0), (1, 4)):
+            self.executed_action[offset] = (
+                self.base_velocities[agent_id, 0] / self.cfg.max_action_v
+            )
+            self.executed_action[offset + 1] = (
+                self.base_velocities[agent_id, 1] / self.cfg.max_action_v
+            )
+            self.executed_action[offset + 2] = (
+                self.base_velocities[agent_id, 2] / self.cfg.max_action_w
+            )
+        self.data.ctrl[:] = np.asarray(
+            [
+                self.executed_action[0],
+                self.executed_action[1],
+                self.executed_action[2],
+                self.executed_action[4],
+                self.executed_action[5],
+                self.executed_action[6],
+            ],
+            dtype=np.float64,
         )
-        # Consume a fixed common-random-number tape every step.  Paired policy
-        # modes may enter the shared space at different times; conditional RNG
-        # draws would otherwise desynchronize all later exogenous occlusions.
-        occlusion_draw, hide_robot_0_draw, hide_robot_1_draw = self.rng.random(3)
-        occlusion_sample = bool(occlusion_draw < self.cfg.occlusion_prob)
-        self.occlusion_active = bool(occlusion_sample and in_shared_space)
 
-        if self.occlusion_active:
-            # Keep at least one viewpoint degraded so the local observations disagree.
-            hide_robot_0 = bool(hide_robot_0_draw < 0.55)
-            hide_robot_1 = bool(hide_robot_1_draw < 0.55)
-            if not hide_robot_0 and not hide_robot_1:
-                hide_robot_0 = True
-            self.teammate_visible = {0: not hide_robot_0, 1: not hide_robot_1}
+    def _linear_speeds(self) -> np.ndarray:
+        return np.linalg.norm(self.base_velocities[:, :2], axis=1)
+
+    def _agent_stopped(self, agent_id: int) -> bool:
+        return bool(
+            np.linalg.norm(self.base_velocities[agent_id, :2])
+            <= self.cfg.stop_linear_speed
+            and abs(float(self.base_velocities[agent_id, 2]))
+            <= self.cfg.stop_angular_speed
+        )
+
+    def _both_stopped(self) -> bool:
+        return self._agent_stopped(0) and self._agent_stopped(1)
+
+    def _update_response_state(self) -> None:
+        speeds = self._linear_speeds()
+        self.linear_decelerations = np.maximum(
+            0.0, (self._previous_speeds - speeds) / self.cfg.control_dt
+        )
+        if not self.brake_event_active:
+            self._previous_speeds = speeds
+            return
+
+        follower_speed = float(speeds[self.responding_agent])
+        if (
+            not self.response_started
+            and self.follower_speed_at_brake - follower_speed
+            >= self.cfg.response_speed_delta
+        ):
+            self.response_started = True
+            self.response_start_step = self.step_count
+
+        if self.response_started and not self._agent_stopped(self.responding_agent):
+            self.follower_brake_steps += 1
+
+        valid_stop = bool(
+            self.pre_brake_motion_valid
+            and self.response_started
+            and self.follower_brake_steps >= self.cfg.min_gradual_brake_steps
+            and self._both_stopped()
+            and self.grasped
+        )
+        if valid_stop:
+            self.stop_hold_count += 1
         else:
-            self.teammate_visible = {0: True, 1: True}
+            self.stop_hold_count = 0
+        self._previous_speeds = speeds
 
-        if self.teammate_visible[0]:
-            self.last_visible_teammate_pose[0] = b.copy()
-        if self.teammate_visible[1]:
-            self.last_visible_teammate_pose[1] = a.copy()
-
-        self.max_contact_force = max(
-            self.max_contact_force, self._compute_force_proxy()
-        )
-
-    def _compute_force_components(self) -> Dict[str, float]:
-        obj = self._object_pose_xy_yaw()
-        x, y, yaw = obj[0], obj[1], obj[2]
-
-        wall_violation = 0.0
-        if 0.15 < y < 2.65:
-            clearance = (
-                self._effective_passage_half_width()
-                - abs(x)
-                - self._object_lateral_extent(yaw)
+    def _response_progress(self) -> float:
+        if not self.brake_event_active or self.follower_speed_at_brake <= 1e-6:
+            return 0.0
+        follower_speed = float(self._linear_speeds()[self.responding_agent])
+        return float(
+            np.clip(
+                (self.follower_speed_at_brake - follower_speed)
+                / self.follower_speed_at_brake,
+                0.0,
+                1.0,
             )
-            wall_violation = max(0.0, -clearance)
-
-        blocked_violation = 0.0
-        if self.blocked_passage_active and 0.85 < y < 1.90:
-            open_lane_center = -0.28 * float(self.blocked_passage_side)
-            usable_half_width = 0.62 * self._effective_passage_half_width()
-            clearance = (
-                usable_half_width
-                - abs(x - open_lane_center)
-                - self._object_lateral_extent(yaw)
-            )
-            blocked_violation = max(0.0, -clearance)
-
-        a = self._robot_pose(0)
-        b = self._robot_pose(1)
-        robot_dist = np.linalg.norm(a[:2] - b[:2])
-        robot_clearance = max(
-            2 * self.cfg.robot_radius, self.cfg.min_robot_distance_limit
         )
-        robot_violation = max(0.0, robot_clearance - robot_dist)
 
-        force_proxy = (
-            10.0 * wall_violation + 8.0 * blocked_violation + 5.0 * robot_violation
+    def _success(self) -> bool:
+        return bool(
+            self.brake_event_active
+            and self.pre_brake_motion_valid
+            and self.response_started
+            and self.follower_brake_steps >= self.cfg.min_gradual_brake_steps
+            and self.stop_hold_count >= self.cfg.stop_hold_steps
+            and self._both_stopped()
+            and self.grasped
         )
-        return {
-            "force_proxy": float(force_proxy),
-            "wall_violation": float(wall_violation),
-            "blocked_violation": float(blocked_violation),
-            "robot_violation": float(robot_violation),
-        }
 
-    def _compute_force_proxy(self) -> float:
-        return self._compute_force_components()["force_proxy"]
+    def _failure(self) -> bool:
+        if self.has_grasped and not self.grasped:
+            self.failure_reason = "grasp_lost"
+            return True
+
+        if self._robot_distance() > self.cfg.max_robot_distance:
+            self.failure_reason = "robot_too_far"
+            return True
+
+        object_pose = self._object_pose_xy_yaw()
+        if np.any(
+            np.abs(object_pose[:2] - self.geometry.task_center)
+            > self.geometry.task_half_size
+        ):
+            self.failure_reason = "object_out_of_bounds"
+            return True
+
+        for agent_id in range(2):
+            pose = self._robot_pose(agent_id)
+            if np.any(
+                np.abs(pose[:2] - self.geometry.task_center)
+                > self.geometry.task_half_size
+            ):
+                self.failure_reason = "robot_out_of_bounds"
+                return True
+
+        if self.brake_event_active and self.step_count - self.brake_event_step >= int(
+            np.ceil(self.cfg.max_response_time / self.cfg.control_dt)
+        ):
+            self.failure_reason = "response_timeout"
+            return True
+
+        if self.step_count >= self.cfg.episode_len:
+            self.failure_reason = "episode_timeout"
+            return True
+
+        self.failure_reason = "none"
+        return False
+
+    def _robot_distance(self) -> float:
+        return float(np.linalg.norm(self._robot_pose(0)[:2] - self._robot_pose(1)[:2]))
+
+    def _update_distance_statistics(self) -> None:
+        self.min_robot_distance = min(self.min_robot_distance, self._robot_distance())
 
     def _local_contact_agents(self) -> np.ndarray:
-        """Return per-robot tactile contact flags from MuJoCo contact pairs."""
-
         robot_geom_ids = (
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_a_base"),
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_b_base"),
+            self._named_id(mujoco.mjtObj.mjOBJ_GEOM, "robot_a_base"),
+            self._named_id(mujoco.mjtObj.mjOBJ_GEOM, "robot_b_base"),
         )
         flags = np.zeros(2, dtype=np.float32)
         for contact_index in range(int(self.data.ncon)):
             contact = self.data.contact[contact_index]
             pair = {int(contact.geom1), int(contact.geom2)}
             for agent_id, geom_id in enumerate(robot_geom_ids):
-                if geom_id >= 0 and geom_id in pair:
+                if geom_id in pair:
                     flags[agent_id] = 1.0
         return flags
 
-    def _local_force_agents(self) -> np.ndarray:
-        """Return per-robot contact-force magnitudes from local geom contacts."""
+    def _robot_base_effort(self, agent_id: int) -> np.ndarray:
+        """Return geometric-controller generalized effort ``[Fx, Fy, Tz]``."""
 
-        robot_geom_ids = (
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_a_base"),
-            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "robot_b_base"),
-        )
-        forces = np.zeros(2, dtype=np.float32)
-        contact_force = np.zeros(6, dtype=np.float64)
-        for contact_index in range(int(self.data.ncon)):
-            contact = self.data.contact[contact_index]
-            pair = {int(contact.geom1), int(contact.geom2)}
-            contact_force.fill(0.0)
-            mujoco.mj_contactForce(self.model, self.data, contact_index, contact_force)
-            magnitude = float(np.linalg.norm(contact_force[:3]))
-            for agent_id, geom_id in enumerate(robot_geom_ids):
-                if geom_id >= 0 and geom_id in pair:
-                    forces[agent_id] += magnitude
-        scale = float(self.cfg.local_force_scale_newtons)
-        if not np.isfinite(scale) or scale <= 0.0:
-            raise ValueError("local_force_scale_newtons must be finite and positive")
-        return np.clip(forces / scale, 0.0, 1.0).astype(np.float32)
-
-    def _success(self) -> bool:
-        obj = self._object_pose_xy_yaw()
-        return bool(
-            abs(obj[0]) < self.cfg.goal_tol_xy
-            and obj[1] > self.cfg.goal_y - self.cfg.goal_tol_xy
+        address = self.robot_dof_addrs[agent_id]
+        return self.data.qfrc_actuator[address : address + 3].astype(
+            np.float32, copy=True
         )
 
-    def _failure(self) -> bool:
-        obj = self._object_pose_xy_yaw()
-        force_proxy = self._compute_force_proxy()
-        a = self._robot_pose(0)
-        b = self._robot_pose(1)
+    def _robot_gripper_state(self, agent_id: int) -> np.ndarray:
+        command_index = 3 if agent_id == 0 else 7
+        command = float(self.last_action[command_index])
+        return np.asarray([command, float(command > 0.5)], dtype=np.float32)
 
-        robot_dist = float(np.linalg.norm(a[:2] - b[:2]))
-        y_desync = float(abs(a[1] - b[1]))
-        obj_yaw_abs = float(abs(((obj[2] + np.pi) % (2 * np.pi)) - np.pi))
-
-        grip_a, grip_b = self._grip_points()
-        midpoint = 0.5 * (grip_a + grip_b)
-        midpoint_error = float(np.linalg.norm(obj[:2] - midpoint))
-
-        if self.private_event_error_steps >= self.cfg.private_gate_error_limit:
-            self.failure_reason = "private_event_mismatch"
-            return True
-
-        if force_proxy > self._force_limit():
-            self.failure_reason = "force_violation"
-            return True
-
-        if robot_dist > self.cfg.max_robot_distance:
-            self.failure_reason = "robot_too_far"
-            return True
-
-        if 0.0 < obj[1] < 2.65 and y_desync > self.cfg.max_y_desync:
-            self.failure_reason = "desync_in_passage"
-            return True
-
-        if 0.0 < obj[1] < 2.65 and obj_yaw_abs > self.cfg.max_object_yaw_abs:
-            self.failure_reason = "object_yaw_too_large"
-            return True
-
-        if self.grasped and midpoint_error > self.cfg.max_object_midpoint_error:
-            self.failure_reason = "object_dropped"
-            return True
-
-        if obj[1] < -2.0 or obj[1] > 3.7 or abs(obj[0]) > 2.2:
-            self.failure_reason = "object_out_of_bounds"
-            return True
-
-        if np.any(np.abs(a[:2]) > np.array([2.25, 3.7])) or np.any(
-            np.abs(b[:2]) > np.array([2.25, 3.7])
-        ):
-            self.failure_reason = "robot_out_of_bounds"
-            return True
-
-        if self.step_count >= self.cfg.episode_len:
-            self.failure_reason = "timeout"
-            return True
-
-        self.failure_reason = "none"
-        return False
-
-    @staticmethod
-    def _wrap_angle(angle: float) -> float:
-        return float((angle + np.pi) % (2 * np.pi) - np.pi)
-
-    def _relative_pose(
-        self, target_pose: np.ndarray, reference_pose: np.ndarray
-    ) -> np.ndarray:
-        return np.array(
+    def _robot_state(self, agent_id: int) -> np.ndarray:
+        return np.concatenate(
             [
-                target_pose[0] - reference_pose[0],
-                target_pose[1] - reference_pose[1],
-                self._wrap_angle(target_pose[2] - reference_pose[2]),
-            ],
-            dtype=np.float32,
-        )
+                self._robot_pose(agent_id).astype(np.float32),
+                self.base_velocities[agent_id].astype(np.float32),
+                self._robot_gripper_state(agent_id),
+                self._robot_base_effort(agent_id),
+            ]
+        ).astype(np.float32)
 
-    def _observed_teammate_pose(self, agent_id: int) -> np.ndarray:
-        teammate_id = 1 - agent_id
-        if self.teammate_visible.get(agent_id, True):
-            pose = self._delayed_robot_pose(teammate_id)
+    def _robot_observation(self, agent_id: int) -> Dict[str, np.ndarray]:
+        state = self._robot_state(agent_id)
+        if self.cfg.include_camera_images:
+            image = self.render(
+                camera=self.robot_camera_names[agent_id],
+                width=self.cfg.agent_camera_width,
+                height=self.cfg.agent_camera_height,
+            )
         else:
-            stale_pose = self.last_visible_teammate_pose.get(agent_id)
-            pose = (
-                stale_pose.copy()
-                if stale_pose is not None
-                else self._delayed_robot_pose(teammate_id)
+            image = np.zeros(
+                (self.cfg.agent_camera_height, self.cfg.agent_camera_width, 3),
+                dtype=np.uint8,
             )
+        return {
+            "state": state,
+            "base_pose": state[:3].copy(),
+            "base_velocity": state[3:6].copy(),
+            "gripper": state[6:8].copy(),
+            "base_effort": state[8:11].copy(),
+            "image": image,
+        }
 
-        if self.false_belief_active:
-            sign = -1.0 if agent_id == 0 else 1.0
-            pose = pose + np.array([-0.12 * sign, 0.16, -0.08 * sign], dtype=np.float64)
-            pose[2] = self._wrap_angle(pose[2])
-        return pose
+    def _task_phase(self, success: bool = False, failure: bool = False) -> str:
+        if success:
+            return "success"
+        if failure:
+            return "failure"
+        if not self.has_grasped:
+            return "waiting_for_grasp"
+        if not self.brake_event_active:
+            return "cruise"
+        if not self._agent_stopped(self.braking_agent):
+            return "braking_robot_stopping"
+        if not self._agent_stopped(self.responding_agent):
+            return "responding_robot_stopping"
+        return "stable_stop_hold"
 
-    def _observed_object_pose(self, agent_id: int, obj: np.ndarray) -> np.ndarray:
-        pose = obj.copy()
-        sign = -1.0 if agent_id == 0 else 1.0
-        if self.cfg.asymmetric_obstacle and -0.25 < obj[1] < 2.80:
-            pose[0] += 0.10 * sign
-        if self.false_belief_active:
-            pose += np.array([0.16 * sign, -0.10, 0.10 * sign], dtype=np.float64)
-        pose[2] = self._wrap_angle(pose[2])
-        return pose
-
-    def _observed_teammate_rel_pose(
-        self, agent_id: int, self_pose: np.ndarray
-    ) -> np.ndarray:
-        if not self.teammate_visible.get(agent_id, True):
-            return np.zeros(3, dtype=np.float32)
-        return self._relative_pose(self._observed_teammate_pose(agent_id), self_pose)
-
-    def _observed_object_rel_pose(
-        self, agent_id: int, self_pose: np.ndarray, obj: np.ndarray
-    ) -> np.ndarray:
-        return self._relative_pose(self._observed_object_pose(agent_id, obj), self_pose)
-
-    def _perceived_force_proxy(
-        self, agent_id: int, force_proxy: float, obj: np.ndarray
-    ) -> float:
-        perceived = float(force_proxy)
-        if self.cfg.asymmetric_obstacle:
-            perceived += 0.08 if agent_id == 0 else 0.14
-            if -0.25 < obj[1] < 2.80:
-                perceived += 0.10 if agent_id == 0 else 0.18
-                if self.blocked_passage_active:
-                    perceived += (
-                        0.20
-                        if self.blocked_passage_side == (-1 if agent_id == 0 else 1)
-                        else 0.08
-                    )
-        if self.false_belief_active:
-            perceived += 0.15
-        if not self.teammate_visible.get(agent_id, True):
-            perceived += 0.05
-        return float(max(0.0, perceived))
-
-    def _local_obs(
-        self, agent_id: int, self_pose: np.ndarray, obj: np.ndarray, force_proxy: float
-    ) -> np.ndarray:
-        object_rel = self._observed_object_rel_pose(agent_id, self_pose, obj)
-        teammate_rel = self._observed_teammate_rel_pose(agent_id, self_pose)
-        perceived_force = self._perceived_force_proxy(agent_id, force_proxy, obj)
-
-        return np.array(
-            [
-                self_pose[0],
-                self_pose[1],
-                self_pose[2],
-                object_rel[0],
-                object_rel[1],
-                object_rel[2],
-                teammate_rel[0],
-                teammate_rel[1],
-                teammate_rel[2],
-                float(self.grasped),
-                perceived_force,
-            ],
-            dtype=np.float32,
-        )
-
-    def _local_pose_context_agents(
-        self, obj: np.ndarray, a: np.ndarray, b: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        rel_target = np.stack(
-            [
-                self._observed_teammate_rel_pose(0, a),
-                self._observed_teammate_rel_pose(1, b),
-            ],
-            axis=0,
-        ).astype(np.float32)
-        object_rel = np.stack(
-            [
-                self._observed_object_rel_pose(0, a, obj),
-                self._observed_object_rel_pose(1, b, obj),
-            ],
-            axis=0,
-        ).astype(np.float32)
-        return rel_target, object_rel
-
-    def _model_local_obs_agents(
-        self,
-        obj: np.ndarray,
-        a: np.ndarray,
-        b: np.ndarray,
-        force_proxy: float,
-        contacts: int,
-    ) -> np.ndarray:
-        proprio = np.stack(
-            [
-                self._local_obs(0, a, obj, force_proxy),
-                self._local_obs(1, b, obj, force_proxy),
-            ],
-            axis=0,
-        ).astype(np.float32)
-        actions = self.last_action.astype(np.float32).reshape(2, 4)
-        local_force = proprio[:, 10:11]
-        contact = np.full((2, 1), float(contacts > 0), dtype=np.float32)
-        return np.concatenate([proprio, actions, local_force, contact], axis=-1).astype(
-            np.float32
-        )
-
-    def _object_goal_distance(self, obj: np.ndarray | None = None) -> float:
-        obj = self._object_pose_xy_yaw() if obj is None else obj
+    def _acceleration_tracking_error(self) -> float:
         return float(
-            np.linalg.norm(
-                np.array([obj[0], obj[1] - self.cfg.goal_y], dtype=np.float64)
+            abs(
+                self.linear_decelerations[self.responding_agent]
+                - self.linear_decelerations[self.braking_agent]
             )
         )
-
-    def _progress(self, obj: np.ndarray | None = None) -> float:
-        obj = self._object_pose_xy_yaw() if obj is None else obj
-        start_y = -1.20
-        denom = max(1e-6, self.cfg.goal_y - start_y)
-        return float(np.clip((obj[1] - start_y) / denom, 0.0, 1.0))
 
     def _build_info(
         self, success: bool | None = None, failure: bool | None = None
-    ) -> Dict:
-        obj = self._object_pose_xy_yaw()
-        a = self._robot_pose(0)
-        b = self._robot_pose(1)
-        force_components = self._compute_force_components()
-        force_proxy = force_components["force_proxy"]
-        robot_distance = float(np.linalg.norm(a[:2] - b[:2]))
-        min_robot_distance = float(min(self.min_robot_distance, robot_distance))
-        contacts = int(self.data.ncon)
-        local_contact_agents = self._local_contact_agents()
-        local_force_agents = self._local_force_agents()
-        virtual_collision = bool(
-            force_components["wall_violation"] > 0.0
-            or force_components["blocked_violation"] > 0.0
-            or force_components["robot_violation"] > 0.0
-        )
-        collision_count = contacts + int(virtual_collision)
-        force_violation = bool(force_proxy > self._force_limit())
+    ) -> Dict[str, Any]:
         success = self._success() if success is None else bool(success)
-        failure = (
-            bool(self.failure_reason != "none") if failure is None else bool(failure)
+        failure = self.failure_reason != "none" if failure is None else bool(failure)
+        speeds = self._linear_speeds()
+        speed_error = float(
+            abs(speeds[self.responding_agent] - speeds[self.braking_agent])
         )
-        communication_required = bool(
-            self.occlusion_active
-            or (not self.teammate_visible.get(0, True))
-            or (not self.teammate_visible.get(1, True))
-            or self.blocked_passage_active
-            or self.false_belief_active
-            or min_robot_distance < self.cfg.min_robot_distance_limit
-            or force_violation
+        response_delay_steps = (
+            self.response_start_step - self.brake_event_step
+            if self.response_started
+            else -1
         )
-        local_obs_agents = self._model_local_obs_agents(
-            obj, a, b, force_proxy, contacts
-        )
-        rel_target_pose_agents, object_rel_pose_agents = (
-            self._local_pose_context_agents(obj, a, b)
-        )
-        event = self._current_private_event()
-        event_cues, event_valid, event_age, next_gate_context = (
-            self._private_event_observations(float(obj[1]))
-        )
-        communication_required = communication_required or bool(
-            event is not None
-            and int(event["event_type"]) == 0
-            and next_gate_context[0, 2] > 0.5
-        )
-
         return {
-            "scenario": self.cfg.scenario,
+            "scenario": "standard",
+            "control_dt": float(self.cfg.control_dt),
+            "geometry_source": "mujoco_xml",
+            "task_phase": self._task_phase(success=success, failure=failure),
             "success": success,
-            "failure": failure and not success,
+            "failure": bool(failure and not success),
             "failure_reason": self.failure_reason,
-            "collision": bool(collision_count > 0),
-            "collision_count": int(collision_count),
-            "contact_force": float(force_proxy),
-            "max_contact_force": float(max(self.max_contact_force, force_proxy)),
-            "force_proxy": float(force_proxy),
-            "force_violation": force_violation,
-            "force_limit": self._force_limit(),
-            "robot_distance": robot_distance,
-            "inter_robot_distance": robot_distance,
-            "min_robot_distance": min_robot_distance,
-            "object_goal_distance": self._object_goal_distance(obj),
-            "progress": self._progress(obj),
-            "occlusion_active": bool(self.occlusion_active),
-            "teammate_visible_robot_0": bool(self.teammate_visible.get(0, True)),
-            "teammate_visible_robot_1": bool(self.teammate_visible.get(1, True)),
-            "communication_required": communication_required,
-            "private_event_active": bool(
-                event is not None and next_gate_context[0, 2] > 0.5
+            "braking_agent": int(self.braking_agent),
+            "responding_agent": int(self.responding_agent),
+            "brake_start_step": int(self.brake_start_step),
+            "brake_start_time": float(self.brake_start_step * self.cfg.control_dt),
+            "brake_event_active": bool(self.brake_event_active),
+            "brake_event_step": int(self.brake_event_step),
+            "steps_since_brake": int(
+                self.step_count - self.brake_event_step
+                if self.brake_event_active
+                else -1
             ),
-            "private_event_index": int(self.private_event_index),
-            "private_event_type": int(event["event_type"]) if event is not None else -1,
-            "private_event_informed_agent": (
-                int(event["informed_agent"]) if event is not None else -1
+            "pre_brake_motion_valid": bool(self.pre_brake_motion_valid),
+            "response_started": bool(self.response_started),
+            "response_start_step": int(self.response_start_step),
+            "response_delay_steps": int(response_delay_steps),
+            "response_delay_seconds": float(
+                response_delay_steps * self.cfg.control_dt
+                if response_delay_steps >= 0
+                else -1.0
             ),
-            "private_event_maneuver": (
-                int(event["maneuver"]) if event is not None else 0
+            "follower_brake_steps": int(self.follower_brake_steps),
+            "stop_hold_steps": int(self.stop_hold_count),
+            "speed_agents": speeds.astype(np.float32),
+            "base_velocity_agents": self.base_velocities.astype(np.float32, copy=True),
+            "base_acceleration_agents": self.base_accelerations.astype(
+                np.float32, copy=True
             ),
-            "private_event_cue_agents": event_cues,
-            "private_event_valid_agents": event_valid,
-            "private_event_age_agents": event_age,
-            "next_gate_context_agents": next_gate_context,
-            "private_event_error_steps": int(self.private_event_error_steps),
-            "private_event_mistakes": int(self.private_event_mistakes),
-            "blocked_passage_active": bool(self.blocked_passage_active),
-            "blocked_passage_current": bool(
-                self.blocked_passage_active and 0.85 < obj[1] < 1.90
-            ),
-            "false_belief_active": bool(self.false_belief_active),
-            "asymmetric_obstacle": bool(self.cfg.asymmetric_obstacle),
-            "effective_passage_half_width": self._effective_passage_half_width(),
-            "narrow_width_scale": float(self.cfg.narrow_width_scale),
-            "wall_violation": force_components["wall_violation"],
-            "blocked_violation": force_components["blocked_violation"],
-            "robot_violation": force_components["robot_violation"],
-            "ncon": contacts,
-            "contacts": contacts,
-            "local_contact_agents": local_contact_agents,
-            "local_force_agents": local_force_agents,
-            "local_force_units": "normalized_0_1",
-            "local_force_scale_newtons": float(self.cfg.local_force_scale_newtons),
-            "object_xy_yaw": obj.copy(),
+            "braking_agent_speed": float(speeds[self.braking_agent]),
+            "responding_agent_speed": float(speeds[self.responding_agent]),
+            "speed_error": speed_error,
+            "coordination_error": speed_error,
+            "acceleration_tracking_error": self._acceleration_tracking_error(),
+            "response_progress": self._response_progress(),
+            "both_stopped": bool(self._both_stopped()),
             "grasped": bool(self.grasped),
+            "has_grasped": bool(self.has_grasped),
+            "robot_distance": self._robot_distance(),
+            "min_robot_distance": float(self.min_robot_distance),
+            "object_xy_yaw": self._object_pose_xy_yaw(),
+            "contacts": int(self.data.ncon),
+            "local_contact_agents": self._local_contact_agents(),
+            "base_effort_agents": np.stack(
+                [self._robot_base_effort(0), self._robot_base_effort(1)], axis=0
+            ),
             "step_count": int(self.step_count),
-            "local_obs_agents": local_obs_agents,
-            "rel_target_pose_agents": rel_target_pose_agents,
-            "object_rel_pose_agents": object_rel_pose_agents,
         }
 
-    def get_obs(self) -> Dict:
-        a = self._robot_pose(0)
-        b = self._robot_pose(1)
-        obj = self._object_pose_xy_yaw()
-        force_proxy = self._compute_force_proxy()
-        success = self._success()
-
-        robot_0 = self._local_obs(0, a, obj, force_proxy)
-        robot_1 = self._local_obs(1, b, obj, force_proxy)
-
-        global_state = np.concatenate(
+    def _privileged_state(self) -> Dict[str, np.ndarray]:
+        info = self._build_info()
+        success = float(info["success"])
+        failure = float(info["failure"])
+        timeout = float(self.failure_reason in {"response_timeout", "episode_timeout"})
+        task_state = np.asarray(
             [
-                a,
-                b,
-                obj,
-                np.array(
-                    [force_proxy, float(success), float(self.step_count)],
-                    dtype=np.float64,
-                ),
-            ]
+                info["response_progress"],
+                info["speed_agents"][0],
+                info["speed_agents"][1],
+                info["speed_error"],
+                info["acceleration_tracking_error"],
+                float(info["both_stopped"]),
+                success,
+                failure,
+                timeout,
+                float(self.step_count),
+            ],
+            dtype=np.float32,
+        )
+        event_state = np.asarray(
+            [
+                float(self.brake_event_active),
+                float(self.braking_agent),
+                float(self.responding_agent),
+                float(self.brake_start_step),
+                float(info["steps_since_brake"]),
+                float(self.pre_brake_motion_valid),
+                float(self.response_started),
+                float(info["response_delay_steps"]),
+                float(self.follower_brake_steps),
+                float(self.stop_hold_count),
+            ],
+            dtype=np.float32,
+        )
+        contact_state = np.asarray(
+            [
+                float(self.data.ncon),
+                self._robot_distance(),
+                float(self.min_robot_distance),
+                float(self.grasped),
+                float(self.has_grasped),
+            ],
+            dtype=np.float32,
+        )
+        object_pose = self._object_pose_xy_yaw().astype(np.float32)
+        object_velocity = self.data.qvel[
+            self.object_dof_addr : self.object_dof_addr + 6
+        ].astype(np.float32, copy=True)
+        state = np.concatenate(
+            [object_pose, object_velocity, task_state, event_state, contact_state]
         ).astype(np.float32)
-        metrics = self._build_info(success=success, failure=False)
+        if state.shape != (self.privileged_state_dim,):
+            raise RuntimeError(
+                f"privileged state shape drifted to {state.shape}, "
+                f"expected {(self.privileged_state_dim,)}"
+            )
+        return {
+            "state": state,
+            "object_pose": object_pose,
+            "object_velocity": object_velocity,
+            "task_bounds": np.concatenate(
+                [self.geometry.task_center, self.geometry.task_half_size]
+            ).astype(np.float32),
+            "object_half_size": self.geometry.object_half_size.astype(
+                np.float32, copy=True
+            ),
+            "task": task_state,
+            "braking_event": event_state,
+            "contact": contact_state,
+        }
 
+    def get_obs(self) -> Dict[str, Any]:
+        robot_0 = self._robot_observation(0)
+        robot_1 = self._robot_observation(1)
+        proprioception = np.concatenate([robot_0["state"], robot_1["state"]]).astype(
+            np.float32
+        )
         return {
             "robot_0": robot_0,
             "robot_1": robot_1,
-            "object": obj.astype(np.float32),
-            "global_state": global_state,
-            "metrics": metrics,
+            "proprioception": proprioception,
+            "privileged_state": self._privileged_state(),
         }
+
+    def _compute_reward(self, success: bool, failure: bool) -> float:
+        speeds = self._linear_speeds()
+        reward = -self.cfg.reward_time_cost
+        reward -= self.cfg.reward_energy_scale * float(
+            np.sum(self.executed_action[:3] ** 2)
+            + np.sum(self.executed_action[4:7] ** 2)
+        )
+        if not self.grasped:
+            reward -= self.cfg.reward_ungrasped_cost
+
+        if not self.brake_event_active:
+            cruise_speed = max(
+                0.0,
+                min(
+                    float(self.base_velocities[0, 1]),
+                    float(self.base_velocities[1, 1]),
+                ),
+            )
+            reward += self.cfg.reward_cruise_scale * cruise_speed
+            reward -= self.cfg.reward_speed_match_scale * abs(
+                float(speeds[0] - speeds[1])
+            )
+        else:
+            progress = self._response_progress()
+            progress_delta = max(0.0, progress - self._best_response_progress)
+            self._best_response_progress = max(self._best_response_progress, progress)
+            speed_error = abs(
+                float(speeds[self.responding_agent] - speeds[self.braking_agent])
+            )
+            reward += self.cfg.reward_response_progress_scale * progress_delta
+            reward -= self.cfg.reward_speed_tracking_scale * speed_error
+            reward -= (
+                self.cfg.reward_acceleration_tracking_scale
+                * self._acceleration_tracking_error()
+            )
+            if self._both_stopped():
+                reward += self.cfg.reward_stop_hold
+
+        if success:
+            reward += self.cfg.reward_success
+        if failure and not success:
+            reward -= self.cfg.reward_failure
+        return float(reward)
 
     def step(self, action: np.ndarray):
         action = np.asarray(action, dtype=np.float64).reshape(-1)
-        if action.shape[0] != self.action_dim:
+        if action.shape != (self.action_dim,):
             raise ValueError(
-                f"Expected action dim {self.action_dim}, got {action.shape[0]}"
+                f"Expected action shape {(self.action_dim,)}, got {action.shape}"
             )
-
         action = np.clip(action, -1.0, 1.0)
         self.last_action = action.copy()
+        self._previous_speeds = self._linear_speeds()
 
-        a_vx, a_vy, a_wz, a_grip = action[:4]
-        b_vx, b_vy, b_wz, b_grip = action[4:]
+        self.grasped = bool(action[3] > 0.5 and action[7] > 0.5)
+        self.has_grasped = bool(self.has_grasped or self.grasped)
+        if not self.brake_event_active and self.step_count >= self.brake_start_step:
+            self._activate_brake_event()
 
-        # The reference task uses kinematic base control.
-        # The action represents normalized velocity commands rather than motor force.
-        dt = self.cfg.control_dt
-
-        a = self._robot_pose(0)
-        b = self._robot_pose(1)
-
-        a[0] += float(a_vx) * self.cfg.max_action_v * dt
-        a[1] += float(a_vy) * self.cfg.max_action_v * dt
-        a[2] += float(a_wz) * self.cfg.max_action_w * dt
-
-        b[0] += float(b_vx) * self.cfg.max_action_v * dt
-        b[1] += float(b_vy) * self.cfg.max_action_v * dt
-        b[2] += float(b_wz) * self.cfg.max_action_w * dt
-
-        # Keep yaw in [-pi, pi].
-        a[2] = (a[2] + np.pi) % (2 * np.pi) - np.pi
-        b[2] = (b[2] + np.pi) % (2 * np.pi) - np.pi
-
-        self.data.qpos[self.robot_a_qpos_addr : self.robot_a_qpos_addr + 3] = a
-        self.data.qpos[self.robot_b_qpos_addr : self.robot_b_qpos_addr + 3] = b
-
-        # Store normalized control for logging compatibility.
-        self.data.ctrl[:] = np.array(
-            [a_vx, a_vy, a_wz, b_vx, b_vy, b_wz], dtype=np.float64
-        )
-
-        self.grasped = bool(a_grip > 0.5 and b_grip > 0.5)
-
+        previous_object_pose = self._object_pose_xy_yaw()
+        self._integrate_bases(action)
         if self.grasped:
-            self._apply_geometric_carry()
+            self._apply_geometric_carry(previous_object_pose)
+        else:
+            self.data.qvel[self.object_dof_addr : self.object_dof_addr + 6] = 0.0
 
         mujoco.mj_forward(self.model, self.data)
-
         self.step_count += 1
-        self._record_pose_history()
-        self._update_scenario_state()
-
-        event_pose = self._object_pose_xy_yaw()
-        event_error = self._update_private_event(
-            action, float(event_pose[1]), float(event_pose[0])
-        )
+        self._update_distance_statistics()
+        self._update_response_state()
 
         success = self._success()
-        failure = self._failure()
-        done = bool(success or failure)
-        obs = self.get_obs()
+        failure = False if success else self._failure()
+        truncated = bool(failure and self.failure_reason == "episode_timeout")
+        terminated = bool(success or (failure and not truncated))
+        reward = self._compute_reward(success, failure)
+        observation = self.get_obs()
         info = self._build_info(success=success, failure=failure)
-        obs["metrics"] = info
-
-        obj = self._object_pose_xy_yaw()
-        force_proxy = info["force_proxy"]
-
-        progress = self._progress(obj)
-        progress_delta = progress - self._previous_progress
-        self._previous_progress = progress
-        reward = self.cfg.reward_progress_scale * progress_delta
-        reward -= self.cfg.reward_time_cost
-        reward -= self.cfg.reward_force_scale * force_proxy
-        reward -= self.cfg.reward_energy_scale * float(
-            np.sum(action[:3] ** 2) + np.sum(action[4:7] ** 2)
-        )
-        reward -= self.cfg.reward_private_event_error * event_error
-        if success:
-            reward += 100.0
-        if failure and not success:
-            reward -= 20.0
-
-        return obs, float(reward), done, info
+        return observation, reward, terminated, truncated, info
 
     def scripted_action(self) -> np.ndarray:
-        """
-        A simple oracle-like controller:
-        - close both grippers;
-        - move both robots forward through the passage;
-        - keep x separated and roughly centered.
-        """
-        a = self._robot_pose(0)
-        b = self._robot_pose(1)
-        obj = self._object_pose_xy_yaw()
+        """Oracle baseline that cruises and then tracks the braking robot speed."""
 
-        route_offset = 0.0
-        event = self._current_private_event()
-        if (
-            event is not None
-            and abs(float(obj[1]) - float(event["gate_y"]))
-            <= 2.0 * self.cfg.private_gate_window
-        ):
-            route_offset = (
-                float(event["maneuver"]) * self.cfg.private_gate_target_offset
-            )
-        target_a_x = -0.42 + route_offset
-        target_b_x = 0.42 + route_offset
-        target_y = 3.15
+        home_a_x = float(self.geometry.home_qpos[self.robot_a_qpos_addr])
+        home_b_x = float(self.geometry.home_qpos[self.robot_b_qpos_addr])
+        target_x = (home_a_x, home_b_x)
+        controls: list[float] = []
+        leader_forward = max(0.0, float(self.base_velocities[self.braking_agent, 1]))
 
-        def ctrl_for_robot(p, target_x):
-            x, y, yaw = p
-            vx = np.clip(1.5 * (target_x - x), -0.55, 0.55)
-            vy = np.clip(0.9 * (target_y - y), -0.70, 0.70)
-            wz = np.clip(-1.2 * yaw, -0.8, 0.8)
-            return vx, vy, wz
-
-        a_vx, a_vy, a_wz = ctrl_for_robot(a, target_a_x)
-        b_vx, b_vy, b_wz = ctrl_for_robot(b, target_b_x)
-
-        # Slow down near walls in passage.
-        if 0.2 < obj[1] < 2.4:
-            a_vy *= 0.75
-            b_vy *= 0.75
-
-        return np.array(
-            [a_vx, a_vy, a_wz, 1.0, b_vx, b_vy, b_wz, 1.0], dtype=np.float64
-        )
+        for agent_id in range(2):
+            pose = self._robot_pose(agent_id)
+            vx = float(np.clip(1.5 * (target_x[agent_id] - pose[0]), -0.55, 0.55))
+            wz = float(np.clip(-1.2 * pose[2], -0.8, 0.8))
+            if not self.brake_event_active:
+                vy = 0.70
+            elif agent_id == self.braking_agent:
+                vy = 0.0
+            else:
+                vy = float(np.clip(leader_forward / self.cfg.max_action_v, 0.0, 1.0))
+            controls.extend([vx, vy, wz, 1.0])
+        return np.asarray(controls, dtype=np.float64)
 
     def get_state_vector(self) -> np.ndarray:
-        obs = self.get_obs()
-        return obs["global_state"].astype(np.float64)
+        return np.concatenate(
+            [
+                self._robot_state(0),
+                self._robot_state(1),
+                self._privileged_state()["state"],
+            ]
+        ).astype(np.float64)
 
     def render(
         self,
@@ -1019,8 +970,6 @@ class TwoRobotCarryNarrowPassageEnv:
         width: int = 640,
         height: int = 360,
     ) -> np.ndarray:
-        """Render one RGB frame without importing dataset or model code."""
-
         if width <= 0 or height <= 0:
             raise ValueError("render dimensions must be positive")
         key = (int(height), int(width))
@@ -1032,85 +981,113 @@ class TwoRobotCarryNarrowPassageEnv:
         return np.asarray(renderer.render(), dtype=np.uint8).copy()
 
     def close(self) -> None:
-        """Release all lazily created offscreen rendering contexts."""
-
         for renderer in self._renderers.values():
             renderer.close()
         self._renderers.clear()
 
-    def snapshot(self) -> dict:
-        """Capture all simulator/task state needed for deterministic branches."""
-
+    def snapshot(self) -> dict[str, Any]:
         return {
             "qpos": self.data.qpos.copy(),
             "qvel": self.data.qvel.copy(),
             "ctrl": self.data.ctrl.copy(),
             "step_count": self.step_count,
             "last_action": self.last_action.copy(),
+            "executed_action": self.executed_action.copy(),
+            "base_velocities": self.base_velocities.copy(),
+            "base_accelerations": self.base_accelerations.copy(),
+            "linear_decelerations": self.linear_decelerations.copy(),
             "grasped": self.grasped,
+            "has_grasped": self.has_grasped,
             "failure_reason": self.failure_reason,
-            "robot_pose_history": copy.deepcopy(self.robot_pose_history),
-            "private_events": copy.deepcopy(self.private_events),
-            "private_event_index": self.private_event_index,
-            "private_event_error_steps": self.private_event_error_steps,
-            "private_event_mistakes": self.private_event_mistakes,
-            "previous_progress": self._previous_progress,
-            "rng_state": copy.deepcopy(self.rng.bit_generator.state),
-            "occlusion_active": self.occlusion_active,
-            "teammate_visible": dict(self.teammate_visible),
-            "last_visible_teammate_pose": copy.deepcopy(
-                self.last_visible_teammate_pose
-            ),
             "min_robot_distance": self.min_robot_distance,
-            "max_contact_force": self.max_contact_force,
+            "braking_agent": self.braking_agent,
+            "responding_agent": self.responding_agent,
+            "brake_start_step": self.brake_start_step,
+            "brake_event_active": self.brake_event_active,
+            "brake_event_step": self.brake_event_step,
+            "pre_brake_motion_valid": self.pre_brake_motion_valid,
+            "follower_speed_at_brake": self.follower_speed_at_brake,
+            "response_started": self.response_started,
+            "response_start_step": self.response_start_step,
+            "follower_brake_steps": self.follower_brake_steps,
+            "stop_hold_count": self.stop_hold_count,
+            "best_response_progress": self._best_response_progress,
+            "previous_speeds": self._previous_speeds.copy(),
+            "rng_state": copy.deepcopy(self.rng.bit_generator.state),
         }
 
-    def restore(self, state: dict) -> None:
-        """Restore :meth:`snapshot` without changing the exogenous RNG tape."""
-
+    def restore(self, state: dict[str, Any]) -> None:
         self.data.qpos[:] = state["qpos"]
         self.data.qvel[:] = state["qvel"]
         self.data.ctrl[:] = state["ctrl"]
         self.step_count = int(state["step_count"])
-        self.last_action = state["last_action"].copy()
+        self.last_action = np.asarray(state["last_action"], dtype=np.float64).copy()
+        self.executed_action = np.asarray(
+            state["executed_action"], dtype=np.float64
+        ).copy()
+        self.base_velocities = np.asarray(
+            state["base_velocities"], dtype=np.float64
+        ).copy()
+        self.base_accelerations = np.asarray(
+            state["base_accelerations"], dtype=np.float64
+        ).copy()
+        self.linear_decelerations = np.asarray(
+            state["linear_decelerations"], dtype=np.float64
+        ).copy()
         self.grasped = bool(state["grasped"])
+        self.has_grasped = bool(state["has_grasped"])
         self.failure_reason = str(state["failure_reason"])
-        self.robot_pose_history = copy.deepcopy(state["robot_pose_history"])
-        self.private_events = copy.deepcopy(state["private_events"])
-        self.private_event_index = int(state["private_event_index"])
-        self.private_event_error_steps = int(state["private_event_error_steps"])
-        self.private_event_mistakes = int(state["private_event_mistakes"])
-        self._previous_progress = float(state["previous_progress"])
-        self.rng.bit_generator.state = copy.deepcopy(state["rng_state"])
-        self.occlusion_active = bool(state["occlusion_active"])
-        self.teammate_visible = dict(state["teammate_visible"])
-        self.last_visible_teammate_pose = copy.deepcopy(
-            state["last_visible_teammate_pose"]
-        )
         self.min_robot_distance = float(state["min_robot_distance"])
-        self.max_contact_force = float(state["max_contact_force"])
+        self.braking_agent = int(state["braking_agent"])
+        self.responding_agent = int(state["responding_agent"])
+        self.brake_start_step = int(state["brake_start_step"])
+        self.brake_event_active = bool(state["brake_event_active"])
+        self.brake_event_step = int(state["brake_event_step"])
+        self.pre_brake_motion_valid = bool(state["pre_brake_motion_valid"])
+        self.follower_speed_at_brake = float(state["follower_speed_at_brake"])
+        self.response_started = bool(state["response_started"])
+        self.response_start_step = int(state["response_start_step"])
+        self.follower_brake_steps = int(state["follower_brake_steps"])
+        self.stop_hold_count = int(state["stop_hold_count"])
+        self._best_response_progress = float(state["best_response_progress"])
+        self._previous_speeds = np.asarray(
+            state["previous_speeds"], dtype=np.float64
+        ).copy()
+        self.rng.bit_generator.state = copy.deepcopy(state["rng_state"])
         mujoco.mj_forward(self.model, self.data)
 
 
-def main():
-    env = TwoRobotCarryNarrowPassageEnv()
-    obs = env.reset(seed=0, randomize=False)
-    print("action_dim:", env.action_dim)
-    print("obs robot_0:", obs["robot_0"].shape)
-    print("global_state:", obs["global_state"].shape)
+# Compatibility aliases keep external imports working while the public task
+# name and all in-repository entry points use the cooperative-stop definition.
+CarryEnvConfig = CooperativeStopEnvConfig
+CarryGeometry = CooperativeStopGeometry
+TwoRobotCarryNarrowPassageEnv = TwoRobotCooperativeStopEnv
 
-    total_reward = 0.0
-    done = False
-    info = {}
-    while not done:
-        action = env.scripted_action()
-        obs, reward, done, info = env.step(action)
-        total_reward += reward
 
-    print("done:", done)
-    print("info:", info)
-    print("total_reward:", round(total_reward, 3))
-    print("final object:", obs["object"])
+def main() -> None:
+    env = TwoRobotCooperativeStopEnv()
+    try:
+        observation, info = env.reset(seed=0)
+        del observation
+        terminated = truncated = False
+        total_reward = 0.0
+        while not (terminated or truncated):
+            observation, reward, terminated, truncated, info = env.step(
+                env.scripted_action()
+            )
+            del observation
+            total_reward += reward
+        print(
+            {
+                "return": total_reward,
+                "steps": env.step_count,
+                "success": info["success"],
+                "braking_agent": info["braking_agent"],
+                "brake_start_step": info["brake_start_step"],
+            }
+        )
+    finally:
+        env.close()
 
 
 if __name__ == "__main__":
