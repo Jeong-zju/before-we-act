@@ -17,6 +17,7 @@ import importlib.metadata
 import json
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 from typing import Any, Mapping, Sequence
@@ -94,6 +95,7 @@ DECISION_AGGREGATE_KEYS = (
 REQUIRED_VALIDATION_FREEZE_CONDITIONS = frozenset(
     {
         "validation_split",
+        "robust_wam_checkpoint",
         "all_five_deployable_modes",
         "complete_split",
         "official_split_size",
@@ -131,24 +133,32 @@ class EpisodeRecipe:
 class CheckpointSet:
     plan: Path
     belief: Path
-    wam_robust: Path
+    deployment_wam: Path
+    deployment_wam_stage: str
     intention: Path
-    wam: Path | None = None
+    base_wam: Path | None = None
+
+    @property
+    def uses_base_wam(self) -> bool:
+        return self.deployment_wam_stage == "wam"
 
     def runtime_paths(self) -> dict[str, Path]:
         return {
             "plan": self.plan,
             "belief": self.belief,
-            "wam_robust": self.wam_robust,
+            self.deployment_wam_stage: self.deployment_wam,
             "intention": self.intention,
         }
 
     def audit_paths(self) -> list[Path]:
-        paths = [self.plan, self.belief]
-        if self.wam is not None:
-            paths.append(self.wam)
-        paths.extend([self.intention, self.wam_robust])
-        return paths
+        paths = [
+            self.plan,
+            self.belief,
+            self.base_wam,
+            self.intention,
+            self.deployment_wam,
+        ]
+        return list(dict.fromkeys(path for path in paths if path is not None))
 
 
 class _RolloutVideoRecorder:
@@ -289,22 +299,43 @@ def _metadata_value(value: Any) -> Any:
     return value
 
 
-def resolve_checkpoints(checkpoint_dir: str | Path) -> CheckpointSet:
+def resolve_checkpoints(
+    checkpoint_dir: str | Path,
+    *,
+    use_base_wam: bool = False,
+) -> CheckpointSet:
     root = Path(checkpoint_dir).resolve()
     required = {
         name: root / f"{name}.pt"
-        for name in ("plan", "belief", "wam_robust", "intention")
+        for name in ("plan", "belief", "intention")
     }
     missing = [str(path) for path in required.values() if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"missing checkpoints: {missing}")
-    intermediate = root / "wam.pt"
+    base_wam = root / "wam.pt"
+    robust_wam = root / "wam_robust.pt"
+    if use_base_wam:
+        if not base_wam.is_file():
+            raise FileNotFoundError(
+                f"--use-base-wam requires the base checkpoint: {base_wam}"
+            )
+        deployment_wam = base_wam
+        deployment_wam_stage = "wam"
+    else:
+        if not robust_wam.is_file():
+            raise FileNotFoundError(
+                f"missing checkpoint: {robust_wam}; pass --use-base-wam only for "
+                "a diagnostic rollout with the teacher-conditioned base WAM"
+            )
+        deployment_wam = robust_wam
+        deployment_wam_stage = "wam_robust"
     return CheckpointSet(
         plan=required["plan"],
         belief=required["belief"],
-        wam_robust=required["wam_robust"],
+        deployment_wam=deployment_wam,
+        deployment_wam_stage=deployment_wam_stage,
         intention=required["intention"],
-        wam=intermediate if intermediate.is_file() else None,
+        base_wam=base_wam if base_wam.is_file() else None,
     )
 
 
@@ -874,6 +905,101 @@ def run_episode(
     if video_info is not None:
         record["video"] = video_info
     return record
+
+
+def _video_artifact_valid(record: Mapping[str, Any], video_path: Path) -> bool:
+    video = record.get("video")
+    return bool(
+        isinstance(video, Mapping)
+        and video_path.is_file()
+        and video.get("sha256") == file_sha256(video_path)
+    )
+
+
+def _video_artifact_path(
+    output_dir: Path,
+    mode: str,
+    recipe: EpisodeRecipe,
+    *,
+    failure_reason: str | None = None,
+) -> Path:
+    """Return a stable video name, including the reason for failures."""
+
+    suffix = ""
+    if failure_reason is not None:
+        slug = re.sub(
+            r"[^a-z0-9._-]+",
+            "_",
+            str(failure_reason).strip().lower(),
+        ).strip("._-")
+        suffix = f"__{slug or 'unknown_failure'}"
+    return (
+        output_dir
+        / "videos"
+        / mode
+        / f"episode_{recipe.episode_index:06d}{suffix}.mp4"
+    )
+
+
+def _relocate_valid_video(
+    record: Mapping[str, Any],
+    *,
+    source: Path,
+    destination: Path,
+) -> bool:
+    """Move a valid video to its canonical name without re-rendering it."""
+
+    if source == destination:
+        return _video_artifact_valid(record, destination)
+    if _video_artifact_valid(record, destination):
+        return True
+    if not _video_artifact_valid(record, source):
+        return False
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source.replace(destination)
+    return _video_artifact_valid(record, destination)
+
+
+def _attach_failure_replay_video(
+    original: dict[str, Any],
+    replay: Mapping[str, Any],
+    *,
+    video_path: Path,
+) -> None:
+    """Attach a deterministic failure replay without replacing original metrics."""
+
+    if bool(original.get("success", False)):
+        raise RuntimeError("failure-video replay was requested for a successful episode")
+    exact_fields = (
+        "input_digest",
+        "evaluation_config_digest",
+        "success",
+        "failure",
+        "failure_reason",
+        "done",
+        "truncated",
+        "environment_steps",
+    )
+    changed = [
+        name for name in exact_fields if original.get(name) != replay.get(name)
+    ]
+    original_return = float(original.get("return", float("nan")))
+    replay_return = float(replay.get("return", float("nan")))
+    if not np.isclose(original_return, replay_return, rtol=1e-6, atol=1e-6):
+        changed.append("return")
+    if changed:
+        raise RuntimeError(
+            "failure-video replay was not deterministic; "
+            f"changed={sorted(set(changed))}"
+        )
+    video = replay.get("video")
+    if not isinstance(video, Mapping) or not _video_artifact_valid(replay, video_path):
+        raise RuntimeError("failure-video replay did not produce a valid MP4 artifact")
+    original["video"] = {
+        **dict(video),
+        "selection": "failure_replay",
+        "replay_verified": True,
+    }
 
 
 def _record_path(output_dir: Path, mode: str, recipe: EpisodeRecipe) -> Path:
@@ -1572,13 +1698,20 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--frozen-config-from is only valid for the frozen test run")
     resolved_device = _resolved_device_name(str(args.device))
 
-    checkpoints = resolve_checkpoints(args.checkpoint_dir)
+    checkpoints = resolve_checkpoints(
+        args.checkpoint_dir,
+        use_base_wam=bool(args.use_base_wam),
+    )
     checkpoint_hashes = _checkpoint_hashes(checkpoints)
     checkpoint_sensor_contracts: dict[str, dict[str, Any]] = {}
     for name, path, stage in (
         ("plan", checkpoints.plan, "plan"),
         ("belief", checkpoints.belief, "belief"),
-        ("wam_robust", checkpoints.wam_robust, "wam_robust"),
+        (
+            checkpoints.deployment_wam_stage,
+            checkpoints.deployment_wam,
+            checkpoints.deployment_wam_stage,
+        ),
         ("intention", checkpoints.intention, "intention"),
     ):
         checkpoint_state = load_checkpoint(
@@ -1734,22 +1867,22 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
             runtime = DecentralizedRuntime.from_checkpoints(
                 plan_checkpoint=checkpoints.plan,
                 belief_checkpoint=checkpoints.belief,
-                wam_checkpoint=checkpoints.wam_robust,
+                wam_checkpoint=checkpoints.deployment_wam,
                 intention_checkpoint=checkpoints.intention,
                 config=runtime_config,
             )
             mode_records: list[dict[str, Any]] = []
             for recipe_position, recipe in enumerate(recipes):
                 path = _record_path(output_dir, mode, recipe)
-                video_path = (
-                    output_dir
-                    / "videos"
-                    / mode
-                    / f"episode_{recipe.episode_index:06d}.mp4"
-                    if args.render_video
-                    and recipe_position < int(args.video_episodes)
-                    else None
+                generic_video_path = _video_artifact_path(
+                    output_dir,
+                    mode,
+                    recipe,
                 )
+                requested_video = bool(args.render_video) and (
+                    recipe_position < int(args.video_episodes)
+                )
+                initial_video_path = generic_video_path if requested_video else None
                 record = (
                     _load_resumable_record(
                         path,
@@ -1760,14 +1893,29 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                     if args.resume
                     else None
                 )
-                if record is not None and video_path is not None:
-                    video = record.get("video")
-                    if (
-                        not isinstance(video, Mapping)
-                        or not video_path.is_file()
-                        or video.get("sha256") != file_sha256(video_path)
+                record_changed = False
+                if record is not None and requested_video:
+                    requested_video_path = _video_artifact_path(
+                        output_dir,
+                        mode,
+                        recipe,
+                        failure_reason=(
+                            str(record.get("failure_reason", "unknown_failure"))
+                            if not bool(record.get("success", False))
+                            else None
+                        ),
+                    )
+                    if not _relocate_valid_video(
+                        record,
+                        source=generic_video_path,
+                        destination=requested_video_path,
                     ):
                         record = None
+                    elif isinstance(record.get("video"), dict):
+                        record["video"]["path"] = str(
+                            requested_video_path.relative_to(output_dir)
+                        )
+                        record_changed = True
                 reused = record is not None
                 if record is None:
                     record = run_episode(
@@ -1779,13 +1927,92 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                         evaluation_config_digest=config_digest,
                         args=args,
                         runtime_config=runtime_config,
-                        video_path=video_path,
+                        video_path=initial_video_path,
                         show_progress=not bool(args.quiet),
                     )
-                    if video_path is not None and "video" in record:
-                        record["video"]["path"] = str(
-                            video_path.relative_to(output_dir)
+                    record_changed = True
+                    if initial_video_path is not None and "video" in record:
+                        requested_video_path = _video_artifact_path(
+                            output_dir,
+                            mode,
+                            recipe,
+                            failure_reason=(
+                                str(record.get("failure_reason", "unknown_failure"))
+                                if not bool(record.get("success", False))
+                                else None
+                            ),
                         )
+                        if not _relocate_valid_video(
+                            record,
+                            source=initial_video_path,
+                            destination=requested_video_path,
+                        ):
+                            raise RuntimeError(
+                                "requested rollout video could not be assigned its "
+                                "canonical artifact name"
+                            )
+                        record["video"]["selection"] = (
+                            "requested_failure"
+                            if not bool(record.get("success", False))
+                            else "requested"
+                        )
+                        record["video"]["path"] = str(
+                            requested_video_path.relative_to(output_dir)
+                        )
+
+                failure_video_required = bool(args.save_failure_videos) and not bool(
+                    record.get("success", False)
+                )
+                artifact_video_path = _video_artifact_path(
+                    output_dir,
+                    mode,
+                    recipe,
+                    failure_reason=(
+                        str(record.get("failure_reason", "unknown_failure"))
+                        if failure_video_required
+                        else None
+                    ),
+                )
+                if failure_video_required and _relocate_valid_video(
+                    record,
+                    source=generic_video_path,
+                    destination=artifact_video_path,
+                ):
+                    if isinstance(record.get("video"), dict):
+                        expected_relative_path = str(
+                            artifact_video_path.relative_to(output_dir)
+                        )
+                        if record["video"].get("path") != expected_relative_path:
+                            record["video"]["path"] = expected_relative_path
+                            record_changed = True
+                failure_video_replayed = False
+                if failure_video_required and not _video_artifact_valid(
+                    record, artifact_video_path
+                ):
+                    replay = run_episode(
+                        runtime,
+                        recipe,
+                        manifest=manifest,
+                        mode=mode,
+                        checkpoint_hashes=checkpoint_hashes,
+                        evaluation_config_digest=config_digest,
+                        args=args,
+                        runtime_config=runtime_config,
+                        video_path=artifact_video_path,
+                        show_progress=not bool(args.quiet),
+                    )
+                    _attach_failure_replay_video(
+                        record,
+                        replay,
+                        video_path=artifact_video_path,
+                    )
+                    record["video"]["path"] = str(
+                        artifact_video_path.relative_to(output_dir)
+                    )
+                    failure_video_replayed = True
+                    record_changed = True
+
+                if record_changed:
                     _atomic_json(path, record)
                 compact_record = _compact_episode_record(
                     record,
@@ -1797,7 +2024,15 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 progress.set_postfix(
                     episode=recipe.episode_index,
                     scenario=recipe.scenario,
-                    status="reused" if reused else "ran",
+                    status=(
+                        "reused+failure-video"
+                        if reused and failure_video_replayed
+                        else "reused"
+                        if reused
+                        else "ran+failure-video"
+                        if failure_video_replayed
+                        else "ran"
+                    ),
                     success=int(bool(compact_record.get("success", False))),
                     steps=int(compact_record.get("environment_steps", 0)),
                     video=int("video" in compact_record),
@@ -1827,14 +2062,17 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
         if isinstance(record.get("video"), Mapping)
     ]
     videos_manifest_path: Path | None = None
-    if args.render_video:
+    if args.render_video or args.save_failure_videos:
         videos_manifest_path = output_dir / "videos.json"
         _atomic_json(
             videos_manifest_path,
             {
                 "video_manifest_contract": "fe_pc_wam_rollout_videos",
                 "created_at_utc": datetime.now(timezone.utc).isoformat(),
+                "failure_videos_enabled": bool(args.save_failure_videos),
+                "failure_video_method": "deterministic_full_episode_replay",
                 "requested_episodes_per_mode": int(args.video_episodes),
+                "requested_video_enabled": bool(args.render_video),
                 "video_count": len(video_entries),
                 "videos": video_entries,
             },
@@ -1878,6 +2116,7 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     }
     formal_conditions = {
         "test_split": args.split == "test",
+        "robust_wam_checkpoint": not checkpoints.uses_base_wam,
         "all_five_deployable_modes": set(modes) == set(DEPLOYABLE_MODES),
         "complete_split": len(recipes) == expected_split_episode_count,
         "official_split_size": expected_split_episode_count
@@ -1924,6 +2163,7 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
     }
     validation_freeze_conditions = {
         "validation_split": args.split == "val",
+        "robust_wam_checkpoint": formal_conditions["robust_wam_checkpoint"],
         "all_five_deployable_modes": formal_conditions[
             "all_five_deployable_modes"
         ],
@@ -1976,6 +2216,8 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
         "baseline_matching_enabled": bool(args.match_baselines_to_selective),
         "matched_selective_request_rate": matched_rate,
         "frozen_validation_config": frozen_config_source,
+        "deployment_wam_stage": checkpoints.deployment_wam_stage,
+        "diagnostic_base_wam": checkpoints.uses_base_wam,
         "synchronous_transport": True,
         "realized_transport_delay_steps": 0.0,
         "expected_delay_cost_steps_by_mode": expected_delay_by_mode,
@@ -2008,6 +2250,8 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
 
     summary = compare_communication_modes(ordered_records, required_modes=modes)
     summary["split"] = args.split
+    summary["deployment_wam_stage"] = checkpoints.deployment_wam_stage
+    summary["diagnostic_base_wam"] = checkpoints.uses_base_wam
     summary["synchronous_transport"] = True
     summary["realized_transport_delay_steps"] = 0.0
     summary["expected_delay_cost_steps_by_mode"] = expected_delay_by_mode
@@ -2075,7 +2319,12 @@ def run_paired_evaluation(args: argparse.Namespace) -> dict[str, Any]:
                 else "not_applicable_incomplete_protocol"
             ),
             "passed": None,
-            "reason": "Formal acceptance requires a frozen, complete 80-episode test protocol.",
+            "reason": (
+                "Base-WAM rollouts are diagnostic only; formal acceptance requires "
+                "wam_robust.pt."
+                if checkpoints.uses_base_wam
+                else "Formal acceptance requires a frozen, complete 80-episode test protocol."
+            ),
             "failed_conditions": summary["formal_protocol"]["failed_conditions"],
         }
     _atomic_json(output_dir / "summary.json", summary)
@@ -2108,6 +2357,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--checkpoint-dir", required=True)
+    parser.add_argument(
+        "--use-base-wam",
+        action="store_true",
+        help=(
+            "use wam.pt instead of wam_robust.pt for diagnostic rollouts; "
+            "the resulting run is never eligible for formal acceptance"
+        ),
+    )
     parser.add_argument("--split", choices=("val", "test"), default="val")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--modes", default=",".join(DEPLOYABLE_MODES))
@@ -2122,6 +2379,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--render-video",
         action="store_true",
         help="render MP4 videos for the first N selected episodes of each mode",
+    )
+    failure_video = parser.add_mutually_exclusive_group()
+    failure_video.add_argument(
+        "--save-failure-videos",
+        dest="save_failure_videos",
+        action="store_true",
+        default=True,
+        help=(
+            "save a full MP4 for every unsuccessful episode by deterministic "
+            "replay (default)"
+        ),
+    )
+    failure_video.add_argument(
+        "--no-save-failure-videos",
+        dest="save_failure_videos",
+        action="store_false",
+        help="disable the default failure-episode MP4 replay",
     )
     parser.add_argument("--video-episodes", type=int, default=1)
     parser.add_argument("--video-fps", type=int, default=20)

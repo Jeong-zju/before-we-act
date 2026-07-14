@@ -1,4 +1,4 @@
-# FE-PC-WAM 数据采集与一键训练
+# FE-PC-WAM V1 数据采集与一键训练
 
 ## 1. 为什么必须重新采集
 
@@ -235,7 +235,23 @@ intention accuracy、macro-F1、Brier、ECE 和 active-support coverage。
   --split val --output-dir outputs/acceptance/smoke \
   --device cpu --max-episodes 2 --max-steps 2 \
   --num-candidates 2 --num-teammate-hypotheses 1 \
-  --residual-sigma-points 1
+  --residual-sigma-points 1 \
+  --no-save-failure-videos
+```
+
+如果 `wam_robust.pt` 尚未训练完成，可显式加入 `--use-base-wam`，临时使用
+`wam.pt` 检查闭环接线和定性行为。该选项即使在目录中存在 `wam_robust.pt` 也会强制
+选择基础 WAM，并在 summary/snapshot 中记录 `diagnostic_base_wam=true`；这类运行永远
+不能用于正式验收或冻结 test 配置：
+
+```bash
+MUJOCO_GL=egl /home/jeong/miniconda3/envs/wam-py311/bin/python \
+  scripts/evaluate_fe_pc_wam_rollouts.py \
+  --dataset-root datasets/private_gates_v1 \
+  --checkpoint-dir checkpoints/private_gates_v1 \
+  --use-base-wam \
+  --split val --output-dir outputs/acceptance/base_wam_probe \
+  --device cuda --max-episodes 4
 ```
 
 输出目录会包含可恢复的完整逐 episode records、紧凑的 `records.json`、`summary.json`、
@@ -245,7 +261,10 @@ intention accuracy、macro-F1、Brier、ECE 和 active-support coverage。
 `frozen_config.json` 会明确标记 `validation_freeze_eligible=false`。
 
 默认显示总 episode 进度条，并在每个实际执行的 episode 下显示 step 进度条；`--quiet`
-会关闭两个进度条。若要为每种通信模式的前 2 个 episode 同时输出 MP4：
+会关闭两个进度条。闭环默认保存所有失败 episode 的完整 MP4：首跑不渲染，失败后以
+同一 seed/runtime 配置确定性重放并录像，只有结局、步数和 return 校验一致才挂到原始
+record。可用 `--no-save-failure-videos` 关闭。若还要为每种通信模式的前 2 个 episode
+（无论成功失败）输出 MP4：
 
 ```bash
 MUJOCO_GL=egl /home/jeong/miniconda3/envs/wam-py311/bin/python \
@@ -258,11 +277,11 @@ MUJOCO_GL=egl /home/jeong/miniconda3/envs/wam-py311/bin/python \
   --video-fps 20 --video-width 640 --video-height 480
 ```
 
-视频按 `videos/<mode>/episode_XXXXXX.mp4` 保存，`videos.json` 记录每个视频的相对路径、
+视频按 `videos/<mode>/episode_XXXXXX.mp4` 保存，`videos.json` 记录选择原因、相对路径、
 SHA256、帧数、FPS、分辨率和 codec。录像采用流式编码，不会把整个 episode 的帧保存在
 内存中。无显示器的 NVIDIA/EGL 环境使用 `MUJOCO_GL=egl`；纯 CPU 且安装了 OSMesa 时
-可改为 `MUJOCO_GL=osmesa`。录像会增加渲染和编码开销，正式大规模统计时建议只录像少量
-episode。
+可改为 `MUJOCO_GL=osmesa`。失败重放会额外执行一次失败 episode；显式 `--render-video`
+则会给指定的前 N 个 episode 增加实时渲染开销。
 
 ## 9. Validation 通信校准
 

@@ -44,6 +44,16 @@ def test_action_only_tokenizer_excludes_outcomes_and_has_balanced_usage_loss():
     assert model.vq.embedding.weight.grad is not None
     assert torch.isfinite(model.vq.embedding.weight.grad).all()
 
+    diagnostics = compute_action_only_plan_losses(
+        model,
+        {"actions": actions, "trajectory": trajectory},
+        include_rate_distortion_metrics=True,
+    )
+    assert diagnostics["loss_code_only_action"].ndim == 0
+    assert diagnostics["loss_mean_action_baseline"].ndim == 0
+    assert torch.isfinite(diagnostics["loss_code_only_action"])
+    assert torch.isfinite(diagnostics["loss_mean_action_baseline"])
+
 
 def test_action_only_tokenizer_residual_dropout_prevents_continuous_bypass():
     cfg = ActionOnlyPlanTokenizerConfig(

@@ -44,6 +44,12 @@ class ScriptedPolicy:
             action = self.apply_noisy_disturbance(action, phase)
         elif self.mode == "recovery":
             action = self.apply_recovery_bias(env, action, phase)
+        elif self.mode == "exploratory":
+            action = self.apply_exploratory_disturbance(action, phase)
+        elif self.mode == "near_miss":
+            action = self.apply_near_miss_bias(action, phase)
+        elif self.mode != "scripted":
+            raise ValueError(f"unknown collection policy mode {self.mode!r}")
 
         return PolicyOutput(action=np.clip(action, -1.0, 1.0), phase=phase)
 
@@ -111,6 +117,26 @@ class ScriptedPolicy:
             recovered[4] += -np.sign(obj[0]) * 0.3
 
         return recovered
+
+    def apply_exploratory_disturbance(self, action: np.ndarray, phase: str) -> np.ndarray:
+        explored = self.apply_noisy_disturbance(action, phase)
+        if self.rng.random() < 0.30:
+            agent = int(self.rng.integers(0, 2))
+            start = 4 * agent
+            explored[start : start + 3] = self.rng.uniform(-1.0, 1.0, size=3)
+        return explored
+
+    def apply_near_miss_bias(self, action: np.ndarray, phase: str) -> np.ndarray:
+        biased = action.copy()
+        if phase in {"carry_to_passage", "passage"}:
+            side = float(self.rng.choice((-1.0, 1.0)))
+            biased[0] += 0.75 * side
+            biased[4] -= 0.75 * side
+            biased[2] += 0.50 * side
+            biased[6] -= 0.50 * side
+            if self.rng.random() < 0.15:
+                biased[3 if self.rng.random() < 0.5 else 7] = 0.0
+        return biased
 
 
 def robot_distance_from_obs(obs: dict) -> float:

@@ -89,6 +89,7 @@ class Episode:
     privileged_observations: Dict[str, np.ndarray]
     privileged_transitions: Dict[str, np.ndarray]
     metadata: Dict[str, Any] = field(default_factory=dict)
+    research_v2_branch_groups: list[Any] = field(default_factory=list)
 
 
 def save_episode(
@@ -372,10 +373,12 @@ def read_flat_local_observations(
     )
 
 
-def spec_from_hdf5(file: h5py.File) -> LocalObservationSpec:
-    if str(file.attrs.get("schema_version", "")) != SCHEMA_VERSION:
+def spec_from_hdf5(
+    file: h5py.File, *, expected_schema_version: str = SCHEMA_VERSION
+) -> LocalObservationSpec:
+    if str(file.attrs.get("schema_version", "")) != expected_schema_version:
         raise ValueError(
-            f"expected schema_version={SCHEMA_VERSION}, got {file.attrs.get('schema_version', '')}"
+            f"expected schema_version={expected_schema_version}, got {file.attrs.get('schema_version', '')}"
         )
     return LocalObservationSpec(
         joint_dim=int(file.attrs["joint_dim"]),

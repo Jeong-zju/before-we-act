@@ -1,4 +1,4 @@
-# FE-PC-WAM 模型信号流、原理、参数与指标说明
+# FE-PC-WAM V1 模型信号流、原理、参数与指标说明
 
 > 本文依据当前仓库实现整理。训练状态快照取自 2026-07-10；训练仍在进行时，最新数值应以各阶段的 `train_log.csv`、checkpoint 和 `artifacts/*/metrics.json` 为准。
 

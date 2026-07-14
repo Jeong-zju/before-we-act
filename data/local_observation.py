@@ -16,6 +16,7 @@ In particular, a packet contains neither the ego robot's global pose nor the
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, Iterable, Mapping
 
@@ -347,6 +348,23 @@ class LocalObservationSimulator:
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         self._cache.clear()
+
+    def snapshot(self) -> dict:
+        """Capture RNG and stale-estimate state for matched interventions."""
+
+        return {
+            "rng_state": copy.deepcopy(self.rng.bit_generator.state),
+            "cache": {key: _copy_estimate(value) for key, value in self._cache.items()},
+        }
+
+    def restore(self, state: Mapping[str, object]) -> None:
+        """Restore :meth:`snapshot` without leaking branch observations."""
+
+        self.rng.bit_generator.state = copy.deepcopy(state["rng_state"])
+        cache = state["cache"]
+        if not isinstance(cache, Mapping):
+            raise TypeError("sensor snapshot cache must be a mapping")
+        self._cache = {key: _copy_estimate(value) for key, value in cache.items()}
 
     def observe(
         self,

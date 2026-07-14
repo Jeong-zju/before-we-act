@@ -17,6 +17,7 @@ from scripts.evaluate_fe_pc_wam_rollouts import (
     EpisodeRecipe,
     DEPLOYABLE_MODES,
     REQUIRED_VALIDATION_FREEZE_CONDITIONS,
+    _attach_failure_replay_video,
     _digest_json,
     _compact_episode_record,
     _episode_metrics,
@@ -26,7 +27,9 @@ from scripts.evaluate_fe_pc_wam_rollouts import (
     _runtime_config,
     _record_set_attestation,
     _validate_resume_snapshot,
+    _video_artifact_path,
     build_parser,
+    resolve_checkpoints,
     run_paired_evaluation,
     run_episode,
 )
@@ -52,6 +55,53 @@ def _args(tmp_path: Path):
             "1",
         ]
     )
+
+
+def test_parser_defaults_to_failure_videos_and_requires_explicit_base_wam(tmp_path):
+    args = _args(tmp_path)
+    assert args.save_failure_videos is True
+    assert args.use_base_wam is False
+    disabled = build_parser().parse_args(
+        [
+            "--dataset-root",
+            str(tmp_path / "dataset"),
+            "--checkpoint-dir",
+            str(tmp_path / "checkpoints"),
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--no-save-failure-videos",
+            "--use-base-wam",
+        ]
+    )
+    assert disabled.save_failure_videos is False
+    assert disabled.use_base_wam is True
+
+
+def test_checkpoint_resolution_can_explicitly_select_base_wam(tmp_path):
+    root = tmp_path / "checkpoints"
+    root.mkdir()
+    for name in ("plan", "belief", "wam", "intention"):
+        (root / f"{name}.pt").touch()
+
+    with pytest.raises(FileNotFoundError, match="--use-base-wam"):
+        resolve_checkpoints(root)
+
+    diagnostic = resolve_checkpoints(root, use_base_wam=True)
+    assert diagnostic.uses_base_wam is True
+    assert diagnostic.deployment_wam == (root / "wam.pt").resolve()
+    assert set(diagnostic.runtime_paths()) == {"plan", "belief", "wam", "intention"}
+    assert diagnostic.audit_paths().count((root / "wam.pt").resolve()) == 1
+
+    (root / "wam_robust.pt").touch()
+    formal = resolve_checkpoints(root)
+    assert formal.uses_base_wam is False
+    assert formal.deployment_wam_stage == "wam_robust"
+    assert set(formal.runtime_paths()) == {
+        "plan",
+        "belief",
+        "wam_robust",
+        "intention",
+    }
 
 
 class _FakeRuntime:
@@ -295,6 +345,66 @@ def test_run_episode_streams_video_and_records_artifact(tmp_path, monkeypatch):
     assert record["video"]["width"] == 320
     assert record["video"]["height"] == 240
     assert record["video"]["sha256"] == file_sha256(video_path)
+
+
+def test_failure_replay_video_is_attached_only_after_determinism_check(tmp_path):
+    video_path = tmp_path / "failure.mp4"
+    video_path.write_bytes(b"failure-video")
+    common = {
+        "input_digest": "input",
+        "evaluation_config_digest": "config",
+        "success": False,
+        "failure": True,
+        "failure_reason": "timeout",
+        "done": True,
+        "truncated": False,
+        "environment_steps": 12,
+        "return": -3.5,
+    }
+    original = dict(common)
+    replay = {
+        **common,
+        "video": {
+            "path": str(video_path),
+            "sha256": file_sha256(video_path),
+            "frame_count": 13,
+        },
+    }
+    _attach_failure_replay_video(original, replay, video_path=video_path)
+    assert original["video"]["selection"] == "failure_replay"
+    assert original["video"]["replay_verified"] is True
+
+    changed = dict(replay)
+    changed["success"] = True
+    with pytest.raises(RuntimeError, match="not deterministic"):
+        _attach_failure_replay_video(dict(common), changed, video_path=video_path)
+
+
+def test_failure_video_path_includes_sanitized_reason(tmp_path):
+    recipe = EpisodeRecipe(
+        source_path=tmp_path / "episode_000007.hdf5",
+        split="val",
+        episode_id="val/episode_000007",
+        episode_index=7,
+        seed=57,
+        scenario="private_gates",
+        object_dropout_prob=0.0,
+        source_sha256="source-hash",
+    )
+
+    path = _video_artifact_path(
+        tmp_path,
+        "selective_vpi",
+        recipe,
+        failure_reason="Private Event/Mismatch",
+    )
+
+    assert path == (
+        tmp_path
+        / "videos"
+        / "selective_vpi"
+        / "episode_000007__private_event_mismatch.mp4"
+    )
 
 
 def test_compact_manifest_records_preserve_full_paired_evaluation(tmp_path):

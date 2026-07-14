@@ -35,6 +35,7 @@ from data.schema import (
     Episode,
     save_episode,
 )
+from data.research_v2 import MatchedBranchGroup
 from envs.two_robot_carry_env import CarryEnvConfig, TwoRobotCarryNarrowPassageEnv
 
 
@@ -45,6 +46,7 @@ def collect_one_episode(
     *,
     randomize: bool = True,
     sensor_config: SensorSimulationConfig | None = None,
+    collect_matched_branches: bool = False,
 ) -> tuple[Episode, Dict[str, Any], LocalObservationSpec]:
     """Collect one episode with strict transition alignment."""
 
@@ -61,6 +63,7 @@ def collect_one_episode(
     actions: Dict[int, list] = {0: [], 1: []}
     privileged_obs: Dict[str, list] = {
         "time": [],
+        "progress": [],
         "robot_pose_world": [],
         "object_pose_world": [],
         "object_pose_ego": [],
@@ -113,13 +116,41 @@ def collect_one_episode(
     done = False
     final_info = obs["metrics"]
     branched_events: set[int] = set()
+    matched_branch_groups: list[MatchedBranchGroup] = []
     while not done:
         event_index = int(obs["metrics"].get("private_event_index", -1))
-        should_branch = bool(obs["metrics"].get("private_event_active", False)) and (
+        event_branch = bool(obs["metrics"].get("private_event_active", False)) and (
             event_index not in branched_events
         )
-        branch = _counterfactual_branches(env) if should_branch else _empty_branches()
-        if should_branch:
+        scheduled_v2_branch = collect_matched_branches and len(matched_branch_groups) < 3 and len(
+            actions[0]
+        ) in (32, 64, 96)
+        should_branch = event_branch or scheduled_v2_branch
+        if should_branch and collect_matched_branches:
+            matched = _matched_counterfactual_branch_group(
+                env,
+                sensor,
+                spec,
+                decision_t=len(actions[0]),
+                group_id=len(matched_branch_groups),
+            )
+            matched_branch_groups.append(matched)
+            branch = {
+                "valid": matched.valid_mask.any(axis=-1).astype(np.float32),
+                "plan_pair": matched.plan_pairs,
+                "action": matched.actions,
+                "return": matched.reward.sum(axis=-1),
+                "success": matched.success,
+                "constraint_violation": matched.constraint,
+            }
+        else:
+            if should_branch:
+                branch = _counterfactual_branches(env)
+            elif collect_matched_branches:
+                branch = _empty_research_v2_branches()
+            else:
+                branch = _empty_branches()
+        if event_branch:
             branched_events.add(event_index)
         policy_out = policy(env)
         joint_action = np.asarray(policy_out.action, dtype=np.float32).reshape(2, 4)
@@ -221,6 +252,7 @@ def collect_one_episode(
             "rgb_camera_names": [],
             "rgb_calibration_reference": "",
         },
+        research_v2_branch_groups=matched_branch_groups,
     )
     return episode, dict(episode.metadata), spec
 
@@ -229,6 +261,7 @@ _BRANCH_PLAN_PAIRS = np.asarray(
     [(-1, -1), (-1, 1), (1, -1), (1, 1), (0, 0), (-1, 0)],
     dtype=np.float32,
 )
+RESEARCH_V2_BRANCH_ACTION_PROGRAM = "joint_4d_anchors_smooth_random_v1"
 
 
 def _empty_branches() -> dict[str, np.ndarray]:
@@ -236,6 +269,18 @@ def _empty_branches() -> dict[str, np.ndarray]:
     return {
         "valid": np.zeros(count, dtype=np.float32),
         "plan_pair": _BRANCH_PLAN_PAIRS.copy(),
+        "action": np.zeros((count, 2, 16, 4), dtype=np.float32),
+        "return": np.zeros(count, dtype=np.float32),
+        "success": np.zeros(count, dtype=np.float32),
+        "constraint_violation": np.zeros(count, dtype=np.float32),
+    }
+
+
+def _empty_research_v2_branches() -> dict[str, np.ndarray]:
+    count = len(_BRANCH_PLAN_PAIRS) + 2
+    return {
+        "valid": np.zeros(count, dtype=np.float32),
+        "plan_pair": np.zeros((count, 2), dtype=np.float32),
         "action": np.zeros((count, 2, 16, 4), dtype=np.float32),
         "return": np.zeros(count, dtype=np.float32),
         "success": np.zeros(count, dtype=np.float32),
@@ -293,6 +338,242 @@ def _counterfactual_branches(
         "return": returns,
         "success": successes,
         "constraint_violation": constraints,
+    }
+
+
+def _matched_counterfactual_branch_group(
+    env: TwoRobotCarryNarrowPassageEnv,
+    sensor: LocalObservationSimulator,
+    spec: LocalObservationSpec,
+    *,
+    decision_t: int,
+    group_id: int,
+    horizon: int = 16,
+) -> MatchedBranchGroup:
+    """Collect action-matched future local observations from one snapshot."""
+
+    env_snapshot = env.snapshot()
+    sensor_snapshot = sensor.snapshot()
+    plan_pairs = _research_v2_plan_pairs(env, decision_t, group_id)
+    action_delta, grip_override = _research_v2_action_programs(
+        env,
+        plan_pairs,
+        decision_t=decision_t,
+        group_id=group_id,
+        horizon=horizon,
+    )
+    count = len(plan_pairs)
+    actions = np.zeros((count, 2, horizon, 4), dtype=np.float32)
+    valid = np.zeros((count, horizon), dtype=np.bool_)
+    reward_values = np.zeros((count, horizon), dtype=np.float32)
+    progress = np.zeros((count, horizon), dtype=np.float32)
+    contact = np.zeros((count, horizon, 2), dtype=np.float32)
+    force = np.zeros((count, horizon, 2), dtype=np.float32)
+    success = np.zeros(count, dtype=np.float32)
+    constraint = np.zeros(count, dtype=np.float32)
+    terminal = np.zeros(count, dtype=np.float32)
+    future_local = {
+        agent_id: {
+            name: np.zeros((count, horizon, *shape), dtype=np.float32)
+            for name, shape in spec.field_shapes().items()
+        }
+        for agent_id in (0, 1)
+    }
+    try:
+        for branch_index, _plan_pair in enumerate(plan_pairs):
+            env.restore(env_snapshot)
+            sensor.restore(sensor_snapshot)
+            done = False
+            info = env.get_obs()["metrics"]
+            for step in range(horizon):
+                observation_before = env.get_obs()
+                action_matrix = env.scripted_action().copy().reshape(2, 4)
+                action_matrix[:, :3] += action_delta[branch_index, step, :, :3]
+                override = grip_override[branch_index, step]
+                action_matrix[:, 3] = np.where(
+                    np.isfinite(override), override, action_matrix[:, 3]
+                )
+                action_matrix = np.clip(action_matrix, -1.0, 1.0)
+                action = action_matrix.reshape(-1)
+                actions[branch_index, :, step] = _ego_action_commands(
+                    action_matrix, observation_before
+                )
+                observation_after, reward, done, info = env.step(action)
+                valid[branch_index, step] = True
+                reward_values[branch_index, step] = float(reward)
+                progress[branch_index, step] = float(info.get("progress", 0.0))
+                local_contact = np.asarray(info.get("local_contact_agents", np.zeros(2)), dtype=np.float32)
+                local_force = np.asarray(info.get("local_force_agents", np.zeros(2)), dtype=np.float32)
+                contact[branch_index, step] = local_contact
+                force[branch_index, step] = local_force
+                constraint[branch_index] = max(
+                    constraint[branch_index],
+                    float(
+                        info.get("force_violation", False)
+                        or info.get("collision", False)
+                        or info.get("private_event_error_steps", 0) > 0
+                    ),
+                )
+                packet_lists = {0: [], 1: []}
+                privileged_lists = _empty_privileged_observation_lists()
+                base_twists = _base_twists_from_action(env, action_matrix, observation_after)
+                _append_observation(
+                    packet_lists,
+                    privileged_lists,
+                    sensor,
+                    spec,
+                    observation_after,
+                    info,
+                    env,
+                    base_twists,
+                    action_matrix[:, 3] > 0.5,
+                )
+                for agent_id in (0, 1):
+                    mapping = stack_packets(packet_lists[agent_id], spec)
+                    for name in spec.field_shapes():
+                        future_local[agent_id][name][branch_index, step] = mapping[name][0]
+                if done:
+                    terminal[branch_index] = 1.0
+                    break
+            success[branch_index] = float(info.get("success", False))
+    finally:
+        env.restore(env_snapshot)
+        sensor.restore(sensor_snapshot)
+    return MatchedBranchGroup(
+        group_id=group_id,
+        decision_t=decision_t,
+        plan_pairs=plan_pairs,
+        actions=actions,
+        valid_mask=valid,
+        future_local_observations=future_local,
+        reward=reward_values,
+        progress=progress,
+        contact=contact,
+        force=force,
+        success=success,
+        constraint=constraint,
+        terminal=terminal,
+    )
+
+
+def _research_v2_plan_pairs(
+    env: TwoRobotCarryNarrowPassageEnv, decision_t: int, group_id: int
+) -> np.ndarray:
+    """Six anchors plus outcome-independent random and state-adaptive pairs."""
+
+    rng = np.random.default_rng(int(env.cfg.seed) + 9973 * decision_t + group_id)
+    random_pair = rng.uniform(-1.0, 1.0, size=(1, 2)).astype(np.float32)
+    object_x = float(env._object_pose_xy_yaw()[0])
+    correction = float(np.clip(-2.0 * object_x, -1.0, 1.0))
+    adaptive_pair = np.asarray([[correction, correction]], dtype=np.float32)
+    return np.concatenate((_BRANCH_PLAN_PAIRS, random_pair, adaptive_pair), axis=0)
+
+
+def _research_v2_action_programs(
+    env: TwoRobotCarryNarrowPassageEnv,
+    plan_pairs: np.ndarray,
+    *,
+    decision_t: int,
+    group_id: int,
+    horizon: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build deterministic, outcome-independent joint 4-D branch programs.
+
+    ``plan_pairs`` remains the compact target-only maneuver label required by
+    the on-disk schema.  The forced actions are intentionally richer than that
+    label: anchors perturb lateral/longitudinal/yaw commands over time, one
+    anchor contains a short grasp dropout, one branch is a seeded smooth random
+    joint program, and the final branch uses only the decision-time object pose
+    for a state-adaptive correction.  Candidate 4 is an unmodified scripted
+    control.  No future outcome is inspected while constructing the programs.
+    """
+
+    pairs = np.asarray(plan_pairs, dtype=np.float32)
+    if pairs.ndim != 2 or pairs.shape[1] != 2:
+        raise ValueError("Research-v2 plan pairs must have shape [N,2]")
+    if horizon <= 0:
+        raise ValueError("Research-v2 branch horizon must be positive")
+    count = int(pairs.shape[0])
+    delta = np.zeros((count, horizon, 2, 4), dtype=np.float32)
+    grip_override = np.full((count, horizon, 2), np.nan, dtype=np.float32)
+    phase = np.linspace(0.0, 1.0, horizon, dtype=np.float32)
+    envelope = 0.55 + 0.45 * np.sin(np.pi * phase)
+    oscillation = np.sin(2.0 * np.pi * phase)
+
+    # The first six candidates are fixed anchors.  Index 4 deliberately stays
+    # at zero and therefore reproduces the scripted policy from the snapshot.
+    for branch_index in range(min(len(_BRANCH_PLAN_PAIRS), count)):
+        if branch_index == 4:
+            continue
+        pair = pairs[branch_index]
+        pair_mean = float(pair.mean())
+        pair_difference = float(0.5 * (pair[0] - pair[1]))
+        delta[branch_index, :, :, 0] = (
+            0.34 * envelope[:, None] * pair[None, :]
+        )
+        delta[branch_index, :, 0, 1] = (
+            0.16 * pair_mean * envelope + 0.12 * pair_difference * oscillation
+        )
+        delta[branch_index, :, 1, 1] = (
+            0.16 * pair_mean * envelope - 0.12 * pair_difference * oscillation
+        )
+        delta[branch_index, :, 0, 2] = (
+            0.30 * float(pair[0]) * oscillation + 0.16 * pair_difference * envelope
+        )
+        delta[branch_index, :, 1, 2] = (
+            0.30 * float(pair[1]) * oscillation - 0.16 * pair_difference * envelope
+        )
+
+    # A short one-agent grip dropout supplies the fourth action dimension while
+    # retaining valid pre- and post-pulse dynamics in the same branch.
+    if count > 5:
+        pulse_start = max(1, horizon // 3)
+        pulse_stop = min(horizon, pulse_start + max(2, horizon // 4))
+        grip_override[5, pulse_start:pulse_stop, 0] = 0.0
+
+    seed = int(env.cfg.seed) + 9973 * int(decision_t) + 101 * int(group_id)
+    if count > 6:
+        rng = np.random.default_rng(seed + 53)
+        noise = rng.normal(0.0, 1.0, size=(horizon, 2, 3)).astype(np.float32)
+        # A short causal smoothing filter produces trajectories instead of
+        # independent action jitter, closer to tokenizer-generated plans.
+        for step in range(1, horizon):
+            noise[step] = 0.68 * noise[step - 1] + 0.32 * noise[step]
+        noise /= np.maximum(noise.std(axis=0, keepdims=True), 1e-5)
+        delta[6, :, :, :3] = noise * np.asarray([0.30, 0.24, 0.36], dtype=np.float32)
+        random_agent = int(rng.integers(0, 2))
+        random_start = int(rng.integers(max(1, horizon // 4), max(2, 3 * horizon // 4)))
+        random_stop = min(horizon, random_start + max(2, horizon // 5))
+        grip_override[6, random_start:random_stop, random_agent] = 0.0
+
+    if count > 7:
+        object_x, _object_y, object_yaw = (
+            float(value) for value in env._object_pose_xy_yaw()
+        )
+        correction = float(np.clip(-2.0 * object_x, -1.0, 1.0))
+        yaw_correction = float(np.clip(-1.5 * object_yaw, -1.0, 1.0))
+        delta[7, :, :, 0] = 0.34 * correction * envelope[:, None]
+        delta[7, :, :, 1] = 0.12 * envelope[:, None]
+        delta[7, :, 0, 2] = 0.30 * yaw_correction * envelope + 0.10 * oscillation
+        delta[7, :, 1, 2] = 0.30 * yaw_correction * envelope - 0.10 * oscillation
+
+    return delta, grip_override
+
+
+def _empty_privileged_observation_lists() -> Dict[str, list]:
+    return {
+        "time": [],
+        "progress": [],
+        "robot_pose_world": [],
+        "object_pose_world": [],
+        "object_pose_ego": [],
+        "teammate_pose_ego": [],
+        "base_twist_ego": [],
+        "global_state": [],
+        "private_event_truth": [],
+        "private_event_cue_agents": [],
+        "private_event_valid_agents": [],
+        "next_gate_context_agents": [],
     }
 
 
@@ -358,6 +639,7 @@ def _append_observation(
         )
 
     privileged["time"].append([float(env.step_count) * float(env.cfg.control_dt)])
+    privileged["progress"].append([float(info.get("progress", 0.0))])
     privileged["robot_pose_world"].append(robot_poses)
     privileged["object_pose_world"].append(object_pose)
     privileged["object_pose_ego"].append(np.stack(object_rel_truth, axis=0))

@@ -280,6 +280,7 @@ def compute_action_only_plan_losses(
     action_std: torch.Tensor | None = None,
     auxiliary_traj_mean: torch.Tensor | None = None,
     auxiliary_traj_std: torch.Tensor | None = None,
+    include_rate_distortion_metrics: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """Compute  losses without ever passing trajectory truth to the encoder."""
 
@@ -295,6 +296,18 @@ def compute_action_only_plan_losses(
     out = model(actions_in)
     loss_action = F.mse_loss(out["recon_actions"], actions_in)
     loss_residual = out["residual"].pow(2).mean()
+    loss_code_only_action = loss_action.new_zeros(())
+    loss_mean_action_baseline = loss_action.new_zeros(())
+    if include_rate_distortion_metrics:
+        # Validation-only diagnostics: how much information is carried by the
+        # discrete code before the communication residual is supplied, and how
+        # much either representation improves over the normalized action mean.
+        with torch.no_grad():
+            code_only = model.decode(
+                out["z_q"].detach(), torch.zeros_like(out["residual"])
+            )["recon_actions"]
+            loss_code_only_action = F.mse_loss(code_only, actions_in)
+            loss_mean_action_baseline = actions_in.square().mean()
 
     loss_auxiliary = loss_action.new_zeros(())
     loss_maneuver = loss_action.new_zeros(())
@@ -318,7 +331,19 @@ def compute_action_only_plan_losses(
             maneuver >= cfg.maneuver_classes
         ).any():
             raise ValueError("maneuver must contain left/hold/right class ids in [0, 2]")
-        loss_maneuver = F.cross_entropy(out["maneuver_logits"], maneuver)
+        maneuver_mask = batch.get("maneuver_mask")
+        if maneuver_mask is None:
+            maneuver_mask = torch.ones_like(maneuver, dtype=torch.bool)
+        else:
+            maneuver_mask = maneuver_mask.to(
+                device=actions.device, dtype=torch.bool
+            ).reshape(-1)
+            if maneuver_mask.shape != maneuver.shape:
+                raise ValueError("maneuver_mask must match the action batch")
+        if maneuver_mask.any():
+            loss_maneuver = F.cross_entropy(
+                out["maneuver_logits"][maneuver_mask], maneuver[maneuver_mask]
+            )
 
     loss = (
         loss_action
@@ -328,7 +353,7 @@ def compute_action_only_plan_losses(
         + cfg.auxiliary_traj_weight * loss_auxiliary
         + cfg.maneuver_weight * loss_maneuver
     )
-    return {
+    metrics = {
         "loss": loss,
         "loss_action": loss_action.detach(),
         "loss_vq": out["vq_loss"].detach(),
@@ -342,6 +367,14 @@ def compute_action_only_plan_losses(
         "residual": out["residual"].detach(),
         "recon_actions": out["recon_actions"].detach(),
     }
+    if include_rate_distortion_metrics:
+        metrics.update(
+            {
+                "loss_code_only_action": loss_code_only_action.detach(),
+                "loss_mean_action_baseline": loss_mean_action_baseline.detach(),
+            }
+        )
+    return metrics
 
 
 @dataclass

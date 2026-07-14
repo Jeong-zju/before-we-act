@@ -152,6 +152,9 @@ def encode_current_and_future_beliefs(
     agent_id = batch["ego_id"].unsqueeze(1).expand(B, H).reshape(B * H)
     context = torch.no_grad() if detach_future else nullcontext()
     with context:
+        belief_dim = getattr(encoder.cfg, "slot_dim", None)
+        if belief_dim is None:
+            belief_dim = getattr(encoder.cfg, "model_dim")
         future = encoder(
             rolled["local_history"].reshape(B * H, L, D),
             rolled["history_mask"].reshape(B * H, L),
@@ -162,7 +165,12 @@ def encode_current_and_future_beliefs(
             object_valid=rolled["object_valid"].reshape(B * H, L),
             object_age=rolled["object_age"].reshape(B * H, L),
             object_confidence=rolled["object_confidence"].reshape(B * H, L),
-        )["slots"].reshape(B, H, encoder.NUM_ROLES, encoder.cfg.slot_dim)
+        )["slots"].reshape(
+            B,
+            H,
+            encoder.NUM_ROLES,
+            int(belief_dim),
+        )
     if detach_future:
         future = future.detach()
     return {"ego_slots": current, "target_ego_slots": future, **rolled}

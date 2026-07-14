@@ -1,4 +1,4 @@
-# Private Gates v1：重新采集与验收
+# FE-PC-WAM V1 Private Gates：重新采集与验收
 
 该版本与旧数据、旧归一化统计和旧 checkpoint 不兼容。每个 episode 包含三个
 协作决策门，事件按 `decisive-private / locally-inferable / redundant` 平衡生成。
