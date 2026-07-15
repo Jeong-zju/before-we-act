@@ -14,6 +14,7 @@ data:
 
 state_features:
   yaw_indices: [2, 13]
+  gripper_closed_indices: [7, 18]
   yaw_encoding: sin_cos
   predict_delta: true
 
@@ -35,13 +36,39 @@ model:
 
 training:
   mode: autoregressive
-  forecast_curriculum: [4, 8, 16]
+  forecast_curriculum: [1, 4, 8, 16]
+  curriculum_epochs: [1, 2, 3, 4]
+  batch_size: 256
+  num_workers: 4
+  seed: 7
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  overfit_refine_epochs: 50
+  overfit_refine_learning_rate: 0.0003
+  gradient_clip_norm: 10.0
+  horizon_decay: 0.95
+  normalization_std_floor: 0.001
+  use_amp: true
+  preload_data: true
+  loss_weights:
+    state_mean: 1.0
+    state_nll: 0.1
+    gripper_closed: 1.0
+    reward: 0.1
+    done: 0.1
+    terminal: 0.1
+    auxiliary: 0.05
   terminal_positive_weight_source: train
   privileged_inputs: false
 
 evaluation:
   open_loop_horizons: [1, 5, 10, 20, 40]
   gate_b_rollout_horizon: 16
+  gate_b_overfit_nrmse_max: 0.02
+  gate_b_overfit_closed_rmse_max: 0.05
+  gate_b_constraint_violation_max: 0.0
+  validation_max_batches: 100
+  evaluation_max_batches: -1
   event_aligned: true
   compare_against:
     - constant_velocity

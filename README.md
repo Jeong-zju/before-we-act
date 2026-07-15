@@ -200,16 +200,105 @@ test split 不参与阈值选择。
 对应的可复现参数见 `configs/wam/phase0_baselines_v2.yaml`。旧 checkpoint 格式归档在
 `configs/wam/phase0_baselines_v1_legacy.yaml`，不得用于 Phase 1。
 
-Phase 0 正式验收和 Gate A 已于 2026-07-15 通过，可以开始 Phase 1。正式证据为
-`outputs/wam_phase0_gate_a_v1.json` 和 `outputs/wam_phase0_v2_mixed`；此前
-`outputs/wam_phase0_v1` 的全成功 legacy 结果只保留为历史工程记录。进入 Phase 1
-不表示 Gate B 已通过，RWM-AR 仍须独立验证多步 rollout、相对当前 MLP 的优势和严格重载。
-完整验收数字和 Phase 1 边界见
-[技术方案 V1.0 第 21 节](docs/PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md#21-phase-0-验收记录)。
+Phase 0/Gate A 与 Phase 1/Gate B 已于 2026-07-15 全量通过，允许进入 Phase 2。
+正式证据位于 `outputs/wam_phase0_gate_a_v1.json`、`outputs/wam_phase0_v2_mixed` 和
+`outputs/wam_phase1_open_loop_v1/open_loop_metrics.json`。关键验收数字及未完成的
+Gate C 条款见[技术方案 V1.0 第 21～22 节](docs/PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md#21-phase-0--gate-a-验收记录)。
 
-Phase 1 的唯一任务配置入口为 `configs/wam/cooperative_stop_v1.yaml`。Phase 0 的训练、
-审计和模型代码均带 `phase0` 前缀；正式 RWM-AR 使用预留的 `models/wam/`、
-`train/trainer.py`、`scripts/train_wam.py` 命名空间，避免把单步 MLP 误当作完整 WAM。
+Phase 1 的唯一任务配置入口为 `configs/wam/phase1_rwm_ar_v1.yaml`。已通过 Gate B 的
+RWM-AR 训练、评估和损失模块冻结为 `rwm_ar_*`，Phase 2 将在共享 `models/wam/`
+组件之上新增 ensemble 和 uncertainty 模块，不覆盖 Phase 1 的可复现实验入口。
+
+## WAM Phase 1：RWM-AR
+
+Phase 1 已实现单模型 RWM-AR 工程链路：状态标准化与 yaw `sin/cos` 特征、两层历史
+GRU belief、1→4→8→16 步 outer autoregression、显式 mean MSE + Gaussian NLL state
+head、symlog reward head、
+done/success/failure 和辅助 heads、episode-safe RAM 预载、safetensors checkpoint、
+1/5/10/20/40 步 open-loop 指标及 SVG rollout。Phase 2 的 ensemble/epistemic uncertainty
+和 Phase 3 的 MPPI 不在本阶段伪实现。
+
+正式训练前先跑 256 个片段的 overfit 证据：
+
+```bash
+python scripts/train_phase1_rwm_ar.py \
+  --config configs/wam/phase1_rwm_ar_v1.yaml \
+  --data-dir datasets/cooperative_stop_wam_proprio_v1/hdf5 \
+  --checkpoint-dir checkpoints/wam_cooperative_stop_v1_overfit \
+  --overfit-samples 256 \
+  --batch-size 64 \
+  --learning-rate 0.001 \
+  --weight-decay 0 \
+  --curriculum-epochs 50 50 50 100 \
+  --no-use-amp \
+  --device cuda
+```
+
+配置会仅在 overfit 模式追加 50 epochs、学习率 `3e-4` 的 H=1 refinement；overfit
+容量测试固定用 FP32，正式全量训练不会追加该阶段且仍可使用 AMP。
+
+训练完成后先独立审计 overfit checkpoint；该命令不依赖正式训练 checkpoint：
+
+```bash
+python scripts/evaluate_phase1_rwm_ar.py \
+  --config configs/wam/phase1_rwm_ar_v1.yaml \
+  --overfit-checkpoint-dir checkpoints/wam_cooperative_stop_v1_overfit \
+  --overfit-only \
+  --output-dir outputs/wam_phase1_overfit_v1 \
+  --device cuda
+```
+
+overfit 同时要求 256 个训练片段的 1-step continuous-state NRMSE 不高于 `0.02`、
+gripper-closed RMSE 不高于 `0.05`，且分布诊断全部 finite。负 Gaussian NLL 本身不再
+作为拟合成功证据。
+
+然后使用全量 train split 正式训练：
+
+```bash
+python scripts/train_phase1_rwm_ar.py \
+  --config configs/wam/phase1_rwm_ar_v1.yaml \
+  --data-dir datasets/cooperative_stop_wam_proprio_v1/hdf5 \
+  --checkpoint-dir checkpoints/wam_cooperative_stop_v1 \
+  --device cuda
+```
+
+评测命令会在 validation 校准 outcome 阈值，在 test 上同时递归运行常速度与 Phase 0 MLP，
+并结合 overfit checkpoint 输出 Gate B 结论：
+
+```bash
+python scripts/evaluate_phase1_rwm_ar.py \
+  --config configs/wam/phase1_rwm_ar_v1.yaml \
+  --checkpoint-dir checkpoints/wam_cooperative_stop_v1 \
+  --overfit-checkpoint-dir checkpoints/wam_cooperative_stop_v1_overfit \
+  --phase0-output-dir outputs/wam_phase0_v2_mixed \
+  --output-dir outputs/wam_phase1_open_loop_v1 \
+  --device cuda
+```
+
+正式结果为 `gate_b.passed=true`：test H=1 continuous NRMSE 为 `0.03140`，低于 Phase 0
+MLP 的 `0.03590` 和常速度的 `0.37113`；H=16 finite rate 为 `1.0`、越界率为 `0`，
+严格重载差异为 `0`。该结论不代表 Gate C、uncertainty 或闭环控制已经通过。
+
+训练每个 curriculum horizon 和 validation 都是独立阶段。优化阶段保持 Phase 0 的终端
+风格：首列 spinner、`stage=当前/总数`、单行自适应进度条，以及下方 5 行完整历史
+Braille loss 点图；阶段完成后固定留在终端，新阶段从下一行开始。可用
+`--progress-refresh-hz` 调整刷新率，或用 `--no-progress` 关闭动态输出。
+AMP 会在支持的 CUDA 上优先使用 BF16，否则使用 FP16；缺失的 previous action 使用
+训练集 action mean 作为哨兵，归一化 std floor 固定为 `1e-3`，避免常数动作维在低精度
+线性层中溢出。定位设备相关数值问题时可临时添加 `--no-use-amp`，正式结果仍需与 AMP
+配置分开记录。
+
+内存预载只保存每个原始 transition 一份，再按需切 history/forecast window；全量数据不
+会物化数百万个重叠序列。内存不足时训练和评测均可加 `--no-preload-data` 回退 HDF5。
+checkpoint 目录包含 `model.safetensors`、`ema_model.safetensors`（Phase 1 与 model
+字节一致，尚未声称使用 EMA）、`config.yaml`、`normalization.npz`、`schema.json`、
+`dataset_manifest.json`、`metrics.json` 和 `provenance.json`。加载时会严格检查 schema、
+维度、normalization SHA-256 和全部 state-dict keys。
+
+`evaluate_phase1_rwm_ar.py` 只有 Gate B 四项全量通过才返回 0；未提供 overfit
+checkpoint、任一
+baseline 未被击败、16 步出现非有限/越界或严格重载不一致时返回 2。使用
+`--max-batches` 或 `--max-episodes` 得到的部分评测永远不能把 Gate B 标记为通过。
 
 ## 验证
 

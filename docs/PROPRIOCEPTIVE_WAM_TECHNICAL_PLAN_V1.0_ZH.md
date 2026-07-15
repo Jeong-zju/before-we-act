@@ -4,7 +4,7 @@
 >
 > 更新时间：2026-07-15
 >
-> 状态：Phase 0 正式验收与 Gate A 数据准入通过；允许进入 Phase 1，Phase 1～5 待完成
+> 状态：Phase 0/Gate A、Phase 1/Gate B 已通过；允许进入 Phase 2，Gate C 待验收
 >
 > 适用仓库：`fe_pc_wam`，分支 `refactor/environment-overhaul`
 
@@ -385,7 +385,8 @@ Value head 使用真实轨迹的 n-step/Monte Carlo return 和 target network �
 
 ```text
 L_total =
-    λ_state      * L_state_nll
+    λ_state_mean * L_state_mean_mse
+  + λ_state_nll  * L_state_nll
   + λ_ar         * L_multistep_autoregressive
   + λ_reward     * L_reward
   + λ_done       * L_done
@@ -397,8 +398,9 @@ L_total =
 
 ### 10.1 状态损失
 
-连续状态采用 Gaussian NLL，yaw 使用 wrapped delta；gripper closed 使用 BCE。各状态组
-分别统计 loss，避免位置维度掩盖速度或 effort 的失败。
+连续状态同时采用显式 normalized mean MSE 与 Gaussian NLL，yaw 使用 wrapped delta；
+gripper closed 使用 BCE。mean MSE 保证预测轨迹本身必须逼近目标，不能只靠增大预测
+方差降低 NLL。各状态组分别统计 loss，避免位置维度掩盖速度或 effort 的失败。
 
 ### 10.2 多步自回归损失
 
@@ -606,8 +608,8 @@ while not done:
 
 ## 13. 代码结构和依赖方向
 
-Phase 0 整理完成后的现有入口和 Phase 1 目标结构如下。带“Phase 1”的文件在对应阶段实现，
-不得以空壳模块冒充交付：
+Phase 1/Gate B 通过后冻结的现有入口，以及 Phase 2/3 的目标结构如下。带“Phase 2/3”
+标记的文件只表示后续交付边界，不得提前以空壳模块冒充实现：
 
 ```text
 models/
@@ -618,21 +620,22 @@ models/
     ├── api.py
     ├── config.py
     ├── normalizer.py
-    ├── state_features.py       # Phase 1
-    ├── recurrent_dynamics.py   # Phase 1
-    ├── heads.py                # Phase 1
-    ├── rollout.py              # Phase 1
+    ├── state_features.py
+    ├── recurrent_dynamics.py
+    ├── heads.py
+    ├── rollout.py
     └── ensemble.py             # Phase 2
 
 train/
 ├── trajectory_dataset.py
 ├── phase0_baselines.py
-├── losses.py                  # Phase 1
-├── checkpointing.py           # Phase 1
-└── trainer.py                 # Phase 1
+├── progress.py
+├── rwm_ar_losses.py
+├── rwm_ar_checkpointing.py
+└── rwm_ar_trainer.py
 
 eval/
-├── open_loop.py               # Phase 1
+├── rwm_ar_open_loop.py
 ├── uncertainty.py             # Phase 2
 └── closed_loop.py             # Phase 3
 
@@ -643,14 +646,17 @@ policies/
 configs/wam/
 ├── phase0_baselines_v1_legacy.yaml
 ├── phase0_baselines_v2.yaml
-└── cooperative_stop_v1.yaml   # Phase 1+ 唯一任务配置
+├── phase1_rwm_ar_v1.yaml
+└── phase2_rwm_u_v1.yaml       # Phase 2
 
 scripts/
 ├── collect_wam_proprio_dataset.py
 ├── audit_phase0_gate_a.py
 ├── train_phase0_baselines.py
-├── train_wam.py               # Phase 1
-├── evaluate_wam.py            # Phase 1
+├── train_phase1_rwm_ar.py
+├── evaluate_phase1_rwm_ar.py
+├── train_phase2_rwm_u.py      # Phase 2
+├── evaluate_phase2_uncertainty.py  # Phase 2
 └── rollout_wam_policy.py      # Phase 3
 ```
 
@@ -852,7 +858,7 @@ MPPI -> reduced-sample MPPI -> action prior -> scripted safe stop
 
 ### Gate B：模型可训练
 
-- 100～500 个片段可以 overfit；
+- 100～500 个片段的连续状态与 gripper closed 可以分别 overfit；
 - 单步误差优于常速度和当前 MLP；
 - 16 步 rollout 不发生 NaN、爆炸或明显状态越界；
 - checkpoint 重载后输出逐元素一致。
@@ -978,66 +984,58 @@ MPPI -> reduced-sample MPPI -> action prior -> scripted safe stop
 V1.0 默认答案为：集中式 22 维、两种 rollout 都需要、允许 privileged auxiliary
 supervision、部署目标 20 Hz、暂不承诺 sim-to-real、仅采用允许商业使用的代码依赖。
 
-## 21. Phase 0 验收记录
+## 21. Phase 0 / Gate A 验收记录
 
-验收日期：2026-07-15。
+验收日期：2026-07-15。证据位于 `outputs/wam_phase0_gate_a_v1.json`、
+`outputs/wam_phase0_v2_mixed` 和 `configs/wam/phase0_baselines_v2.yaml`。
 
-验收证据：`outputs/wam_phase0_gate_a_v1.json`、`outputs/wam_phase0_v2_mixed` 和
-`configs/wam/phase0_baselines_v2.yaml`。
+**结论：Phase 0 与 Gate A 全量通过。** 数据、接口和单步 baseline 可用于正式 WAM
+训练；该结论不等价于学习到复杂物理规律。
 
-### 21.1 结论
-
-- `[判断]` **Phase 0 正式验收通过，Gate A 全量通过，可以开始 Phase 1 的 RWM-AR
-  实现与训练。**
-- 该结论不代表 Phase 1 或 Gate B 已通过。Phase 1 仍须独立验证小数据 overfit、相对
-  当前 MLP/常速度 baseline 的优势、16 步稳定 rollout 和 checkpoint 重载一致性。
-- 当前结果只证明数据、接口和单步 baseline 有效，不能解释为已学习复杂物理规律或完成
-  闭环 WAM。
-
-### 21.2 Gate A 关键结果
-
-| 项目 | 结果 |
+| 关键项 | 结果 |
 |---|---:|
 | Schema | `wam.proprio/1.0` |
 | Episodes / transitions | 10,000 / 1,097,241 |
 | Success / failure episodes | 5,506 / 4,494 |
 | Train / validation / test episodes | 8,000 / 1,000 / 1,000 |
 | Episode/seed overlap | 0 |
-| Contract errors / forbidden image or privileged paths | 0 / 0 |
-| Gate A | 顶层和六项子检查全部 `passed=true` |
+| Contract / forbidden-path errors | 0 / 0 |
+| Linear / MLP test state NRMSE | 0.13803 / 0.04186 |
+| Gate A | 顶层及六项子检查全部 `passed=true` |
 
-行为混合以零容差严格匹配第 11.2 节比例；所有 episode 均包含
-commanded/executed action，sequence padding 与 episode boundary 检查通过。
+## 22. Phase 1 / Gate B 验收记录
 
-### 21.3 训练与 baseline 关键结果
+验收日期：2026-07-15。证据位于 `checkpoints/wam_cooperative_stop_v1`、
+`outputs/wam_phase1_overfit_v1/overfit_metrics.json` 和
+`outputs/wam_phase1_open_loop_v1/open_loop_metrics.json`。
 
-训练配置：state/action dim 22/8，history/forecast horizon 32/16，MLP
-hidden dim/layers 256/3，batch size 256，10 epochs，learning rate `3e-4`，
-weight decay `1e-5`，CUDA。Outcome 正类权重只由 train split 计算，阈值只由
-validation split 最大 F1 校准。
+**结论：Phase 1 与 Gate B 全量通过，允许进入 Phase 2；Gate C 尚未通过。** 正式评测
+覆盖完整的 1,000 个 test episodes，所有 checkpoint、normalization 和指标均为 finite，
+代码回归测试为 `34 passed`。
 
-| Model | Test state RMSE | Test state NRMSE | Reward/Action MAE(RMSE) |
-|---|---:|---:|---:|
-| Linear dynamics | 0.68720 | 0.13803 | reward 0.68792 |
-| MLP dynamics | 0.19288 | 0.04186 | reward 0.68362 |
-| Action prior | — | — | action 0.12110 |
+### 22.1 Gate B 关键结果
 
-MLP 相对 linear 的 state RMSE/NRMSE 分别下降 71.93%/69.67%。
+| 判据 | 结果 | 结论 |
+|---|---:|---:|
+| 256-fragment overfit continuous NRMSE | 0.01731 ≤ 0.02 | 通过 |
+| 256-fragment gripper-closed RMSE | 0.000422 ≤ 0.05 | 通过 |
+| Test H=1 RWM / Phase 0 MLP / 常速度 NRMSE | 0.03140 / 0.03590 / 0.37113 | 通过 |
+| Test H=16 finite rate / constraint violation rate | 1.0 / 0 | 通过 |
+| Checkpoint strict reload `max_abs_diff` | 0 | 通过 |
+| Gate B | `passed=true`，`full_test_split_evaluated=true` | 通过 |
 
-| MLP head | AUROC | AUPRC | Prevalence baseline | Lift | Validation threshold | Test F1 |
-|---|---:|---:|---:|---:|---:|---:|
-| done | 0.94348 | 0.23135 | 0.00926 | 24.97× | 0.94473 | 0.28647 |
-| success | 0.98693 | 0.16955 | 0.00520 | 32.62× | 0.97406 | 0.28332 |
-| failure | 0.91513 | 0.24823 | 0.00407 | 61.04× | 0.97383 | 0.29718 |
+### 22.2 Open-loop 关键结果
 
-三个 outcome head 均显著超过随机 AUROC 和 prevalence AUPRC baseline。由于标签极度
-不平衡，多数类 accuracy 约为 99%，因此验收不使用 accuracy 作为主要依据。
+| Horizon | RWM NRMSE | Phase 0 MLP NRMSE | 相对下降 |
+|---:|---:|---:|---:|
+| 1 | 0.03140 | 0.03590 | 12.5% |
+| 5 | 0.08541 | 0.11888 | 28.1% |
+| 10 | 0.13292 | 0.19431 | 31.6% |
+| 16 | 0.17952 | 0.27354 | 34.4% |
+| 20 | 0.20790 | 0.32066 | 35.2% |
+| 40 | 0.33516 | 0.52641 | 36.3% |
 
-### 21.4 完整性与 Phase 1 边界
-
-- 三个 `wam.phase0/2` checkpoint 严格加载均为 0 missing / 0 unexpected keys；
-  dynamics 26 维输出语义与 action-prior 8 维输出均正确且有限；
-- normalization、metrics、label stats 和 validation calibration 文件完整，无 NaN/Inf；
-- 代码回归测试：`23 passed`；
-- MLP done/failure test ECE 仍为 0.1722/0.1913，failure recall 为 0.2278。Phase 1
-  应重点改善多步概率校准和稀有失败召回，并按第 16、17 节完成 Gate B 评测。
+H=20 已满足 Gate C 的相对误差条款，但 event-aligned 反平均预测、teacher-forcing 消融、
+uncertainty-error 相关性和 OOD 识别仍待 Phase 2 验证。Failure head 仍是主要风险：test
+H=1 AUROC/AUPRC 为 0.8587/0.2172，recall 为 0.2278；进入 Phase 2 后不得直接将其概率
+作为可靠规划风险，应结合 ensemble disagreement、OOD score 和重新校准。

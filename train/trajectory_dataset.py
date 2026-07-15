@@ -457,6 +457,232 @@ class InMemoryOneStepDataset(Dataset):
         """Match the sequence dataset lifecycle API; no files remain open."""
 
 
+class InMemoryProprioSequenceDataset(Dataset):
+    """RAM-backed episode-safe sequence windows for Phase 1 training.
+
+    Raw transitions are loaded exactly once.  Histories and forecasts are sliced
+    lazily, avoiding both random HDF5 access across 10,000 files and materializing
+    millions of overlapping 32+16 step windows.
+    """
+
+    _FIELDS = (
+        "states",
+        "next_states",
+        "commanded_actions",
+        "executed_actions",
+        "rewards",
+        "dones",
+        "successes",
+        "failures",
+        "response_progress",
+        "coordination_error",
+    )
+
+    def __init__(
+        self,
+        data_dir: str | Path | None = None,
+        *,
+        paths: Sequence[str | Path] | None = None,
+        history_horizon: int = 32,
+        forecast_horizon: int = 16,
+        stride: int = 1,
+        state_dim: int = 22,
+        action_dim: int = 8,
+        allow_legacy_wam: bool = False,
+        progress: PreloadProgressCallback | None = None,
+    ) -> None:
+        if paths is None:
+            if data_dir is None:
+                raise ValueError("data_dir or paths must be provided")
+            resolved_paths = discover_episode_paths(data_dir)
+        else:
+            resolved_paths = [Path(path) for path in paths]
+        if not resolved_paths:
+            raise ValueError("paths cannot be empty")
+        for name, value in (
+            ("history_horizon", history_horizon),
+            ("forecast_horizon", forecast_horizon),
+            ("stride", stride),
+            ("state_dim", state_dim),
+            ("action_dim", action_dim),
+        ):
+            if int(value) <= 0:
+                raise ValueError(f"{name} must be positive")
+        self.history_horizon = int(history_horizon)
+        self.forecast_horizon = int(forecast_horizon)
+        self.stride = int(stride)
+        self.state_dim = int(state_dim)
+        self.action_dim = int(action_dim)
+        records = [
+            _inspect_episode_record(
+                path,
+                state_dim=self.state_dim,
+                action_dim=self.action_dim,
+                allow_legacy_wam=allow_legacy_wam,
+            )
+            for path in sorted(resolved_paths)
+        ]
+        self.paths = [record.path for record in records]
+        self.num_episodes = len(records)
+        self._episode_seeds = np.asarray(
+            [record.seed for record in records], dtype=np.int64
+        )
+        self._episode_indices = np.asarray(
+            [record.episode_index for record in records], dtype=np.int64
+        )
+        self._episode_offsets = np.zeros(self.num_episodes + 1, dtype=np.int64)
+        self._episode_offsets[1:] = np.cumsum(
+            [record.num_steps for record in records], dtype=np.int64
+        )
+        transition_count = int(self._episode_offsets[-1])
+        self._tensors = {
+            "states": torch.empty((transition_count, self.state_dim)),
+            "next_states": torch.empty((transition_count, self.state_dim)),
+            "commanded_actions": torch.empty((transition_count, self.action_dim)),
+            "executed_actions": torch.empty((transition_count, self.action_dim)),
+            "rewards": torch.empty((transition_count, 1)),
+            "dones": torch.empty((transition_count, 1)),
+            "successes": torch.empty((transition_count, 1)),
+            "failures": torch.empty((transition_count, 1)),
+            "response_progress": torch.empty((transition_count, 1)),
+            "coordination_error": torch.empty((transition_count, 1)),
+        }
+        sample_episode: list[np.ndarray] = []
+        sample_decision: list[np.ndarray] = []
+        for episode_number, record in enumerate(records, start=1):
+            start = int(self._episode_offsets[episode_number - 1])
+            stop = int(self._episode_offsets[episode_number])
+            with h5py.File(record.path, "r") as file:
+                arrays = {
+                    "states": _read_states(
+                        file, record.layout, 0, record.num_steps, next_state=False
+                    ),
+                    "next_states": _read_states(
+                        file, record.layout, 0, record.num_steps, next_state=True
+                    ),
+                    "commanded_actions": _read_actions(
+                        file, record.layout, 0, record.num_steps, executed=False
+                    ),
+                    "executed_actions": _read_actions(
+                        file, record.layout, 0, record.num_steps, executed=True
+                    ),
+                }
+                for field, source in (
+                    ("rewards", "reward"),
+                    ("dones", "done"),
+                    ("successes", "success"),
+                    ("failures", "failure"),
+                    ("response_progress", "response_progress"),
+                    ("coordination_error", "coordination_error"),
+                ):
+                    arrays[field] = _read_scalar(
+                        file, source, 0, record.num_steps, record.layout
+                    )[:, None]
+            for field, array in arrays.items():
+                self._tensors[field][start:stop].copy_(torch.from_numpy(array))
+            decisions = np.arange(0, record.num_steps, self.stride, dtype=np.int32)
+            sample_episode.append(
+                np.full(decisions.shape, episode_number - 1, dtype=np.int32)
+            )
+            sample_decision.append(decisions)
+            if progress is not None:
+                progress(
+                    {
+                        "episode": episode_number,
+                        "episodes": self.num_episodes,
+                        "samples": stop,
+                    }
+                )
+        self._sample_episode = np.concatenate(sample_episode)
+        self._sample_decision = np.concatenate(sample_decision)
+
+    def __len__(self) -> int:
+        return int(self._sample_episode.size)
+
+    def __getitem__(self, item: int) -> dict[str, torch.Tensor]:
+        episode = int(self._sample_episode[item])
+        decision_t = int(self._sample_decision[item])
+        episode_start = int(self._episode_offsets[episode])
+        episode_stop = int(self._episode_offsets[episode + 1])
+        num_steps = episode_stop - episode_start
+        history_start_t = max(0, decision_t - self.history_horizon + 1)
+        history_count = decision_t - history_start_t + 1
+        history_offset = self.history_horizon - history_count
+        forecast_stop_t = min(num_steps, decision_t + self.forecast_horizon)
+        forecast_count = forecast_stop_t - decision_t
+        history_start = episode_start + history_start_t
+        current_stop = episode_start + decision_t + 1
+        forecast_start = episode_start + decision_t
+        forecast_stop = episode_start + forecast_stop_t
+
+        states = torch.zeros(self.history_horizon, self.state_dim)
+        states[history_offset:].copy_(
+            self._tensors["states"][history_start:current_stop]
+        )
+        past_actions = torch.zeros(max(self.history_horizon - 1, 0), self.action_dim)
+        if history_count > 1:
+            past_actions[history_offset:].copy_(
+                self._tensors["commanded_actions"][history_start : current_stop - 1]
+            )
+        valid_mask = torch.zeros(self.history_horizon, dtype=torch.bool)
+        valid_mask[history_offset:] = True
+        past_action_mask = torch.zeros(
+            max(self.history_horizon - 1, 0), dtype=torch.bool
+        )
+        if history_count > 1:
+            past_action_mask[history_offset:] = True
+
+        result: dict[str, torch.Tensor] = {
+            "states": states,
+            "past_actions": past_actions,
+            "valid_mask": valid_mask,
+            "past_action_mask": past_action_mask,
+            "forecast_mask": torch.arange(self.forecast_horizon) < forecast_count,
+            "episode_index": torch.tensor(
+                int(self._episode_indices[episode]), dtype=torch.int64
+            ),
+            "episode_seed": torch.tensor(
+                int(self._episode_seeds[episode]), dtype=torch.int64
+            ),
+            "decision_t": torch.tensor(decision_t, dtype=torch.int64),
+        }
+        forecast_fields = {
+            "candidate_actions": ("commanded_actions", self.action_dim),
+            "executed_actions": ("executed_actions", self.action_dim),
+            "target_states": ("next_states", self.state_dim),
+            "rewards": ("rewards", 1),
+            "dones": ("dones", 1),
+            "successes": ("successes", 1),
+            "failures": ("failures", 1),
+            "response_progress": ("response_progress", 1),
+            "coordination_error": ("coordination_error", 1),
+        }
+        for output_name, (field, width) in forecast_fields.items():
+            padded = torch.zeros(self.forecast_horizon, width)
+            padded[:forecast_count].copy_(
+                self._tensors[field][forecast_start:forecast_stop]
+            )
+            result[output_name] = padded
+        return result
+
+    @property
+    def nbytes(self) -> int:
+        tensor_bytes = sum(
+            tensor.numel() * tensor.element_size() for tensor in self._tensors.values()
+        )
+        return int(
+            tensor_bytes
+            + self._episode_offsets.nbytes
+            + self._episode_seeds.nbytes
+            + self._episode_indices.nbytes
+            + self._sample_episode.nbytes
+            + self._sample_decision.nbytes
+        )
+
+    def close(self) -> None:
+        """Match the disk-backed dataset lifecycle API."""
+
+
 def _inspect_episode_record(
     path: Path,
     *,
@@ -564,6 +790,7 @@ def _read_scalar(
 __all__ = [
     "EpisodeSequenceIndex",
     "InMemoryOneStepDataset",
+    "InMemoryProprioSequenceDataset",
     "PreloadProgressCallback",
     "ProprioSequenceDataset",
     "discover_episode_paths",

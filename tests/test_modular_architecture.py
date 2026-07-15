@@ -145,7 +145,7 @@ def test_phase1_wam_contracts_are_reserved_without_environment_dependencies():
 
 def test_phase1_task_config_matches_rwm_ar_contract():
     payload = yaml.safe_load(
-        (ROOT / "configs/wam/cooperative_stop_v1.yaml").read_text(encoding="utf-8")
+        (ROOT / "configs/wam/phase1_rwm_ar_v1.yaml").read_text(encoding="utf-8")
     )
     data = payload["data"]
     model = payload["model"]

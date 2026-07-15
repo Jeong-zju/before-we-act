@@ -7,10 +7,13 @@ from models.wam.api import (
 )
 from models.wam.config import RWMARConfig
 from models.wam.normalizer import NormalizationStats
+from models.wam.recurrent_dynamics import RWMARRolloutPredictions, RWMARWorldModel
 
 __all__ = [
     "NormalizationStats",
     "RWMARConfig",
+    "RWMARRolloutPredictions",
+    "RWMARWorldModel",
     "WorldModelRolloutInputs",
     "WorldModelRolloutOutput",
     "WorldModelSequenceInputs",

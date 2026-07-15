@@ -21,6 +21,8 @@ class RWMARConfig:
     predict_delta: bool = True
     min_log_std: float = -8.0
     max_log_std: float = 2.0
+    yaw_indices: tuple[int, ...] = (2, 13)
+    gripper_closed_indices: tuple[int, ...] = (7, 18)
 
     def __post_init__(self) -> None:
         integer_fields = (
@@ -40,6 +42,13 @@ class RWMARConfig:
             raise ValueError("dropout must be in [0,1)")
         if self.min_log_std >= self.max_log_std:
             raise ValueError("min_log_std must be smaller than max_log_std")
+        for name in ("yaw_indices", "gripper_closed_indices"):
+            indices = tuple(int(index) for index in getattr(self, name))
+            if len(indices) != len(set(indices)):
+                raise ValueError(f"{name} must be unique")
+            if any(index < 0 or index >= self.state_dim for index in indices):
+                raise ValueError(f"{name} contains an out-of-range index")
+            object.__setattr__(self, name, indices)
 
 
 __all__ = ["RWMARConfig"]
