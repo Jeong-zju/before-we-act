@@ -15,7 +15,15 @@ from scripts.collect_modular_dataset import main as collect_main  # noqa: E402
 def main(argv: list[str] | None = None) -> int:
     user_args = list(sys.argv[1:] if argv is None else argv)
     return collect_main(
-        ["--format", "hdf5", "--profile", "wam_proprio", *user_args]
+        [
+            "--format",
+            "hdf5",
+            "--profile",
+            "wam_proprio",
+            "--behavior-profile",
+            "phase0_mixed_v1",
+            *user_args,
+        ]
     )
 
 

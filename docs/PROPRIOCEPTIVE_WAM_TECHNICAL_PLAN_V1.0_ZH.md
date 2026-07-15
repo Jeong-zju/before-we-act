@@ -2,9 +2,9 @@
 
 > 文档版本：V1.0
 >
-> 更新时间：2026-07-14
+> 更新时间：2026-07-15
 >
-> 状态：Phase 0 工程验收通过；Gate A 数据准入、Phase 1～5 待完成
+> 状态：Phase 0 正式验收与 Gate A 数据准入通过；允许进入 Phase 1，Phase 1～5 待完成
 >
 > 适用仓库：`fe_pc_wam`，分支 `refactor/environment-overhaul`
 
@@ -75,7 +75,8 @@ World-Action Model，而采用面向低维机器人状态的组合方案：
 
 ### 3.2 当前模型的缺口
 
-[`models/world_action_model.py`](../models/world_action_model.py) 中的模型是单步 MLP：
+[`models/phase0_baselines.py`](../models/phase0_baselines.py) 中的
+`OneStepMLPWorldModel` 是单步 MLP：
 
 ```text
 state + action -> next_state + reward + done
@@ -431,6 +432,20 @@ done、success 和 failure 只出现在少量时间步，需要：
 - 使用 positive class weights 或 focal BCE；
 - 单独报告 AUROC、AUPRC 和 calibration，而不只报告 accuracy。
 
+Phase 0 baseline 采用三个独立 logit head：`done`、`success`、`failure`。三者的
+positive class weight 仅使用 train split 估计为 `negative_count / positive_count`。决策阈值
+仅在 validation split 上最大化 F1，如出现并列则选择 recall 更高的阈值；该阈值冻结后
+用于 train/test，test 不得参与阈值搜索。每个标签至少输出：
+
+- AUROC 和 AUPRC；
+- 多数类 accuracy 和 prevalence AUPRC baseline；
+- Brier score 和 10-bin ECE；
+- 冻结阈值、precision/recall/F1、balanced accuracy 和 confusion matrix。
+
+若 validation 的某个标签只有单一类，阈值状态必须记为
+`unavailable_single_class`，不得伪造 AUROC/AUPRC；正式 Phase 0 验收数据必须保证
+validation/test 各标签都能被评估。
+
 ## 11. 数据采集方案
 
 ### 11.1 数据规模
@@ -460,6 +475,22 @@ image streams:  disabled
 | 10% | 平滑随机动作或随机 action chunks |
 | 5% | 提前停止、保持静止等反事实行为 |
 | 5% | 松夹爪、越界、距离过大等失败行为 |
+
+Phase 0 对应的可执行 profile 为 `phase0_mixed_v1`，使用确定性 100-episode 周期调度：
+
+```text
+scripted_oracle_v1      30
+oracle_ou_noise_v1      25
+delayed_response_v1     15
+response_rate_v1        10
+smooth_random_v1        10
+counterfactual_stop_v1   5
+induced_failure_v1       5
+```
+
+`mixture_seed` 只控制周期内顺序和扰动参数；环境 seed 单独控制刹车事件与初始状态。
+因此 10,000 episode 的各类数量应精确为
+`3000/2500/1500/1000/1000/500/500`，而不是仅在期望意义上接近。
 
 噪声策略应覆盖多个幅度，而不是固定一个 `sigma`。动作扰动要保持一定时间相关性，避免
 产生只有白噪声、真实策略永远不会访问的轨迹。
@@ -575,41 +606,52 @@ while not done:
 
 ## 13. 代码结构和依赖方向
 
-建议新增：
+Phase 0 整理完成后的现有入口和 Phase 1 目标结构如下。带“Phase 1”的文件在对应阶段实现，
+不得以空壳模块冒充交付：
 
 ```text
-models/wam/
-├── __init__.py
-├── config.py
-├── normalizer.py
-├── state_features.py
-├── recurrent_dynamics.py
-├── ensemble.py
-├── heads.py
-└── rollout.py
-
-policies/
-└── wam_mppi_policy.py
+models/
+├── api.py
+├── phase0_baselines.py
+└── wam/
+    ├── __init__.py
+    ├── api.py
+    ├── config.py
+    ├── normalizer.py
+    ├── state_features.py       # Phase 1
+    ├── recurrent_dynamics.py   # Phase 1
+    ├── heads.py                # Phase 1
+    ├── rollout.py              # Phase 1
+    └── ensemble.py             # Phase 2
 
 train/
 ├── trajectory_dataset.py
-├── losses.py
-├── checkpointing.py
-└── trainer.py
+├── phase0_baselines.py
+├── losses.py                  # Phase 1
+├── checkpointing.py           # Phase 1
+└── trainer.py                 # Phase 1
 
 eval/
-├── open_loop.py
-├── uncertainty.py
-└── closed_loop.py
+├── open_loop.py               # Phase 1
+├── uncertainty.py             # Phase 2
+└── closed_loop.py             # Phase 3
+
+policies/
+├── collection.py
+└── wam_mppi_policy.py         # Phase 3
 
 configs/wam/
-└── cooperative_stop_v1.yaml
+├── phase0_baselines_v1_legacy.yaml
+├── phase0_baselines_v2.yaml
+└── cooperative_stop_v1.yaml   # Phase 1+ 唯一任务配置
 
 scripts/
 ├── collect_wam_proprio_dataset.py
-├── train_wam.py
-├── evaluate_wam.py
-└── rollout_wam_policy.py
+├── audit_phase0_gate_a.py
+├── train_phase0_baselines.py
+├── train_wam.py               # Phase 1
+├── evaluate_wam.py            # Phase 1
+└── rollout_wam_policy.py      # Phase 3
 ```
 
 依赖约束：
@@ -938,79 +980,64 @@ supervision、部署目标 20 Hz、暂不承诺 sim-to-real、仅采用允许商
 
 ## 21. Phase 0 验收记录
 
-验收日期：2026-07-14。
+验收日期：2026-07-15。
 
-验收输入：`outputs/wam_phase0_v1`。该目录为本地运行产物，由 `.gitignore` 排除，
-不随代码提交；可通过第 13 节命令重新生成。
+验收证据：`outputs/wam_phase0_gate_a_v1.json`、`outputs/wam_phase0_v2_mixed` 和
+`configs/wam/phase0_baselines_v2.yaml`。
 
 ### 21.1 结论
 
-- `[判断]` **Phase 0 工程验收通过**：约定的 schema、动作语义、序列 loader、三类
-  baseline、测试、checkpoint、指标和最小命令均已交付并可运行。
-- `[判断]` **Gate A 数据准入不通过**：本次 baseline 使用的是 legacy `wam` 数据，
-  仅能确认工程链路与单步基线，不能作为 Phase 1 正式训练数据或 WAM 研究结论。
+- `[判断]` **Phase 0 正式验收通过，Gate A 全量通过，可以开始 Phase 1 的 RWM-AR
+  实现与训练。**
+- 该结论不代表 Phase 1 或 Gate B 已通过。Phase 1 仍须独立验证小数据 overfit、相对
+  当前 MLP/常速度 baseline 的优势、16 步稳定 rollout 和 checkpoint 重载一致性。
+- 当前结果只证明数据、接口和单步 baseline 有效，不能解释为已学习复杂物理规律或完成
+  闭环 WAM。
 
-这两个结论不矛盾：Phase 0 验收的是接口和基线工程；Gate A 验收的是下一阶段所需的
-数据覆盖与语义完整性。
+### 21.2 Gate A 关键结果
 
-### 21.2 输出完整性
+| 项目 | 结果 |
+|---|---:|
+| Schema | `wam.proprio/1.0` |
+| Episodes / transitions | 10,000 / 1,097,241 |
+| Success / failure episodes | 5,506 / 4,494 |
+| Train / validation / test episodes | 8,000 / 1,000 / 1,000 |
+| Episode/seed overlap | 0 |
+| Contract errors / forbidden image or privileged paths | 0 / 0 |
+| Gate A | 顶层和六项子检查全部 `passed=true` |
 
-`[事实]` 输出目录包含：
+行为混合以零容差严格匹配第 11.2 节比例；所有 episode 均包含
+commanded/executed action，sequence padding 与 episode boundary 检查通过。
 
-- `linear.safetensors`、`mlp.safetensors`、`action_prior.safetensors`；
-- 三份模型配置、运行配置、normalization 和 dataset manifest；
-- train/validation/test baseline metrics。
+### 21.3 训练与 baseline 关键结果
 
-三个 safetensors 均通过严格 `state_dict` 加载，无 missing/unexpected keys；使用零输入
-执行 forward 时输出 shape 分别为 `[2,24]`、`[2,24]` 和 `[2,8]`，且全部为有限值。
-normalization 的八组数组维度正确且不存在 NaN/Inf。
+训练配置：state/action dim 22/8，history/forecast horizon 32/16，MLP
+hidden dim/layers 256/3，batch size 256，10 epochs，learning rate `3e-4`，
+weight decay `1e-5`，CUDA。Outcome 正类权重只由 train split 计算，阈值只由
+validation split 最大 F1 校准。
 
-数据按 episode/seed 切分：
-
-| Partition | Episodes | Transitions | 与其他 partition 的 episode/seed 交集 |
+| Model | Test state RMSE | Test state NRMSE | Reward/Action MAE(RMSE) |
 |---|---:|---:|---:|
-| train | 80 | 7,411 | 0 |
-| validation | 10 | 926 | 0 |
-| test | 10 | 940 | 0 |
+| Linear dynamics | 0.68720 | 0.13803 | reward 0.68792 |
+| MLP dynamics | 0.19288 | 0.04186 | reward 0.68362 |
+| Action prior | — | — | action 0.12110 |
 
-### 21.3 Baseline 结果
+MLP 相对 linear 的 state RMSE/NRMSE 分别下降 71.93%/69.67%。
 
-| Model | Test metric | 结果 |
-|---|---|---:|
-| Linear dynamics | state RMSE | 0.63433 |
-| Linear dynamics | state NRMSE | 0.36232 |
-| Linear dynamics | reward MAE | 1.35479 |
-| MLP dynamics | state RMSE | 0.21002 |
-| MLP dynamics | state NRMSE | 0.02592 |
-| MLP dynamics | reward MAE | 1.32401 |
-| Action prior | action RMSE | 0.04798 |
+| MLP head | AUROC | AUPRC | Prevalence baseline | Lift | Validation threshold | Test F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| done | 0.94348 | 0.23135 | 0.00926 | 24.97× | 0.94473 | 0.28647 |
+| success | 0.98693 | 0.16955 | 0.00520 | 32.62× | 0.97406 | 0.28332 |
+| failure | 0.91513 | 0.24823 | 0.00407 | 61.04× | 0.97383 | 0.29718 |
 
-`[事实]` MLP test state NRMSE 相对线性模型下降 92.84%，state RMSE 下降 66.89%；
-train/validation/test 指标接近，没有观察到明显的 episode-split 泛化断层。三类训练 loss
-均下降且为有限值，首末轮降幅分别为 linear 39.81%、MLP 88.54%、action prior
-98.87%。这些结果足以证明 Phase 0 baseline 训练链路有效。
+三个 outcome head 均显著超过随机 AUROC 和 prevalence AUPRC baseline。由于标签极度
+不平衡，多数类 accuracy 约为 99%，因此验收不使用 accuracy 作为主要依据。
 
-### 21.4 不通过 Gate A 的证据
+### 21.4 完整性与 Phase 1 边界
 
-本次 100 个 episode、9,277 个 transition 全部来自成功 scripted oracle：
-
-- 成功 episode：100；失败 episode：0；
-- 数据 profile：legacy `wam`，不是 `wam.proprio/1.0`；
-- 100 个源 HDF5 均包含图像数据；
-- 100 个源 HDF5 均没有 `executed_action`；
-- test set 只有 10 个 done frame；MLP `done_accuracy=0.98936` 与“永不预测 done”的
-  多数类准确率完全相同，因此不能认定 done head 已学会终止事件；
-- 没有失败行为、动作扰动、延迟响应或 OOD 覆盖。
-
-因此不得用本次低 state NRMSE 推导“模型已能多步 rollout”“终止/失败预测有效”或
-“可以进入 MPPI 闭环”。这也符合第 10.2 节指出的边界：低维 learned dynamics baseline
-不是完整生成式 WAM，单步拟合更不是可执行世界模型。
-
-### 21.5 进入 Phase 1 前必须完成
-
-1. 使用 `wam.proprio/1.0` 重新采集包含成功、失败和第 11.2 节行为混合的数据；
-2. 验证所有 episode 都含 commanded/executed action，且不含图像或 privileged input；
-3. 重新生成三类 baseline，并对 done/success/failure 报告 AUROC、AUPRC 和多数类基线；
-4. Gate A 全项通过后，才允许开始正式 RWM-AR 训练；
-5. Phase 1 仍须独立通过 16 步稳定 rollout、checkpoint 重载一致性和 Gate B，不能沿用
-   本节的单步结果替代。
+- 三个 `wam.phase0/2` checkpoint 严格加载均为 0 missing / 0 unexpected keys；
+  dynamics 26 维输出语义与 action-prior 8 维输出均正确且有限；
+- normalization、metrics、label stats 和 validation calibration 文件完整，无 NaN/Inf；
+- 代码回归测试：`23 passed`；
+- MLP done/failure test ECE 仍为 0.1722/0.1913，failure recall 为 0.2278。Phase 1
+  应重点改善多步概率校准和稀有失败召回，并按第 16、17 节完成 Gate B 评测。

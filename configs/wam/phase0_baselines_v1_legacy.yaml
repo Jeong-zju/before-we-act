@@ -1,4 +1,10 @@
-version: wam.phase0/1
+version: wam.phase0/1  # Historical checkpoint format; do not use for Phase 1.
+
+collection:
+  episodes: 10000
+  seed: 0
+  mixture_seed: 20260714
+  behavior_profile: phase0_mixed_v1
 
 data:
   schema_version: wam.proprio/1.0
@@ -27,3 +33,4 @@ optimization:
 
 runtime:
   rich_progress: true
+  preload_data: true

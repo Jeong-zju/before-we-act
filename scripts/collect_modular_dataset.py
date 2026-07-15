@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -48,19 +49,34 @@ from envs.two_robot_carry_env import (  # noqa: E402
     CooperativeStopEnvConfig,
     TwoRobotCooperativeStopEnv,
 )
+from policies.collection import CooperativeStopCollectionPolicy  # noqa: E402
 
 
 class CollectionProgressObserver:
     """Render dataset collection progress without entering the data path."""
 
-    def __init__(self, total_episodes: int, *, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        total_episodes: int,
+        *,
+        enabled: bool = True,
+        refresh_per_second: float = 4.0,
+        step_interval: int = 5,
+    ) -> None:
         self.total_episodes = int(total_episodes)
         self.completed_episodes = 0
         self.successes = 0
         self.failures = 0
         self.current_step = 0
+        self.step_interval = int(step_interval)
+        self._last_phase = ""
         self._progress: Any | None = None
         self._task_id: Any | None = None
+
+        if refresh_per_second <= 0:
+            raise ValueError("refresh_per_second must be positive")
+        if self.step_interval <= 0:
+            raise ValueError("step_interval must be positive")
 
         if not enabled:
             return
@@ -76,21 +92,22 @@ class CollectionProgressObserver:
             TextColumn("[bold cyan]{task.description}"),
             BarColumn(bar_width=None, complete_style="cyan"),
             MofNCompleteColumn(),
-            TextColumn("[dim]step[/dim] [white]{task.fields[step]}", justify="right"),
-            TextColumn("[green]✓ {task.fields[successes]}"),
-            TextColumn("[red]✗ {task.fields[failures]}"),
-            TextColumn("[magenta]{task.fields[phase]}", justify="left"),
+            TextColumn("[white]{task.fields[step_text]}"),
+            TextColumn("[green]{task.fields[success_text]}"),
+            TextColumn("[red]{task.fields[failure_text]}"),
+            TextColumn("[magenta]{task.fields[phase_text]}"),
             TimeRemainingColumn(),
             console=Console(stderr=True),
-            refresh_per_second=10,
+            expand=True,
+            refresh_per_second=float(refresh_per_second),
         )
         self._task_id = self._progress.add_task(
-            "Preparing",
+            "collect",
             total=self.total_episodes,
-            step=0,
-            successes=0,
-            failures=0,
-            phase="initializing",
+            step_text="s=0000",
+            success_text="ok=00000",
+            failure_text="bad=00000",
+            phase_text=_fit_progress_text("initializing", 16),
         )
 
     def start(self) -> None:
@@ -110,13 +127,13 @@ class CollectionProgressObserver:
         info: Any,
         task: str,
     ) -> None:
-        del seed, observation, task
+        del episode_index, seed, observation, task
         self.current_step = 0
         braking_agent = int(info.get("braking_agent", -1))
         brake_time = float(info.get("brake_start_time", -1.0))
         phase = f"brake r{braking_agent} @ {brake_time:.2f}s"
+        self._last_phase = phase
         self._update(
-            description=f"Ep {episode_index + 1}/{self.total_episodes}",
             step=0,
             phase=phase,
         )
@@ -124,6 +141,9 @@ class CollectionProgressObserver:
     def on_transition(self, transition: Any) -> None:
         self.current_step = int(transition.frame_index) + 1
         phase = str(transition.info.get("task_phase", "running")).replace("_", " ")
+        if self.current_step % self.step_interval != 0 and phase == self._last_phase:
+            return
+        self._last_phase = phase
         self._update(step=self.current_step, phase=phase)
 
     def on_episode_end(self, summary: Any) -> None:
@@ -142,11 +162,39 @@ class CollectionProgressObserver:
         )
 
     def finalizing(self) -> None:
-        self._update(description="Finalizing", phase="closing exporters")
+        self._update(phase="closing exporters")
 
     def _update(self, *, advance: int = 0, **fields: Any) -> None:
         if self._progress is not None and self._task_id is not None:
-            self._progress.update(self._task_id, advance=advance, **fields)
+            stable_fields: dict[str, Any] = {}
+            if "step" in fields:
+                stable_fields["step_text"] = f"s={int(fields['step']):04d}"
+            if "successes" in fields:
+                stable_fields["success_text"] = (
+                    f"ok={int(fields['successes']):05d}"
+                )
+            if "failures" in fields:
+                stable_fields["failure_text"] = (
+                    f"bad={int(fields['failures']):05d}"
+                )
+            if "phase" in fields:
+                stable_fields["phase_text"] = _fit_progress_text(
+                    str(fields["phase"]), 16
+                )
+            self._progress.update(
+                self._task_id,
+                advance=advance,
+                **stable_fields,
+            )
+
+
+def _fit_progress_text(value: str, width: int) -> str:
+    """Keep dynamic fields at a fixed width so the Rich table does not reflow."""
+
+    text = " ".join(str(value).split())
+    if len(text) > width:
+        text = f"{text[: width - 1]}…"
+    return text.ljust(width)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -171,6 +219,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--drop-field", action="append", default=[])
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--behavior-profile",
+        choices=CooperativeStopCollectionPolicy.PROFILES,
+        default="scripted_oracle_v1",
+        help="Offline data behavior distribution; phase0_mixed_v1 implements §11.2.",
+    )
+    parser.add_argument(
+        "--mixture-seed",
+        type=int,
+        default=20260714,
+        help="Seed for behavior scheduling and perturbation parameters.",
+    )
     parser.add_argument("--scenario", choices=("standard",), default="standard")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--realtime", action="store_true")
@@ -185,6 +245,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable the Rich collection progress display.",
     )
+    parser.add_argument(
+        "--progress-refresh-hz",
+        type=float,
+        default=4.0,
+        help="Maximum Rich display refresh rate (default: 4 Hz).",
+    )
+    parser.add_argument(
+        "--progress-step-interval",
+        type=int,
+        default=5,
+        help="Update the displayed step every N transitions (default: 5).",
+    )
     parser.add_argument("--repo-id", default="local/wam-modular")
     parser.add_argument("--robot-type", default="two_robot_cooperative_stop")
     parser.add_argument(
@@ -198,6 +270,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.episodes <= 0:
         raise ValueError("episodes must be positive")
+    if args.progress_refresh_hz <= 0:
+        raise ValueError("progress_refresh_hz must be positive")
+    if args.progress_step_interval <= 0:
+        raise ValueError("progress_step_interval must be positive")
     if args.schema_json is not None:
         schema = load_schema_json(args.schema_json)
     else:
@@ -212,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("wam_proprio currently uses the HDF5 backend only")
     if proprio_only and (args.camera or args.stream_video):
         raise ValueError("wam_proprio collection does not render or encode images")
+    if args.behavior_profile == "phase0_mixed_v1" and not proprio_only:
+        raise ValueError("phase0_mixed_v1 is restricted to the wam_proprio profile")
 
     env_config = CooperativeStopEnvConfig(
         scenario=args.scenario,
@@ -247,9 +325,14 @@ def main(argv: list[str] | None = None) -> int:
         RenderRequest(name=camera, camera=camera, width=args.width, height=args.height)
         for camera in args.camera
     )
+    collection_policy = CooperativeStopCollectionPolicy(
+        env,
+        profile=args.behavior_profile,
+        mixture_seed=args.mixture_seed,
+    )
     runner = SimulationRunner(
         env,
-        CallablePolicy(lambda observation: env.scripted_action()),
+        CallablePolicy(collection_policy.act),
         RunnerConfig(
             realtime=args.realtime,
             max_steps=args.max_steps,
@@ -262,15 +345,23 @@ def main(argv: list[str] | None = None) -> int:
     progress = CollectionProgressObserver(
         args.episodes,
         enabled=not args.no_progress,
+        refresh_per_second=args.progress_refresh_hz,
+        step_interval=args.progress_step_interval,
     )
     progress.start()
     try:
         for episode_index in range(args.episodes):
             episode_seed = args.seed + episode_index
+            behavior = collection_policy.configure_episode(
+                episode_index=episode_index,
+                episode_seed=episode_seed,
+            )
             episode_metadata = {
                 "schema_version": schema.version,
-                "behavior_id": "scripted_oracle_v1",
-                "perturbation_config": json.dumps({}, sort_keys=True),
+                "behavior_id": behavior.behavior_id,
+                "perturbation_config": json.dumps(
+                    behavior.perturbation_config, sort_keys=True
+                ),
                 "environment_config": json.dumps(
                     asdict(env_config), sort_keys=True
                 ),
@@ -290,6 +381,8 @@ def main(argv: list[str] | None = None) -> int:
                 metadata=episode_metadata,
             )
             payload = asdict(summary)
+            payload["behavior_id"] = behavior.behavior_id
+            payload["perturbation_config"] = behavior.perturbation_config
             payload["final_info"] = {
                 "success": bool(summary.final_info.get("success", False)),
                 "failure": bool(summary.final_info.get("failure", False)),
@@ -316,6 +409,11 @@ def main(argv: list[str] | None = None) -> int:
         "formats": list(dict.fromkeys(args.format)),
         "schema_profile": schema.profile,
         "schema_version": schema.version,
+        "behavior_profile": args.behavior_profile,
+        "mixture_seed": args.mixture_seed,
+        "behavior_counts": dict(
+            sorted(Counter(item["behavior_id"] for item in summaries).items())
+        ),
         "fields": [asdict(field) for field in schema.fields],
         "fps": fps,
         "episodes": summaries,

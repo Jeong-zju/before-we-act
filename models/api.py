@@ -38,11 +38,13 @@ class WorldModelInputs:
 
 @dataclass(frozen=True)
 class WorldModelOutput:
-    """One-step state, reward, and termination predictions."""
+    """One-step dynamics, reward, termination, and terminal-outcome predictions."""
 
     next_state: Tensor
     reward: Tensor
     done_logit: Tensor
+    success_logit: Tensor
+    failure_logit: Tensor
     diagnostics: Mapping[str, Tensor] = field(default_factory=dict)
 
 

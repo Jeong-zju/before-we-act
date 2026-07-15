@@ -8,13 +8,14 @@ from models.api import (
     WorldModelInputs,
     WorldModelOutput,
 )
-from models.baselines import (
+from models.phase0_baselines import (
     ActionPrior,
     ActionPriorConfig,
     LinearWorldModel,
     LinearWorldModelConfig,
+    OneStepMLPWorldModel,
+    OneStepMLPWorldModelConfig,
 )
-from models.world_action_model import WorldActionModel, WorldActionModelConfig
 
 __all__ = [
     "ActionPrior",
@@ -24,8 +25,8 @@ __all__ = [
     "PolicyInputs",
     "PolicyModel",
     "PolicyOutput",
-    "WorldActionModel",
-    "WorldActionModelConfig",
+    "OneStepMLPWorldModel",
+    "OneStepMLPWorldModelConfig",
     "WorldModel",
     "WorldModelInputs",
     "WorldModelOutput",

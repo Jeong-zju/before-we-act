@@ -1,4 +1,4 @@
-"""Small tensor-only baselines used to qualify the Phase 0 data contract."""
+"""Tensor-only models used exclusively by the accepted Phase 0 baseline suite."""
 
 from __future__ import annotations
 
@@ -21,12 +21,12 @@ class LinearWorldModelConfig:
 
 
 class LinearWorldModel(nn.Module):
-    """Linear ``state, action -> state target, reward, done`` baseline."""
+    """Linear dynamics, reward, done, success, and failure baseline."""
 
     def __init__(self, config: LinearWorldModelConfig) -> None:
         super().__init__()
         self.config = config
-        self.linear = nn.Linear(config.state_dim + config.action_dim, config.state_dim + 2)
+        self.linear = nn.Linear(config.state_dim + config.action_dim, config.state_dim + 4)
 
     def forward(self, inputs: WorldModelInputs) -> WorldModelOutput:
         _validate_world_inputs(inputs, self.config.state_dim, self.config.action_dim)
@@ -35,8 +35,65 @@ class LinearWorldModel(nn.Module):
         return WorldModelOutput(
             next_state=raw[..., :state_end],
             reward=raw[..., state_end : state_end + 1],
-            done_logit=raw[..., state_end + 1 :],
+            done_logit=raw[..., state_end + 1 : state_end + 2],
+            success_logit=raw[..., state_end + 2 : state_end + 3],
+            failure_logit=raw[..., state_end + 3 : state_end + 4],
             diagnostics={},
+        )
+
+
+@dataclass(frozen=True)
+class OneStepMLPWorldModelConfig:
+    state_dim: int
+    action_dim: int
+    hidden_dim: int = 256
+    hidden_layers: int = 3
+    predict_delta: bool = True
+
+    def __post_init__(self) -> None:
+        for name in ("state_dim", "action_dim", "hidden_dim", "hidden_layers"):
+            if int(getattr(self, name)) <= 0:
+                raise ValueError(f"{name} must be positive")
+
+
+class OneStepMLPWorldModel(nn.Module):
+    """Phase 0 one-step MLP, intentionally distinct from the Phase 1 RWM."""
+
+    def __init__(self, config: OneStepMLPWorldModelConfig) -> None:
+        super().__init__()
+        self.config = config
+        layers: list[nn.Module] = []
+        input_dim = config.state_dim + config.action_dim
+        for index in range(config.hidden_layers):
+            layers.extend(
+                (
+                    nn.Linear(
+                        input_dim if index == 0 else config.hidden_dim,
+                        config.hidden_dim,
+                    ),
+                    nn.SiLU(),
+                )
+            )
+        layers.append(nn.Linear(config.hidden_dim, config.state_dim + 4))
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, inputs: WorldModelInputs) -> WorldModelOutput:
+        _validate_world_inputs(inputs, self.config.state_dim, self.config.action_dim)
+        raw = self.network(torch.cat((inputs.state, inputs.action), dim=-1))
+        state_end = self.config.state_dim
+        state_prediction = raw[..., :state_end]
+        next_state = (
+            inputs.state + state_prediction
+            if self.config.predict_delta
+            else state_prediction
+        )
+        return WorldModelOutput(
+            next_state=next_state,
+            reward=raw[..., state_end : state_end + 1],
+            done_logit=raw[..., state_end + 1 : state_end + 2],
+            success_logit=raw[..., state_end + 2 : state_end + 3],
+            failure_logit=raw[..., state_end + 3 : state_end + 4],
+            diagnostics={"state_prediction": state_prediction},
         )
 
 
@@ -116,4 +173,6 @@ __all__ = [
     "ActionPriorConfig",
     "LinearWorldModel",
     "LinearWorldModelConfig",
+    "OneStepMLPWorldModel",
+    "OneStepMLPWorldModelConfig",
 ]

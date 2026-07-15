@@ -11,6 +11,7 @@ import mujoco
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from data.exporters import (
     ExportObserver,
@@ -34,7 +35,12 @@ from envs.two_robot_carry_env import (
     TwoRobotCooperativeStopEnv,
 )
 from envs.video import StreamingVideoObserver
-from models import WorldActionModel, WorldActionModelConfig, WorldModelInputs
+from models import (
+    OneStepMLPWorldModel,
+    OneStepMLPWorldModelConfig,
+    WorldModelInputs,
+)
+from models.wam import RWMARConfig, WorldModelRolloutInputs, WorldModelSequenceInputs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -88,9 +94,11 @@ def test_module_dependency_direction_is_enforced():
     _assert_no_package_import("envs", forbidden={"data", "models"})
 
 
-def test_world_action_model_consumes_only_explicit_tensor_inputs():
-    model = WorldActionModel(
-        WorldActionModelConfig(state_dim=3, action_dim=2, hidden_dim=8, hidden_layers=2)
+def test_one_step_mlp_world_model_consumes_only_explicit_tensor_inputs():
+    model = OneStepMLPWorldModel(
+        OneStepMLPWorldModelConfig(
+            state_dim=3, action_dim=2, hidden_dim=8, hidden_layers=2
+        )
     )
     inputs = WorldModelInputs(
         state=torch.zeros(4, 3),
@@ -102,8 +110,63 @@ def test_world_action_model_consumes_only_explicit_tensor_inputs():
     assert output.next_state.shape == (4, 3)
     assert output.reward.shape == (4, 1)
     assert output.done_logit.shape == (4, 1)
+    assert output.success_logit.shape == (4, 1)
+    assert output.failure_logit.shape == (4, 1)
     with pytest.raises(ValueError, match="action must end"):
         model(WorldModelInputs(state=torch.zeros(4, 3), action=torch.zeros(4, 3)))
+
+
+def test_phase1_wam_contracts_are_reserved_without_environment_dependencies():
+    config = RWMARConfig()
+    history = WorldModelSequenceInputs(
+        states=torch.zeros(4, config.history_horizon, config.state_dim),
+        past_actions=torch.zeros(
+            4, config.history_horizon - 1, config.action_dim
+        ),
+        valid_mask=torch.ones(4, config.history_horizon, dtype=torch.bool),
+    )
+    rollout = WorldModelRolloutInputs(
+        history=history,
+        candidate_actions=torch.zeros(
+            4, config.train_forecast_horizon, config.action_dim
+        ),
+        num_particles=8,
+    )
+
+    assert rollout.history.states.shape == (4, 32, 22)
+    assert rollout.candidate_actions.shape == (4, 16, 8)
+    with pytest.raises(ValueError, match="num_particles"):
+        WorldModelRolloutInputs(
+            history=history,
+            candidate_actions=rollout.candidate_actions,
+            num_particles=0,
+        )
+
+
+def test_phase1_task_config_matches_rwm_ar_contract():
+    payload = yaml.safe_load(
+        (ROOT / "configs/wam/cooperative_stop_v1.yaml").read_text(encoding="utf-8")
+    )
+    data = payload["data"]
+    model = payload["model"]
+    config = RWMARConfig(
+        state_dim=data["state_dim"],
+        action_dim=data["action_dim"],
+        history_horizon=data["history_horizon"],
+        train_forecast_horizon=data["train_forecast_horizon"],
+        planning_horizon=data["planning_horizon"],
+        encoder_hidden_dim=model["encoder_hidden_dim"],
+        gru_hidden_dim=model["gru_hidden_dim"],
+        gru_layers=model["gru_layers"],
+        dropout=model["dropout"],
+        min_log_std=model["min_log_std"],
+        max_log_std=model["max_log_std"],
+    )
+
+    assert payload["phase"] == "phase1_rwm_ar"
+    assert config == RWMARConfig()
+    assert payload["evaluation"]["open_loop_horizons"] == [1, 5, 10, 20, 40]
+    assert payload["checkpoint"]["format_version"] == "wam.rwm_ar/1"
 
 
 def test_realtime_runner_streams_aligned_transitions():

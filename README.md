@@ -104,7 +104,10 @@ MUJOCO_GL=egl python scripts/collect_modular_dataset.py \
 ```
 
 采集脚本默认使用 Rich 显示总体 episode 进度、当前 step、任务阶段、成功/失败数以及
-预计剩余时间。自动化日志或 CI 中可添加 `--no-progress` 关闭动态显示。
+预计剩余时间。可变文字列保持稳定宽度，bar 自动占用终端的剩余宽度。显示默认
+限制为 4 Hz，并每 5 step 刷新一次 step，避免终端频繁重排；
+可通过 `--progress-refresh-hz` 和 `--progress-step-interval` 调整。自动化日志或 CI 中可添加
+`--no-progress` 关闭动态显示。
 
 同一次 rollout 可同时导出 HDF5 和 LeRobot。默认 profile 为 `vla`、`wam`、
 `robocasa`、`rmbench`；WAM profile 额外保存 `response_progress`、
@@ -119,38 +122,94 @@ MUJOCO_GL=egl python scripts/collect_modular_dataset.py \
 ```bash
 python scripts/collect_wam_proprio_dataset.py \
   --out-dir datasets/cooperative_stop_wam_proprio_v1 \
-  --episodes 100
+  --episodes 10000 \
+  --seed 0 \
+  --mixture-seed 20260714
 ```
 
-Phase 0 采集入口使用 `scripted_oracle_v1` 并将其写入 `behavior_id`。该数据适合验证契约
-和训练链路；正式训练 RWM 前仍需按技术方案补充噪声、延迟响应、随机动作和失败行为。
+采集目录必须是新的空目录，避免把旧 schema 或上一次残留 episode 混入数据集。Phase 0
+入口默认使用 `phase0_mixed_v1`，每 100 个 episode 精确执行第 11.2 节比例：
+
+| `behavior_id` | 比例 |
+|---|---:|
+| `scripted_oracle_v1` | 30% |
+| `oracle_ou_noise_v1` | 25% |
+| `delayed_response_v1` | 15% |
+| `response_rate_v1` | 10% |
+| `smooth_random_v1` | 10% |
+| `counterfactual_stop_v1` | 5% |
+| `induced_failure_v1` | 5% |
+
+采集完成后必须先运行 Gate A 审计；脚本任一检查失败都会返回非零状态：
+
+```bash
+python scripts/audit_phase0_gate_a.py \
+  --data-dir datasets/cooperative_stop_wam_proprio_v1/hdf5 \
+  --report outputs/wam_phase0_gate_a_v1.json \
+  --expected-episodes 10000 \
+  --mixture-tolerance 0
+```
 
 序列 loader 以 episode 为边界构造 `states[32,22]`、`past_actions[31,8]` 和未来
 监督，并通过 `valid_mask`、`forecast_mask` 标识 padding。数据集按 episode/seed 分组为
 80/10/10，禁止随机拆 transition。
 
-在仓库已有 legacy WAM 数据上直接训练线性动力学、单步 MLP 和 action prior：
+仅在 Gate A 报告中 `"passed": true` 后训练线性动力学、单步 MLP 和 action prior。
+正式训练必须关闭 legacy 兼容：
 
 ```bash
-python scripts/train_wam_baselines.py \
-  --data-dir datasets/cooperative_stop_wam/hdf5 \
-  --output-dir outputs/wam_phase0_v1
+python scripts/train_phase0_baselines.py \
+  --data-dir datasets/cooperative_stop_wam_proprio_v1/hdf5 \
+  --output-dir outputs/wam_phase0_v2_mixed \
+  --no-allow-legacy-wam
 ```
 
+Phase 0 baseline 默认在 episode split 完成后，将
+`state_t/commanded_action_t/next_state_t/reward_t/done_t/success_t/failure_t` 一次性载入 RAM，并在数据统计、
+三个模型、所有 epoch 和评测之间复用。当前 1,097,241 条 transition 的核心缓存约为
+234 MiB；完整序列 loader 仍保留给后续多步 WAM。内存受限环境可添加
+`--no-preload-data` 回退到原 HDF5 序列读取路径。
+
 采集和训练默认显示 Rich 进度条。采集展示 episode、step、成功/失败数、任务阶段和 ETA；
-训练展示数据统计、各模型优化 loss 以及 train/validation/test 评估进度。CI 或重定向日志时
-可显式添加 `--no-progress`。最小进度条依赖可通过
-`pip install -r requirements-wam-phase0.txt` 安装。
+训练为每个阶段保留独立行，显示 `stage=当前/总数`、数据统计、各模型优化 loss 以及
+train/validation/test 评估进度。优化阶段会在单行进度条下方实时绘制 5 行、按终端可用
+宽度分箱降采样的 batch-loss Braille 点图；点之间不连线，每个字符提供 `2×4` 点阵
+分辨率。横轴始终覆盖 `step 1 → 当前 step`，并随训练持续将完整历史重新分箱到终端
+宽度；纵轴使用 1%/99% 稳健范围和边距，避免少量 loss 峰值把主体变化压成直线。
+阶段完成后 spinner 变为 `✓`，
+进度条、最终 loss 和点图固定保留，下一阶段在新行显示。预加载、统计和评估阶段仍只占
+一行。各弹性列和进度 bar 会随终端宽度分配空间，并使用 4 Hz 刷新上限。
+可用 `--progress-refresh-hz 2` 进一步降低刷新频率。CI、重定向日志或仍无法正确处理 ANSI 的
+终端可显式添加 `--no-progress`。最小进度条依赖可通过
+`pip install -r requirements-wam.txt` 安装。
+
+线性和 MLP dynamics baseline 现在同时输出 `done_logit`、`success_logit` 和
+`failure_logit`。三个稀有标签的 positive class weight 只由 train split 计算；
+每个标签的决策阈值只在 validation split 上按最大 F1 选择，F1 并列时优先更高
+recall，然后冻结用于 train/test。评估同时报告 AUROC、AUPRC、多数类 accuracy、
+prevalence AUPRC baseline、Brier score、10-bin ECE 和阈值后的 confusion matrix/F1。
+test split 不参与阈值选择。
 
 训练输出包含 `baseline_metrics.json`、`dataset_manifest.json`、`normalization.npz`、
-三个 `*.safetensors` checkpoint 及对应模型配置。默认允许读取旧 `wam` layout 作为
+三个 `*.safetensors` checkpoint 及对应模型配置，以及
+`outcome_label_stats.json`、`linear_outcome_calibration.json` 和
+`mlp_outcome_calibration.json`。默认允许读取旧 `wam` layout 作为
 基线对照；对正式数据可加 `--no-allow-legacy-wam` 强制使用 `wam.proprio/1.0`。
+新 checkpoint 格式为 `wam.phase0/2`，因输出维度由 24 变为 26，不应将旧
+`wam.phase0/1` dynamics checkpoint 复制到新输出目录混用。
+对应的可复现参数见 `configs/wam/phase0_baselines_v2.yaml`。旧 checkpoint 格式归档在
+`configs/wam/phase0_baselines_v1_legacy.yaml`，不得用于 Phase 1。
 
-Phase 0 工程验收已通过：三个 checkpoint 可严格加载，数据 split 无 episode/seed
-泄漏，MLP test state NRMSE 为 `0.02592`，线性模型为 `0.36232`。但该结果来自 100 个
-全成功 legacy scripted-oracle episode；Gate A 数据准入尚未通过，不能把该结果解释为
-done/failure 预测、多步 rollout 或闭环 WAM 已有效。完整证据和进入 Phase 1 前的条件见
+Phase 0 正式验收和 Gate A 已于 2026-07-15 通过，可以开始 Phase 1。正式证据为
+`outputs/wam_phase0_gate_a_v1.json` 和 `outputs/wam_phase0_v2_mixed`；此前
+`outputs/wam_phase0_v1` 的全成功 legacy 结果只保留为历史工程记录。进入 Phase 1
+不表示 Gate B 已通过，RWM-AR 仍须独立验证多步 rollout、相对当前 MLP 的优势和严格重载。
+完整验收数字和 Phase 1 边界见
 [技术方案 V1.0 第 21 节](docs/PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md#21-phase-0-验收记录)。
+
+Phase 1 的唯一任务配置入口为 `configs/wam/cooperative_stop_v1.yaml`。Phase 0 的训练、
+审计和模型代码均带 `phase0` 前缀；正式 RWM-AR 使用预留的 `models/wam/`、
+`train/trainer.py`、`scripts/train_wam.py` 命名空间，避免把单步 MLP 误当作完整 WAM。
 
 ## 验证
 

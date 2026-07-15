@@ -1,0 +1,45 @@
+version: wam.phase0/2  # Accepted Phase 0 baseline configuration.
+
+collection:
+  episodes: 10000
+  seed: 0
+  mixture_seed: 20260714
+  behavior_profile: phase0_mixed_v1
+
+data:
+  schema_version: wam.proprio/1.0
+  state_dim: 22
+  action_dim: 8
+  history_horizon: 32
+  forecast_horizon: 16
+  split:
+    unit: episode_seed
+    train: 0.8
+    validation: 0.1
+    test: 0.1
+
+models:
+  enabled: [linear, mlp, action_prior]
+  hidden_dim: 256
+  hidden_layers: 3
+  outcome_heads: [done, success, failure]
+
+optimization:
+  batch_size: 256
+  epochs: 10
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  reward_weight: 0.1
+  done_weight: 0.1
+  outcome_weight: 0.1
+  positive_weight_source: train
+
+evaluation:
+  outcome_metrics: [roc_auc, average_precision, majority_accuracy]
+  threshold_source: validation
+  threshold_objective: max_f1
+  threshold_tie_break: higher_recall
+
+runtime:
+  rich_progress: true
+  preload_data: true

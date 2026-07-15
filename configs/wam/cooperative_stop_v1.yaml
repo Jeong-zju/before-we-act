@@ -1,0 +1,58 @@
+version: wam.cooperative_stop/1
+phase: phase1_rwm_ar
+
+data:
+  directory: datasets/cooperative_stop_wam_proprio_v1/hdf5
+  schema_version: wam.proprio/1.0
+  state_dim: 22
+  action_dim: 8
+  history_horizon: 32
+  train_forecast_horizon: 16
+  planning_horizon: 20
+  split_seed: 7
+  allow_legacy_wam: false
+
+state_features:
+  yaw_indices: [2, 13]
+  yaw_encoding: sin_cos
+  predict_delta: true
+
+model:
+  family: rwm_ar
+  ensemble_size: 1
+  encoder_hidden_dim: 256
+  gru_hidden_dim: 256
+  gru_layers: 2
+  dropout: 0.0
+  min_log_std: -8.0
+  max_log_std: 2.0
+  heads:
+    - state_delta_gaussian
+    - reward
+    - done
+    - success
+    - failure
+
+training:
+  mode: autoregressive
+  forecast_curriculum: [4, 8, 16]
+  terminal_positive_weight_source: train
+  privileged_inputs: false
+
+evaluation:
+  open_loop_horizons: [1, 5, 10, 20, 40]
+  gate_b_rollout_horizon: 16
+  event_aligned: true
+  compare_against:
+    - constant_velocity
+    - linear_phase0
+    - mlp_phase0
+
+checkpoint:
+  format_version: wam.rwm_ar/1
+  directory: checkpoints/wam_cooperative_stop_v1
+  weights_format: safetensors
+
+phase0_reference:
+  config: configs/wam/phase0_baselines_v2.yaml
+  metrics: outputs/wam_phase0_v2_mixed/baseline_metrics.json
