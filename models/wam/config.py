@@ -1,4 +1,4 @@
-"""Validated tensor-shape configuration for the Phase 1 RWM-AR model."""
+"""Validated configuration for recurrent WAM members and ensembles."""
 
 from __future__ import annotations
 
@@ -51,4 +51,41 @@ class RWMARConfig:
             object.__setattr__(self, name, indices)
 
 
-__all__ = ["RWMARConfig"]
+@dataclass(frozen=True)
+class RWMUEnsembleConfig:
+    """Independent-member configuration for the Phase 2 RWM-U ensemble."""
+
+    ensemble_size: int = 5
+    bootstrap: bool = True
+
+    def __post_init__(self) -> None:
+        if self.ensemble_size < 2:
+            raise ValueError("RWM-U ensemble_size must be at least 2")
+        if not self.bootstrap:
+            raise ValueError("Phase 2 RWM-U requires episode bootstrap sampling")
+
+
+@dataclass(frozen=True)
+class RWMURiskConfig:
+    """Weights for planner-facing risk scores; rewards remain outside this API."""
+
+    epistemic_weight: float = 1.0
+    aleatoric_weight: float = 0.1
+    failure_weight: float = 1.0
+    action_ood_weight: float = 0.5
+    action_ood_threshold: float = 3.0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "epistemic_weight",
+            "aleatoric_weight",
+            "failure_weight",
+            "action_ood_weight",
+        ):
+            if getattr(self, name) < 0.0:
+                raise ValueError(f"{name} must be non-negative")
+        if self.action_ood_threshold <= 0.0:
+            raise ValueError("action_ood_threshold must be positive")
+
+
+__all__ = ["RWMARConfig", "RWMUEnsembleConfig", "RWMURiskConfig"]

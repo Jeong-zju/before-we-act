@@ -4,7 +4,7 @@
 >
 > 更新时间：2026-07-15
 >
-> 状态：Phase 0/Gate A、Phase 1/Gate B 已通过；允许进入 Phase 2，Gate C 待验收
+> 状态：Phase 0/Gate A、Phase 1/Gate B、Phase 2/Gate C 已通过；允许进入 Phase 3
 >
 > 适用仓库：`fe_pc_wam`，分支 `refactor/environment-overhaul`
 
@@ -296,6 +296,9 @@ aleatoric_uncertainty  [B,H,*]
 ```
 
 其中 `E` 是 ensemble size。
+确定性 `predict` 保持 `[E,B,H,*]`；公开 particle rollout 在 `num_particles=P` 时使用
+`[E*P,B,H,*]`，并在 diagnostics 中返回 `member_index` 和 `particle_index`。同一 leading-axis
+trajectory 在完整 horizon 内不得切换 member。
 
 ## 8. 概率递归动力学
 
@@ -608,8 +611,8 @@ while not done:
 
 ## 13. 代码结构和依赖方向
 
-Phase 1/Gate B 通过后冻结的现有入口，以及 Phase 2/3 的目标结构如下。带“Phase 2/3”
-标记的文件只表示后续交付边界，不得提前以空壳模块冒充实现：
+Phase 2 实现后的现有入口和 Phase 3 目标结构如下。带“Phase 3”标记的文件只表示后续
+交付边界，不得提前以空壳模块冒充实现：
 
 ```text
 models/
@@ -624,7 +627,7 @@ models/
     ├── recurrent_dynamics.py
     ├── heads.py
     ├── rollout.py
-    └── ensemble.py             # Phase 2
+    └── ensemble.py
 
 train/
 ├── trajectory_dataset.py
@@ -632,11 +635,13 @@ train/
 ├── progress.py
 ├── rwm_ar_losses.py
 ├── rwm_ar_checkpointing.py
-└── rwm_ar_trainer.py
+├── rwm_ar_trainer.py
+├── rwm_u_checkpointing.py
+└── rwm_u_trainer.py
 
 eval/
 ├── rwm_ar_open_loop.py
-├── uncertainty.py             # Phase 2
+├── uncertainty.py
 └── closed_loop.py             # Phase 3
 
 policies/
@@ -647,7 +652,8 @@ configs/wam/
 ├── phase0_baselines_v1_legacy.yaml
 ├── phase0_baselines_v2.yaml
 ├── phase1_rwm_ar_v1.yaml
-└── phase2_rwm_u_v1.yaml       # Phase 2
+├── phase2_rwm_u_v1.yaml
+└── phase3_wam_mppi_v1.yaml    # Phase 3
 
 scripts/
 ├── collect_wam_proprio_dataset.py
@@ -655,8 +661,8 @@ scripts/
 ├── train_phase0_baselines.py
 ├── train_phase1_rwm_ar.py
 ├── evaluate_phase1_rwm_ar.py
-├── train_phase2_rwm_u.py      # Phase 2
-├── evaluate_phase2_uncertainty.py  # Phase 2
+├── train_phase2_rwm_u.py
+├── evaluate_phase2_uncertainty.py
 └── rollout_wam_policy.py      # Phase 3
 ```
 
@@ -744,9 +750,37 @@ checkpoints/wam_cooperative_stop_v1/
 └── provenance.json
 ```
 
+Phase 2 使用独立目录，不能用单模型文件冒充 ensemble：
+
+```text
+checkpoints/wam_cooperative_stop_phase2_rwm_u_v1/
+├── members/
+│   ├── member_00.safetensors
+│   ├── member_01.safetensors
+│   ├── member_02.safetensors
+│   ├── member_03.safetensors
+│   └── member_04.safetensors
+├── teacher_forcing.safetensors
+├── config.yaml
+├── normalization.npz
+├── schema.json
+├── dataset_manifest.json
+├── bootstrap_manifest.json
+├── partial_training_metrics.json
+├── metrics.json
+└── provenance.json
+```
+
+`bootstrap_manifest.json` 固化每个成员抽到的 episode 及重复次数；同一 episode 的全部
+fragment 必须一起被抽取。`partial_training_metrics.json` 是训练恢复与审计元数据，Phase 3
+推理加载器不读取它；其 run signature 只允许配置、数据划分和 normalization hash 完全一致
+时续训。`teacher_forcing.safetensors` 使用 member 0 相同的 bootstrap episode、初始化 seed
+和训练 schedule，唯一变量是递归反馈状态来源。
+
 `provenance.json` 至少包含：
 
 - git commit；
+- git dirty 状态；dirty tree 训练必须记录影响训练行为的配置与源文件 SHA-256；
 - 数据版本和 episode IDs；
 - 外部代码 commit 和许可证；
 - Python/PyTorch/CUDA 版本；
@@ -866,9 +900,14 @@ MPPI -> reduced-sample MPPI -> action prior -> scripted safe stop
 ### Gate C：模型有研究价值
 
 - 20 步 open-loop NRMSE 至少比当前 MLP 递归 rollout 低 20%；
-- event-aligned 预测不存在明显的双机器人“平均刹车”；
-- autoregressive training 明显优于同架构 teacher forcing；
-- uncertainty 与实际 rollout error 正相关，并能识别 OOD 扰动。
+- H=5 event-aligned member dominant-agent accuracy 不低于 `0.60`，ambiguous braking
+  rate 不高于 `0.25`，否则判定仍存在明显的双机器人“平均刹车”；
+- member 0 的 20 步 autoregressive NRMSE 至少比同数据、同初始化、同 schedule 的
+  teacher-forcing ablation 低 5%；
+- H=20 epistemic uncertainty 与实际 rollout error 的 Spearman 不低于 `0.30`；
+- bounded action OOD 的 AUROC 不低于 `0.70`，且 OOD/ID mean epistemic ratio 不低于
+  `1.25`；
+- 五个成员的参数不能逐元素相同，且必须完成完整 test split。
 
 ### Gate D：闭环有效
 
@@ -877,8 +916,8 @@ MPPI -> reduced-sample MPPI -> action prior -> scripted safe stop
 - planner latency 满足控制频率，或存在验证过的安全降级路径；
 - 不发生 privileged-state leakage。
 
-以上门槛是项目验收条件，不是已经取得的实验结果。第一轮数据完成后可以根据基线难度
-调整，但调整必须记录原因，不能为通过实验事后降低标准。
+以上门槛是版本化项目验收条件；实际结果记录在第 21～23 节。后续如因任务定义变化调整
+门槛，必须记录原因，不能为通过实验事后降低标准。
 
 ## 18. 致命实验与停止条件
 
@@ -948,6 +987,11 @@ MPPI -> reduced-sample MPPI -> action prior -> scripted safe stop
 - 接入 `SimulationRunner`；
 - latency 和 closed-loop 评测。
 
+版本化命名：`configs/wam/phase3_wam_mppi_v1.yaml`、
+`outputs/wam_phase3_closed_loop_v1`。Phase 2 ensemble checkpoint 作为只读输入；如 Phase 3
+新增可训练 action prior/value heads，使用独立的
+`checkpoints/wam_cooperative_stop_phase3_wam_mppi_v1`，不得覆盖 Phase 2 权重。
+
 交付：`rollout_wam_policy.py`、视频/日志、500-seed 报告和 Gate D 结论。
 
 ### Phase 4：数据闭环与部署
@@ -1009,11 +1053,8 @@ supervision、部署目标 20 Hz、暂不承诺 sim-to-real、仅采用允许商
 `outputs/wam_phase1_overfit_v1/overfit_metrics.json` 和
 `outputs/wam_phase1_open_loop_v1/open_loop_metrics.json`。
 
-**结论：Phase 1 与 Gate B 全量通过，允许进入 Phase 2；Gate C 尚未通过。** 正式评测
-覆盖完整的 1,000 个 test episodes，所有 checkpoint、normalization 和指标均为 finite，
-代码回归测试为 `34 passed`。
-
-### 22.1 Gate B 关键结果
+**结论：Phase 1 与 Gate B 全量通过。** 正式评测覆盖 1,000 个 test episodes；checkpoint、
+normalization 和指标均为 finite。
 
 | 判据 | 结果 | 结论 |
 |---|---:|---:|
@@ -1024,18 +1065,29 @@ supervision、部署目标 20 Hz、暂不承诺 sim-to-real、仅采用允许商
 | Checkpoint strict reload `max_abs_diff` | 0 | 通过 |
 | Gate B | `passed=true`，`full_test_split_evaluated=true` | 通过 |
 
-### 22.2 Open-loop 关键结果
+Phase 1 failure head 是进入闭环阶段的保留风险：H=1 AUROC/AUPRC 为
+`0.8587/0.2172`。规划风险必须结合 ensemble disagreement、action OOD 与 outcome
+probability，不能只使用 failure probability。
 
-| Horizon | RWM NRMSE | Phase 0 MLP NRMSE | 相对下降 |
-|---:|---:|---:|---:|
-| 1 | 0.03140 | 0.03590 | 12.5% |
-| 5 | 0.08541 | 0.11888 | 28.1% |
-| 10 | 0.13292 | 0.19431 | 31.6% |
-| 16 | 0.17952 | 0.27354 | 34.4% |
-| 20 | 0.20790 | 0.32066 | 35.2% |
-| 40 | 0.33516 | 0.52641 | 36.3% |
+## 23. Phase 2 / Gate C 验收记录
 
-H=20 已满足 Gate C 的相对误差条款，但 event-aligned 反平均预测、teacher-forcing 消融、
-uncertainty-error 相关性和 OOD 识别仍待 Phase 2 验证。Failure head 仍是主要风险：test
-H=1 AUROC/AUPRC 为 0.8587/0.2172，recall 为 0.2278；进入 Phase 2 后不得直接将其概率
-作为可靠规划风险，应结合 ensemble disagreement、OOD score 和重新校准。
+验收日期：2026-07-15。证据位于
+`checkpoints/wam_cooperative_stop_phase2_rwm_u_v1` 和
+`outputs/wam_phase2_uncertainty_v1`。
+
+**结论：Phase 2 与 Gate C 全量通过，允许进入 Phase 3。** 评测覆盖完整的 1,000 个
+test episodes；五个 member 与 teacher-forcing checkpoint 均 finite，严格重载差异为 `0`。
+
+| 判据 | 结果 | 门槛 | 结论 |
+|---|---:|---:|---:|
+| H=20 ensemble / Phase 0 MLP NRMSE | 0.18434 / 0.32066（下降 42.51%） | ≥20% | 通过 |
+| H=20 AR member 0 / teacher-forcing NRMSE | 0.22030 / 0.25155（改善 12.42%） | ≥5% | 通过 |
+| H=20 uncertainty-error Spearman | 0.89098 | ≥0.30 | 通过 |
+| H=20 OOD AUROC / epistemic ratio | 0.98853 / 29.25 | ≥0.70 / ≥1.25 | 通过 |
+| H=5 dominant-agent accuracy / ambiguous rate | 97.58% / 2.24% | ≥60% / ≤25% | 通过 |
+| Member 参数独立性 / strict reload | 最小 RMS 距离 0.11049 / max diff 0 | 独立 / 0 | 通过 |
+| Full test split / finite / violation rate | true / 1.0 / 0 | true / 1.0 / 0 | 通过 |
+
+进入 Phase 3 时保留两个边界：validation variance calibration 的 50% 区间偏保守；当前
+OOD 是有界合成动作扰动。二者均需在 planner exploitation 和闭环轨迹上重新验证，Gate C
+不应被解释为真实环境安全认证。

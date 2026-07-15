@@ -5,7 +5,8 @@ from models.wam.api import (
     WorldModelRolloutOutput,
     WorldModelSequenceInputs,
 )
-from models.wam.config import RWMARConfig
+from models.wam.config import RWMARConfig, RWMUEnsembleConfig, RWMURiskConfig
+from models.wam.ensemble import RWMUEnsemble, RWMUEnsemblePredictions
 from models.wam.normalizer import NormalizationStats
 from models.wam.recurrent_dynamics import RWMARRolloutPredictions, RWMARWorldModel
 
@@ -14,6 +15,10 @@ __all__ = [
     "RWMARConfig",
     "RWMARRolloutPredictions",
     "RWMARWorldModel",
+    "RWMUEnsemble",
+    "RWMUEnsembleConfig",
+    "RWMUEnsemblePredictions",
+    "RWMURiskConfig",
     "WorldModelRolloutInputs",
     "WorldModelRolloutOutput",
     "WorldModelSequenceInputs",

@@ -147,6 +147,53 @@ class RWMARWorldModel(nn.Module):
         sample_state: bool = False,
     ) -> RWMARRolloutPredictions:
         self._validate_candidates(history, candidate_actions)
+        return self._predict_rollout(
+            history,
+            candidate_actions,
+            sample_state=sample_state,
+            teacher_states=None,
+        )
+
+    def predict_teacher_forced(
+        self,
+        history: WorldModelSequenceInputs,
+        candidate_actions: Tensor,
+        teacher_states: Tensor,
+    ) -> RWMARRolloutPredictions:
+        """Decode each step from the true preceding state for Gate C ablation.
+
+        This method is deliberately separate from :meth:`predict`; deployment
+        and open-loop evaluation therefore cannot accidentally enable teacher
+        forcing.
+        """
+
+        self._validate_candidates(history, candidate_actions)
+        if teacher_states.shape != (
+            candidate_actions.shape[0],
+            candidate_actions.shape[1],
+            self.config.state_dim,
+        ):
+            raise ValueError("teacher_states must have shape [B,H,state_dim]")
+        if (
+            teacher_states.device != history.states.device
+            or teacher_states.dtype != history.states.dtype
+        ):
+            raise TypeError("teacher_states must match history dtype and device")
+        return self._predict_rollout(
+            history,
+            candidate_actions,
+            sample_state=False,
+            teacher_states=teacher_states,
+        )
+
+    def _predict_rollout(
+        self,
+        history: WorldModelSequenceInputs,
+        candidate_actions: Tensor,
+        *,
+        sample_state: bool,
+        teacher_states: Tensor | None,
+    ) -> RWMARRolloutPredictions:
         hidden, current_state = self.encode_history(history)
         collected: dict[str, list[Tensor]] = {
             name: [] for name in RWMARRolloutPredictions.__dataclass_fields__
@@ -201,11 +248,14 @@ class RWMARWorldModel(nn.Module):
             }
             for name, value in values.items():
                 collected[name].append(value)
+            feedback_state = (
+                teacher_states[:, step] if teacher_states is not None else next_state
+            )
             transition = self._encode_transition(
-                next_state.unsqueeze(1), action.unsqueeze(1)
+                feedback_state.unsqueeze(1), action.unsqueeze(1)
             )
             _, hidden = self.belief_gru(transition, hidden)
-            current_state = next_state
+            current_state = feedback_state
         return RWMARRolloutPredictions(
             **{name: torch.stack(values, dim=1) for name, values in collected.items()}
         )

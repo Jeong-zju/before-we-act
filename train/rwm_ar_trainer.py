@@ -169,6 +169,7 @@ def train_curriculum_stage(
     device: torch.device,
     completed_steps: int = 0,
     progress: ProgressCallback | None = None,
+    teacher_forcing: bool = False,
 ) -> tuple[list[float], int]:
     if horizon <= 0 or epochs <= 0:
         raise ValueError("horizon and epochs must be positive")
@@ -191,9 +192,14 @@ def train_curriculum_stage(
                 dtype=amp_dtype,
                 enabled=amp_enabled,
             ):
-                predictions = model.predict(
-                    _history_from_batch(batch),
-                    batch["candidate_actions"][:, :horizon],
+                history = _history_from_batch(batch)
+                actions = batch["candidate_actions"][:, :horizon]
+                predictions = (
+                    model.predict_teacher_forced(
+                        history, actions, batch["target_states"][:, :horizon]
+                    )
+                    if teacher_forcing
+                    else model.predict(history, actions)
                 )
                 loss, components = compute_rwm_loss(
                     predictions,
@@ -260,6 +266,7 @@ def evaluate_wam_loss(
     device: torch.device,
     max_batches: int = -1,
     progress: ProgressCallback | None = None,
+    teacher_forcing: bool = False,
 ) -> dict[str, float | int]:
     model.to(device)
     model.eval()
@@ -267,8 +274,14 @@ def evaluate_wam_loss(
     batches = 0
     for batch_index, raw_batch in enumerate(loader, start=1):
         batch = _batch_to_device(raw_batch, device)
-        predictions = model.predict(
-            _history_from_batch(batch), batch["candidate_actions"][:, :horizon]
+        history = _history_from_batch(batch)
+        actions = batch["candidate_actions"][:, :horizon]
+        predictions = (
+            model.predict_teacher_forced(
+                history, actions, batch["target_states"][:, :horizon]
+            )
+            if teacher_forcing
+            else model.predict(history, actions)
         )
         _, components = compute_rwm_loss(
             predictions,

@@ -200,14 +200,15 @@ test split 不参与阈值选择。
 对应的可复现参数见 `configs/wam/phase0_baselines_v2.yaml`。旧 checkpoint 格式归档在
 `configs/wam/phase0_baselines_v1_legacy.yaml`，不得用于 Phase 1。
 
-Phase 0/Gate A 与 Phase 1/Gate B 已于 2026-07-15 全量通过，允许进入 Phase 2。
-正式证据位于 `outputs/wam_phase0_gate_a_v1.json`、`outputs/wam_phase0_v2_mixed` 和
-`outputs/wam_phase1_open_loop_v1/open_loop_metrics.json`。关键验收数字及未完成的
-Gate C 条款见[技术方案 V1.0 第 21～22 节](docs/PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md#21-phase-0--gate-a-验收记录)。
+Phase 0/Gate A、Phase 1/Gate B 与 Phase 2/Gate C 已于 2026-07-15 全量通过，允许进入
+Phase 3。正式证据位于 `outputs/wam_phase0_gate_a_v1.json`、
+`outputs/wam_phase0_v2_mixed`、`outputs/wam_phase1_open_loop_v1` 和
+`outputs/wam_phase2_uncertainty_v1`。关键验收数字见
+[技术方案 V1.0 第 21～23 节](docs/PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md#21-phase-0--gate-a-验收记录)。
 
 Phase 1 的唯一任务配置入口为 `configs/wam/phase1_rwm_ar_v1.yaml`。已通过 Gate B 的
-RWM-AR 训练、评估和损失模块冻结为 `rwm_ar_*`，Phase 2 将在共享 `models/wam/`
-组件之上新增 ensemble 和 uncertainty 模块，不覆盖 Phase 1 的可复现实验入口。
+RWM-AR 训练、评估和损失模块冻结为 `rwm_ar_*`；Phase 2 的 `rwm_u_*` 模块在共享
+`models/wam/` 组件上扩展，不覆盖 Phase 1 的可复现实验入口。
 
 ## WAM Phase 1：RWM-AR
 
@@ -215,8 +216,8 @@ Phase 1 已实现单模型 RWM-AR 工程链路：状态标准化与 yaw `sin/cos
 GRU belief、1→4→8→16 步 outer autoregression、显式 mean MSE + Gaussian NLL state
 head、symlog reward head、
 done/success/failure 和辅助 heads、episode-safe RAM 预载、safetensors checkpoint、
-1/5/10/20/40 步 open-loop 指标及 SVG rollout。Phase 2 的 ensemble/epistemic uncertainty
-和 Phase 3 的 MPPI 不在本阶段伪实现。
+1/5/10/20/40 步 open-loop 指标及 SVG rollout。该入口只负责 Phase 1 单模型实验，不混入
+后续 ensemble 或 MPPI 逻辑。
 
 正式训练前先跑 256 个片段的 overfit 证据：
 
@@ -300,6 +301,76 @@ checkpoint、任一
 baseline 未被击败、16 步出现非有限/越界或严格重载不一致时返回 2。使用
 `--max-batches` 或 `--max-episodes` 得到的部分评测永远不能把 Gate B 标记为通过。
 
+## WAM Phase 2：RWM-U ensemble
+
+Phase 2 在冻结的 RWM-AR member 上实现 5 个完整独立模型的 episode-bootstrap ensemble。
+每个 imagined trajectory 在整个 horizon 内固定使用同一个 member；公开 risk API 同时输出
+normalized epistemic/aleatoric uncertainty、failure probability 和 action OOD penalty。
+训练还会使用 member 0 的同一 bootstrap episode、初始化 seed 和 schedule 训练
+teacher-forcing 对照，避免把 ensemble 增益误报为 autoregressive training 增益。
+
+正式训练会依次训练 5 个 member 和 1 个 teacher-forcing ablation，终端进度条、阶段完成
+记录及 loss 点图与 Phase 1 保持一致：
+
+```bash
+python scripts/train_phase2_rwm_u.py \
+  --config configs/wam/phase2_rwm_u_v1.yaml \
+  --data-dir datasets/cooperative_stop_wam_proprio_v1/hdf5 \
+  --phase1-checkpoint-dir checkpoints/wam_cooperative_stop_v1 \
+  --checkpoint-dir checkpoints/wam_cooperative_stop_phase2_rwm_u_v1 \
+  --device cuda
+```
+
+每个完整 member 训练后立即写入独立 safetensors 和部分训练状态。中断后使用完全相同的
+配置、数据和 normalization 执行以下命令；run signature 不一致时会拒绝续训：
+
+```bash
+python scripts/train_phase2_rwm_u.py \
+  --config configs/wam/phase2_rwm_u_v1.yaml \
+  --checkpoint-dir checkpoints/wam_cooperative_stop_phase2_rwm_u_v1 \
+  --resume \
+  --device cuda
+```
+
+训练完成后先仅使用 validation 拟合逐维 variance scale，再在完整 test split 上评测
+1/5/10/20/40 步 ensemble mean、50%/90%/95% coverage、uncertainty-error Spearman、
+bounded action OOD AUROC、event-aligned 反平均刹车和 teacher-forcing 消融：
+
+```bash
+python scripts/evaluate_phase2_uncertainty.py \
+  --config configs/wam/phase2_rwm_u_v1.yaml \
+  --data-dir datasets/cooperative_stop_wam_proprio_v1/hdf5 \
+  --checkpoint-dir checkpoints/wam_cooperative_stop_phase2_rwm_u_v1 \
+  --phase1-metrics outputs/wam_phase1_open_loop_v1/open_loop_metrics.json \
+  --output-dir outputs/wam_phase2_uncertainty_v1 \
+  --device cuda
+```
+
+输出包含 `uncertainty_calibration.json`、`uncertainty_metrics.json` 和
+`uncertainty_report.md`。只有版本化配置中的全部 Gate C 条款及完整 test split 同时通过，
+评测脚本才返回 0；`--max-batches`、`--max-episodes` 或缺少 teacher-forcing checkpoint
+时只能用于 smoke test，不能通过 Gate C。
+
+正式 5-member GPU 训练和 1,000 个 test episodes 的评测已经完成，`gate_c.passed=true`：
+H=20 ensemble NRMSE 为 `0.18434`，相对 Phase 0 MLP 的 `0.32066` 下降 `42.51%`；
+autoregressive member 0 相对 teacher-forcing 改善 `12.42%`；H=20 uncertainty-error
+Spearman 为 `0.89098`；bounded action OOD AUROC/epistemic ratio 为
+`0.98853/29.25`；H=5 dominant-agent accuracy/ambiguous braking rate 为
+`97.58%/2.24%`。五个 member 均独立，严格重载差异为 `0`。
+
+## WAM Phase 3：准备状态
+
+Phase 3 以 `checkpoints/wam_cooperative_stop_phase2_rwm_u_v1` 作为只读 world-model
+输入，不覆盖 Phase 2 权重。计划使用以下版本化名称：
+
+- 配置：`configs/wam/phase3_wam_mppi_v1.yaml`；
+- policy：`policies/wam_mppi_policy.py`；
+- 闭环评测：`eval/closed_loop.py`；
+- 入口：`scripts/rollout_wam_policy.py`；
+- 输出：`outputs/wam_phase3_closed_loop_v1`。
+
+这些 Phase 3 文件将在实现阶段创建；准备阶段不放置不可运行的空壳模块。
+
 ## 验证
 
 ```bash
@@ -308,8 +379,5 @@ ruff check .
 git diff --check
 ```
 
-任务公式、奖励和数据字段详见
-[模块化架构设计](docs/MODULAR_ARCHITECTURE_ZH.md)。
-
-纯本体感知 WAM 的后续阶段和验收门槛见
+任务公式、奖励、数据字段、后续阶段和验收门槛见
 [技术方案 V1.0](docs/PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md)。
