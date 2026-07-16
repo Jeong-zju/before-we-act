@@ -489,6 +489,10 @@ class InMemoryProprioSequenceDataset(Dataset):
         state_dim: int = 22,
         action_dim: int = 8,
         allow_legacy_wam: bool = False,
+        planning_discount: float | None = None,
+        action_prior_behavior_weights: Mapping[str, float] | None = None,
+        action_prior_require_success: bool = True,
+        action_prior_min_return_quantile: float = 0.0,
         progress: PreloadProgressCallback | None = None,
     ) -> None:
         if paths is None:
@@ -513,6 +517,17 @@ class InMemoryProprioSequenceDataset(Dataset):
         self.stride = int(stride)
         self.state_dim = int(state_dim)
         self.action_dim = int(action_dim)
+        if planning_discount is not None and not 0.0 < planning_discount <= 1.0:
+            raise ValueError("planning_discount must be in (0,1]")
+        if not 0.0 <= action_prior_min_return_quantile < 1.0:
+            raise ValueError("action_prior_min_return_quantile must be in [0,1)")
+        behavior_weights = {
+            str(name): float(weight)
+            for name, weight in (action_prior_behavior_weights or {}).items()
+        }
+        if any(weight < 0.0 for weight in behavior_weights.values()):
+            raise ValueError("action-prior behavior weights must be non-negative")
+        self.planning_discount = planning_discount
         records = [
             _inspect_episode_record(
                 path,
@@ -547,6 +562,17 @@ class InMemoryProprioSequenceDataset(Dataset):
             "response_progress": torch.empty((transition_count, 1)),
             "coordination_error": torch.empty((transition_count, 1)),
         }
+        if planning_discount is not None:
+            self._tensors.update(
+                {
+                    "returns_to_go": torch.empty((transition_count, 1)),
+                    "episode_returns": torch.empty((transition_count, 1)),
+                    "action_prior_weights": torch.empty((transition_count, 1)),
+                }
+            )
+        episode_returns = np.zeros(self.num_episodes, dtype=np.float32)
+        episode_successes = np.zeros(self.num_episodes, dtype=np.bool_)
+        episode_behavior_weights = np.zeros(self.num_episodes, dtype=np.float32)
         sample_episode: list[np.ndarray] = []
         sample_decision: list[np.ndarray] = []
         for episode_number, record in enumerate(records, start=1):
@@ -578,8 +604,32 @@ class InMemoryProprioSequenceDataset(Dataset):
                     arrays[field] = _read_scalar(
                         file, source, 0, record.num_steps, record.layout
                     )[:, None]
+                behavior_id = str(file.attrs.get("behavior_id", "unknown"))
+                episode_return = float(
+                    file.attrs.get("total_reward", arrays["rewards"].sum())
+                )
             for field, array in arrays.items():
                 self._tensors[field][start:stop].copy_(torch.from_numpy(array))
+            if planning_discount is not None:
+                returns_to_go = _discounted_returns(
+                    arrays["rewards"].reshape(-1), planning_discount
+                )
+                success = bool(np.asarray(arrays["successes"]).max(initial=0.0) >= 0.5)
+                behavior_weight = behavior_weights.get(
+                    behavior_id, 1.0 if not behavior_weights else 0.0
+                )
+                if action_prior_require_success and not success:
+                    behavior_weight = 0.0
+                self._tensors["returns_to_go"][start:stop, 0].copy_(
+                    torch.from_numpy(returns_to_go)
+                )
+                self._tensors["episode_returns"][start:stop, 0].fill_(episode_return)
+                self._tensors["action_prior_weights"][start:stop, 0].fill_(
+                    behavior_weight
+                )
+                episode_returns[episode_number - 1] = episode_return
+                episode_successes[episode_number - 1] = success
+                episode_behavior_weights[episode_number - 1] = behavior_weight
             decisions = np.arange(0, record.num_steps, self.stride, dtype=np.int32)
             sample_episode.append(
                 np.full(decisions.shape, episode_number - 1, dtype=np.int32)
@@ -593,6 +643,41 @@ class InMemoryProprioSequenceDataset(Dataset):
                         "samples": stop,
                     }
                 )
+        if planning_discount is not None and action_prior_min_return_quantile > 0.0:
+            eligible = episode_returns[
+                episode_successes & (episode_behavior_weights > 0.0)
+            ]
+            if eligible.size == 0:
+                raise RuntimeError("no successful action-prior episodes are eligible")
+            threshold = float(
+                np.quantile(eligible, action_prior_min_return_quantile)
+            )
+            for episode, episode_return in enumerate(episode_returns):
+                if episode_return >= threshold:
+                    continue
+                start = int(self._episode_offsets[episode])
+                stop = int(self._episode_offsets[episode + 1])
+                self._tensors["action_prior_weights"][start:stop].zero_()
+        if planning_discount is not None:
+            self.planning_metadata = {
+                "discount": float(planning_discount),
+                "action_prior_require_success": bool(action_prior_require_success),
+                "action_prior_min_return_quantile": float(
+                    action_prior_min_return_quantile
+                ),
+                "eligible_episodes": int(
+                    sum(
+                        float(
+                            self._tensors["action_prior_weights"][
+                                int(self._episode_offsets[index])
+                            ]
+                        )
+                        > 0.0
+                        for index in range(self.num_episodes)
+                    )
+                ),
+                "behavior_weights": behavior_weights,
+            }
         self._sample_episode = np.concatenate(sample_episode)
         self._sample_decision = np.concatenate(sample_decision)
 
@@ -663,6 +748,14 @@ class InMemoryProprioSequenceDataset(Dataset):
                 self._tensors[field][forecast_start:forecast_stop]
             )
             result[output_name] = padded
+        if self.planning_discount is not None:
+            current = episode_start + decision_t
+            for name in (
+                "returns_to_go",
+                "episode_returns",
+                "action_prior_weights",
+            ):
+                result[name] = self._tensors[name][current].clone()
         return result
 
     @property
@@ -681,6 +774,15 @@ class InMemoryProprioSequenceDataset(Dataset):
 
     def close(self) -> None:
         """Match the disk-backed dataset lifecycle API."""
+
+
+def _discounted_returns(rewards: np.ndarray, discount: float) -> np.ndarray:
+    result = np.empty_like(np.asarray(rewards, dtype=np.float32))
+    running = 0.0
+    for index in range(result.size - 1, -1, -1):
+        running = float(rewards[index]) + discount * running
+        result[index] = running
+    return result
 
 
 def _inspect_episode_record(

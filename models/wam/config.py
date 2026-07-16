@@ -88,4 +88,28 @@ class RWMURiskConfig:
             raise ValueError("action_ood_threshold must be positive")
 
 
-__all__ = ["RWMARConfig", "RWMUEnsembleConfig", "RWMURiskConfig"]
+@dataclass(frozen=True)
+class WAMPlanningHeadConfig:
+    """Belief-conditioned behavior prior and Monte-Carlo value head."""
+
+    feature_dim: int
+    action_dim: int = 8
+    hidden_dim: int = 256
+    hidden_layers: int = 2
+    min_log_std: float = -5.0
+    max_log_std: float = 1.0
+
+    def __post_init__(self) -> None:
+        for name in ("feature_dim", "action_dim", "hidden_dim", "hidden_layers"):
+            if int(getattr(self, name)) <= 0:
+                raise ValueError(f"{name} must be positive")
+        if self.min_log_std >= self.max_log_std:
+            raise ValueError("min_log_std must be smaller than max_log_std")
+
+
+__all__ = [
+    "RWMARConfig",
+    "RWMUEnsembleConfig",
+    "RWMURiskConfig",
+    "WAMPlanningHeadConfig",
+]

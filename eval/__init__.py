@@ -6,6 +6,12 @@ from eval.uncertainty import (
     evaluate_rwm_u,
     fit_variance_calibration,
 )
+from eval.closed_loop import (
+    ClosedLoopEpisode,
+    ClosedLoopEpisodeObserver,
+    aggregate_closed_loop,
+    gate_d_report,
+)
 
 __all__ = [
     "OODActionPerturbation",
@@ -13,4 +19,8 @@ __all__ = [
     "evaluate_open_loop",
     "evaluate_rwm_u",
     "fit_variance_calibration",
+    "ClosedLoopEpisode",
+    "ClosedLoopEpisodeObserver",
+    "aggregate_closed_loop",
+    "gate_d_report",
 ]

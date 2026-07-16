@@ -327,6 +327,10 @@ def progress_detail(values: Any) -> str:
             detail += f" mean {float(values['state_mean_mse']):.4g}"
         if "state_nll" in values:
             detail += f" nll {float(values['state_nll']):.4g}"
+        if "action_nll" in values:
+            detail += f" prior {float(values['action_nll']):.4g}"
+        if "value_huber" in values:
+            detail += f" value {float(values['value_huber']):.4g}"
         return detail
     if "samples" in values:
         return f"{int(values['samples'])} samples"

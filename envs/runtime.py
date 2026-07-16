@@ -183,6 +183,9 @@ class SimulationRunner:
     ) -> RolloutSummary:
         episode_metadata = dict(metadata or {})
         observation, reset_info = self._reset(seed=seed, randomize=randomize)
+        reset_policy = getattr(self.policy, "reset", None)
+        if callable(reset_policy):
+            reset_policy()
         for observer in observers:
             observer.on_episode_start(
                 episode_index=episode_index,

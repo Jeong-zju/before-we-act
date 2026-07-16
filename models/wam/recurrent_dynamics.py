@@ -139,6 +139,67 @@ class RWMARWorldModel(nn.Module):
         current_state = states[:, -1]
         return hidden, current_state
 
+    @property
+    def planning_feature_dim(self) -> int:
+        return self.config.gru_hidden_dim + self.features.feature_dim
+
+    def planning_features(self, hidden: Tensor, current_state: Tensor) -> Tensor:
+        """Return the deployable feature shared by Phase 3 planning heads."""
+
+        if hidden.shape != (
+            self.config.gru_layers,
+            current_state.shape[0],
+            self.config.gru_hidden_dim,
+        ):
+            raise ValueError("hidden state does not match current_state batch")
+        if current_state.shape[-1] != self.config.state_dim:
+            raise ValueError("current_state has the wrong state dimension")
+        return torch.cat(
+            (hidden[-1], self.features.encode_state(current_state)), dim=-1
+        )
+
+    def encode_planning_history(
+        self, inputs: WorldModelSequenceInputs
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        hidden, current_state = self.encode_history(inputs)
+        return hidden, current_state, self.planning_features(hidden, current_state)
+
+    def imagine_step(
+        self,
+        hidden: Tensor,
+        current_state: Tensor,
+        action: Tensor,
+        *,
+        sample_state: bool = False,
+    ) -> tuple[Tensor, Tensor, RWMHeadOutput]:
+        """Advance one learned transition while preserving recurrent belief."""
+
+        if action.shape != (current_state.shape[0], self.config.action_dim):
+            raise ValueError("action must have shape [B,action_dim]")
+        head = self._decode(hidden[-1], current_state, action)
+        normalized_delta = head.normalized_delta_mean
+        if sample_state:
+            normalized_delta = normalized_delta + torch.randn_like(
+                normalized_delta
+            ) * head.normalized_delta_log_std.exp()
+        raw_delta = normalized_delta * self.delta_std + self.delta_mean
+        next_state = current_state + raw_delta
+        for yaw_index in self.config.yaw_indices:
+            next_state = self._replace_column(
+                next_state, yaw_index, wrap_to_pi(next_state[..., yaw_index])
+            )
+        closed_probability = head.gripper_closed_logit.sigmoid()
+        for offset, state_index in enumerate(self.config.gripper_closed_indices):
+            closed_value = closed_probability[..., offset]
+            if sample_state:
+                closed_value = torch.bernoulli(closed_value)
+            next_state = self._replace_column(next_state, state_index, closed_value)
+        transition = self._encode_transition(
+            next_state.unsqueeze(1), action.unsqueeze(1)
+        )
+        _, next_hidden = self.belief_gru(transition, hidden)
+        return next_hidden, next_state, head
+
     def predict(
         self,
         history: WorldModelSequenceInputs,
