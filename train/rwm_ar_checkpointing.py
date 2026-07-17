@@ -1,4 +1,4 @@
-"""Safe, versioned Phase 1 RWM-AR checkpoint save/load helpers."""
+"""Safe, versioned recurrent world model RWM-AR checkpoint save/load helpers."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def save_wam_checkpoint(
             "model_family": "rwm_ar",
         },
     )
-    # Phase 1 has no EMA training path yet.  Preserve the planned inference
+    # recurrent world model has no EMA training path yet.  Preserve the planned inference
     # surface with byte-identical safe weights rather than inventing EMA state.
     shutil.copyfile(target / "model.safetensors", target / "ema_model.safetensors")
     stats.save(target / "normalization.npz")

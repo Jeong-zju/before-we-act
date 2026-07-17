@@ -8,7 +8,7 @@ from models.api import (
     WorldModelInputs,
     WorldModelOutput,
 )
-from models.phase0_baselines import (
+from models.baselines import (
     ActionPrior,
     ActionPriorConfig,
     LinearWorldModel,

@@ -1,0 +1,359 @@
+{
+  "evidence": [
+    {
+      "action_source": "joint_wam_flow",
+      "action_source_counts": {
+        "joint_wam_flow": 83
+      },
+      "annotated": true,
+      "camera": "fixed",
+      "failure": false,
+      "failure_reason": "none",
+      "fallback_enabled": false,
+      "fallback_used": false,
+      "format_version": "wam.joint_wam.video/1",
+      "fps": 20.0,
+      "frames_written": 83,
+      "height": 360,
+      "policy": "joint_wam_direct",
+      "replay_matches_evaluation": true,
+      "seed": 120000,
+      "sidecar_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/standard/success/seed_120000.json",
+      "steps": 83,
+      "success": true,
+      "suite": "standard",
+      "terminal_frame_included": true,
+      "video_bytes": 288178,
+      "video_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/standard/success/seed_120000.mp4",
+      "video_probe": {
+        "first_frame_read": true,
+        "frames": 83,
+        "height": 360,
+        "opened": true,
+        "width": 640
+      },
+      "video_sha256": "6fe79dce1a5931e6c8ba2711742bfbdea8a76d0235ab4931e6632a4dc9e22229",
+      "width": 640
+    },
+    {
+      "action_source": "joint_wam_flow",
+      "action_source_counts": {
+        "joint_wam_flow": 91
+      },
+      "annotated": true,
+      "camera": "fixed",
+      "failure": false,
+      "failure_reason": "none",
+      "fallback_enabled": false,
+      "fallback_used": false,
+      "format_version": "wam.joint_wam.video/1",
+      "fps": 20.0,
+      "frames_written": 91,
+      "height": 360,
+      "policy": "joint_wam_direct",
+      "replay_matches_evaluation": true,
+      "seed": 120001,
+      "sidecar_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/standard/success/seed_120001.json",
+      "steps": 91,
+      "success": true,
+      "suite": "standard",
+      "terminal_frame_included": true,
+      "video_bytes": 319144,
+      "video_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/standard/success/seed_120001.mp4",
+      "video_probe": {
+        "first_frame_read": true,
+        "frames": 91,
+        "height": 360,
+        "opened": true,
+        "width": 640
+      },
+      "video_sha256": "efcc8157c35ea1640b1633600785ce7836f3e154bb68eba50d36bc09527b1907",
+      "width": 640
+    },
+    {
+      "action_source": "joint_wam_flow",
+      "action_source_counts": {
+        "joint_wam_flow": 112
+      },
+      "annotated": true,
+      "camera": "fixed",
+      "failure": false,
+      "failure_reason": "none",
+      "fallback_enabled": false,
+      "fallback_used": false,
+      "format_version": "wam.joint_wam.video/1",
+      "fps": 20.0,
+      "frames_written": 112,
+      "height": 360,
+      "policy": "joint_wam_direct",
+      "replay_matches_evaluation": true,
+      "seed": 120002,
+      "sidecar_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/standard/success/seed_120002.json",
+      "steps": 112,
+      "success": true,
+      "suite": "standard",
+      "terminal_frame_included": true,
+      "video_bytes": 385219,
+      "video_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/standard/success/seed_120002.mp4",
+      "video_probe": {
+        "first_frame_read": true,
+        "frames": 112,
+        "height": 360,
+        "opened": true,
+        "width": 640
+      },
+      "video_sha256": "d693eda48497062f71c6d057b51d5f1ad34b9c2641e721ed0a7cd89a826c58ff",
+      "width": 640
+    },
+    {
+      "action_source": "joint_wam_flow",
+      "action_source_counts": {
+        "joint_wam_flow": 63
+      },
+      "annotated": true,
+      "camera": "fixed",
+      "failure": false,
+      "failure_reason": "none",
+      "fallback_enabled": false,
+      "fallback_used": false,
+      "format_version": "wam.joint_wam.video/1",
+      "fps": 20.0,
+      "frames_written": 63,
+      "height": 360,
+      "policy": "joint_wam_direct",
+      "replay_matches_evaluation": true,
+      "seed": 220000,
+      "sidecar_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/challenge/success/seed_220000.json",
+      "steps": 63,
+      "success": true,
+      "suite": "challenge",
+      "terminal_frame_included": true,
+      "video_bytes": 246783,
+      "video_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/challenge/success/seed_220000.mp4",
+      "video_probe": {
+        "first_frame_read": true,
+        "frames": 63,
+        "height": 360,
+        "opened": true,
+        "width": 640
+      },
+      "video_sha256": "4af0437cb24d9cd73703e1dc69c21528dad4a4f1a277a9430d465cb955de572e",
+      "width": 640
+    },
+    {
+      "action_source": "joint_wam_flow",
+      "action_source_counts": {
+        "joint_wam_flow": 49
+      },
+      "annotated": true,
+      "camera": "fixed",
+      "failure": false,
+      "failure_reason": "none",
+      "fallback_enabled": false,
+      "fallback_used": false,
+      "format_version": "wam.joint_wam.video/1",
+      "fps": 20.0,
+      "frames_written": 49,
+      "height": 360,
+      "policy": "joint_wam_direct",
+      "replay_matches_evaluation": true,
+      "seed": 220001,
+      "sidecar_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/challenge/success/seed_220001.json",
+      "steps": 49,
+      "success": true,
+      "suite": "challenge",
+      "terminal_frame_included": true,
+      "video_bytes": 213997,
+      "video_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/challenge/success/seed_220001.mp4",
+      "video_probe": {
+        "first_frame_read": true,
+        "frames": 49,
+        "height": 360,
+        "opened": true,
+        "width": 640
+      },
+      "video_sha256": "04ce9e27309a70452d8153246a2e60d6bfb46977423f065407017f50be9ce7ee",
+      "width": 640
+    },
+    {
+      "action_source": "joint_wam_flow",
+      "action_source_counts": {
+        "joint_wam_flow": 56
+      },
+      "annotated": true,
+      "camera": "fixed",
+      "failure": false,
+      "failure_reason": "none",
+      "fallback_enabled": false,
+      "fallback_used": false,
+      "format_version": "wam.joint_wam.video/1",
+      "fps": 20.0,
+      "frames_written": 56,
+      "height": 360,
+      "policy": "joint_wam_direct",
+      "replay_matches_evaluation": true,
+      "seed": 220002,
+      "sidecar_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/challenge/success/seed_220002.json",
+      "steps": 56,
+      "success": true,
+      "suite": "challenge",
+      "terminal_frame_included": true,
+      "video_bytes": 207609,
+      "video_path": "/home/jeong/zeno/wam/fe_pc_wam/outputs/joint_wam/videos/challenge/success/seed_220002.mp4",
+      "video_probe": {
+        "first_frame_read": true,
+        "frames": 56,
+        "height": 360,
+        "opened": true,
+        "width": 640
+      },
+      "video_sha256": "bea5f406ce1bee20656acaee651ef7d3ef09166ba3454275c36c7f319b516bff",
+      "width": 640
+    }
+  ],
+  "selection": {
+    "available": {
+      "challenge": {
+        "failure": 0,
+        "success": 500
+      },
+      "standard": {
+        "failure": 0,
+        "success": 500
+      }
+    },
+    "failure": [],
+    "format_version": "wam.joint_wam.video_selection/1",
+    "policy": "joint_wam_direct",
+    "selected": [
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 120000,
+        "success": true,
+        "suite": "standard"
+      },
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 120001,
+        "success": true,
+        "suite": "standard"
+      },
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 120002,
+        "success": true,
+        "suite": "standard"
+      },
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 220000,
+        "success": true,
+        "suite": "challenge"
+      },
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 220001,
+        "success": true,
+        "suite": "challenge"
+      },
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 220002,
+        "success": true,
+        "suite": "challenge"
+      }
+    ],
+    "selection_rule": {
+      "failure": "lowest_seed_global_then_fixed_suite_order",
+      "failure_global_max": 3,
+      "success": "lowest_seed_per_suite",
+      "success_per_suite": 3
+    },
+    "success": [
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 120000,
+        "success": true,
+        "suite": "standard"
+      },
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 120001,
+        "success": true,
+        "suite": "standard"
+      },
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 120002,
+        "success": true,
+        "suite": "standard"
+      },
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 220000,
+        "success": true,
+        "suite": "challenge"
+      },
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 220001,
+        "success": true,
+        "suite": "challenge"
+      },
+      {
+        "failure_reason": "none",
+        "fallback_enabled": false,
+        "policy": "joint_wam_direct",
+        "seed": 220002,
+        "success": true,
+        "suite": "challenge"
+      }
+    ]
+  },
+  "validation": {
+    "checks": {
+      "direct_action_sources_recorded": true,
+      "exact_selected_episode_set": true,
+      "fallback_disabled": true,
+      "outcomes_match_evaluation": true,
+      "replay_matches_evaluation": true,
+      "selection_schema_valid": true,
+      "sidecar_schema_valid": true,
+      "video_artifacts_nonempty_and_hashed": true,
+      "video_directory_exact": true
+    },
+    "directory": {
+      "expected_files": 12,
+      "missing": [],
+      "observed_files": 12,
+      "passed": true,
+      "unexpected": []
+    },
+    "expected_videos": 6,
+    "format_version": "wam.joint_wam.video/1",
+    "observed_videos": 6,
+    "passed": true
+  }
+}

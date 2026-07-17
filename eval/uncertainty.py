@@ -1,4 +1,4 @@
-"""Calibration, OOD, event-aligned, and Gate C metrics for Phase 2 RWM-U."""
+"""Calibration, OOD, event-aligned, and ensemble uncertainty acceptance metrics for world-model ensemble RWM-U."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _COVERAGE_Z = {"50": 0.6744897501960817, "90": 1.6448536269514722, "95": 1.95996
 
 @dataclass(frozen=True)
 class OODActionPerturbation:
-    """Deterministic, bounded action shift used as the Phase 2 OOD suite."""
+    """Deterministic, bounded action shift used as the world-model ensemble OOD suite."""
 
     scale: float = 2.5
     offset_std: float = 4.0
@@ -154,7 +154,7 @@ def evaluate_rwm_u(
     ensemble.to(device).eval()
     if teacher_forcing_model is not None:
         teacher_forcing_model.to(device).eval()
-    accumulator = _Phase2Accumulator(
+    accumulator = _EnsembleAccumulator(
         horizons,
         stats,
         variance_scale=scale,
@@ -217,7 +217,7 @@ def evaluate_rwm_u(
     return result
 
 
-class _Phase2Accumulator:
+class _EnsembleAccumulator:
     def __init__(
         self,
         horizons: Sequence[int],

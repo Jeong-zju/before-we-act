@@ -1,4 +1,4 @@
-"""Sequence and imagined-rollout tensor contracts for Phase 1 and later."""
+"""Sequence and imagined-rollout tensor contracts for recurrent world model and later."""
 
 from __future__ import annotations
 

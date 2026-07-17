@@ -2,13 +2,27 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .pytest_cache/
+.ruff_cache/
 
-# conda / env
+# Python / uv environment
 .env
-.venv
+.venv/
+.venv-*/
+.uv-cache/
+.uv-python/
 
 # outputs
-outputs/
+outputs/*
+!outputs/joint_wam/
+outputs/joint_wam/*
+!outputs/joint_wam/closed_loop_metrics.json
+!outputs/joint_wam/report.md
+!outputs/joint_wam/video_manifest.json
+!outputs/joint_wam/world_model/
+outputs/joint_wam/world_model/*
+!outputs/joint_wam/world_model/uncertainty_calibration.json
+!outputs/joint_wam/world_model/uncertainty_metrics.json
+!outputs/joint_wam/world_model/uncertainty_report.md
 logs/
 checkpoints/
 wandb/
@@ -26,7 +40,7 @@ datasets/
 .vscode/
 .idea/
 backups/
-archive/
+/archive/
 artifacts/
 
 # refs

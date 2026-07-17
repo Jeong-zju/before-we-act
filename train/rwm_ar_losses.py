@@ -1,4 +1,4 @@
-"""Masked multi-step objectives for Phase 1 RWM-AR training."""
+"""Masked multi-step objectives for recurrent world model RWM-AR training."""
 
 from __future__ import annotations
 

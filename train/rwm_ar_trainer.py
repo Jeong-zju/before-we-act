@@ -1,4 +1,4 @@
-"""Statistics, curriculum optimization, and validation for Phase 1 RWM-AR."""
+"""Statistics, curriculum optimization, and validation for recurrent world model RWM-AR."""
 
 from __future__ import annotations
 

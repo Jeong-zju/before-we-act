@@ -17,6 +17,7 @@ try:
         SpinnerColumn,
         TextColumn,
         TimeElapsedColumn,
+        TimeRemainingColumn,
     )
     from rich.table import Column
     from rich.text import Text
@@ -75,7 +76,10 @@ class TrainingProgress:
             ),
             MofNCompleteColumn(),
             TextColumn("[magenta]{task.fields[detail]}", table_column=detail),
+            TextColumn("[dim]elapsed"),
             TimeElapsedColumn(),
+            TextColumn("[dim]remaining"),
+            TimeRemainingColumn(),
             console=self._console,
             expand=True,
             auto_refresh=False,
@@ -225,7 +229,7 @@ class AdaptiveLossPointChart:
 
 
 def loss_point_chart(values: Any, *, width: int, height: int = 5) -> Any:
-    """Phase 0-compatible complete-history Braille point chart."""
+    """baseline-compatible complete-history Braille point chart."""
 
     if Text is None or width <= 0 or height <= 0:
         return ""
@@ -331,6 +335,10 @@ def progress_detail(values: Any) -> str:
             detail += f" prior {float(values['action_nll']):.4g}"
         if "value_huber" in values:
             detail += f" value {float(values['value_huber']):.4g}"
+        if "flow_loss" in values:
+            detail += f" flow {float(values['flow_loss']):.4g}"
+        if "world_loss" in values:
+            detail += f" world {float(values['world_loss']):.4g}"
         return detail
     if "samples" in values:
         return f"{int(values['samples'])} samples"

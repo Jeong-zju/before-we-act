@@ -336,7 +336,7 @@ class InMemoryOneStepDataset(Dataset):
     """Preload the minimal one-step baseline fields and reuse them across epochs.
 
     The sequence dataset intentionally exposes full history and forecast windows for
-    later WAM models. Phase 0 baselines consume only the final history state and the
+    later WAM models. baseline baselines consume only the final history state and the
     first forecast target, so rebuilding those overlapping windows on every epoch is
     unnecessary. This dataset reads each episode once, stores only the seven tensors
     used by the baseline losses, and preserves the existing batch field shapes.
@@ -458,7 +458,7 @@ class InMemoryOneStepDataset(Dataset):
 
 
 class InMemoryProprioSequenceDataset(Dataset):
-    """RAM-backed episode-safe sequence windows for Phase 1 training.
+    """RAM-backed episode-safe sequence windows for recurrent world model training.
 
     Raw transitions are loaded exactly once.  Histories and forecasts are sliced
     lazily, avoiding both random HDF5 access across 10,000 files and materializing
@@ -477,6 +477,7 @@ class InMemoryProprioSequenceDataset(Dataset):
         "response_progress",
         "coordination_error",
     )
+    CACHE_FORMAT_VERSION = "wam.in_memory_proprio_sequence/1"
 
     def __init__(
         self,
@@ -573,6 +574,7 @@ class InMemoryProprioSequenceDataset(Dataset):
         episode_returns = np.zeros(self.num_episodes, dtype=np.float32)
         episode_successes = np.zeros(self.num_episodes, dtype=np.bool_)
         episode_behavior_weights = np.zeros(self.num_episodes, dtype=np.float32)
+        episode_behavior_ids: list[str] = ["unknown"] * self.num_episodes
         sample_episode: list[np.ndarray] = []
         sample_decision: list[np.ndarray] = []
         for episode_number, record in enumerate(records, start=1):
@@ -630,6 +632,7 @@ class InMemoryProprioSequenceDataset(Dataset):
                 episode_returns[episode_number - 1] = episode_return
                 episode_successes[episode_number - 1] = success
                 episode_behavior_weights[episode_number - 1] = behavior_weight
+                episode_behavior_ids[episode_number - 1] = behavior_id
             decisions = np.arange(0, record.num_steps, self.stride, dtype=np.int32)
             sample_episode.append(
                 np.full(decisions.shape, episode_number - 1, dtype=np.int32)
@@ -643,6 +646,7 @@ class InMemoryProprioSequenceDataset(Dataset):
                         "samples": stop,
                     }
                 )
+        return_threshold: float | None = None
         if planning_discount is not None and action_prior_min_return_quantile > 0.0:
             eligible = episode_returns[
                 episode_successes & (episode_behavior_weights > 0.0)
@@ -652,6 +656,7 @@ class InMemoryProprioSequenceDataset(Dataset):
             threshold = float(
                 np.quantile(eligible, action_prior_min_return_quantile)
             )
+            return_threshold = threshold
             for episode, episode_return in enumerate(episode_returns):
                 if episode_return >= threshold:
                     continue
@@ -680,9 +685,81 @@ class InMemoryProprioSequenceDataset(Dataset):
             }
         self._sample_episode = np.concatenate(sample_episode)
         self._sample_decision = np.concatenate(sample_decision)
+        if planning_discount is not None:
+            eligible_episodes = []
+            for index in range(self.num_episodes):
+                offset = int(self._episode_offsets[index])
+                weight = float(self._tensors["action_prior_weights"][offset])
+                if weight <= 0.0:
+                    continue
+                eligible_episodes.append(
+                    {
+                        "episode_index": int(self._episode_indices[index]),
+                        "seed": int(self._episode_seeds[index]),
+                        "behavior_id": episode_behavior_ids[index],
+                        "episode_return": float(episode_returns[index]),
+                        "weight": weight,
+                    }
+                )
+            eligible_set = {
+                int(item["episode_index"]) for item in eligible_episodes
+            }
+            self.action_quality_metadata = {
+                "discount": float(planning_discount),
+                "require_success": bool(action_prior_require_success),
+                "minimum_return_quantile": float(
+                    action_prior_min_return_quantile
+                ),
+                "return_threshold": return_threshold,
+                "behavior_weights": behavior_weights,
+                "eligible_episode_count": len(eligible_episodes),
+                "eligible_window_count": int(
+                    sum(
+                        int(episode_index) in eligible_set
+                        for episode_index in self._episode_indices[
+                            self._sample_episode
+                        ]
+                    )
+                ),
+                "eligible_episodes": eligible_episodes,
+            }
 
     def __len__(self) -> int:
         return int(self._sample_episode.size)
+
+    def complete_forecast_indices(
+        self,
+        *,
+        require_positive_action_quality: bool = False,
+    ) -> np.ndarray:
+        """Return windows whose full forecast remains inside one episode.
+
+        Joint WAM action chunks may not use padded tail actions.  This method
+        exposes the episode-safe index calculation without materializing every
+        overlapping history window merely to inspect its mask.
+        """
+
+        episode_lengths = np.diff(self._episode_offsets)
+        remaining = episode_lengths[self._sample_episode] - self._sample_decision
+        selected = remaining >= self.forecast_horizon
+        if require_positive_action_quality:
+            if self.planning_discount is None:
+                raise ValueError(
+                    "action-quality filtering requires planning_discount"
+                )
+            absolute = (
+                self._episode_offsets[self._sample_episode]
+                + self._sample_decision
+            )
+            quality = self._tensors["action_prior_weights"][absolute, 0].numpy()
+            selected &= quality > 0.0
+        return np.flatnonzero(selected).astype(np.int64, copy=False)
+
+    @property
+    def episode_seeds(self) -> np.ndarray:
+        """Return a defensive copy for portable split/lineage manifests."""
+
+        return self._episode_seeds.copy()
 
     def __getitem__(self, item: int) -> dict[str, torch.Tensor]:
         episode = int(self._sample_episode[item])
@@ -756,6 +833,9 @@ class InMemoryProprioSequenceDataset(Dataset):
                 "action_prior_weights",
             ):
                 result[name] = self._tensors[name][current].clone()
+            result["action_quality_weights"] = result[
+                "action_prior_weights"
+            ].clone()
         return result
 
     @property
@@ -771,6 +851,77 @@ class InMemoryProprioSequenceDataset(Dataset):
             + self._sample_episode.nbytes
             + self._sample_decision.nbytes
         )
+
+    def cache_payload(self) -> dict[str, object]:
+        """Return a tensor-only payload compatible with safe ``torch.load``."""
+
+        return {
+            "format_version": self.CACHE_FORMAT_VERSION,
+            "history_horizon": self.history_horizon,
+            "forecast_horizon": self.forecast_horizon,
+            "stride": self.stride,
+            "state_dim": self.state_dim,
+            "action_dim": self.action_dim,
+            "planning_discount": self.planning_discount,
+            "paths": [str(path) for path in self.paths],
+            "num_episodes": self.num_episodes,
+            "episode_seeds": torch.from_numpy(self._episode_seeds.copy()),
+            "episode_indices": torch.from_numpy(self._episode_indices.copy()),
+            "episode_offsets": torch.from_numpy(self._episode_offsets.copy()),
+            "sample_episode": torch.from_numpy(self._sample_episode.copy()),
+            "sample_decision": torch.from_numpy(self._sample_decision.copy()),
+            "tensors": self._tensors,
+            "planning_metadata": getattr(self, "planning_metadata", None),
+            "action_quality_metadata": getattr(
+                self, "action_quality_metadata", None
+            ),
+        }
+
+    @classmethod
+    def from_cache_payload(
+        cls, payload: Mapping[str, object]
+    ) -> "InMemoryProprioSequenceDataset":
+        if payload.get("format_version") != cls.CACHE_FORMAT_VERSION:
+            raise ValueError("unsupported in-memory sequence cache format")
+        required_tensors = (
+            "episode_seeds",
+            "episode_indices",
+            "episode_offsets",
+            "sample_episode",
+            "sample_decision",
+        )
+        if any(not isinstance(payload.get(name), torch.Tensor) for name in required_tensors):
+            raise ValueError("in-memory sequence cache arrays are incomplete")
+        tensors = payload.get("tensors")
+        if not isinstance(tensors, Mapping) or any(
+            not isinstance(value, torch.Tensor) for value in tensors.values()
+        ):
+            raise ValueError("in-memory sequence cache tensors are incomplete")
+        dataset = cls.__new__(cls)
+        dataset.history_horizon = int(payload["history_horizon"])
+        dataset.forecast_horizon = int(payload["forecast_horizon"])
+        dataset.stride = int(payload["stride"])
+        dataset.state_dim = int(payload["state_dim"])
+        dataset.action_dim = int(payload["action_dim"])
+        raw_discount = payload.get("planning_discount")
+        dataset.planning_discount = (
+            None if raw_discount is None else float(raw_discount)
+        )
+        dataset.paths = [Path(str(path)) for path in payload["paths"]]
+        dataset.num_episodes = int(payload["num_episodes"])
+        dataset._episode_seeds = payload["episode_seeds"].numpy()
+        dataset._episode_indices = payload["episode_indices"].numpy()
+        dataset._episode_offsets = payload["episode_offsets"].numpy()
+        dataset._sample_episode = payload["sample_episode"].numpy()
+        dataset._sample_decision = payload["sample_decision"].numpy()
+        dataset._tensors = dict(tensors)
+        planning_metadata = payload.get("planning_metadata")
+        if planning_metadata is not None:
+            dataset.planning_metadata = planning_metadata
+        action_quality_metadata = payload.get("action_quality_metadata")
+        if action_quality_metadata is not None:
+            dataset.action_quality_metadata = action_quality_metadata
+        return dataset
 
     def close(self) -> None:
         """Match the disk-backed dataset lifecycle API."""

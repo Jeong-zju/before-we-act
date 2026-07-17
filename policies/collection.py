@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 
-PHASE0_BEHAVIOR_WEIGHTS: tuple[tuple[str, int], ...] = (
+BEHAVIOR_WEIGHTS: tuple[tuple[str, int], ...] = (
     ("scripted_oracle_v1", 30),
     ("oracle_ou_noise_v1", 25),
     ("delayed_response_v1", 15),
@@ -34,7 +34,7 @@ class CooperativeStopCollectionPolicy:
     values become WAM runtime inputs.
     """
 
-    PROFILES = ("scripted_oracle_v1", "phase0_mixed_v1")
+    PROFILES = ("scripted_oracle_v1", "mixed_proprio")
 
     def __init__(
         self,
@@ -43,6 +43,8 @@ class CooperativeStopCollectionPolicy:
         profile: str = "scripted_oracle_v1",
         mixture_seed: int = 20260714,
     ) -> None:
+        if profile == "phase0_mixed_v1":  # Backward compatibility for old manifests.
+            profile = "mixed_proprio"
         if profile not in self.PROFILES:
             raise ValueError(f"unknown collection behavior profile {profile!r}")
         self.env = env
@@ -94,11 +96,11 @@ class CooperativeStopCollectionPolicy:
         raise RuntimeError(f"unsupported configured behavior {behavior_id!r}")
 
     def _scheduled_behavior(self, episode_index: int) -> str:
-        cycle_size = sum(weight for _, weight in PHASE0_BEHAVIOR_WEIGHTS)
+        cycle_size = sum(weight for _, weight in BEHAVIOR_WEIGHTS)
         block, offset = divmod(int(episode_index), cycle_size)
         schedule = [
             behavior_id
-            for behavior_id, weight in PHASE0_BEHAVIOR_WEIGHTS
+            for behavior_id, weight in BEHAVIOR_WEIGHTS
             for _ in range(weight)
         ]
         np.random.default_rng(
@@ -211,7 +213,7 @@ class CooperativeStopCollectionPolicy:
 
 
 __all__ = [
-    "PHASE0_BEHAVIOR_WEIGHTS",
+    "BEHAVIOR_WEIGHTS",
     "CollectionBehavior",
     "CooperativeStopCollectionPolicy",
 ]

@@ -1,4 +1,4 @@
-"""Safe, versioned checkpoint helpers for Phase 2 RWM-U ensembles."""
+"""Safe, versioned checkpoint helpers for world-model ensemble RWM-U ensembles."""
 
 from __future__ import annotations
 
@@ -205,6 +205,72 @@ def load_rwm_u_checkpoint(
     return ensemble, metadata
 
 
+def load_rwm_u_member_checkpoint(
+    directory: str | Path,
+    member_index: int,
+    *,
+    device: str | torch.device = "cpu",
+    expected_schema_version: str | None = None,
+) -> tuple[RWMARWorldModel, dict[str, Any]]:
+    """Strictly load one world-model ensemble member without instantiating the ensemble.
+
+    Joint WAM online and joint-training paths are allowed to depend on member 0,
+    but not on the other four weight files.  This loader therefore requires
+    only the selected member plus the shared config/schema/normalization files.
+    """
+
+    source = Path(directory)
+    member_index = int(member_index)
+    weights = source / "members" / f"member_{member_index:02d}.safetensors"
+    required = (
+        source / "config.yaml",
+        source / "normalization.npz",
+        source / "schema.json",
+        weights,
+    )
+    missing = [str(path.relative_to(source)) for path in required if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"RWM-U member checkpoint is missing {missing}")
+    payload = yaml.safe_load((source / "config.yaml").read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("checkpoint config.yaml root must be a mapping")
+    for name in ("member_model_config", "ensemble_config"):
+        if name not in payload:
+            raise ValueError(f"checkpoint config.yaml has no {name}")
+    member_payload = dict(payload["member_model_config"])
+    for name in ("yaw_indices", "gripper_closed_indices"):
+        if name in member_payload:
+            member_payload[name] = tuple(member_payload[name])
+    member_config = RWMARConfig(**member_payload)
+    ensemble_config = RWMUEnsembleConfig(**dict(payload["ensemble_config"]))
+    if member_index < 0 or member_index >= ensemble_config.ensemble_size:
+        raise ValueError("member_index is outside the world-model ensemble ensemble")
+    stats = NormalizationStats.load(source / "normalization.npz")
+    schema = _read_json(source / "schema.json")
+    _validate_schema(
+        schema,
+        stats,
+        member_config,
+        ensemble_config,
+        expected_schema_version=expected_schema_version,
+    )
+    model = RWMARWorldModel(member_config, stats)
+    incompatible = model.load_state_dict(
+        load_file(weights, device=str(device)), strict=True
+    )
+    if incompatible.missing_keys or incompatible.unexpected_keys:
+        raise RuntimeError(f"strict member {member_index} load failed: {incompatible}")
+    model.to(device).eval()
+    return model, {
+        "experiment_config": payload,
+        "schema": schema,
+        "normalization": stats,
+        "member_index": member_index,
+        "loaded_member_indices": [member_index],
+        "ensemble_loaded": False,
+    }
+
+
 def load_teacher_forcing_ablation(
     directory: str | Path,
     *,
@@ -289,6 +355,7 @@ def _plain(value: Any) -> Any:
 __all__ = [
     "CHECKPOINT_FORMAT_VERSION",
     "load_rwm_u_checkpoint",
+    "load_rwm_u_member_checkpoint",
     "load_rwm_u_member_weights",
     "load_teacher_forcing_ablation",
     "load_teacher_forcing_weights",

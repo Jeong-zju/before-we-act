@@ -1,0 +1,102 @@
+version: wam.world_model_ensemble/1
+pipeline: world_model_ensemble
+
+data:
+  directory: datasets/cooperative_stop_wam_proprio/hdf5
+
+initialization:
+  checkpoint: checkpoints/world_model
+  schema_version: wam.proprio/1.0
+  state_dim: 22
+  action_dim: 8
+  history_horizon: 32
+  train_forecast_horizon: 16
+  planning_horizon: 20
+  split_seed: 7
+  allow_legacy_wam: false
+
+state_features:
+  yaw_indices: [2, 13]
+  gripper_closed_indices: [7, 18]
+  yaw_encoding: sin_cos
+  predict_delta: true
+
+model:
+  family: rwm_u
+  ensemble_size: 5
+  bootstrap: true
+  encoder_hidden_dim: 256
+  gru_hidden_dim: 256
+  gru_layers: 2
+  dropout: 0.0
+  min_log_std: -8.0
+  max_log_std: 2.0
+  heads:
+    - state_delta_gaussian
+    - reward
+    - done
+    - success
+    - failure
+
+risk:
+  epistemic_weight: 1.0
+  aleatoric_weight: 0.1
+  failure_weight: 1.0
+  action_ood_weight: 0.5
+  action_ood_threshold: 3.0
+
+training:
+  mode: autoregressive
+  forecast_curriculum: [1, 4, 8, 16]
+  curriculum_epochs: [1, 2, 3, 4]
+  batch_size: 256
+  num_workers: 4
+  seed: 7
+  member_seed_stride: 1009
+  learning_rate: 0.0003
+  weight_decay: 0.00001
+  gradient_clip_norm: 10.0
+  horizon_decay: 0.95
+  use_amp: true
+  preload_data: true
+  teacher_forcing_ablation: true
+  loss_weights:
+    state_mean: 1.0
+    state_nll: 0.1
+    gripper_closed: 1.0
+    reward: 0.1
+    done: 0.1
+    terminal: 0.1
+    auxiliary: 0.05
+  terminal_positive_weight_source: train
+  privileged_inputs: false
+
+evaluation:
+  open_loop_horizons: [1, 5, 10, 20, 40]
+  validation_max_batches: -1
+  evaluation_max_batches: -1
+  variance_scale_min: 0.05
+  variance_scale_max: 20.0
+  event_horizon: 5
+  event_progress_min: 0.01
+  event_slowdown_min: 0.001
+  event_asymmetry_min: 0.001
+  event_ambiguity_fraction: 0.25
+  ood_action_scale: 2.5
+  ood_action_offset_std: 4.0
+  ood_action_low: -1.0
+  ood_action_high: 1.0
+  acceptance_horizon: 20
+  baseline_mlp_h20_nrmse: 0.3206605823063411
+  acceptance_mlp_improvement_min: 0.20
+  acceptance_ar_over_teacher_forcing_min: 0.05
+  acceptance_uncertainty_error_spearman_min: 0.30
+  acceptance_ood_auroc_min: 0.70
+  acceptance_ood_epistemic_ratio_min: 1.25
+  acceptance_event_dominant_agent_accuracy_min: 0.60
+  acceptance_event_ambiguous_rate_max: 0.25
+
+checkpoint:
+  format_version: wam.rwm_u/1
+  directory: checkpoints/joint_wam/initialization/world_model
+  weights_format: safetensors

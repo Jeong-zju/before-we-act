@@ -39,7 +39,7 @@ class RWMARRolloutPredictions:
 
 
 class RWMARWorldModel(nn.Module):
-    """History-conditioned probabilistic RWM-AR used in Phase 1.
+    """History-conditioned probabilistic RWM-AR used in recurrent world model.
 
     Inner autoregression compresses valid ``(state, preceding action)`` history
     into a GRU belief.  Outer autoregression predicts a future state and feeds
@@ -50,7 +50,7 @@ class RWMARWorldModel(nn.Module):
     def __init__(self, config: RWMARConfig, stats: NormalizationStats) -> None:
         super().__init__()
         if not config.predict_delta:
-            raise ValueError("Phase 1 RWM-AR requires predict_delta=true")
+            raise ValueError("recurrent world model RWM-AR requires predict_delta=true")
         if stats.state_mean.shape != (config.state_dim,):
             raise ValueError("normalization state dimension does not match config")
         if stats.action_mean.shape != (config.action_dim,):
@@ -144,7 +144,7 @@ class RWMARWorldModel(nn.Module):
         return self.config.gru_hidden_dim + self.features.feature_dim
 
     def planning_features(self, hidden: Tensor, current_state: Tensor) -> Tensor:
-        """Return the deployable feature shared by Phase 3 planning heads."""
+        """Return the deployable feature shared by Joint WAM planning heads."""
 
         if hidden.shape != (
             self.config.gru_layers,
@@ -215,13 +215,59 @@ class RWMARWorldModel(nn.Module):
             teacher_states=None,
         )
 
+    def predict_from_encoded_history(
+        self,
+        hidden: Tensor,
+        current_state: Tensor,
+        candidate_actions: Tensor,
+        *,
+        sample_state: bool = False,
+    ) -> RWMARRolloutPredictions:
+        """Roll out from a previously encoded history.
+
+        Joint world/action training needs the same belief for the flow expert
+        and the world objective.  Reusing it here avoids a second full history
+        GRU pass without changing either branch's gradients.
+        """
+
+        batch_size = current_state.shape[0]
+        if hidden.shape != (
+            self.config.gru_layers,
+            batch_size,
+            self.config.gru_hidden_dim,
+        ):
+            raise ValueError("hidden state does not match current_state batch")
+        if current_state.shape != (batch_size, self.config.state_dim):
+            raise ValueError("current_state has the wrong shape")
+        if (
+            candidate_actions.ndim != 3
+            or candidate_actions.shape[0] != batch_size
+            or candidate_actions.shape[1] <= 0
+            or candidate_actions.shape[2] != self.config.action_dim
+        ):
+            raise ValueError("candidate_actions must have shape [B,H,action_dim]")
+        if (
+            hidden.device != current_state.device
+            or candidate_actions.device != current_state.device
+            or hidden.dtype != current_state.dtype
+            or candidate_actions.dtype != current_state.dtype
+        ):
+            raise TypeError("encoded history and actions must share device and dtype")
+        return self._predict_from_encoded_history(
+            hidden,
+            current_state,
+            candidate_actions,
+            sample_state=sample_state,
+            teacher_states=None,
+        )
+
     def predict_teacher_forced(
         self,
         history: WorldModelSequenceInputs,
         candidate_actions: Tensor,
         teacher_states: Tensor,
     ) -> RWMARRolloutPredictions:
-        """Decode each step from the true preceding state for Gate C ablation.
+        """Decode each step from the true preceding state for ensemble uncertainty acceptance ablation.
 
         This method is deliberately separate from :meth:`predict`; deployment
         and open-loop evaluation therefore cannot accidentally enable teacher
@@ -256,6 +302,23 @@ class RWMARWorldModel(nn.Module):
         teacher_states: Tensor | None,
     ) -> RWMARRolloutPredictions:
         hidden, current_state = self.encode_history(history)
+        return self._predict_from_encoded_history(
+            hidden,
+            current_state,
+            candidate_actions,
+            sample_state=sample_state,
+            teacher_states=teacher_states,
+        )
+
+    def _predict_from_encoded_history(
+        self,
+        hidden: Tensor,
+        current_state: Tensor,
+        candidate_actions: Tensor,
+        *,
+        sample_state: bool,
+        teacher_states: Tensor | None,
+    ) -> RWMARRolloutPredictions:
         collected: dict[str, list[Tensor]] = {
             name: [] for name in RWMARRolloutPredictions.__dataclass_fields__
         }

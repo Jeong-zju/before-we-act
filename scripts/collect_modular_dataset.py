@@ -223,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--behavior-profile",
         choices=CooperativeStopCollectionPolicy.PROFILES,
         default="scripted_oracle_v1",
-        help="Offline data behavior distribution; phase0_mixed_v1 implements §11.2.",
+        help="Offline data behavior distribution; mixed_proprio is the full WAM mixture.",
     )
     parser.add_argument(
         "--mixture-seed",
@@ -288,8 +288,8 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("wam_proprio currently uses the HDF5 backend only")
     if proprio_only and (args.camera or args.stream_video):
         raise ValueError("wam_proprio collection does not render or encode images")
-    if args.behavior_profile == "phase0_mixed_v1" and not proprio_only:
-        raise ValueError("phase0_mixed_v1 is restricted to the wam_proprio profile")
+    if args.behavior_profile == "mixed_proprio" and not proprio_only:
+        raise ValueError("mixed_proprio is restricted to the wam_proprio profile")
 
     env_config = CooperativeStopEnvConfig(
         scenario=args.scenario,

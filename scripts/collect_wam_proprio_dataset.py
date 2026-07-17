@@ -1,4 +1,4 @@
-"""Convenience entry point for image-free Phase 0 WAM collection."""
+"""Convenience entry point for image-free baseline WAM collection."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def main(argv: list[str] | None = None) -> int:
             "--profile",
             "wam_proprio",
             "--behavior-profile",
-            "phase0_mixed_v1",
+            "mixed_proprio",
             *user_args,
         ]
     )

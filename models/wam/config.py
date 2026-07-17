@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class RWMARConfig:
-    """Architecture defaults fixed by the technical plan for Phase 1."""
+    """Architecture defaults fixed by the technical plan for recurrent world model."""
 
     state_dim: int = 22
     action_dim: int = 8
@@ -53,7 +53,7 @@ class RWMARConfig:
 
 @dataclass(frozen=True)
 class RWMUEnsembleConfig:
-    """Independent-member configuration for the Phase 2 RWM-U ensemble."""
+    """Independent-member configuration for the world-model ensemble RWM-U ensemble."""
 
     ensemble_size: int = 5
     bootstrap: bool = True
@@ -62,7 +62,7 @@ class RWMUEnsembleConfig:
         if self.ensemble_size < 2:
             raise ValueError("RWM-U ensemble_size must be at least 2")
         if not self.bootstrap:
-            raise ValueError("Phase 2 RWM-U requires episode bootstrap sampling")
+            raise ValueError("world-model ensemble RWM-U requires episode bootstrap sampling")
 
 
 @dataclass(frozen=True)
@@ -89,8 +89,8 @@ class RWMURiskConfig:
 
 
 @dataclass(frozen=True)
-class WAMPlanningHeadConfig:
-    """Belief-conditioned behavior prior and Monte-Carlo value head."""
+class ActionPriorConfig:
+    """Belief-conditioned tanh-Gaussian behavior prior."""
 
     feature_dim: int
     action_dim: int = 8
@@ -107,9 +107,65 @@ class WAMPlanningHeadConfig:
             raise ValueError("min_log_std must be smaller than max_log_std")
 
 
+@dataclass(frozen=True)
+class ActionChunkConfig:
+    """Locked Joint WAM action-chunk and warm-start contract."""
+
+    action_dim: int = 8
+    horizon: int = 8
+    execution_steps: int = 2
+    solver_steps: int = 4
+    warm_start_mode: str = "shift_repeat_last"
+
+    def __post_init__(self) -> None:
+        for name in ("action_dim", "horizon", "execution_steps", "solver_steps"):
+            if int(getattr(self, name)) <= 0:
+                raise ValueError(f"{name} must be positive")
+        if self.execution_steps >= self.horizon:
+            raise ValueError("execution_steps must be smaller than horizon")
+        if self.warm_start_mode != "shift_repeat_last":
+            raise ValueError("Joint WAM requires shift_repeat_last warm start")
+
+
+@dataclass(frozen=True)
+class StatefulActionFlowConfig:
+    """Single-expert rectified flow used by Joint WAM."""
+
+    feature_dim: int
+    action_dim: int = 8
+    horizon: int = 8
+    hidden_dim: int = 512
+    hidden_layers: int = 4
+    time_embedding_dim: int = 32
+    anchor_hidden_dim: int = 256
+    anchor_hidden_layers: int = 2
+    anchor_min_log_std: float = -5.0
+    anchor_max_log_std: float = 1.0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "feature_dim",
+            "action_dim",
+            "horizon",
+            "hidden_dim",
+            "hidden_layers",
+            "time_embedding_dim",
+            "anchor_hidden_dim",
+            "anchor_hidden_layers",
+        ):
+            if int(getattr(self, name)) <= 0:
+                raise ValueError(f"{name} must be positive")
+        if self.time_embedding_dim % 2:
+            raise ValueError("time_embedding_dim must be even")
+        if self.anchor_min_log_std >= self.anchor_max_log_std:
+            raise ValueError("invalid anchor log-std bounds")
+
+
 __all__ = [
+    "ActionChunkConfig",
+    "ActionPriorConfig",
     "RWMARConfig",
     "RWMUEnsembleConfig",
     "RWMURiskConfig",
-    "WAMPlanningHeadConfig",
+    "StatefulActionFlowConfig",
 ]

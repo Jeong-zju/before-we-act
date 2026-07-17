@@ -1,6 +1,6 @@
 """Offline evaluation for recurrent WAM checkpoints."""
 
-from eval.rwm_ar_open_loop import Phase0RecursiveBaseline, evaluate_open_loop
+from eval.rwm_ar_open_loop import RecursiveBaseline, evaluate_open_loop
 from eval.uncertainty import (
     OODActionPerturbation,
     evaluate_rwm_u,
@@ -10,17 +10,25 @@ from eval.closed_loop import (
     ClosedLoopEpisode,
     ClosedLoopEpisodeObserver,
     aggregate_closed_loop,
-    gate_d_report,
+    paired_policy_statistics,
+)
+from eval.joint_wam import (
+    joint_wam_acceptance_report,
+    select_video_episodes,
+    validate_video_evidence,
 )
 
 __all__ = [
     "OODActionPerturbation",
-    "Phase0RecursiveBaseline",
+    "RecursiveBaseline",
     "evaluate_open_loop",
     "evaluate_rwm_u",
     "fit_variance_calibration",
     "ClosedLoopEpisode",
     "ClosedLoopEpisodeObserver",
     "aggregate_closed_loop",
-    "gate_d_report",
+    "paired_policy_statistics",
+    "joint_wam_acceptance_report",
+    "select_video_episodes",
+    "validate_video_evidence",
 ]

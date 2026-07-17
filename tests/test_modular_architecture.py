@@ -116,7 +116,7 @@ def test_one_step_mlp_world_model_consumes_only_explicit_tensor_inputs():
         model(WorldModelInputs(state=torch.zeros(4, 3), action=torch.zeros(4, 3)))
 
 
-def test_phase1_wam_contracts_are_reserved_without_environment_dependencies():
+def test_world_model_wam_contracts_are_reserved_without_environment_dependencies():
     config = RWMARConfig()
     history = WorldModelSequenceInputs(
         states=torch.zeros(4, config.history_horizon, config.state_dim),
@@ -143,9 +143,9 @@ def test_phase1_wam_contracts_are_reserved_without_environment_dependencies():
         )
 
 
-def test_phase1_task_config_matches_rwm_ar_contract():
+def test_world_model_task_config_matches_rwm_ar_contract():
     payload = yaml.safe_load(
-        (ROOT / "configs/wam/phase1_rwm_ar_v1.yaml").read_text(encoding="utf-8")
+        (ROOT / "configs/wam/world_model.yaml").read_text(encoding="utf-8")
     )
     data = payload["data"]
     model = payload["model"]
@@ -163,7 +163,7 @@ def test_phase1_task_config_matches_rwm_ar_contract():
         max_log_std=model["max_log_std"],
     )
 
-    assert payload["phase"] == "phase1_rwm_ar"
+    assert payload["pipeline"] == "world_model"
     assert config == RWMARConfig()
     assert payload["evaluation"]["open_loop_horizons"] == [1, 5, 10, 20, 40]
     assert payload["checkpoint"]["format_version"] == "wam.rwm_ar/1"

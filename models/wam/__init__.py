@@ -1,4 +1,4 @@
-"""Phase 1+ recurrent world-model contracts and shared utilities."""
+"""recurrent world model+ recurrent world-model contracts and shared utilities."""
 
 from models.wam.api import (
     WorldModelRolloutInputs,
@@ -6,17 +6,25 @@ from models.wam.api import (
     WorldModelSequenceInputs,
 )
 from models.wam.config import (
+    ActionChunkConfig,
+    ActionPriorConfig,
     RWMARConfig,
     RWMUEnsembleConfig,
     RWMURiskConfig,
-    WAMPlanningHeadConfig,
+    StatefulActionFlowConfig,
 )
+from models.wam.action_chunk import shift_action_chunk_warm_start
+from models.wam.action_prior import ActionPrior, ActionPriorOutput
 from models.wam.ensemble import RWMUEnsemble, RWMUEnsemblePredictions
 from models.wam.normalizer import NormalizationStats
-from models.wam.planning_heads import WAMPlanningHeadOutput, WAMPlanningHeads
 from models.wam.recurrent_dynamics import RWMARRolloutPredictions, RWMARWorldModel
+from models.wam.stateful_action_flow import StatefulActionFlow
 
 __all__ = [
+    "ActionChunkConfig",
+    "ActionPrior",
+    "ActionPriorConfig",
+    "ActionPriorOutput",
     "NormalizationStats",
     "RWMARConfig",
     "RWMARRolloutPredictions",
@@ -25,10 +33,10 @@ __all__ = [
     "RWMUEnsembleConfig",
     "RWMUEnsemblePredictions",
     "RWMURiskConfig",
-    "WAMPlanningHeadConfig",
-    "WAMPlanningHeadOutput",
-    "WAMPlanningHeads",
+    "StatefulActionFlow",
+    "StatefulActionFlowConfig",
     "WorldModelRolloutInputs",
     "WorldModelRolloutOutput",
     "WorldModelSequenceInputs",
+    "shift_action_chunk_warm_start",
 ]

@@ -1,4 +1,4 @@
-"""Phase 1 RWM-AR open-loop metrics and Phase 0 recursive baselines."""
+"""RWM-AR open-loop metrics and recursive baselines."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from torch import Tensor
 from models import OneStepMLPWorldModel, WorldModelInputs
 from models.wam import NormalizationStats, RWMARWorldModel, WorldModelSequenceInputs
 from models.wam.rollout import wrap_to_pi
-from train.phase0_baselines import (
+from train.baselines import (
     binary_classification_metrics,
     calibrate_binary_threshold,
 )
@@ -29,7 +29,7 @@ STATE_GROUPS = {
 
 
 @dataclass
-class Phase0RecursiveBaseline:
+class RecursiveBaseline:
     model: OneStepMLPWorldModel
     stats: NormalizationStats
     yaw_indices: tuple[int, ...] = (2, 13)
@@ -70,7 +70,7 @@ def evaluate_open_loop(
     *,
     device: torch.device,
     horizons: Sequence[int] = (1, 5, 10, 20, 40),
-    phase0_mlp: Phase0RecursiveBaseline | None = None,
+    baseline_mlp: RecursiveBaseline | None = None,
     classification_thresholds: Mapping[str, float] | None = None,
     calibrate_thresholds: bool = False,
     max_batches: int = -1,
@@ -81,14 +81,14 @@ def evaluate_open_loop(
         raise ValueError("horizons must be positive")
     max_horizon = max(horizons)
     model.to(device).eval()
-    if phase0_mlp is not None:
-        phase0_mlp.model.to(device).eval()
+    if baseline_mlp is not None:
+        baseline_mlp.model.to(device).eval()
     accumulators = {
         "rwm_ar": _OpenLoopAccumulator(horizons, stats),
         "constant_velocity": _OpenLoopAccumulator(horizons, stats),
     }
-    if phase0_mlp is not None:
-        accumulators["phase0_mlp_recursive"] = _OpenLoopAccumulator(horizons, stats)
+    if baseline_mlp is not None:
+        accumulators["baseline_mlp_recursive"] = _OpenLoopAccumulator(horizons, stats)
     example: dict[str, np.ndarray] = {}
     batches = 0
     for batch_index, raw_batch in enumerate(loader, start=1):
@@ -109,8 +109,8 @@ def evaluate_open_loop(
             "rwm_ar": rwm.next_state_mean,
             "constant_velocity": constant_velocity_rollout(current, max_horizon),
         }
-        if phase0_mlp is not None:
-            predictions["phase0_mlp_recursive"] = phase0_mlp.rollout(current, actions)
+        if baseline_mlp is not None:
+            predictions["baseline_mlp_recursive"] = baseline_mlp.rollout(current, actions)
         for name, state_predictions in predictions.items():
             accumulators[name].update(
                 state_predictions,
@@ -393,7 +393,7 @@ def _replace_column(value: Tensor, index: int, column: Tensor) -> Tensor:
 
 
 __all__ = [
-    "Phase0RecursiveBaseline",
+    "RecursiveBaseline",
     "constant_velocity_rollout",
     "evaluate_open_loop",
 ]

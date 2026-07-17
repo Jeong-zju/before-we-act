@@ -40,7 +40,7 @@ class RWMUEnsemblePredictions:
 
 
 class RWMUEnsemble(nn.Module):
-    """Phase 2 ensemble of complete, independently initialized RWM-AR members."""
+    """world-model ensemble ensemble of complete, independently initialized RWM-AR members."""
 
     def __init__(
         self,

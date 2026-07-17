@@ -1,4 +1,4 @@
-"""Deployable proprioception features for the Phase 1 RWM-AR."""
+"""Deployable proprioception features for the recurrent world model RWM-AR."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Episode-bootstrap utilities and diagnostics for Phase 2 RWM-U training."""
+"""Episode-bootstrap utilities and diagnostics for world-model ensemble RWM-U training."""
 
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ def _sample_episode_positions(dataset: Dataset) -> np.ndarray:
             dtype=np.int64,
         )
     raise TypeError(
-        "dataset does not expose episode-safe indexing required by Phase 2 bootstrap"
+        "dataset does not expose episode-safe indexing required by world-model ensemble bootstrap"
     )
 
 
