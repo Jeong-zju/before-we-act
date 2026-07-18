@@ -143,30 +143,16 @@ def evaluate_action_prior(
 
 def world_model_checkpoint_fingerprint(directory: str | Path) -> dict[str, Any]:
     root = Path(directory)
-    schema = root / "schema.json"
-    members = sorted((root / "members").glob("member_*.safetensors"))
-    if not schema.is_file() or not members:
-        raise FileNotFoundError("world-model ensemble checkpoint is incomplete")
-    return {
-        "schema_sha256": _sha256(schema),
-        "member_sha256": {path.name: _sha256(path) for path in members},
+    artifacts = {
+        "schema_sha256": root / "schema.json",
+        "model_sha256": root / "model.safetensors",
+        "normalization_sha256": root / "normalization.npz",
     }
-
-
-def world_model_member_fingerprint(
-    directory: str | Path, member_index: int = 0
-) -> dict[str, Any]:
-    """Fingerprint one deployable world-model ensemble member without reading its siblings."""
-
-    root = Path(directory)
-    schema = root / "schema.json"
-    member = root / "members" / f"member_{int(member_index):02d}.safetensors"
-    if not schema.is_file() or not member.is_file():
-        raise FileNotFoundError("world-model ensemble member checkpoint is incomplete")
+    missing = [path.name for path in artifacts.values() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"world-model checkpoint is missing {missing}")
     return {
-        "member_index": int(member_index),
-        "schema_sha256": _sha256(schema),
-        "member_sha256": _sha256(member),
+        name: _sha256(path) for name, path in artifacts.items()
     }
 
 
@@ -212,8 +198,8 @@ def save_action_prior_checkpoint(
                 "braking_time",
             ],
             "normalization_sha256": normalization_sha256,
-            "world_model_member_fingerprint": world_model_member_fingerprint(
-                world_model_checkpoint, 0
+            "world_model_fingerprint": world_model_checkpoint_fingerprint(
+                world_model_checkpoint
             ),
         },
     )
@@ -284,24 +270,9 @@ def _freeze_world_model(model: RWMARWorldModel) -> None:
 def _validate_world_model_binding(
     schema: Mapping[str, Any], world_model_checkpoint: str | Path
 ) -> None:
-    current = world_model_member_fingerprint(world_model_checkpoint, 0)
-    expected = schema.get("world_model_member_fingerprint")
-    if expected is None:
-        expected = schema.get("phase2_member_fingerprint")
-    if expected is not None:
-        if expected != current:
-            raise ValueError("world-model ensemble member 0 fingerprint does not match action prior")
-        return
-    legacy = schema.get("phase2_fingerprint")
-    if not isinstance(legacy, Mapping):
-        raise ValueError("action prior has no world-model ensemble member binding")
-    member_hashes = legacy.get("member_sha256")
-    if (
-        legacy.get("schema_sha256") != current["schema_sha256"]
-        or not isinstance(member_hashes, Mapping)
-        or member_hashes.get("member_00.safetensors") != current["member_sha256"]
-    ):
-        raise ValueError("world-model ensemble member 0 fingerprint does not match action prior")
+    current = world_model_checkpoint_fingerprint(world_model_checkpoint)
+    if schema.get("world_model_fingerprint") != current:
+        raise ValueError("world-model fingerprint does not match action prior")
 
 
 def _prepare_batch(batch: Mapping[str, Tensor], device: torch.device) -> dict[str, Tensor]:
@@ -366,7 +337,6 @@ __all__ = [
     "evaluate_action_prior",
     "load_action_prior_checkpoint",
     "world_model_checkpoint_fingerprint",
-    "world_model_member_fingerprint",
     "save_action_prior_checkpoint",
     "train_action_prior",
 ]

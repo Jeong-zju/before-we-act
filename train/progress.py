@@ -323,10 +323,15 @@ def progress_detail(values: Any) -> str:
     if not isinstance(values, dict):
         return str(values)
     if "loss" in values:
-        detail = (
-            f"epoch {int(values['epoch'])}/{int(values['epochs'])} "
-            f"loss {float(values['loss']):.5f}"
-        )
+        if "epoch" in values:
+            detail = f"epoch {int(values['epoch'])}"
+            if "epochs" in values:
+                detail += f"/{int(values['epochs'])}"
+        elif "step" in values:
+            detail = f"step {int(values['step'])}"
+        else:
+            detail = "train"
+        detail += f" loss {float(values['loss']):.5f}"
         if "state_mean_mse" in values:
             detail += f" mean {float(values['state_mean_mse']):.4g}"
         if "state_nll" in values:
@@ -345,7 +350,10 @@ def progress_detail(values: Any) -> str:
     if "batch" in values:
         return f"batch {int(values['batch'])}"
     if "episode" in values:
-        return f"episode {int(values['episode'])}/{int(values['episodes'])}"
+        detail = f"episode {int(values['episode'])}"
+        if "episodes" in values:
+            detail += f"/{int(values['episodes'])}"
+        return detail
     return "running"
 
 

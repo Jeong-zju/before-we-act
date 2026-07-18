@@ -808,7 +808,7 @@ def _strict_joint_evidence_ok(value: bool | Mapping[str, Any]) -> bool:
     checks = value.get("checks")
     if isinstance(checks, Mapping):
         required = (
-            "member_0_parameter_delta_nonzero",
+            "world_model_parameter_delta_nonzero",
             "shared_history_parameter_delta_nonzero",
             "world_parameter_delta_nonzero",
             "action_flow_parameter_delta_nonzero",
@@ -830,7 +830,7 @@ def _strict_joint_evidence_ok(value: bool | Mapping[str, Any]) -> bool:
         )
 
     positive = (
-        "member_0_parameter_delta",
+        "world_model_parameter_delta",
         "shared_history_parameter_delta",
         "world_parameter_delta",
         "action_flow_parameter_delta",

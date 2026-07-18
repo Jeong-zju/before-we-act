@@ -10,6 +10,7 @@ import yaml
 from models.wam import ActionPrior, ActionPriorConfig, NormalizationStats, RWMARConfig, RWMARWorldModel
 from policies import ActionPriorPolicy
 from train.action_prior import load_action_prior_checkpoint, save_action_prior_checkpoint
+from train.rwm_ar_checkpointing import save_wam_checkpoint
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,10 +41,18 @@ def test_action_prior_is_finite_and_policy_rejects_privileged_state():
 
 def test_action_prior_checkpoint_roundtrip_is_strict(tmp_path: Path):
     world_model = tmp_path / "world_model"
-    (world_model / "members").mkdir(parents=True)
-    (world_model / "schema.json").write_text("{}", encoding="utf-8")
-    (world_model / "members/member_00.safetensors").write_bytes(b"member")
-    model = _world_model()
+    stats = _stats()
+    model = _world_model(stats)
+    save_wam_checkpoint(
+        world_model,
+        model,
+        stats,
+        experiment_config={"pipeline": "world_model"},
+        dataset_manifest={"partitions": {}},
+        metrics={"evaluation": {}},
+        provenance={"seed": 7},
+        schema_version="wam.proprio/1.0",
+    )
     prior = _prior(model)
     checkpoint = tmp_path / "action_prior"
     save_action_prior_checkpoint(
@@ -68,7 +77,7 @@ def test_action_prior_checkpoint_roundtrip_is_strict(tmp_path: Path):
     assert metadata["schema"]["format_version"] == "wam.action_prior/1"
 
 
-def _world_model() -> RWMARWorldModel:
+def _world_model(stats: NormalizationStats | None = None) -> RWMARWorldModel:
     config = RWMARConfig(
         history_horizon=3,
         train_forecast_horizon=2,
@@ -77,7 +86,11 @@ def _world_model() -> RWMARWorldModel:
         gru_hidden_dim=16,
         gru_layers=1,
     )
-    stats = NormalizationStats(
+    return RWMARWorldModel(config, stats or _stats())
+
+
+def _stats() -> NormalizationStats:
+    return NormalizationStats(
         state_mean=np.zeros(22, dtype=np.float32),
         state_std=np.ones(22, dtype=np.float32),
         action_mean=np.zeros(8, dtype=np.float32),
@@ -87,7 +100,6 @@ def _world_model() -> RWMARWorldModel:
         reward_mean=np.zeros(1, dtype=np.float32),
         reward_std=np.ones(1, dtype=np.float32),
     )
-    return RWMARWorldModel(config, stats)
 
 
 def _prior(model: RWMARWorldModel) -> ActionPrior:

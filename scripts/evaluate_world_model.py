@@ -482,7 +482,7 @@ def _acceptance_report(
         "passed": full_test_split and all(item["passed"] for item in checks.values()),
         "full_test_split_evaluated": full_test_split,
         "checks": checks,
-        "note": "world-model acceptance only; this is not a ensemble uncertainty acceptance or world-model ensemble uncertainty claim.",
+        "note": "single-world-model open-loop acceptance only.",
     }
 
 

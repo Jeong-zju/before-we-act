@@ -351,7 +351,7 @@ def test_strict_joint_evidence_requires_every_coupling_path() -> None:
     required = {
         name: True
         for name in (
-            "member_0_parameter_delta_nonzero",
+            "world_model_parameter_delta_nonzero",
             "shared_history_parameter_delta_nonzero",
             "world_parameter_delta_nonzero",
             "action_flow_parameter_delta_nonzero",
@@ -743,7 +743,7 @@ def _strict_joint_evidence() -> dict[str, object]:
         "checks": {
             name: True
             for name in (
-                "member_0_parameter_delta_nonzero",
+                "world_model_parameter_delta_nonzero",
                 "shared_history_parameter_delta_nonzero",
                 "world_parameter_delta_nonzero",
                 "action_flow_parameter_delta_nonzero",

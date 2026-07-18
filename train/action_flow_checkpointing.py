@@ -12,8 +12,8 @@ import torch
 import yaml
 
 from models.wam import StatefulActionFlow, StatefulActionFlowConfig
-from train.action_prior import world_model_member_fingerprint
-from train.rwm_u_checkpointing import load_rwm_u_member_checkpoint
+from train.action_prior import world_model_checkpoint_fingerprint
+from train.rwm_ar_checkpointing import load_wam_checkpoint
 
 CHECKPOINT_FORMAT_VERSION = "wam.action_flow_warmup/1"
 
@@ -55,7 +55,6 @@ def save_action_flow_checkpoint(
             "format_version": CHECKPOINT_FORMAT_VERSION,
             "schema_version": schema_version,
             "stage": "action_flow_warmup",
-            "member_index": 0,
             "runtime_inputs": ["states", "past_actions", "valid_mask"],
             "forbidden_runtime_inputs": [
                 "privileged_state",
@@ -63,10 +62,9 @@ def save_action_flow_checkpoint(
                 "braking_time",
             ],
             "normalization_sha256": normalization_sha256,
-            "world_model_member_fingerprint": world_model_member_fingerprint(
-                world_model_checkpoint, 0
+            "world_model_fingerprint": world_model_checkpoint_fingerprint(
+                world_model_checkpoint
             ),
-            "online_ensemble_required": False,
             "action_prior_fallback_required": False,
             "embedded_frozen_action_prior_anchor": True,
         },
@@ -99,10 +97,6 @@ def load_action_flow_checkpoint(
     schema = _read_json(source / "schema.json")
     if schema.get("format_version") != CHECKPOINT_FORMAT_VERSION:
         raise ValueError("unsupported action-flow checkpoint")
-    if schema.get("member_index") != 0:
-        raise ValueError("action-flow warm-up must be bound to member 0")
-    if schema.get("online_ensemble_required") is not False:
-        raise ValueError("action-flow checkpoint requests an online ensemble")
     if schema.get("embedded_frozen_action_prior_anchor") is not True:
         raise ValueError("action-flow checkpoint has no frozen action anchor")
     if (
@@ -110,12 +104,11 @@ def load_action_flow_checkpoint(
         and schema.get("schema_version") != expected_schema_version
     ):
         raise ValueError("action-flow data schema mismatch")
-    current = world_model_member_fingerprint(world_model_checkpoint, 0)
-    if schema.get("world_model_member_fingerprint") != current:
-        raise ValueError("world-model member fingerprint does not match action flow")
-    member, metadata = load_rwm_u_member_checkpoint(
+    current = world_model_checkpoint_fingerprint(world_model_checkpoint)
+    if schema.get("world_model_fingerprint") != current:
+        raise ValueError("world-model fingerprint does not match action flow")
+    world_model, metadata = load_wam_checkpoint(
         world_model_checkpoint,
-        0,
         device=device,
         expected_schema_version=expected_schema_version,
     )
@@ -130,8 +123,8 @@ def load_action_flow_checkpoint(
     flow = StatefulActionFlow(
         StatefulActionFlowConfig(**dict(raw_model)), metadata["normalization"]
     )
-    if flow.config.feature_dim != member.planning_feature_dim:
-        raise ValueError("action-flow feature dimension does not match member 0")
+    if flow.config.feature_dim != world_model.planning_feature_dim:
+        raise ValueError("action-flow feature dimension does not match world model")
     incompatible = flow.load_state_dict(
         load_file(source / "action_flow.safetensors", device=str(device)),
         strict=True,
@@ -158,9 +151,7 @@ def _plain(value: Any) -> Any:
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
-    )
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _read_json(path: Path) -> dict[str, Any]:

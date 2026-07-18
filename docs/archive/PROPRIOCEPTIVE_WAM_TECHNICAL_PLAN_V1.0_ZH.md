@@ -2,8 +2,9 @@
 
 > 归档日期：2026-07-17
 >
-> 本文记录阶段性设计、失败路线与验收过程，仅用于历史追溯。当前入口、资产路径和
-> 复现命令以根目录 `README.md` 与仍在维护的 benchmark/baseline 计划为准。
+> 本文记录阶段性设计、失败路线与验收过程，仅用于历史追溯。当前入口、资产路径和复现命令以根目录 `README.md` 与仍在维护的 benchmark/baseline 计划为准。
+>
+> 后续实现已删除五成员 uncertainty ensemble，只保留 Joint WAM 实际使用的单个 recurrent world model；下文关于 ensemble、member 0 和 Gate C 的内容仅是历史记录。
 
 > 更新日期：2026-07-17
 >

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 from pathlib import Path
-import shutil
 from typing import Any, Mapping
 
 from safetensors.torch import load_file, save_file
@@ -42,9 +41,6 @@ def save_wam_checkpoint(
             "model_family": "rwm_ar",
         },
     )
-    # recurrent world model has no EMA training path yet.  Preserve the planned inference
-    # surface with byte-identical safe weights rather than inventing EMA state.
-    shutil.copyfile(target / "model.safetensors", target / "ema_model.safetensors")
     stats.save(target / "normalization.npz")
     config_payload = dict(experiment_config)
     config_payload["model_config"] = _plain(asdict(model.config))
@@ -76,13 +72,11 @@ def load_wam_checkpoint(
     directory: str | Path,
     *,
     device: str | torch.device = "cpu",
-    use_ema: bool = False,
     expected_schema_version: str | None = None,
 ) -> tuple[RWMARWorldModel, dict[str, Any]]:
     source = Path(directory)
     required = (
         "model.safetensors",
-        "ema_model.safetensors",
         "config.yaml",
         "normalization.npz",
         "schema.json",
@@ -126,8 +120,7 @@ def load_wam_checkpoint(
     ):
         raise ValueError("schema dimensions do not match model config")
     model = RWMARWorldModel(config, stats)
-    weights_name = "ema_model.safetensors" if use_ema else "model.safetensors"
-    state_dict = load_file(source / weights_name, device=str(device))
+    state_dict = load_file(source / "model.safetensors", device=str(device))
     incompatible = model.load_state_dict(state_dict, strict=True)
     if incompatible.missing_keys or incompatible.unexpected_keys:
         raise RuntimeError(f"strict checkpoint load failed: {incompatible}")

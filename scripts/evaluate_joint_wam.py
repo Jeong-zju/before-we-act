@@ -57,7 +57,7 @@ from train.joint_wam_checkpointing import (  # noqa: E402
     load_joint_wam_checkpoint,
 )
 from train.progress import TrainingProgress  # noqa: E402
-from train.rwm_u_checkpointing import load_rwm_u_member_checkpoint  # noqa: E402
+from train.rwm_ar_checkpointing import load_wam_checkpoint  # noqa: E402
 
 
 FORMAL_SUITES = ("standard", "challenge")
@@ -144,9 +144,7 @@ def _settings(config: Mapping[str, Any], args: argparse.Namespace) -> dict[str, 
         )
     ) or bool(args.skip_videos)
     if has_diagnostic_override and args.output_dir is None:
-        raise ValueError(
-            "evaluation overrides require a separate --output-dir"
-        )
+        raise ValueError("evaluation overrides require a separate --output-dir")
     formal_protocol = not has_diagnostic_override
     suite_seeds = {
         suite: tuple(range(starts[suite], starts[suite] + count))
@@ -155,9 +153,7 @@ def _settings(config: Mapping[str, Any], args: argparse.Namespace) -> dict[str, 
     if set(suite_seeds["standard"]) & set(suite_seeds["challenge"]):
         raise ValueError("standard and challenge evaluation seeds must be disjoint")
 
-    output = (
-        args.output_dir or ROOT / str(evaluation["output_directory"])
-    ).resolve()
+    output = (args.output_dir or ROOT / str(evaluation["output_directory"])).resolve()
     return {
         "config_path": args.config.resolve(),
         "world_model_checkpoint": (
@@ -244,9 +240,8 @@ def main(argv: list[str] | None = None) -> int:
         ]
         raise RuntimeError(f"strict Joint WAM evidence failed: {failed}")
 
-    frozen_teacher, world_model_metadata = load_rwm_u_member_checkpoint(
+    frozen_teacher, world_model_metadata = load_wam_checkpoint(
         settings["world_model_checkpoint"],
-        0,
         device=device,
         expected_schema_version=PROPRIO_WAM_SCHEMA_VERSION,
     )
@@ -368,9 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         required_videos_complete=bool(video_validation.get("passed", False)),
         minimum_episodes=int(limits["minimum_episodes_per_suite"]),
         minimum_success_rate=float(limits["minimum_direct_success_rate"]),
-        maximum_prior_regression=float(
-            limits["maximum_prior_success_regression"]
-        ),
+        maximum_prior_regression=float(limits["maximum_prior_success_regression"]),
         formal_protocol=bool(settings["formal_protocol"]),
     )
 
@@ -454,9 +447,7 @@ def _evaluate_all_policies(
             suite_records: dict[str, list[ClosedLoopEpisode]] = {}
             for policy_name in settings["policies"]:
                 seeds = settings["suite_seeds"][suite]
-                phase = progress.add_phase(
-                    f"{suite} {policy_name}", len(seeds)
-                )
+                phase = progress.add_phase(f"{suite} {policy_name}", len(seeds))
                 env = _environment(evaluation_config, model_config, suite)
                 try:
                     policy = _policy(
@@ -529,9 +520,7 @@ def _policy(
             joint,
             flow,
             config=policy_config,
-            fallback_world_model=(
-                frozen_teacher if name == FALLBACK_POLICY else None
-            ),
+            fallback_world_model=(frozen_teacher if name == FALLBACK_POLICY else None),
             fallback_prior=action_prior if name == FALLBACK_POLICY else None,
             fixed_actions=fixed_actions,
         )
@@ -568,14 +557,10 @@ def _joint_wam_policy_config(
         solver=str(chunk["solver"]),
         anchor_residual_scale=float(runtime["anchor_residual_scale"]),
         normalized_action_clip=float(runtime["normalized_action_clip"]),
-        observation_residual_nrmse_max=float(
-            runtime["observation_residual_nrmse_max"]
-        ),
+        observation_residual_nrmse_max=float(runtime["observation_residual_nrmse_max"]),
         risk_veto=bool(runtime["risk_veto"]),
         max_failure_probability=float(runtime["max_failure_probability"]),
-        max_predicted_robot_distance=float(
-            runtime["max_predicted_robot_distance"]
-        ),
+        max_predicted_robot_distance=float(runtime["max_predicted_robot_distance"]),
         max_action_ood=float(runtime["max_action_ood"]),
         action_ood_threshold=float(runtime["action_ood_threshold"]),
         latency_budget_ms=float(runtime["latency_budget_ms"]),
@@ -590,9 +575,7 @@ def _environment(
 ) -> TwoRobotCooperativeStopEnv:
     del model_config
     evaluation = _mapping(evaluation_config, "evaluation")
-    overrides = (
-        {} if suite == "standard" else dict(evaluation["challenge_environment"])
-    )
+    overrides = {} if suite == "standard" else dict(evaluation["challenge_environment"])
     return TwoRobotCooperativeStopEnv(
         CooperativeStopEnvConfig(include_camera_images=False, **overrides)
     )
@@ -678,7 +661,9 @@ def _render_video_evidence(
             or int(video_probe["width"]) != int(video["width"])
             or int(video_probe["height"]) != int(video["height"])
         ):
-            raise RuntimeError(f"encoded evaluation video contract mismatch: {video_path}")
+            raise RuntimeError(
+                f"encoded evaluation video contract mismatch: {video_path}"
+            )
         source_counts = dict(sorted(Counter(replay.planner_modes).items()))
         replay_matches = bool(
             replay.success is bool(item.success)
@@ -698,8 +683,7 @@ def _render_video_evidence(
             "action_source_counts": source_counts,
             "fallback_enabled": False,
             "fallback_used": any(
-                name not in {DIRECT_POLICY, "joint_wam_flow"}
-                for name in source_counts
+                name not in {DIRECT_POLICY, "joint_wam_flow"} for name in source_counts
             ),
             "replay_matches_evaluation": replay_matches,
             "steps": int(replay.steps),
@@ -750,11 +734,15 @@ def _prepare_output_directory(path: Path) -> None:
 
     if path.exists() and not path.is_dir():
         raise FileExistsError(f"output path is not a directory: {path}")
-    existing = sorted(
-        item.relative_to(path).as_posix()
-        for item in path.rglob("*")
-        if item.is_file()
-    ) if path.exists() else []
+    existing = (
+        sorted(
+            item.relative_to(path).as_posix()
+            for item in path.rglob("*")
+            if item.is_file()
+        )
+        if path.exists()
+        else []
+    )
     if existing:
         preview = ", ".join(existing[:5])
         raise FileExistsError(
@@ -789,10 +777,8 @@ def _validate_video_directory(
 
 def _strict_joint_evidence(metrics: Mapping[str, Any]) -> dict[str, Any]:
     positive = {
-        "member_0_parameter_delta_nonzero": "member_0_parameter_delta",
-        "shared_history_parameter_delta_nonzero": (
-            "shared_history_parameter_delta"
-        ),
+        "world_model_parameter_delta_nonzero": "world_model_parameter_delta",
+        "shared_history_parameter_delta_nonzero": ("shared_history_parameter_delta"),
         "world_parameter_delta_nonzero": "world_parameter_delta",
         "action_flow_parameter_delta_nonzero": "action_flow_parameter_delta",
     }
@@ -811,8 +797,7 @@ def _strict_joint_evidence(metrics: Mapping[str, Any]) -> dict[str, Any]:
     checks.update(
         {
             name.replace("_norm", "_nonzero"): bool(
-                isinstance(gradients, Mapping)
-                and _positive_finite(gradients.get(name))
+                isinstance(gradients, Mapping) and _positive_finite(gradients.get(name))
             )
             for name in required_gradients
         }
@@ -825,9 +810,7 @@ def _strict_joint_evidence(metrics: Mapping[str, Any]) -> dict[str, Any]:
             "frozen_teacher_immutable": _exact_zero(
                 metrics.get("frozen_teacher_parameter_delta")
             ),
-            "source_checkpoints_immutable": metrics.get(
-                "source_checkpoints_immutable"
-            )
+            "source_checkpoints_immutable": metrics.get("source_checkpoints_immutable")
             is True,
             "strict_checkpoint_reload_exact": bool(
                 isinstance(reload_metrics, Mapping)
@@ -842,9 +825,7 @@ def _strict_joint_evidence(metrics: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "passed": all(checks.values()),
         "checks": checks,
-        "parameter_deltas": {
-            key: metrics.get(key) for key in positive.values()
-        },
+        "parameter_deltas": {key: metrics.get(key) for key in positive.values()},
         "branch_gradient_maxima": dict(gradients),
         "checkpoint_reload": dict(reload_metrics),
     }
@@ -874,9 +855,7 @@ def _validate_evaluation_config(config: Mapping[str, Any]) -> None:
         fallback["fallback_enabled"]
     ):
         raise ValueError("fallback deployment contract is invalid")
-    if str(video["source_policy"]) != DIRECT_POLICY or bool(
-        video["fallback_enabled"]
-    ):
+    if str(video["source_policy"]) != DIRECT_POLICY or bool(video["fallback_enabled"]):
         raise ValueError("videos must use the direct no-fallback policy")
     if str(video["selection"]) != "sorted_smallest_seed":
         raise ValueError("video selection must be deterministic")
@@ -1083,7 +1062,7 @@ def _configure_torch(config: Mapping[str, Any], device: torch.device) -> None:
         str(runtime.get("torch_float32_matmul_precision", "highest"))
     )
     if device.type == "cpu":
-        threads = int(runtime["cpu_threads"])
+        threads = int(runtime.get("cpu_threads", 1))
         if threads <= 0:
             raise ValueError("runtime.cpu_threads must be positive")
         torch.set_num_threads(threads)
@@ -1292,9 +1271,9 @@ def _markdown(report: Mapping[str, Any]) -> str:
     )
     for suite, values in acceptance["suites"].items():
         lines.append(
-            f"- {suite}: direct `{values.get('direct_success_rate'):.1%}`, "
-            f"prior `{values.get('prior_success_rate'):.1%}`, "
-            f"regression `{values.get('prior_regression'):.1%}`"
+            f"- {suite}: direct `{_format_percent_optional(values.get('direct_success_rate'))}`, "
+            f"prior `{_format_percent_optional(values.get('prior_success_rate'))}`, "
+            f"regression `{_format_percent_optional(values.get('prior_regression'))}`"
         )
     if report["policy_acceptable"]:
         conclusion = "本结果证明当前 proprioceptive Joint WAM 在本任务上可接受"
@@ -1303,8 +1282,7 @@ def _markdown(report: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-            conclusion
-            + "；未评测未饱和任务上的同预算配对消融，因此不声称 joint world "
+            conclusion + "；未评测未饱和任务上的同预算配对消融，因此不声称 joint world "
             "modeling 带来控制增益。",
             "",
         ]
@@ -1314,6 +1292,10 @@ def _markdown(report: Mapping[str, Any]) -> str:
 
 def _format_optional(value: Any) -> str:
     return "n/a" if value is None else f"{float(value):.3f}"
+
+
+def _format_percent_optional(value: Any) -> str:
+    return "n/a" if value is None else f"{float(value):.1%}"
 
 
 def _atomic_write_text(path: Path, content: str) -> None:

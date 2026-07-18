@@ -12,9 +12,7 @@ data:
 initialization:
   world_model_checkpoint: checkpoints/joint_wam/initialization/world_model
   action_prior_checkpoint: checkpoints/joint_wam/initialization/action_prior
-  member_index: 0
-  online_load_ensemble: false
-  generated_action_teacher: frozen_member_0
+  generated_action_teacher: frozen_world_model
 
 action_chunk:
   horizon: 8
@@ -123,17 +121,17 @@ joint_training:
       scope: flow_only
       steps: 64
       action_learning_rate: 0.00002
-      member_learning_rate: 0.0
+      world_model_learning_rate: 0.0
     - name: world_heads_coupling
       scope: world_heads
       steps: 128
       action_learning_rate: 0.00002
-      member_learning_rate: 0.000001
+      world_model_learning_rate: 0.000001
     - name: full_joint_coupling
       scope: full_joint
       steps: 512
       action_learning_rate: 0.00002
-      member_learning_rate: 0.0000005
+      world_model_learning_rate: 0.0000005
 
 runtime:
   anchor_residual_scale: 0.10

@@ -39,7 +39,7 @@ from train.joint_wam_checkpointing import (  # noqa: E402
 )
 from train.progress import TrainingProgress  # noqa: E402
 from train.rwm_ar_losses import RWMLossWeights  # noqa: E402
-from train.rwm_u_checkpointing import load_rwm_u_member_checkpoint  # noqa: E402
+from train.rwm_ar_checkpointing import load_wam_checkpoint  # noqa: E402
 from train.trajectory_dataset import InMemoryProprioSequenceDataset  # noqa: E402
 
 
@@ -82,20 +82,16 @@ def main(argv: list[str] | None = None) -> int:
 
     parent_manifest = settings["world_model_checkpoint"] / "dataset_manifest.json"
     if _sha256(settings["split_manifest"]) != _sha256(parent_manifest):
-        raise ValueError(
-            "training data split must match the initialization manifest"
-        )
+        raise ValueError("training data split must match the initialization manifest")
 
     source_before = _source_fingerprints(settings)
-    joint, world_model_metadata = load_rwm_u_member_checkpoint(
+    joint, world_model_metadata = load_wam_checkpoint(
         settings["world_model_checkpoint"],
-        0,
         device=device,
         expected_schema_version=PROPRIO_WAM_SCHEMA_VERSION,
     )
-    frozen_teacher, frozen_metadata = load_rwm_u_member_checkpoint(
+    frozen_teacher, frozen_metadata = load_wam_checkpoint(
         settings["world_model_checkpoint"],
-        0,
         device=device,
         expected_schema_version=PROPRIO_WAM_SCHEMA_VERSION,
     )
@@ -121,10 +117,6 @@ def main(argv: list[str] | None = None) -> int:
         expected_schema_version=PROPRIO_WAM_SCHEMA_VERSION,
         expected_normalization_sha256=world_model_metadata["normalization"].sha256(),
     )
-    if int(config["initialization"]["member_index"]) != 0:
-        raise ValueError("Joint WAM is locked to member_index=0")
-    if bool(config["initialization"]["online_load_ensemble"]):
-        raise ValueError("Joint WAM may not load the ensemble online")
     anchor_prior_delta_at_start = _maximum_delta(
         action_prior.state_dict(), flow.anchor_prior.state_dict()
     )
@@ -144,10 +136,9 @@ def main(argv: list[str] | None = None) -> int:
     if any(not partitions[name] for name in ("train", "validation", "test")):
         raise RuntimeError("Joint WAM requires non-empty manifest partitions")
 
-    stage_configs = _stage_configs(config, settings, args.max_steps)
     with TrainingProgress(
         enabled=not args.no_progress,
-        total_stages=3 + len(stage_configs) + 2 + 1,
+        total_stages=3 + len(settings["stages"]) + 2 + 1,
     ) as progress:
         datasets: dict[str, InMemoryProprioSequenceDataset] = {}
         complete: dict[str, np.ndarray] = {}
@@ -198,6 +189,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             for name in ("validation", "test")
         }
+        stage_configs = _stage_configs(
+            config,
+            settings,
+            max_steps=args.max_steps,
+        )
+        configured_steps = sum(stage.max_steps for stage in stage_configs)
         positive_weights = _positive_weights(settings["world_model_checkpoint"])
         history: list[dict[str, Any]] = []
         completed_steps = 0
@@ -227,8 +224,10 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "name": settings["stages"][stage_index]["name"],
                     "scope": stage_config.scope,
+                    "configured_steps": stage_config.max_steps,
                     "steps": stage_steps,
                     "final_loss": final.get("loss"),
+                    "final_action_flow_loss": final.get("action_flow_loss"),
                     "final_world_loss": final.get("world_loss"),
                     "final_generated_consistency": final.get(
                         "generated_consistency_loss"
@@ -256,9 +255,7 @@ def main(argv: list[str] | None = None) -> int:
                 execution_steps=int(config["action_chunk"]["execution_steps"]),
                 solver_steps=int(config["action_chunk"]["solver_steps"]),
                 solver=str(config["action_chunk"]["solver"]),
-                anchor_residual_scale=float(
-                    config["runtime"]["anchor_residual_scale"]
-                ),
+                anchor_residual_scale=float(config["runtime"]["anchor_residual_scale"]),
                 normalized_action_clip=float(
                     config["runtime"]["normalized_action_clip"]
                 ),
@@ -303,9 +300,15 @@ def main(argv: list[str] | None = None) -> int:
             "format_version": "wam.joint_wam.metrics/1",
             "model": "joint_wam",
             "completed_steps": completed_steps,
+            "configured_steps": configured_steps,
             "stage_summaries": stage_summaries,
             "loss_history": history,
             "branch_gradient_maxima": branch_gradient_maxima,
+            "parameter_counts": {
+                "action_flow_total": sum(
+                    parameter.numel() for parameter in flow.parameters()
+                ),
+            },
             "offline": offline,
             "data": {
                 name: {
@@ -315,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 for name in datasets
             },
-            "member_0_parameter_delta": joint_delta,
+            "world_model_parameter_delta": joint_delta,
             "shared_history_parameter_delta": shared_history_delta,
             "world_parameter_delta": world_delta,
             "action_flow_parameter_delta": flow_delta,
@@ -327,8 +330,6 @@ def main(argv: list[str] | None = None) -> int:
                 GENERATED_ACTION_WORLD_TARGET_SOURCE
             ),
             "generated_action_demo_state_is_ground_truth": False,
-            "online_loaded_member_indices": [0],
-            "online_ensemble_loaded": False,
             "formal_run": formal_run,
             "debug_limits": {
                 "max_steps": args.max_steps,
@@ -399,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
         split_acceptance = {
             name: joint_wam_offline_acceptance_report(
                 split_metrics,
-                member_0_parameter_delta=joint_delta,
+                world_model_parameter_delta=joint_delta,
                 shared_history_parameter_delta=shared_history_delta,
                 world_parameter_delta=world_delta,
                 action_flow_parameter_delta=flow_delta,
@@ -408,9 +409,7 @@ def main(argv: list[str] | None = None) -> int:
                 source_checkpoints_immutable=source_immutable,
                 checkpoint_reload_max_abs_diff=reload_difference,
                 branch_gradient_maxima=branch_gradient_maxima,
-                maximum_expert_world_nrmse=float(
-                    limits["maximum_expert_world_nrmse"]
-                ),
+                maximum_expert_world_nrmse=float(limits["maximum_expert_world_nrmse"]),
                 maximum_generated_teacher_state_nrmse=float(
                     limits["maximum_generated_teacher_state_nrmse"]
                 ),
@@ -420,9 +419,7 @@ def main(argv: list[str] | None = None) -> int:
         formal_checks = _formal_acceptance_checks(
             args,
             completed_steps=completed_steps,
-            configured_steps=sum(
-                int(stage["steps"]) for stage in settings["stages"]
-            ),
+            configured_steps=configured_steps,
             smoke_subset=bool(manifest["smoke_subset"]),
         )
         acceptance = {
@@ -434,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
             "formal_checks": formal_checks,
         }
         metrics["checkpoint_reload"] = {
-            "joint_member_max_abs_diff": joint_reload_difference,
+            "world_model_max_abs_diff": joint_reload_difference,
             "action_flow_max_abs_diff": flow_reload_difference,
             "max_abs_diff": reload_difference,
             "strict": True,
@@ -460,7 +457,7 @@ def main(argv: list[str] | None = None) -> int:
         "passed": metrics["passed"],
         "completed_steps": completed_steps,
         "test": offline["test"],
-        "member_0_parameter_delta": joint_delta,
+        "world_model_parameter_delta": joint_delta,
         "shared_history_parameter_delta": shared_history_delta,
         "world_parameter_delta": world_delta,
         "action_flow_parameter_delta": flow_delta,
@@ -475,7 +472,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _stage_configs(
-    config: Mapping[str, Any], settings: Mapping[str, Any], max_steps: int
+    config: Mapping[str, Any],
+    settings: Mapping[str, Any],
+    *,
+    max_steps: int,
 ) -> list[JointWAMTrainConfig]:
     training = config["joint_training"]
     losses = training["loss_weights"]
@@ -494,12 +494,12 @@ def _stage_configs(
         result.append(
             JointWAMTrainConfig(
                 scope=str(raw["scope"]),
-                epochs=1,
+                name=str(raw["name"]),
                 flow_learning_rate=float(raw["action_learning_rate"]),
-                member_learning_rate=float(raw["member_learning_rate"]),
+                world_model_learning_rate=float(raw["world_model_learning_rate"]),
                 weight_decay=float(training["weight_decay"]),
                 flow_gradient_clip_norm=float(training["gradient_clip_norm"]),
-                member_gradient_clip_norm=float(training["gradient_clip_norm"]),
+                world_model_gradient_clip_norm=float(training["gradient_clip_norm"]),
                 use_amp=bool(training["use_amp"]),
                 max_steps=steps,
                 warm_start_probability=float(training["warm_start_probability"]),
@@ -535,15 +535,11 @@ def _stage_configs(
                 ),
                 action_loss_weight=float(losses["action_flow"]),
                 world_loss_weight=float(losses["expert_world"]),
-                generated_consistency_weight=float(
-                    losses["generated_consistency"]
-                ),
+                generated_consistency_weight=float(losses["generated_consistency"]),
                 generated_state_weight=1.0,
                 generated_risk_weight=float(losses["generated_risk"]),
                 generated_progress_weight=float(losses["generated_progress"]),
-                gradient_audit_interval=int(
-                    training["branch_gradient_audit_interval"]
-                ),
+                gradient_audit_interval=int(training["branch_gradient_audit_interval"]),
             )
         )
     if not result:
@@ -560,6 +556,8 @@ def _settings(config: Mapping[str, Any], args: argparse.Namespace) -> dict[str, 
         "full_joint",
     ]:
         raise ValueError("training must progressively unfreeze flow/heads/full model")
+    if any(int(stage["steps"]) <= 0 for stage in stages):
+        raise ValueError("joint training stage steps must be positive")
     if config["checkpoint"].get("format_version") != CHECKPOINT_FORMAT_VERSION:
         raise ValueError("checkpoint format does not match the implementation")
     if args.batch_size is not None and args.batch_size <= 0:
@@ -594,9 +592,7 @@ def _settings(config: Mapping[str, Any], args: argparse.Namespace) -> dict[str, 
         "quality_discount": float(training["action_quality_discount"]),
         "behavior_weights": dict(training["action_quality_behavior_weights"]),
         "require_success": bool(training["action_quality_require_success"]),
-        "min_return_quantile": float(
-            training["action_quality_min_return_quantile"]
-        ),
+        "min_return_quantile": float(training["action_quality_min_return_quantile"]),
         "stages": stages,
     }
 
@@ -623,8 +619,7 @@ def _formal_acceptance_checks(
     formal_run = _formal_run(args)
     return {
         "no_debug_limits": formal_run,
-        "all_configured_training_steps_completed": completed_steps
-        == configured_steps,
+        "all_configured_training_steps_completed": completed_steps == configured_steps,
         "full_dataset_partitions_used": not smoke_subset,
         "full_validation_and_test_evaluated": args.max_eval_batches == -1,
     }
@@ -633,10 +628,10 @@ def _formal_acceptance_checks(
 def _manifest_partitions(path: Path) -> dict[str, list[Path]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("split_unit") != "episode_seed":
-        raise ValueError("world-model ensemble manifest is not episode-seed grouped")
+        raise ValueError("world-model manifest is not episode-seed grouped")
     partitions = payload.get("partitions")
     if not isinstance(partitions, Mapping):
-        raise ValueError("world-model ensemble manifest has no partitions")
+        raise ValueError("world-model manifest has no partitions")
     return {
         name: [Path(str(item)).resolve() for item in partitions[name]]
         for name in ("train", "validation", "test")
@@ -657,21 +652,17 @@ def _positive_weights(path: Path) -> dict[str, float]:
 def _source_fingerprints(settings: Mapping[str, Any]) -> dict[str, str]:
     world_model = settings["world_model_checkpoint"]
     paths: dict[str, Path] = {
-        f"world_model_member_{index}": world_model / f"members/member_{index:02d}.safetensors"
-        for index in range(5)
+        "world_model": world_model / "model.safetensors",
+        "world_model_schema": world_model / "schema.json",
+        "world_model_normalization": world_model / "normalization.npz",
+        "world_model_dataset_manifest": world_model / "dataset_manifest.json",
+        "configured_split_manifest": settings["split_manifest"],
+        "action_prior": settings["action_prior_checkpoint"]
+        / "action_prior.safetensors",
+        "warmup_action_flow": settings["action_flow_checkpoint"]
+        / "action_flow.safetensors",
+        "warmup_schema": settings["action_flow_checkpoint"] / "schema.json",
     }
-    paths.update(
-        {
-            "world_model_schema": world_model / "schema.json",
-            "world_model_normalization": world_model / "normalization.npz",
-            "world_model_dataset_manifest": world_model / "dataset_manifest.json",
-            "configured_split_manifest": settings["split_manifest"],
-            "action_prior": settings["action_prior_checkpoint"]
-            / "action_prior.safetensors",
-            "warmup_action_flow": settings["action_flow_checkpoint"] / "action_flow.safetensors",
-            "warmup_schema": settings["action_flow_checkpoint"] / "schema.json",
-        }
-    )
     return {name: _sha256(path) for name, path in paths.items()}
 
 

@@ -122,7 +122,10 @@ class ActionFlowDistillationBuffer:
             raise ValueError("distillation tensors must include a batch dimension")
         if features.shape[0] != target_actions.shape[0]:
             raise ValueError("distillation batch dimensions must match")
-        if initial_actions is not None and initial_actions.shape != target_actions.shape:
+        if (
+            initial_actions is not None
+            and initial_actions.shape != target_actions.shape
+        ):
             raise ValueError("warm initial actions must match target actions")
         feature_cpu = features.detach().float().cpu()
         target_cpu = target_actions.detach().float().cpu()
@@ -197,23 +200,27 @@ def make_flow_matching_batch(
         dtype=target.dtype,
         generator=generator,
     )
-    warm_actions = synthetic_shifted_warm_start(
-        target_actions, config.execution_steps
-    )
+    warm_actions = synthetic_shifted_warm_start(target_actions, config.execution_steps)
     warm_initial = flow.normalize_actions(warm_actions)
     warm_initial = warm_initial + config.warm_start_noise_std * noise
     cold_initial = config.cold_noise_std * noise
-    cold_zero = torch.rand(
-        (target.shape[0], 1, 1),
-        device=target.device,
-        generator=generator,
-    ) < config.cold_zero_probability
+    cold_zero = (
+        torch.rand(
+            (target.shape[0], 1, 1),
+            device=target.device,
+            generator=generator,
+        )
+        < config.cold_zero_probability
+    )
     cold_initial = torch.where(cold_zero, torch.zeros_like(cold_initial), cold_initial)
-    warm = torch.rand(
-        (target.shape[0], 1, 1),
-        device=target.device,
-        generator=generator,
-    ) < config.warm_start_probability
+    warm = (
+        torch.rand(
+            (target.shape[0], 1, 1),
+            device=target.device,
+            generator=generator,
+        )
+        < config.warm_start_probability
+    )
     initial = torch.where(warm, warm_initial, cold_initial)
     tau = torch.rand(
         (target.shape[0],),
@@ -243,7 +250,7 @@ def train_action_flow(
     action_prior: ActionPrior | None = None,
     progress: ProgressCallback | None = None,
 ) -> tuple[list[dict[str, float]], int]:
-    """Optimize only the action flow while keeping member 0 bitwise frozen."""
+    """Optimize only the action flow while keeping the world model bitwise frozen."""
 
     _freeze_world_model(world_model.to(device))
     if config.action_prior_distillation_steps > flow.config.horizon:
@@ -277,7 +284,9 @@ def train_action_flow(
             actions = batch["candidate_actions"][:, : flow.config.horizon]
             quality = batch["action_quality_weights"].reshape(-1)
             if not bool((quality > 0.0).all()):
-                raise ValueError("action-flow training loader must contain only eligible chunks")
+                raise ValueError(
+                    "action-flow training loader must contain only eligible chunks"
+                )
             optimizer.zero_grad(set_to_none=True)
             with torch.no_grad():
                 hidden, current_state, features = world_model.encode_planning_history(
@@ -298,10 +307,9 @@ def train_action_flow(
                 training_actions = actions.clone()
                 count = config.action_prior_distillation_steps
                 blend = config.action_prior_distillation_blend
-                training_actions[:, :count] = (
-                    (1.0 - blend) * actions[:, :count]
-                    + blend * teacher_actions
-                )
+                training_actions[:, :count] = (1.0 - blend) * actions[
+                    :, :count
+                ] + blend * teacher_actions
             sampled = make_flow_matching_batch(
                 flow, training_actions, config=config, generator=generator
             )
@@ -318,19 +326,24 @@ def train_action_flow(
                     sampled["warm"],
                 )
                 flow_per_sample = (
-                    predicted_velocity - sampled["velocity"]
-                ).square().mean(dim=(1, 2))
-                endpoint_normalized = sampled["path"] + (
-                    1.0 - sampled["time"][:, None, None]
-                ) * predicted_velocity
+                    (predicted_velocity - sampled["velocity"]).square().mean(dim=(1, 2))
+                )
+                endpoint_normalized = (
+                    sampled["path"]
+                    + (1.0 - sampled["time"][:, None, None]) * predicted_velocity
+                )
                 endpoint = flow.denormalize_actions(endpoint_normalized)
-                endpoint_per_sample = (endpoint - training_actions).square().mean(
-                    dim=(1, 2)
+                endpoint_per_sample = (
+                    (endpoint - training_actions).square().mean(dim=(1, 2))
                 )
                 smooth_per_sample = (
-                    (endpoint[:, 1:] - endpoint[:, :-1])
-                    - (training_actions[:, 1:] - training_actions[:, :-1])
-                ).square().mean(dim=(1, 2))
+                    (
+                        (endpoint[:, 1:] - endpoint[:, :-1])
+                        - (training_actions[:, 1:] - training_actions[:, :-1])
+                    )
+                    .square()
+                    .mean(dim=(1, 2))
+                )
                 per_sample = (
                     flow_per_sample
                     + config.endpoint_weight * endpoint_per_sample
@@ -416,7 +429,9 @@ def fine_tune_action_flow_on_policy(
     if replay_enabled and (
         replay_loader is None or world_model is None or action_prior is None
     ):
-        raise ValueError("offline replay requires a loader, world model and action prior")
+        raise ValueError(
+            "offline replay requires a loader, world model and action prior"
+        )
     replay_iterator = iter(replay_loader) if replay_loader is not None else None
     replay_sampling = ActionFlowTrainConfig(epochs=1)
     optimizer = torch.optim.AdamW(
@@ -440,9 +455,10 @@ def fine_tune_action_flow_on_policy(
             targets = data["targets"][indices]
             normalized_target = flow.normalize_actions(targets)
             warm = data["warm"][indices]
-            cold_replay = torch.rand(
-                warm.shape, device=device, generator=generator
-            ) < config.cold_replay_probability
+            cold_replay = (
+                torch.rand(warm.shape, device=device, generator=generator)
+                < config.cold_replay_probability
+            )
             warm = warm & ~cold_replay
             normalized_initial = flow.normalize_actions(data["initials"][indices])
             noise = torch.randn(
@@ -455,7 +471,9 @@ def fine_tune_action_flow_on_policy(
                 config.warm_start_noise_std * noise
             )
             initial = torch.where(
-                warm[:, :, None], normalized_initial, torch.zeros_like(normalized_initial)
+                warm[:, :, None],
+                normalized_initial,
+                torch.zeros_like(normalized_initial),
             )
             tau = torch.rand(
                 (indices.shape[0],),
@@ -463,10 +481,9 @@ def fine_tune_action_flow_on_policy(
                 dtype=features.dtype,
                 generator=generator,
             )
-            path = (
-                (1.0 - tau[:, None, None]) * initial
-                + tau[:, None, None] * normalized_target
-            )
+            path = (1.0 - tau[:, None, None]) * initial + tau[
+                :, None, None
+            ] * normalized_target
             target_velocity = normalized_target - initial
             optimizer.zero_grad(set_to_none=True)
             replay_loss = torch.zeros((), device=device, dtype=features.dtype)
@@ -513,15 +530,19 @@ def fine_tune_action_flow_on_policy(
                     warm.to(dtype=features.dtype),
                 )
                 flow_loss = (predicted_velocity - target_velocity).square().mean()
-                endpoint_normalized = path + (
-                    1.0 - tau[:, None, None]
-                ) * predicted_velocity
+                endpoint_normalized = (
+                    path + (1.0 - tau[:, None, None]) * predicted_velocity
+                )
                 endpoint = flow.denormalize_actions(endpoint_normalized)
                 endpoint_loss = (endpoint - targets).square().mean()
                 smoothness_loss = (
-                    (endpoint[:, 1:] - endpoint[:, :-1])
-                    - (targets[:, 1:] - targets[:, :-1])
-                ).square().mean()
+                    (
+                        (endpoint[:, 1:] - endpoint[:, :-1])
+                        - (targets[:, 1:] - targets[:, :-1])
+                    )
+                    .square()
+                    .mean()
+                )
                 solver_current = initial
                 solver_dt = 1.0 / config.solver_steps
                 warm_float = warm.to(dtype=features.dtype)
@@ -550,18 +571,25 @@ def fine_tune_action_flow_on_policy(
                         replay_sampled["warm"],
                     )
                     replay_flow_loss = (
-                        replay_velocity - replay_sampled["velocity"]
-                    ).square().mean()
-                    replay_endpoint_normalized = replay_sampled["path"] + (
-                        1.0 - replay_sampled["time"][:, None, None]
-                    ) * replay_velocity
+                        (replay_velocity - replay_sampled["velocity"]).square().mean()
+                    )
+                    replay_endpoint_normalized = (
+                        replay_sampled["path"]
+                        + (1.0 - replay_sampled["time"][:, None, None])
+                        * replay_velocity
+                    )
                     replay_endpoint = flow.denormalize_actions(
                         replay_endpoint_normalized
                     )
-                    replay_loss = replay_flow_loss + (
-                        replay_endpoint
-                        - flow.denormalize_actions(replay_sampled["target"])
-                    ).square().mean()
+                    replay_loss = (
+                        replay_flow_loss
+                        + (
+                            replay_endpoint
+                            - flow.denormalize_actions(replay_sampled["target"])
+                        )
+                        .square()
+                        .mean()
+                    )
                 loss = (
                     flow_loss
                     + config.endpoint_weight * endpoint_loss
@@ -589,6 +617,7 @@ def fine_tune_action_flow_on_policy(
                 "gradient_norm": float(gradient_norm.detach().cpu()),
                 "warm_fraction": float(warm.float().mean().detach().cpu()),
                 "epoch": float(epoch + 1),
+                "epochs": float(config.epochs),
             }
             history.append(item)
             if progress is not None:
@@ -633,10 +662,7 @@ def _history(batch: Mapping[str, Tensor]) -> WorldModelSequenceInputs:
 def _batch_to_device(
     batch: Mapping[str, Tensor], device: torch.device
 ) -> dict[str, Tensor]:
-    return {
-        name: value.to(device, non_blocking=True)
-        for name, value in batch.items()
-    }
+    return {name: value.to(device, non_blocking=True) for name, value in batch.items()}
 
 
 def _freeze_world_model(model: RWMARWorldModel) -> None:

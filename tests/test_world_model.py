@@ -24,7 +24,7 @@ from models.wam import (
 from scripts.train_world_model import main as train_world_model_main
 from train.rwm_ar_checkpointing import load_wam_checkpoint, save_wam_checkpoint
 from train.rwm_ar_losses import RWMLossWeights, compute_rwm_loss
-from train.progress import PhaseDisplay, TrainingProgress
+from train.progress import PhaseDisplay, TrainingProgress, progress_detail
 from train.trajectory_dataset import (
     InMemoryProprioSequenceDataset,
     ProprioSequenceDataset,
@@ -105,7 +105,9 @@ def test_amp_safe_missing_previous_action_with_constant_action_dimension():
 def test_world_model_progress_matches_adaptive_braille_style():
     progress = TrainingProgress(enabled=True, total_stages=1)
     phase = progress.add_phase("train RWM-AR H=4", 3)
-    assert any(isinstance(column, TimeElapsedColumn) for column in phase.progress.columns)
+    assert any(
+        isinstance(column, TimeElapsedColumn) for column in phase.progress.columns
+    )
     assert any(
         isinstance(column, TimeRemainingColumn) for column in phase.progress.columns
     )
@@ -120,6 +122,20 @@ def test_world_model_progress_matches_adaptive_braille_style():
         assert "steps 1→2" in output.getvalue()
         assert any("⠀" < character <= "⣿" for character in output.getvalue())
     phase.finish("done")
+
+
+def test_episode_progress_is_total_aware_and_tolerates_missing_total():
+    assert progress_detail({"episode": 3, "episodes": 32}) == "episode 3/32"
+    assert progress_detail({"episode": 3}) == "episode 3"
+
+
+def test_loss_progress_supports_epoch_and_step_based_trainers():
+    assert (
+        progress_detail({"epoch": 2, "epochs": 15, "step": 7, "loss": 0.125})
+        == "epoch 2/15 loss 0.12500"
+    )
+    assert progress_detail({"step": 7, "loss": 0.125}) == "step 7 loss 0.12500"
+    assert progress_detail({"loss": 0.125}) == "train loss 0.12500"
 
 
 def test_multistep_loss_is_finite_and_backpropagates():
@@ -213,9 +229,7 @@ def test_state_mean_objective_cannot_be_bypassed_by_variance_inflation():
     low_variance_loss, low_components = objective(-8.0)
     high_variance_loss, high_components = objective(2.0)
     torch.testing.assert_close(low_variance_loss, high_variance_loss)
-    torch.testing.assert_close(
-        low_variance_loss, low_components["state_mean_mse"]
-    )
+    torch.testing.assert_close(low_variance_loss, low_components["state_mean_mse"])
     torch.testing.assert_close(
         low_components["state_mean_mse"], high_components["state_mean_mse"]
     )
@@ -238,9 +252,7 @@ def test_in_memory_world_model_windows_match_disk_loader(tmp_path):
         forecast_horizon=4,
         allow_legacy_wam=False,
     )
-    restored = InMemoryProprioSequenceDataset.from_cache_payload(
-        memory.cache_payload()
-    )
+    restored = InMemoryProprioSequenceDataset.from_cache_payload(memory.cache_payload())
     try:
         assert len(disk) == len(memory) == len(restored) == 10
         assert memory.nbytes > 0
@@ -293,7 +305,6 @@ def test_checkpoint_strict_reload_is_elementwise_identical(tmp_path):
             getattr(actual, name), getattr(expected, name), rtol=0, atol=0
         )
     assert metadata["schema"]["normalization_sha256"] == stats.sha256()
-    assert (tmp_path / "ema_model.safetensors").exists()
 
 
 def test_open_loop_reports_all_required_horizons():
@@ -353,7 +364,6 @@ def test_world_model_training_entrypoint_smoke(tmp_path):
             "predict_delta": True,
         },
         "model": {
-            "ensemble_size": 1,
             "encoder_hidden_dim": 16,
             "gru_hidden_dim": 12,
             "gru_layers": 1,

@@ -394,7 +394,6 @@ def _resolve_settings(
         "dropout": float(model["dropout"]),
         "min_log_std": float(model["min_log_std"]),
         "max_log_std": float(model["max_log_std"]),
-        "ensemble_size": int(model["ensemble_size"]),
         "predict_delta": bool(features["predict_delta"]),
         "training_mode": str(training["mode"]),
         "privileged_inputs": bool(training["privileged_inputs"]),
@@ -471,10 +470,6 @@ def _validate_settings(settings: Mapping[str, Any]) -> None:
         raise ValueError("overfit_refine_epochs must be non-negative")
     if settings["overfit_refine_learning_rate"] <= 0.0:
         raise ValueError("overfit_refine_learning_rate must be positive")
-    if settings["ensemble_size"] != 1:
-        raise ValueError(
-            "recurrent world model requires ensemble_size=1; ensemble belongs to world-model ensemble"
-        )
     if not settings["predict_delta"]:
         raise ValueError("recurrent world model requires state_features.predict_delta=true")
     if settings["training_mode"] != "autoregressive":

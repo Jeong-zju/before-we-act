@@ -33,9 +33,7 @@ from train.rwm_ar_losses import RWMLossWeights, compute_rwm_loss
 
 JointWAMScope = Literal["flow_only", "world_heads", "full_joint"]
 ProgressCallback = Callable[[Mapping[str, Any]], None]
-GENERATED_ACTION_TARGET_SOURCE = (
-    "frozen_world_model_same_generated_actions"
-)
+GENERATED_ACTION_TARGET_SOURCE = "frozen_world_model_same_generated_actions"
 
 
 @dataclass(frozen=True)
@@ -43,9 +41,9 @@ class JointWAMTrainConfig:
     """One Joint WAM optimization stage.
 
     The action flow is trainable in every scope.  ``scope`` controls which
-    parameters of the Joint member-0 copy are additionally trainable:
+    parameters of the Joint world-model copy are additionally trainable:
 
-    * ``flow_only``: no Joint-member parameters;
+    * ``flow_only``: no Joint world-model parameters;
     * ``world_heads``: the action-conditioned decoder and prediction heads;
     * ``full_joint``: history encoder, recurrent belief, decoder, and heads.
 
@@ -57,10 +55,10 @@ class JointWAMTrainConfig:
     name: str = ""
     epochs: int = 1
     flow_learning_rate: float = 2e-5
-    member_learning_rate: float = 2e-6
+    world_model_learning_rate: float = 2e-6
     weight_decay: float = 1e-5
     flow_gradient_clip_norm: float = 10.0
-    member_gradient_clip_norm: float = 1.0
+    world_model_gradient_clip_norm: float = 1.0
     use_amp: bool = True
     max_steps: int = -1
 
@@ -116,18 +114,22 @@ class JointWAMTrainConfig:
         for name in (
             "flow_learning_rate",
             "flow_gradient_clip_norm",
-            "member_gradient_clip_norm",
+            "world_model_gradient_clip_norm",
             "normalized_action_clip",
             "anchor_residual_scale",
         ):
             if float(getattr(self, name)) <= 0.0:
                 raise ValueError(f"{name} must be positive")
-        if self.member_learning_rate < 0.0:
-            raise ValueError("member_learning_rate must be non-negative")
-        if self.scope != "flow_only" and self.member_learning_rate == 0.0:
-            raise ValueError("trainable-member scopes require a positive member LR")
-        if self.member_learning_rate >= self.flow_learning_rate:
-            raise ValueError("member_learning_rate must be smaller than flow_learning_rate")
+        if self.world_model_learning_rate < 0.0:
+            raise ValueError("world_model_learning_rate must be non-negative")
+        if self.scope != "flow_only" and self.world_model_learning_rate == 0.0:
+            raise ValueError(
+                "trainable world-model scopes require a positive world-model LR"
+            )
+        if self.world_model_learning_rate >= self.flow_learning_rate:
+            raise ValueError(
+                "world_model_learning_rate must be smaller than flow_learning_rate"
+            )
         if self.weight_decay < 0.0:
             raise ValueError("weight_decay must be non-negative")
         for name in (
@@ -226,7 +228,7 @@ def differentiable_flow_generate(
     This mirrors :meth:`StatefulActionFlow.generate` numerically, but uses
     out-of-place clamps and has no ``no_grad`` decorator.  Consequently a world
     consistency loss on its result can update both the flow and its shared
-    Joint-member conditioning features.
+    Joint world-model conditioning features.
     """
 
     if solver_steps <= 0:
@@ -244,11 +246,16 @@ def differentiable_flow_generate(
         if warm_start_mask is not None and bool(warm_start_mask.bool().any()):
             raise ValueError("warm_start_mask requires initial_actions")
         initial = cold
-        warm = torch.zeros((batch_size, 1), device=features.device, dtype=features.dtype)
+        warm = torch.zeros(
+            (batch_size, 1), device=features.device, dtype=features.dtype
+        )
     else:
         if tuple(initial_actions.shape) != shape:
             raise ValueError(f"initial_actions must have shape {shape}")
-        if initial_actions.device != features.device or initial_actions.dtype != features.dtype:
+        if (
+            initial_actions.device != features.device
+            or initial_actions.dtype != features.dtype
+        ):
             raise TypeError("initial_actions must match feature device and dtype")
         normalized_warm = flow.normalize_actions(initial_actions).clamp(
             -normalized_clip, normalized_clip
@@ -304,9 +311,7 @@ def rollout_frozen_prior_chunk(
     if steps <= 0:
         raise ValueError("steps must be positive")
     entries = tuple(
-        fixed_actions.items()
-        if isinstance(fixed_actions, Mapping)
-        else fixed_actions
+        fixed_actions.items() if isinstance(fixed_actions, Mapping) else fixed_actions
     )
     for raw_index, raw_value in entries:
         index, value = int(raw_index), float(raw_value)
@@ -344,7 +349,9 @@ def build_deployed_action_chunk(
     result = (
         anchor_actions + residual_scale * (generated_actions - anchor_actions)
     ).clamp(-1.0, 1.0)
-    entries = fixed_actions.items() if isinstance(fixed_actions, Mapping) else fixed_actions
+    entries = (
+        fixed_actions.items() if isinstance(fixed_actions, Mapping) else fixed_actions
+    )
     for raw_index, raw_value in entries:
         index, value = int(raw_index), float(raw_value)
         if not 0 <= index < result.shape[-1]:
@@ -395,9 +402,12 @@ def generated_action_consistency_loss(
     # Explicitly disable the caller's autocast context so its GRU hidden state,
     # current state, and candidate actions remain the same FP32 dtype required
     # by ``predict_from_encoded_history``.
-    with torch.no_grad(), torch.autocast(
-        device_type=history.states.device.type,
-        enabled=False,
+    with (
+        torch.no_grad(),
+        torch.autocast(
+            device_type=history.states.device.type,
+            enabled=False,
+        ),
     ):
         teacher_hidden, teacher_state = frozen_teacher.encode_history(history)
         teacher = frozen_teacher.predict_from_encoded_history(
@@ -448,7 +458,7 @@ def configure_joint_wam_scope(
     frozen_teacher: RWMARWorldModel,
     scope: JointWAMScope,
 ) -> tuple[list[nn.Parameter], list[nn.Parameter]]:
-    """Freeze immutable assets and return trainable flow/member parameters."""
+    """Freeze immutable assets and return trainable flow/world-model parameters."""
 
     if scope not in {"flow_only", "world_heads", "full_joint"}:
         raise ValueError("unsupported Joint WAM training scope")
@@ -468,7 +478,7 @@ def configure_joint_wam_scope(
         # Parameters stay frozen, but generated-world consistency must still
         # differentiate through the action-conditioned recurrent rollout back
         # to the flow inputs.  cuDNN refuses RNN input-gradient backward when
-        # the GRU forward ran in eval mode.  The accepted member-0 config has
+        # the GRU forward ran in eval mode.  The accepted world-model config has
         # dropout=0, so train mode changes no stochastic semantics here.
         joint_model.train()
     else:
@@ -485,18 +495,22 @@ def configure_joint_wam_scope(
     flow_parameters = [
         parameter for parameter in flow.parameters() if parameter.requires_grad
     ]
-    member_parameters = [
+    world_model_parameters = [
         parameter for parameter in joint_model.parameters() if parameter.requires_grad
     ]
     if not flow_parameters:
-        raise RuntimeError("Joint WAM scope exposes no trainable action-flow parameters")
-    if scope != "flow_only" and not member_parameters:
-        raise RuntimeError("Joint WAM scope exposes no trainable Joint-member parameters")
+        raise RuntimeError(
+            "Joint WAM scope exposes no trainable action-flow parameters"
+        )
+    if scope != "flow_only" and not world_model_parameters:
+        raise RuntimeError(
+            "Joint WAM scope exposes no trainable Joint world-model parameters"
+        )
     if any(parameter.requires_grad for parameter in frozen_teacher.parameters()):
         raise RuntimeError("frozen initialization teacher became trainable")
     if any(parameter.requires_grad for parameter in flow.anchor_prior.parameters()):
         raise RuntimeError("embedded action-prior anchor became trainable")
-    return flow_parameters, member_parameters
+    return flow_parameters, world_model_parameters
 
 
 def train_joint_wam_stage(
@@ -517,15 +531,15 @@ def train_joint_wam_stage(
     flow.to(device)
     joint_model.to(device)
     frozen_teacher.to(device)
-    flow_parameters, member_parameters = configure_joint_wam_scope(
+    flow_parameters, world_model_parameters = configure_joint_wam_scope(
         flow, joint_model, frozen_teacher, config.scope
     )
     parameter_groups: list[dict[str, Any]] = [
         {"params": flow_parameters, "lr": config.flow_learning_rate}
     ]
-    if member_parameters:
+    if world_model_parameters:
         parameter_groups.append(
-            {"params": member_parameters, "lr": config.member_learning_rate}
+            {"params": world_model_parameters, "lr": config.world_model_learning_rate}
         )
     optimizer = torch.optim.AdamW(
         parameter_groups,
@@ -555,19 +569,16 @@ def train_joint_wam_stage(
                 teacher_hidden, teacher_state, _ = (
                     frozen_teacher.encode_planning_history(history_inputs)
                 )
-                action_teacher = rollout_frozen_prior_chunk(
+                supervised_actions = rollout_frozen_prior_chunk(
                     frozen_teacher,
                     flow,
                     teacher_hidden,
                     teacher_state,
                     steps=flow.config.horizon,
                     fixed_actions=config.fixed_actions,
-                )
-                action_teacher = action_teacher.detach()
+                ).detach()
 
-            ratio = _generated_action_ratio(
-                config, completed_steps, estimated_steps
-            )
+            ratio = _generated_action_ratio(config, completed_steps, estimated_steps)
             # Keep the recurrent history contract in FP32.  Under autocast a
             # GRU returns a BF16 hidden state while ``current_state`` remains
             # the original FP32 tensor; the public encoded-history rollout
@@ -586,7 +597,7 @@ def train_joint_wam_stage(
                 action_parts = _action_flow_loss(
                     flow,
                     joint_features,
-                    action_teacher.to(dtype=joint_features.dtype),
+                    supervised_actions.to(dtype=joint_features.dtype),
                     batch["action_quality_weights"].reshape(-1),
                     config=config,
                     generator=generator,
@@ -618,7 +629,7 @@ def train_joint_wam_stage(
                     joint_hidden,
                     joint_state,
                     joint_features,
-                    action_teacher,
+                    supervised_actions,
                     ratio=ratio,
                     config=config,
                     generator=generator,
@@ -626,7 +637,7 @@ def train_joint_wam_stage(
                 consistency_loss = (
                     consistency.total
                     if consistency is not None
-                    else _connected_zero(flow_parameters, member_parameters)
+                    else _connected_zero(flow_parameters, world_model_parameters)
                 )
                 total_loss = (
                     config.action_loss_weight * action_parts["total"]
@@ -643,7 +654,7 @@ def train_joint_wam_stage(
                     world_loss,
                     consistency_loss,
                     flow_parameters=flow_parameters,
-                    member_parameters=member_parameters,
+                    world_model_parameters=world_model_parameters,
                 )
                 if not all(math.isfinite(value) for value in audit.values()):
                     raise FloatingPointError(
@@ -655,13 +666,13 @@ def train_joint_wam_stage(
             flow_gradient_norm = torch.nn.utils.clip_grad_norm_(
                 flow_parameters, config.flow_gradient_clip_norm
             )
-            member_gradient_norm: Tensor | float = 0.0
-            if member_parameters:
-                member_gradient_norm = torch.nn.utils.clip_grad_norm_(
-                    member_parameters, config.member_gradient_clip_norm
+            world_model_gradient_norm: Tensor | float = 0.0
+            if world_model_parameters:
+                world_model_gradient_norm = torch.nn.utils.clip_grad_norm_(
+                    world_model_parameters, config.world_model_gradient_clip_norm
                 )
             if not math.isfinite(float(flow_gradient_norm)) or not math.isfinite(
-                float(member_gradient_norm)
+                float(world_model_gradient_norm)
             ):
                 raise FloatingPointError("non-finite Joint WAM gradient norm")
             scaler.step(optimizer)
@@ -679,6 +690,7 @@ def train_joint_wam_stage(
             )
             item: dict[str, Any] = {
                 "scope": config.scope,
+                "flow_action_target_source": "frozen_action_prior_rollout",
                 "stage_name": config.name or config.scope,
                 "epoch": epoch + 1,
                 "step": completed_steps,
@@ -686,8 +698,12 @@ def train_joint_wam_stage(
                 "action_loss": float(action_parts["total"].detach().cpu()),
                 "action_flow_loss": float(action_parts["flow"].detach().cpu()),
                 "action_endpoint_loss": float(action_parts["endpoint"].detach().cpu()),
-                "action_smoothness_loss": float(action_parts["smoothness"].detach().cpu()),
-                "action_supervised_samples": int(action_parts["samples"].detach().cpu()),
+                "action_smoothness_loss": float(
+                    action_parts["smoothness"].detach().cpu()
+                ),
+                "action_supervised_samples": int(
+                    action_parts["samples"].detach().cpu()
+                ),
                 "world_loss": float(world_loss.detach().cpu()),
                 "world_state_mean_mse": float(world_parts["state_mean_mse"].cpu()),
                 "world_state_nll": float(world_parts["state_nll"].cpu()),
@@ -701,16 +717,18 @@ def train_joint_wam_stage(
                 "generated_action_target_source": GENERATED_ACTION_TARGET_SOURCE,
                 "generated_action_demo_state_is_ground_truth": False,
                 "generated_teacher_targets_detached": (
-                    True if consistency is None else consistency.teacher_targets_detached
+                    True
+                    if consistency is None
+                    else consistency.teacher_targets_detached
                 ),
                 "flow_gradient_norm": float(flow_gradient_norm),
-                "member_gradient_norm": float(member_gradient_norm),
+                "world_model_gradient_norm": float(world_model_gradient_norm),
                 "total_gradient_norm": math.hypot(
-                    float(flow_gradient_norm), float(member_gradient_norm)
+                    float(flow_gradient_norm), float(world_model_gradient_norm)
                 ),
                 "flow_learning_rate": config.flow_learning_rate,
-                "member_learning_rate": (
-                    config.member_learning_rate if member_parameters else 0.0
+                "world_model_learning_rate": (
+                    config.world_model_learning_rate if world_model_parameters else 0.0
                 ),
                 "gradient_audit_performed": bool(
                     completed_steps - 1
@@ -719,9 +737,9 @@ def train_joint_wam_stage(
                 ),
                 **audit,
             }
-            history.append(item)
             if progress is not None:
                 progress(item)
+            history.append(item)
     return history, completed_steps
 
 
@@ -769,7 +787,7 @@ def audit_joint_wam_branch_gradients(
     consistency_loss: Tensor,
     *,
     flow_parameters: Sequence[nn.Parameter],
-    member_parameters: Sequence[nn.Parameter],
+    world_model_parameters: Sequence[nn.Parameter],
 ) -> dict[str, float]:
     """Measure the six objective-to-branch gradient paths without populating grads."""
 
@@ -778,19 +796,19 @@ def audit_joint_wam_branch_gradients(
             action_loss, flow_parameters
         ),
         "action_to_backbone_gradient_norm": _branch_gradient_norm(
-            action_loss, member_parameters
+            action_loss, world_model_parameters
         ),
         "world_to_flow_gradient_norm": _branch_gradient_norm(
             world_loss, flow_parameters
         ),
         "world_to_backbone_gradient_norm": _branch_gradient_norm(
-            world_loss, member_parameters
+            world_loss, world_model_parameters
         ),
         "consistency_to_flow_gradient_norm": _branch_gradient_norm(
             consistency_loss, flow_parameters
         ),
         "consistency_to_backbone_gradient_norm": _branch_gradient_norm(
-            consistency_loss, member_parameters
+            consistency_loss, world_model_parameters
         ),
     }
 
@@ -811,19 +829,19 @@ def _action_flow_loss(
         dtype=target.dtype,
         generator=generator,
     )
-    warm_actions = synthetic_shifted_warm_start(
-        target_actions, config.execution_steps
-    )
+    warm_actions = synthetic_shifted_warm_start(target_actions, config.execution_steps)
     warm_initial = flow.normalize_actions(warm_actions)
     warm_initial = warm_initial + config.warm_start_noise_std * noise
     cold_initial = config.cold_noise_std * noise
-    cold_zero = torch.rand(
-        (target.shape[0], 1, 1), device=target.device, generator=generator
-    ) < config.cold_zero_probability
+    cold_zero = (
+        torch.rand((target.shape[0], 1, 1), device=target.device, generator=generator)
+        < config.cold_zero_probability
+    )
     cold_initial = torch.where(cold_zero, torch.zeros_like(cold_initial), cold_initial)
-    warm = torch.rand(
-        (target.shape[0], 1, 1), device=target.device, generator=generator
-    ) < config.warm_start_probability
+    warm = (
+        torch.rand((target.shape[0], 1, 1), device=target.device, generator=generator)
+        < config.warm_start_probability
+    )
     initial = torch.where(warm, warm_initial, cold_initial)
     tau = torch.rand(
         (target.shape[0],),
@@ -845,9 +863,13 @@ def _action_flow_loss(
     endpoint_actions = flow.denormalize_actions(endpoint_normalized)
     endpoint_per_sample = (endpoint_actions - target_actions).square().mean(dim=(1, 2))
     smoothness_per_sample = (
-        (endpoint_actions[:, 1:] - endpoint_actions[:, :-1])
-        - (target_actions[:, 1:] - target_actions[:, :-1])
-    ).square().mean(dim=(1, 2))
+        (
+            (endpoint_actions[:, 1:] - endpoint_actions[:, :-1])
+            - (target_actions[:, 1:] - target_actions[:, :-1])
+        )
+        .square()
+        .mean(dim=(1, 2))
+    )
     weights = quality.to(device=target.device, dtype=target.dtype).clamp_min(0.0)
     selected = weights > 0.0
     denominator = weights.sum()
@@ -860,12 +882,13 @@ def _action_flow_loss(
     flow_loss = weighted(flow_per_sample)
     endpoint_loss = weighted(endpoint_per_sample)
     smoothness_loss = weighted(smoothness_per_sample)
+    action_total = (
+        flow_loss
+        + config.action_endpoint_weight * endpoint_loss
+        + config.action_smoothness_weight * smoothness_loss
+    )
     return {
-        "total": (
-            flow_loss
-            + config.action_endpoint_weight * endpoint_loss
-            + config.action_smoothness_weight * smoothness_loss
-        ),
+        "total": action_total,
         "flow": flow_loss,
         "endpoint": endpoint_loss,
         "smoothness": smoothness_loss,
@@ -881,21 +904,26 @@ def _generated_consistency_subbatch(
     joint_hidden: Tensor,
     joint_state: Tensor,
     joint_features: Tensor,
-    action_teacher: Tensor,
+    reference_actions: Tensor,
     *,
     ratio: float,
     config: JointWAMTrainConfig,
     generator: torch.Generator,
 ) -> tuple[GeneratedActionConsistency | None, int]:
     batch_size = joint_features.shape[0]
-    selected = torch.rand((batch_size,), device=joint_features.device, generator=generator) < ratio
+    selected = (
+        torch.rand((batch_size,), device=joint_features.device, generator=generator)
+        < ratio
+    )
     count = int(selected.sum().detach().cpu())
     if count == 0:
         return None, 0
     selected_hidden = joint_hidden[:, selected]
     selected_state = joint_state[selected]
     selected_features = joint_features[selected]
-    selected_teacher_actions = action_teacher[selected].to(dtype=selected_features.dtype)
+    selected_reference_actions = reference_actions[selected].to(
+        dtype=selected_features.dtype
+    )
     anchor_actions = rollout_frozen_prior_chunk(
         joint_model,
         flow,
@@ -905,11 +933,12 @@ def _generated_consistency_subbatch(
         fixed_actions=config.fixed_actions,
     )
     warm_seed = synthetic_shifted_warm_start(
-        selected_teacher_actions, config.execution_steps
+        selected_reference_actions, config.execution_steps
     )
-    warm_mask = torch.rand(
-        (count,), device=selected_features.device, generator=generator
-    ) < config.generated_warm_start_probability
+    warm_mask = (
+        torch.rand((count,), device=selected_features.device, generator=generator)
+        < config.generated_warm_start_probability
+    )
     raw_generated = differentiable_flow_generate(
         flow,
         selected_features,
@@ -951,9 +980,9 @@ def _validate_model_contract(
     if joint_model.config != frozen_teacher.config:
         raise ValueError("Joint and frozen teacher model configurations differ")
     if flow.config.feature_dim != joint_model.planning_feature_dim:
-        raise ValueError("flow feature dimension does not match Joint member")
+        raise ValueError("flow feature dimension does not match Joint world model")
     if flow.config.action_dim != joint_model.config.action_dim:
-        raise ValueError("flow action dimension does not match Joint member")
+        raise ValueError("flow action dimension does not match Joint world model")
     if config.world_horizon > flow.config.horizon:
         raise ValueError("world_horizon cannot exceed the action-chunk horizon")
     if config.execution_steps >= flow.config.horizon:
@@ -961,7 +990,7 @@ def _validate_model_contract(
     if any(index >= flow.config.action_dim for index, _ in config.fixed_actions):
         raise ValueError("fixed action index exceeds the action dimension")
     if flow.anchor_prior.config.feature_dim != joint_model.planning_feature_dim:
-        raise ValueError("embedded action anchor does not match Joint member")
+        raise ValueError("embedded action anchor does not match Joint world model")
 
 
 def _validate_training_batch(
@@ -990,7 +1019,9 @@ def _validate_training_batch(
         raise KeyError(f"Joint WAM batch is missing {missing}")
     actions = batch["candidate_actions"]
     if actions.ndim != 3 or actions.shape[1] < flow.config.horizon:
-        raise ValueError("candidate_actions does not contain a complete Joint WAM chunk")
+        raise ValueError(
+            "candidate_actions does not contain a complete Joint WAM chunk"
+        )
     if actions.shape[-1] != flow.config.action_dim:
         raise ValueError("candidate_actions has the wrong action dimension")
     if batch["target_states"].shape[1] < config.world_horizon:
@@ -1057,7 +1088,9 @@ def _apply_fixed_actions(
 ) -> Tensor:
     result = actions
     for index, value in fixed_actions:
-        result = _replace_column(result, index, torch.full_like(result[..., index], value))
+        result = _replace_column(
+            result, index, torch.full_like(result[..., index], value)
+        )
     return result
 
 
@@ -1094,11 +1127,12 @@ def _estimated_stage_steps(
 
 
 def _connected_zero(
-    flow_parameters: Sequence[nn.Parameter], member_parameters: Sequence[nn.Parameter]
+    flow_parameters: Sequence[nn.Parameter],
+    world_model_parameters: Sequence[nn.Parameter],
 ) -> Tensor:
     zero = flow_parameters[0].sum() * 0.0
-    if member_parameters:
-        zero = zero + member_parameters[0].sum() * 0.0
+    if world_model_parameters:
+        zero = zero + world_model_parameters[0].sum() * 0.0
     return zero
 
 
@@ -1129,9 +1163,7 @@ def _empty_branch_audit() -> dict[str, float]:
     }
 
 
-def _assert_parameter_storage_disjoint(
-    first: nn.Module, second: nn.Module
-) -> None:
+def _assert_parameter_storage_disjoint(first: nn.Module, second: nn.Module) -> None:
     first_parameters = dict(first.named_parameters())
     second_parameters = dict(second.named_parameters())
     if first_parameters.keys() != second_parameters.keys():
@@ -1142,7 +1174,9 @@ def _assert_parameter_storage_disjoint(
         if first_parameters[name].data_ptr() == second_parameters[name].data_ptr()
     ]
     if shared:
-        raise ValueError(f"Joint model and frozen teacher share parameter storage: {shared[:3]}")
+        raise ValueError(
+            f"Joint model and frozen teacher share parameter storage: {shared[:3]}"
+        )
 
 
 def _freeze_module(module: nn.Module) -> None:

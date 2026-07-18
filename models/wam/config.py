@@ -1,4 +1,4 @@
-"""Validated configuration for recurrent WAM members and ensembles."""
+"""Validated configuration for the recurrent world model and action policy."""
 
 from __future__ import annotations
 
@@ -49,43 +49,6 @@ class RWMARConfig:
             if any(index < 0 or index >= self.state_dim for index in indices):
                 raise ValueError(f"{name} contains an out-of-range index")
             object.__setattr__(self, name, indices)
-
-
-@dataclass(frozen=True)
-class RWMUEnsembleConfig:
-    """Independent-member configuration for the world-model ensemble RWM-U ensemble."""
-
-    ensemble_size: int = 5
-    bootstrap: bool = True
-
-    def __post_init__(self) -> None:
-        if self.ensemble_size < 2:
-            raise ValueError("RWM-U ensemble_size must be at least 2")
-        if not self.bootstrap:
-            raise ValueError("world-model ensemble RWM-U requires episode bootstrap sampling")
-
-
-@dataclass(frozen=True)
-class RWMURiskConfig:
-    """Weights for planner-facing risk scores; rewards remain outside this API."""
-
-    epistemic_weight: float = 1.0
-    aleatoric_weight: float = 0.1
-    failure_weight: float = 1.0
-    action_ood_weight: float = 0.5
-    action_ood_threshold: float = 3.0
-
-    def __post_init__(self) -> None:
-        for name in (
-            "epistemic_weight",
-            "aleatoric_weight",
-            "failure_weight",
-            "action_ood_weight",
-        ):
-            if getattr(self, name) < 0.0:
-                raise ValueError(f"{name} must be non-negative")
-        if self.action_ood_threshold <= 0.0:
-            raise ValueError("action_ood_threshold must be positive")
 
 
 @dataclass(frozen=True)
@@ -165,7 +128,5 @@ __all__ = [
     "ActionChunkConfig",
     "ActionPriorConfig",
     "RWMARConfig",
-    "RWMUEnsembleConfig",
-    "RWMURiskConfig",
     "StatefulActionFlowConfig",
 ]

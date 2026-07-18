@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import copy
 import inspect
+from pathlib import Path
 
 import numpy as np
 import torch
+import yaml
 
 from eval.joint_wam_training import (
     evaluate_joint_wam_offline,
     joint_wam_offline_acceptance_report,
 )
 from models.wam import (
+    ActionChunkConfig,
     NormalizationStats,
     RWMARConfig,
     RWMARWorldModel,
@@ -18,8 +21,10 @@ from models.wam import (
     StatefulActionFlowConfig,
     WorldModelSequenceInputs,
 )
+from policies.joint_wam import JointWAMPolicy, JointWAMPolicyConfig
 from scripts._train_joint_coupling import (
     _formal_acceptance_checks,
+    _stage_configs,
     build_parser as build_training_parser,
 )
 from train.joint_wam import (
@@ -30,6 +35,9 @@ from train.joint_wam import (
     rollout_frozen_prior_chunk,
     train_joint_wam_stage,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_differentiable_solver_matches_runtime_and_reaches_flow() -> None:
@@ -51,7 +59,9 @@ def test_differentiable_solver_matches_runtime_and_reaches_flow() -> None:
     assert all(parameter.grad is None for parameter in flow.anchor_prior.parameters())
 
 
-def test_generated_consistency_has_no_demo_target_surface_and_detaches_teacher() -> None:
+def test_generated_consistency_has_no_demo_target_surface_and_detaches_teacher() -> (
+    None
+):
     joint = _member()
     teacher = copy.deepcopy(joint)
     for parameter in teacher.parameters():
@@ -69,12 +79,11 @@ def test_generated_consistency_has_no_demo_target_surface_and_detaches_teacher()
     result = generated_action_consistency_loss(
         joint, teacher, history, hidden, state, deployed
     )
-    assert "target_states" not in inspect.signature(
-        generated_action_consistency_loss
-    ).parameters
-    assert result.target_source == (
-        "frozen_world_model_same_generated_actions"
+    assert (
+        "target_states"
+        not in inspect.signature(generated_action_consistency_loss).parameters
     )
+    assert result.target_source == ("frozen_world_model_same_generated_actions")
     assert result.demo_state_is_ground_truth is False
     assert result.teacher_targets_detached
     result.total.backward()
@@ -119,8 +128,12 @@ def test_anchor_rollout_applies_fixed_actions_before_every_imagined_step() -> No
     assert len(observed) == 4
     assert torch.equal(chunk[..., 3], torch.ones_like(chunk[..., 3]))
     assert torch.equal(chunk[..., 7], torch.ones_like(chunk[..., 7]))
-    assert all(torch.equal(action[:, 3], torch.ones_like(action[:, 3])) for action in observed)
-    assert all(torch.equal(action[:, 7], torch.ones_like(action[:, 7])) for action in observed)
+    assert all(
+        torch.equal(action[:, 3], torch.ones_like(action[:, 3])) for action in observed
+    )
+    assert all(
+        torch.equal(action[:, 7], torch.ones_like(action[:, 7])) for action in observed
+    )
 
 
 def test_staged_training_unfreezes_only_declared_scope_and_records_coupling() -> None:
@@ -139,7 +152,7 @@ def test_staged_training_unfreezes_only_declared_scope_and_records_coupling() ->
         teacher,
         [batch],
         device=torch.device("cpu"),
-        config=_train_config("flow_only", max_steps=1, member_lr=0.0),
+        config=_train_config("flow_only", max_steps=1, world_model_lr=0.0),
         seed=1,
     )
     assert steps == 1
@@ -158,11 +171,14 @@ def test_staged_training_unfreezes_only_declared_scope_and_records_coupling() ->
     )
     assert steps == 1
     assert _prefix_delta(before_heads, joint.state_dict(), ("decoder.", "heads.")) > 0
-    assert _prefix_delta(
-        before_heads,
-        joint.state_dict(),
-        ("features.", "transition_encoder.", "belief_gru."),
-    ) == 0.0
+    assert (
+        _prefix_delta(
+            before_heads,
+            joint.state_dict(),
+            ("features.", "transition_encoder.", "belief_gru."),
+        )
+        == 0.0
+    )
 
     before_full = _state(joint)
     history, steps = train_joint_wam_stage(
@@ -175,11 +191,14 @@ def test_staged_training_unfreezes_only_declared_scope_and_records_coupling() ->
         seed=3,
     )
     assert steps == 2
-    assert _prefix_delta(
-        before_full,
-        joint.state_dict(),
-        ("features.", "transition_encoder.", "belief_gru."),
-    ) > 0.0
+    assert (
+        _prefix_delta(
+            before_full,
+            joint.state_dict(),
+            ("features.", "transition_encoder.", "belief_gru."),
+        )
+        > 0.0
+    )
     assert max(item["action_to_backbone_gradient_norm"] for item in history) > 0.0
     assert max(item["world_to_backbone_gradient_norm"] for item in history) > 0.0
     assert max(item["consistency_to_flow_gradient_norm"] for item in history) > 0.0
@@ -212,7 +231,7 @@ def test_offline_evaluation_accepts_strict_joint_evidence() -> None:
     )
     report = joint_wam_offline_acceptance_report(
         metrics,
-        member_0_parameter_delta=1e-4,
+        world_model_parameter_delta=1e-4,
         shared_history_parameter_delta=1e-6,
         world_parameter_delta=1e-4,
         action_flow_parameter_delta=1e-4,
@@ -235,7 +254,7 @@ def test_offline_evaluation_accepts_strict_joint_evidence() -> None:
 
     fuzzy_gradient_report = joint_wam_offline_acceptance_report(
         metrics,
-        member_0_parameter_delta=1e-4,
+        world_model_parameter_delta=1e-4,
         shared_history_parameter_delta=1e-6,
         world_parameter_delta=1e-4,
         action_flow_parameter_delta=1e-4,
@@ -250,15 +269,13 @@ def test_offline_evaluation_accepts_strict_joint_evidence() -> None:
         },
     )
     assert not fuzzy_gradient_report["passed"]
-    assert not fuzzy_gradient_report["checks"][
-        "action_to_backbone_gradient_nonzero"
-    ]
+    assert not fuzzy_gradient_report["checks"]["action_to_backbone_gradient_nonzero"]
 
     non_finite_auxiliary = copy.deepcopy(metrics)
     non_finite_auxiliary["all_offline_values_finite"] = False
     non_finite_report = joint_wam_offline_acceptance_report(
         non_finite_auxiliary,
-        member_0_parameter_delta=1e-4,
+        world_model_parameter_delta=1e-4,
         shared_history_parameter_delta=1e-6,
         world_parameter_delta=1e-4,
         action_flow_parameter_delta=1e-4,
@@ -272,12 +289,12 @@ def test_offline_evaluation_accepts_strict_joint_evidence() -> None:
     assert not non_finite_report["checks"]["all_offline_values_finite"]
 
     relabelled = copy.deepcopy(metrics)
-    relabelled["teacher_consistency"]["cold_generated"][
-        "target_source"
-    ] = "dataset_demo_future"
+    relabelled["teacher_consistency"]["cold_generated"]["target_source"] = (
+        "dataset_demo_future"
+    )
     relabelled_report = joint_wam_offline_acceptance_report(
         relabelled,
-        member_0_parameter_delta=1e-4,
+        world_model_parameter_delta=1e-4,
         shared_history_parameter_delta=1e-6,
         world_parameter_delta=1e-4,
         action_flow_parameter_delta=1e-4,
@@ -319,14 +336,37 @@ def test_partial_training_guards_fail_closed() -> None:
         assert checks["no_debug_limits"] is False
 
 
+def test_joint_stage_schedule_uses_prior_anchored_step_budget() -> None:
+    config = yaml.safe_load(
+        (ROOT / "configs/wam/joint_wam.yaml").read_text(encoding="utf-8")
+    )
+    settings = {"stages": config["joint_training"]["stages"]}
+    stages = _stage_configs(
+        config,
+        settings,
+        max_steps=-1,
+    )
+
+    assert [stage.max_steps for stage in stages] == [64, 128, 512]
+    assert sum(stage.max_steps for stage in stages) == 704
+    assert all(stage.anchor_residual_scale == 0.1 for stage in stages)
+
+    truncated = _stage_configs(
+        config,
+        settings,
+        max_steps=150,
+    )
+    assert [stage.max_steps for stage in truncated] == [64, 86]
+
+
 def _train_config(
-    scope: str, *, max_steps: int, member_lr: float = 1e-4
+    scope: str, *, max_steps: int, world_model_lr: float = 1e-4
 ) -> JointWAMTrainConfig:
     return JointWAMTrainConfig(
         scope=scope,
         epochs=1,
         flow_learning_rate=1e-3,
-        member_learning_rate=member_lr,
+        world_model_learning_rate=world_model_lr,
         use_amp=False,
         max_steps=max_steps,
         world_horizon=8,
@@ -417,9 +457,7 @@ def _state(module: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {name: value.detach().clone() for name, value in module.state_dict().items()}
 
 
-def _delta(
-    before: dict[str, torch.Tensor], after: dict[str, torch.Tensor]
-) -> float:
+def _delta(before: dict[str, torch.Tensor], after: dict[str, torch.Tensor]) -> float:
     return max(
         (
             float((before[name] - value.detach()).abs().max())

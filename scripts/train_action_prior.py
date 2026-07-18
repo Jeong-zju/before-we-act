@@ -1,4 +1,4 @@
-"""Train the action-prior baseline on the frozen accepted world-model ensemble belief."""
+"""Train the action-prior baseline on the frozen world-model belief."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from train.action_prior import (  # noqa: E402
     train_action_prior,
 )
 from train.progress import TrainingProgress  # noqa: E402
-from train.rwm_u_checkpointing import load_rwm_u_member_checkpoint  # noqa: E402
+from train.rwm_ar_checkpointing import load_wam_checkpoint  # noqa: E402
 from train.trajectory_dataset import (  # noqa: E402
     InMemoryProprioSequenceDataset,
     discover_episode_paths,
@@ -63,16 +63,15 @@ def main(argv: list[str] | None = None) -> int:
     settings = _settings(config, args)
     device = _device(args.device)
     _seed(settings["seed"])
-    member, world_model_metadata = load_rwm_u_member_checkpoint(
+    world_model, world_model_metadata = load_wam_checkpoint(
         settings["world_model_checkpoint"],
-        0,
         device=device,
         expected_schema_version=PROPRIO_WAM_SCHEMA_VERSION,
     )
     prior = ActionPrior(
         ActionPriorConfig(
-            feature_dim=member.planning_feature_dim,
-            action_dim=member.config.action_dim,
+            feature_dim=world_model.planning_feature_dim,
+            action_dim=world_model.config.action_dim,
             **settings["model"],
         )
     ).to(device)
@@ -89,10 +88,10 @@ def main(argv: list[str] | None = None) -> int:
             phase = progress.add_phase(f"preload {name} action-prior data", len(partitions[name]))
             datasets[name] = InMemoryProprioSequenceDataset(
                 paths=partitions[name],
-                history_horizon=member.config.history_horizon,
+                history_horizon=world_model.config.history_horizon,
                 forecast_horizon=1,
-                state_dim=member.config.state_dim,
-                action_dim=member.config.action_dim,
+                state_dim=world_model.config.state_dim,
+                action_dim=world_model.config.action_dim,
                 allow_legacy_wam=False,
                 planning_discount=settings["discount"],
                 action_prior_behavior_weights=settings["behavior_weights"],
@@ -122,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         phase = progress.add_phase("train action prior", train_steps)
         loss_history, completed_steps = train_action_prior(
             prior,
-            member,
+            world_model,
             loaders["train"],
             device=device,
             config=ActionPriorTrainConfig(
@@ -141,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
             phase = progress.add_phase(f"evaluate {name} action prior", maximum)
             evaluations[name] = evaluate_action_prior(
                 prior,
-                member,
+                world_model,
                 loaders[name],
                 device=device,
                 max_batches=args.max_eval_batches,

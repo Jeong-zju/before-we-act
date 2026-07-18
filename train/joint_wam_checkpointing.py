@@ -24,9 +24,7 @@ from models.wam import (
 
 
 CHECKPOINT_FORMAT_VERSION = "wam.joint_wam/1"
-GENERATED_ACTION_WORLD_TARGET_SOURCE = (
-    "frozen_world_model_same_generated_actions"
-)
+GENERATED_ACTION_WORLD_TARGET_SOURCE = "frozen_world_model_same_generated_actions"
 WORLD_MODEL_WEIGHTS = "world_model.safetensors"
 ACTION_FLOW_WEIGHTS = "action_flow.safetensors"
 NORMALIZATION_FILE = "normalization.npz"
@@ -97,21 +95,16 @@ def save_joint_wam_checkpoint(
             "braking_time",
         ],
         "normalization_sha256": normalization.sha256(),
-        "online_ensemble_required": False,
         "action_prior_fallback_required": False,
         "embedded_frozen_action_prior_anchor": True,
-        "generated_action_world_target_source": (
-            GENERATED_ACTION_WORLD_TARGET_SOURCE
-        ),
+        "generated_action_world_target_source": (GENERATED_ACTION_WORLD_TARGET_SOURCE),
         "generated_action_demo_state_is_ground_truth": False,
         "weight_files": {
             "world_model": WORLD_MODEL_WEIGHTS,
             "action_flow": ACTION_FLOW_WEIGHTS,
         },
         "source_fingerprints": dict(source_fingerprints or {}),
-        "artifact_sha256": {
-            name: _sha256(target / name) for name in _HASHED_ARTIFACTS
-        },
+        "artifact_sha256": {name: _sha256(target / name) for name in _HASHED_ARTIFACTS},
     }
     _atomic_write_json(target / "schema.json", schema)
     return target
@@ -143,9 +136,9 @@ def load_joint_wam_checkpoint(
     raw_flow = payload.get("action_flow_config")
     if not isinstance(raw_world, Mapping) or not isinstance(raw_flow, Mapping):
         raise ValueError("Joint WAM checkpoint has no model configuration")
-    world_model = RWMARWorldModel(
-        RWMARConfig(**dict(raw_world)), normalization
-    ).to(device)
+    world_model = RWMARWorldModel(RWMARConfig(**dict(raw_world)), normalization).to(
+        device
+    )
     flow = StatefulActionFlow(
         StatefulActionFlowConfig(**dict(raw_flow)), normalization
     ).to(device)
@@ -165,14 +158,18 @@ def load_joint_wam_checkpoint(
     world_model.eval()
     flow.eval()
     flow.freeze_anchor()
-    return world_model, flow, {
-        "experiment_config": dict(payload),
-        "schema": schema,
-        "dataset_manifest": _read_json(source / "dataset_manifest.json"),
-        "metrics": _read_json(source / "metrics.json"),
-        "provenance": _read_json(source / "provenance.json"),
-        "normalization": normalization,
-    }
+    return (
+        world_model,
+        flow,
+        {
+            "experiment_config": dict(payload),
+            "schema": schema,
+            "dataset_manifest": _read_json(source / "dataset_manifest.json"),
+            "metrics": _read_json(source / "metrics.json"),
+            "provenance": _read_json(source / "provenance.json"),
+            "normalization": normalization,
+        },
+    )
 
 
 def _validate_model_contract(
@@ -202,8 +199,6 @@ def _validate_schema(
         and schema.get("schema_version") != expected_schema_version
     ):
         raise ValueError("Joint WAM data schema mismatch")
-    if schema.get("online_ensemble_required") is not False:
-        raise ValueError("Joint WAM checkpoint requests an online ensemble")
     if schema.get("action_prior_fallback_required") is not False:
         raise ValueError("Joint WAM checkpoint requires a fallback")
     if schema.get("embedded_frozen_action_prior_anchor") is not True:

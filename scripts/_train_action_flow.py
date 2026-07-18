@@ -34,7 +34,7 @@ from models.wam import (  # noqa: E402
     shift_action_chunk_warm_start,
 )
 from policies import ActionPriorPolicy  # noqa: E402
-from train.action_prior import world_model_member_fingerprint  # noqa: E402
+from train.action_prior import world_model_checkpoint_fingerprint  # noqa: E402
 from train.action_prior import load_action_prior_checkpoint  # noqa: E402
 from train.action_flow import (  # noqa: E402
     ActionFlowDistillationBuffer,
@@ -49,7 +49,7 @@ from train.action_flow_checkpointing import (  # noqa: E402
     save_action_flow_checkpoint,
 )
 from train.progress import TrainingProgress  # noqa: E402
-from train.rwm_u_checkpointing import load_rwm_u_member_checkpoint  # noqa: E402
+from train.rwm_ar_checkpointing import load_wam_checkpoint  # noqa: E402
 from train.trajectory_dataset import InMemoryProprioSequenceDataset  # noqa: E402
 
 
@@ -84,11 +84,14 @@ def main(argv: list[str] | None = None) -> int:
     _seed(settings["seed"])
     if device.type == "cuda":
         torch.set_float32_matmul_precision("high")
-    world_model_before = world_model_member_fingerprint(settings["world_model_checkpoint"], 0)
-    prior_before = _sha256(settings["action_prior_checkpoint"] / "action_prior.safetensors")
-    member, world_model_metadata = load_rwm_u_member_checkpoint(
+    world_model_before = world_model_checkpoint_fingerprint(
+        settings["world_model_checkpoint"]
+    )
+    prior_before = _sha256(
+        settings["action_prior_checkpoint"] / "action_prior.safetensors"
+    )
+    world_model, world_model_metadata = load_wam_checkpoint(
         settings["world_model_checkpoint"],
-        0,
         device=device,
         expected_schema_version=PROPRIO_WAM_SCHEMA_VERSION,
     )
@@ -99,25 +102,22 @@ def main(argv: list[str] | None = None) -> int:
         expected_schema_version=PROPRIO_WAM_SCHEMA_VERSION,
         expected_normalization_sha256=world_model_metadata["normalization"].sha256(),
     )
-    if int(config["initialization"]["member_index"]) != 0:
-        raise ValueError("Joint WAM is locked to member_index=0")
     flow = StatefulActionFlow(
         StatefulActionFlowConfig(
-            feature_dim=member.planning_feature_dim,
-            action_dim=member.config.action_dim,
+            feature_dim=world_model.planning_feature_dim,
+            action_dim=world_model.config.action_dim,
             horizon=int(config["action_chunk"]["horizon"]),
             **settings["model"],
         ),
         world_model_metadata["normalization"],
     ).to(device)
     flow.set_anchor_from_prior(action_prior)
-    member_initial = {
+    world_model_initial = {
         name: value.detach().cpu().clone()
-        for name, value in member.state_dict().items()
+        for name, value in world_model.state_dict().items()
     }
     flow_initial = {
-        name: value.detach().cpu().clone()
-        for name, value in flow.state_dict().items()
+        name: value.detach().cpu().clone() for name, value in flow.state_dict().items()
     }
     partitions = _manifest_partitions(settings["split_manifest"])
     if args.max_episodes_per_split > 0:
@@ -137,13 +137,15 @@ def main(argv: list[str] | None = None) -> int:
         selected: dict[str, np.ndarray] = {}
         complete: dict[str, np.ndarray] = {}
         for name in ("train", "validation", "test"):
-            phase = progress.add_phase(f"preload {name} action chunks", len(partitions[name]))
+            phase = progress.add_phase(
+                f"preload {name} action chunks", len(partitions[name])
+            )
             datasets[name] = InMemoryProprioSequenceDataset(
                 paths=partitions[name],
-                history_horizon=member.config.history_horizon,
+                history_horizon=world_model.config.history_horizon,
                 forecast_horizon=flow.config.horizon,
-                state_dim=member.config.state_dim,
-                action_dim=member.config.action_dim,
+                state_dim=world_model.config.state_dim,
+                action_dim=world_model.config.action_dim,
                 allow_legacy_wam=False,
                 planning_discount=settings["quality_discount"],
                 action_prior_behavior_weights=settings["behavior_weights"],
@@ -185,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         phase = progress.add_phase("train stateful action flow", train_steps)
         loss_history, completed_steps = train_action_flow(
             flow,
-            member,
+            world_model,
             train_loader,
             device=device,
             config=ActionFlowTrainConfig(
@@ -225,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             buffer, rollout_metrics = _collect_on_policy_distillation(
                 flow,
-                member,
+                world_model,
                 action_prior,
                 config=config,
                 settings=settings["on_policy"],
@@ -262,9 +264,7 @@ def main(argv: list[str] | None = None) -> int:
                         settings["on_policy"]["warm_start_noise_std"]
                     ),
                     endpoint_weight=float(settings["on_policy"]["endpoint_weight"]),
-                    smoothness_weight=float(
-                        settings["on_policy"]["smoothness_weight"]
-                    ),
+                    smoothness_weight=float(settings["on_policy"]["smoothness_weight"]),
                     solver_steps=int(config["action_chunk"]["solver_steps"]),
                     solver_endpoint_weight=float(
                         settings["on_policy"]["solver_endpoint_weight"]
@@ -276,11 +276,13 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 seed=settings["seed"] + 1000 + round_index,
                 replay_loader=train_loader,
-                world_model=member,
+                world_model=world_model,
                 action_prior=action_prior,
                 progress=phase.advance,
             )
-            phase.finish(f"{fine_steps} steps, final loss {fine_history[-1]['loss']:.5f}")
+            phase.finish(
+                f"{fine_steps} steps, final loss {fine_history[-1]['loss']:.5f}"
+            )
             on_policy_metrics.append(
                 {
                     **rollout_metrics,
@@ -299,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
             phase = progress.add_phase(f"evaluate {name} action flow", maximum)
             offline[name] = evaluate_action_flow_offline(
                 flow,
-                member,
+                world_model,
                 evaluation_loaders[name],
                 device=device,
                 execution_steps=int(config["action_chunk"]["execution_steps"]),
@@ -309,19 +311,18 @@ def main(argv: list[str] | None = None) -> int:
                 progress=phase.advance,
                 action_prior=action_prior,
             )
-            phase.finish(
-                f"cold RMSE {offline[name]['cold_action_chunk_rmse']:.5f}"
-            )
-        member_delta = _maximum_delta(member_initial, member.state_dict())
+            phase.finish(f"cold RMSE {offline[name]['cold_action_chunk_rmse']:.5f}")
+        world_model_delta = _maximum_delta(
+            world_model_initial, world_model.state_dict()
+        )
         flow_delta = _maximum_delta(flow_initial, flow.state_dict())
         anchor_prior_delta = _maximum_delta(
             action_prior.state_dict(), flow.anchor_prior.state_dict()
         )
-        source_immutable = (
-            world_model_before
-            == world_model_member_fingerprint(settings["world_model_checkpoint"], 0)
-            and prior_before
-            == _sha256(settings["action_prior_checkpoint"] / "action_prior.safetensors")
+        source_immutable = world_model_before == world_model_checkpoint_fingerprint(
+            settings["world_model_checkpoint"]
+        ) and prior_before == _sha256(
+            settings["action_prior_checkpoint"] / "action_prior.safetensors"
         )
         metrics: dict[str, Any] = {
             "format_version": "wam.action_flow_warmup.metrics/1",
@@ -342,12 +343,10 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 for name in datasets
             },
-            "member_0_parameter_delta": member_delta,
+            "world_model_parameter_delta": world_model_delta,
             "action_flow_parameter_delta": flow_delta,
             "anchor_prior_parameter_delta": anchor_prior_delta,
             "source_checkpoints_immutable": source_immutable,
-            "online_loaded_member_indices": [0],
-            "online_ensemble_loaded": False,
         }
         manifest = {
             "source": str(settings["split_manifest"]),
@@ -382,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
         reload_difference = _maximum_delta(flow.state_dict(), reloaded.state_dict())
         metrics["checkpoint_reload_max_abs_diff"] = reload_difference
         metrics["passed"] = bool(
-            member_delta == 0.0
+            world_model_delta == 0.0
             and flow_delta > 0.0
             and anchor_prior_delta == 0.0
             and source_immutable
@@ -412,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         "checkpoint": str(settings["checkpoint_dir"]),
         "passed": metrics["passed"],
         "test": offline["test"],
-        "member_0_parameter_delta": member_delta,
+        "world_model_parameter_delta": world_model_delta,
         "action_flow_parameter_delta": flow_delta,
         "anchor_prior_parameter_delta": anchor_prior_delta,
         "checkpoint_reload_max_abs_diff": reload_difference,
@@ -423,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _collect_on_policy_distillation(
     flow: StatefulActionFlow,
-    member: Any,
+    world_model: Any,
     action_prior: Any,
     *,
     config: Mapping[str, Any],
@@ -461,6 +460,7 @@ def _collect_on_policy_distillation(
     }
     successes: list[bool] = []
     used_seeds: list[int] = []
+    total_episodes = sum(len(seeds) for seeds in seeds_by_suite.values())
     for suite, seeds in seeds_by_suite.items():
         overrides = (
             {}
@@ -484,7 +484,7 @@ def _collect_on_policy_distillation(
                     nonlocal callback_step, previous_target
                     if callback_step % execution_steps == 0:
                         targets = action_prior_teacher_chunk(
-                            member,
+                            world_model,
                             action_prior,
                             hidden,
                             current_state,
@@ -506,7 +506,7 @@ def _collect_on_policy_distillation(
                     callback_step += 1
 
                 policy = ActionPriorPolicy(
-                    member,
+                    world_model,
                     action_prior,
                     fixed_actions=fixed_actions,
                     distillation_callback=record,
@@ -523,7 +523,13 @@ def _collect_on_policy_distillation(
                 success = bool(summary.final_info.get("success", False))
                 successes.append(success)
                 used_seeds.append(seed)
-                progress({"episode": len(successes), "success": int(success)})
+                progress(
+                    {
+                        "episode": len(successes),
+                        "episodes": total_episodes,
+                        "success": int(success),
+                    }
+                )
         finally:
             env.close()
     return buffer, {
@@ -590,10 +596,10 @@ def _settings(config: Mapping[str, Any], args: argparse.Namespace) -> dict[str, 
 def _manifest_partitions(path: Path) -> dict[str, list[Path]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("split_unit") != "episode_seed":
-        raise ValueError("world-model ensemble manifest is not episode-seed grouped")
+        raise ValueError("world-model manifest is not episode-seed grouped")
     partitions = payload.get("partitions")
     if not isinstance(partitions, Mapping):
-        raise ValueError("world-model ensemble manifest has no partitions")
+        raise ValueError("world-model manifest has no partitions")
     return {
         name: [Path(str(item)).resolve() for item in partitions[name]]
         for name in ("train", "validation", "test")
@@ -611,7 +617,9 @@ def _maximum_delta(
         if torch.is_floating_point(first):
             differences.append(float((first.detach().cpu() - second).abs().max()))
         else:
-            differences.append(0.0 if torch.equal(first.detach().cpu(), second) else float("inf"))
+            differences.append(
+                0.0 if torch.equal(first.detach().cpu(), second) else float("inf")
+            )
     return max(differences, default=0.0)
 
 

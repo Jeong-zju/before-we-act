@@ -34,8 +34,11 @@ def test_joint_wam_config_locks_runtime_and_checkpoint_contract() -> None:
         (ROOT / "configs/wam/joint_wam.yaml").read_text(encoding="utf-8")
     )
     assert config["name"] == "wam.cooperative_stop/joint-wam"
-    assert config["initialization"]["member_index"] == 0
-    assert config["initialization"]["online_load_ensemble"] is False
+    assert set(config["initialization"]) == {
+        "world_model_checkpoint",
+        "action_prior_checkpoint",
+        "generated_action_teacher",
+    }
     assert config["action_chunk"] == {
         "horizon": 8,
         "execution_steps": 2,
@@ -50,6 +53,12 @@ def test_joint_wam_config_locks_runtime_and_checkpoint_contract() -> None:
         "world_heads",
         "full_joint",
     ]
+    assert [stage["steps"] for stage in config["joint_training"]["stages"]] == [
+        64,
+        128,
+        512,
+    ]
+    assert config["runtime"]["anchor_residual_scale"] == 0.1
     assert config["checkpoint"]["format_version"] == CHECKPOINT_FORMAT_VERSION
     assert config["checkpoint"]["directory"] == "checkpoints/joint_wam"
 
@@ -76,9 +85,7 @@ def test_joint_wam_checkpoint_is_strict_and_self_contained(tmp_path: Path) -> No
     assert metadata["schema"]["generated_action_world_target_source"] == (
         GENERATED_ACTION_WORLD_TARGET_SOURCE
     )
-    assert metadata["schema"]["source_fingerprints"] == {
-        "world_model": "a" * 64
-    }
+    assert metadata["schema"]["source_fingerprints"] == {"world_model": "a" * 64}
     _assert_state_equal(world_model, loaded_world)
     _assert_state_equal(flow, loaded_flow)
     assert all(
@@ -91,7 +98,6 @@ def test_joint_wam_checkpoint_is_strict_and_self_contained(tmp_path: Path) -> No
     ("field", "value"),
     (
         ("model", "not_joint"),
-        ("online_ensemble_required", True),
         ("action_prior_fallback_required", True),
         ("generated_action_world_target_source", "dataset_demo_future"),
         ("generated_action_demo_state_is_ground_truth", True),

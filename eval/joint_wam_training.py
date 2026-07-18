@@ -48,8 +48,7 @@ class _ActionStats:
         self.values += int(actions.numel())
         self.non_finite += int((~finite).sum().cpu())
         out = finite & (
-            (actions < -1.0 - self.bound_atol)
-            | (actions > 1.0 + self.bound_atol)
+            (actions < -1.0 - self.bound_atol) | (actions > 1.0 + self.bound_atol)
         )
         self.out_of_bounds += int(out.sum().cpu())
 
@@ -100,9 +99,7 @@ class _StateNRMSE:
         difference = prediction - target
         for yaw_index in yaw_indices:
             difference[..., yaw_index] = wrap_to_pi(difference[..., yaw_index])
-        normalized = difference[..., continuous] / state_std[continuous].to(
-            difference
-        )
+        normalized = difference[..., continuous] / state_std[continuous].to(difference)
         selected = mask.to(dtype=torch.bool).unsqueeze(-1).expand_as(normalized)
         for step in range(self.horizon):
             step_values = normalized[:, step][selected[:, step]]
@@ -324,9 +321,7 @@ def evaluate_joint_wam_offline(
     action_stats = {
         mode: _ActionStats(action_bound_atol) for mode in _CONSISTENCY_MODES
     }
-    consistency = {
-        mode: _ConsistencyStats(horizon) for mode in _CONSISTENCY_MODES
-    }
+    consistency = {mode: _ConsistencyStats(horizon) for mode in _CONSISTENCY_MODES}
     joint_expert = _StateNRMSE(horizon)
     teacher_expert = _StateNRMSE(horizon)
     expert_joint_prediction_values = 0
@@ -349,22 +344,24 @@ def evaluate_joint_wam_offline(
             past_actions=batch["past_actions"],
             valid_mask=batch["valid_mask"],
         )
-        joint_hidden, joint_state, joint_features = (
-            joint_world.encode_planning_history(history)
+        joint_hidden, joint_state, joint_features = joint_world.encode_planning_history(
+            history
         )
         teacher_hidden, teacher_state, _ = frozen_teacher.encode_planning_history(
             history
         )
         target_actions = batch["candidate_actions"][:, :horizon]
         if target_actions.shape[1:] != (horizon, flow.config.action_dim):
-            raise ValueError("candidate action chunk does not satisfy the Joint WAM contract")
+            raise ValueError(
+                "candidate action chunk does not satisfy the Joint WAM contract"
+            )
+        warm_seed = synthetic_shifted_warm_start(target_actions, execution_steps)
         cold_generated = flow.generate(
             joint_features,
             solver_steps=solver_steps,
             solver=solver,
             normalized_clip=normalized_action_clip,
         )
-        warm_seed = synthetic_shifted_warm_start(target_actions, execution_steps)
         warm_generated = flow.generate(
             joint_features,
             initial_actions=warm_seed,
@@ -508,8 +505,7 @@ def evaluate_joint_wam_offline(
         bool(report["all_bounded"]) for report in action_reports.values()
     )
     all_consistency_finite = all(
-        bool(report["all_values_finite"])
-        for report in consistency_reports.values()
+        bool(report["all_values_finite"]) for report in consistency_reports.values()
     )
     return {
         "format_version": "wam.joint_wam.offline/1",
@@ -559,9 +555,7 @@ def evaluate_joint_wam_offline(
         "action_generation": action_reports,
         "teacher_consistency": consistency_reports,
         "expert_action_world_state_nrmse": joint_expert_report["state_nrmse"],
-        "expert_action_world_horizon_nrmse": joint_expert_report[
-            "state_horizon_nrmse"
-        ],
+        "expert_action_world_horizon_nrmse": joint_expert_report["state_horizon_nrmse"],
         "expert_action_world_target_source": _EXPERT_TARGET_SOURCE,
         "frozen_teacher_expert_action_world_state_nrmse": teacher_expert_report[
             "state_nrmse"
@@ -573,9 +567,7 @@ def evaluate_joint_wam_offline(
         "all_generated_actions_finite": all_actions_finite,
         "all_generated_actions_bounded": all_actions_bounded,
         "all_teacher_consistency_values_finite": all_consistency_finite,
-        "all_generated_values_finite": (
-            all_actions_finite and all_consistency_finite
-        ),
+        "all_generated_values_finite": (all_actions_finite and all_consistency_finite),
         "all_offline_values_finite": (
             expert_all_finite and all_actions_finite and all_consistency_finite
         ),
@@ -585,7 +577,7 @@ def evaluate_joint_wam_offline(
 def joint_wam_offline_acceptance_report(
     metrics: Mapping[str, Any],
     *,
-    member_0_parameter_delta: float | None = None,
+    world_model_parameter_delta: float | None = None,
     shared_history_parameter_delta: float | None = None,
     world_parameter_delta: float | None = None,
     world_head_parameter_delta: float | None = None,
@@ -681,24 +673,17 @@ def joint_wam_offline_acceptance_report(
             == _DEPLOYED_TARGET_SOURCE
             and metrics.get("deployed_action_demo_state_is_ground_truth") is False
         ),
-        "cold_and_warm_actions_finite": metrics.get(
-            "all_generated_actions_finite"
-        )
+        "cold_and_warm_actions_finite": metrics.get("all_generated_actions_finite")
         is True,
-        "cold_and_warm_actions_bounded": metrics.get(
-            "all_generated_actions_bounded"
-        )
+        "cold_and_warm_actions_bounded": metrics.get("all_generated_actions_bounded")
         is True,
         "teacher_consistency_present_and_finite": consistency_finite,
         "teacher_consistency_target_contract": consistency_target_contract,
-        "all_generated_values_finite": metrics.get(
-            "all_generated_values_finite"
-        )
+        "all_generated_values_finite": metrics.get("all_generated_values_finite")
         is True,
-        "all_offline_values_finite": metrics.get("all_offline_values_finite")
-        is True,
-        "member_0_parameter_delta_nonzero": _positive_finite(
-            member_0_parameter_delta
+        "all_offline_values_finite": metrics.get("all_offline_values_finite") is True,
+        "world_model_parameter_delta_nonzero": _positive_finite(
+            world_model_parameter_delta
         ),
         "shared_history_parameter_delta_nonzero": _positive_finite(
             shared_history_parameter_delta
@@ -706,15 +691,12 @@ def joint_wam_offline_acceptance_report(
         "world_parameter_delta_nonzero": _positive_finite(world_delta),
         "action_flow_parameter_delta_nonzero": _positive_finite(flow_delta),
         "anchor_prior_immutable": _exact_zero(anchor_prior_parameter_delta),
-        "anchor_prior_frozen": metrics.get("frozen_anchor_parameters_frozen")
-        is True,
+        "anchor_prior_frozen": metrics.get("frozen_anchor_parameters_frozen") is True,
         "frozen_teacher_parameters_frozen": metrics.get(
             "frozen_teacher_parameters_frozen"
         )
         is True,
-        "frozen_teacher_immutable": _exact_zero(
-            frozen_teacher_parameter_delta
-        ),
+        "frozen_teacher_immutable": _exact_zero(frozen_teacher_parameter_delta),
         "source_checkpoints_immutable": source_checkpoints_immutable is True,
         "strict_checkpoint_reload_exact": _exact_zero(reload_difference),
         "action_to_flow_gradient_nonzero": _positive_finite(
@@ -754,7 +736,7 @@ def joint_wam_offline_acceptance_report(
         "passed": all(checks.values()),
         "checks": checks,
         "parameter_deltas": {
-            "member_0": member_0_parameter_delta,
+            "world_model": world_model_parameter_delta,
             "shared_history": shared_history_parameter_delta,
             "world": world_delta,
             "action_flow": flow_delta,
@@ -769,12 +751,8 @@ def joint_wam_offline_acceptance_report(
             "expert_action_world_state_nrmse": metrics.get(
                 "expert_action_world_state_nrmse"
             ),
-            "maximum_generated_teacher_state_nrmse": (
-                maximum_generated_state_nrmse
-            ),
-            "all_generated_values_finite": metrics.get(
-                "all_generated_values_finite"
-            ),
+            "maximum_generated_teacher_state_nrmse": (maximum_generated_state_nrmse),
+            "all_generated_values_finite": metrics.get("all_generated_values_finite"),
             "all_generated_actions_bounded": metrics.get(
                 "all_generated_actions_bounded"
             ),
@@ -884,9 +862,7 @@ def _validate_offline_contract(
         raise ValueError("action_bound_atol cannot be negative")
     if max_batches == 0 or max_batches < -1:
         raise ValueError("max_batches must be -1 or positive")
-    configured = (
-        {3: 1.0, 7: 1.0} if fixed_actions is None else dict(fixed_actions)
-    )
+    configured = {3: 1.0, 7: 1.0} if fixed_actions is None else dict(fixed_actions)
     fixed: dict[int, float] = {}
     for raw_index, raw_value in configured.items():
         index = int(raw_index)

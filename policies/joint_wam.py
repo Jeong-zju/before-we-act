@@ -73,9 +73,9 @@ class JointWAMPolicy:
     ) -> None:
         self.config = config or JointWAMPolicyConfig()
         if flow.config.feature_dim != world_model.planning_feature_dim:
-            raise ValueError("flow feature dimension does not match member 0")
+            raise ValueError("flow feature dimension does not match world model")
         if flow.config.action_dim != world_model.config.action_dim:
-            raise ValueError("flow action dimension does not match member 0")
+            raise ValueError("flow action dimension does not match world model")
         if flow.config.horizon != self.config.action_chunk.horizon:
             raise ValueError("flow horizon does not match the action-chunk contract")
         if flow.config.action_dim != self.config.action_chunk.action_dim:
@@ -103,8 +103,7 @@ class JointWAMPolicy:
         self.device = parameter.device
         self.dtype = parameter.dtype
         self.fixed_actions = {
-            int(index): float(value)
-            for index, value in (fixed_actions or {}).items()
+            int(index): float(value) for index, value in (fixed_actions or {}).items()
         }
         self.distillation_callback = distillation_callback
         for index, value in self.fixed_actions.items():
@@ -253,13 +252,14 @@ class JointWAMPolicy:
             action_index = self._chunk_cursor
             action = self._chunk[action_index].detach().cpu().numpy()
             diagnostics["applied_flow_residual_max"] = float(
-                (
-                    self._chunk[action_index] - self._chunk_anchor[action_index]
-                ).abs().max().cpu()
+                (self._chunk[action_index] - self._chunk_anchor[action_index])
+                .abs()
+                .max()
+                .cpu()
             )
-            self._predicted_next_state = self._chunk_world[
-                action_index
-            ].detach().clone()
+            self._predicted_next_state = (
+                self._chunk_world[action_index].detach().clone()
+            )
             self._chunk_cursor += 1
             self._executed_since_generation += 1
         except (RuntimeError, FloatingPointError, ValueError) as error:
@@ -304,7 +304,10 @@ class JointWAMPolicy:
         risk_veto_regenerated: bool,
     ) -> np.ndarray:
         action = np.clip(np.asarray(raw_action, dtype=np.float32), -1.0, 1.0)
-        if action.shape != (self.flow.config.action_dim,) or not np.isfinite(action).all():
+        if (
+            action.shape != (self.flow.config.action_dim,)
+            or not np.isfinite(action).all()
+        ):
             action = self._safe_stop()
             executed_mode = "safe_stop_invalid_action"
             fallback_reason = "invalid_flow_action"
@@ -337,7 +340,10 @@ class JointWAMPolicy:
     def _replan_reason(self, residual: float | None) -> str:
         if self._chunk is None:
             return "cold_start"
-        if residual is not None and residual > self.config.observation_residual_nrmse_max:
+        if (
+            residual is not None
+            and residual > self.config.observation_residual_nrmse_max
+        ):
             return "observation_prediction_residual"
         if self._chunk_cursor >= self.config.action_chunk.horizon:
             return "chunk_exhausted"
@@ -362,20 +368,20 @@ class JointWAMPolicy:
             return None
         difference = state[0] - self._predicted_next_state
         for yaw_index in self.world_model.config.yaw_indices:
-            difference[yaw_index] = torch.remainder(
-                difference[yaw_index] + torch.pi, 2.0 * torch.pi
-            ) - torch.pi
+            difference[yaw_index] = (
+                torch.remainder(difference[yaw_index] + torch.pi, 2.0 * torch.pi)
+                - torch.pi
+            )
         continuous = self.world_model.continuous_state_mask
-        normalized = difference[continuous] / self.world_model.features.state_std[
-            continuous
-        ]
+        normalized = (
+            difference[continuous] / self.world_model.features.state_std[continuous]
+        )
         return float(normalized.square().mean().sqrt().cpu())
 
     def _world_diagnostics(self, chunk: torch.Tensor, world: Any) -> dict[str, float]:
         failure = world.failure_logit.sigmoid()
         distance = torch.linalg.vector_norm(
-            world.next_state_mean[..., 0:2]
-            - world.next_state_mean[..., 11:13],
+            world.next_state_mean[..., 0:2] - world.next_state_mean[..., 11:13],
             dim=-1,
         )
         normalized_action = self.flow.normalize_actions(chunk)

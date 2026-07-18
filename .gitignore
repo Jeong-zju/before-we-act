@@ -11,18 +11,8 @@ __pycache__/
 .uv-cache/
 .uv-python/
 
-# outputs
-outputs/*
-!outputs/joint_wam/
-outputs/joint_wam/*
-!outputs/joint_wam/closed_loop_metrics.json
-!outputs/joint_wam/report.md
-!outputs/joint_wam/video_manifest.json
-!outputs/joint_wam/world_model/
-outputs/joint_wam/world_model/*
-!outputs/joint_wam/world_model/uncertainty_calibration.json
-!outputs/joint_wam/world_model/uncertainty_metrics.json
-!outputs/joint_wam/world_model/uncertainty_report.md
+# Reproducible evaluation and diagnostic outputs
+outputs/
 logs/
 checkpoints/
 wandb/

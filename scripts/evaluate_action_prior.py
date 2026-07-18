@@ -25,7 +25,7 @@ from eval.closed_loop import ClosedLoopEpisode, ClosedLoopEpisodeObserver, aggre
 from policies import ActionPriorPolicy  # noqa: E402
 from train.action_prior import load_action_prior_checkpoint  # noqa: E402
 from train.progress import TrainingProgress  # noqa: E402
-from train.rwm_u_checkpointing import load_rwm_u_member_checkpoint  # noqa: E402
+from train.rwm_ar_checkpointing import load_wam_checkpoint  # noqa: E402
 
 POLICIES = ("action_prior", "stationary", "scripted_oracle")
 
@@ -55,9 +55,8 @@ def main(argv: list[str] | None = None) -> int:
     device = _device(args.device)
     world_model_path = (args.world_model_checkpoint_dir or ROOT / config["world_model"]["checkpoint"]).resolve()
     prior_path = (args.action_prior_checkpoint_dir or ROOT / config["checkpoint"]["directory"]).resolve()
-    member, metadata = load_rwm_u_member_checkpoint(
+    world_model, metadata = load_wam_checkpoint(
         world_model_path,
-        0,
         device=device,
         expected_schema_version=PROPRIO_WAM_SCHEMA_VERSION,
     )
@@ -81,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             phase = progress.add_phase(f"closed-loop {name}", len(seeds))
             env = TwoRobotCooperativeStopEnv(CooperativeStopEnvConfig(include_camera_images=False))
             try:
-                policy = _policy(name, env, member, prior, fixed_actions)
+                policy = _policy(name, env, world_model, prior, fixed_actions)
                 records: list[ClosedLoopEpisode] = []
                 for episode_index, seed in enumerate(seeds):
                     record_video = args.video_dir is not None and episode_index < args.video_episodes

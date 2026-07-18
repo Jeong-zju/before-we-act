@@ -1,4 +1,4 @@
-"""Behavior-cloning action prior on top of the accepted world-model ensemble belief."""
+"""Behavior-cloning action prior on top of the frozen world-model belief."""
 
 from __future__ import annotations
 

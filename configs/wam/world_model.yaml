@@ -20,7 +20,6 @@ state_features:
 
 model:
   family: rwm_ar
-  ensemble_size: 1
   encoder_hidden_dim: 256
   gru_hidden_dim: 256
   gru_layers: 2
@@ -77,7 +76,7 @@ evaluation:
 
 checkpoint:
   format_version: wam.rwm_ar/1
-  directory: checkpoints/world_model
+  directory: checkpoints/joint_wam/initialization/world_model
   weights_format: safetensors
 
 baseline_reference:

@@ -1,4 +1,4 @@
-"""Single-member recurrent world-action model with outer autoregression."""
+"""Recurrent world-action model with outer autoregression."""
 
 from __future__ import annotations
 
@@ -267,7 +267,7 @@ class RWMARWorldModel(nn.Module):
         candidate_actions: Tensor,
         teacher_states: Tensor,
     ) -> RWMARRolloutPredictions:
-        """Decode each step from the true preceding state for ensemble uncertainty acceptance ablation.
+        """Decode each step from the true preceding state for teacher-forcing evaluation.
 
         This method is deliberately separate from :meth:`predict`; deployment
         and open-loop evaluation therefore cannot accidentally enable teacher

@@ -1,4 +1,4 @@
-"""Probability and auxiliary prediction heads for a single RWM member."""
+"""Probability and auxiliary prediction heads for the recurrent world model."""
 
 from __future__ import annotations
 
