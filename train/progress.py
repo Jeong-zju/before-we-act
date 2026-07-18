@@ -349,6 +349,19 @@ def progress_detail(values: Any) -> str:
         return f"{int(values['samples'])} samples"
     if "batch" in values:
         return f"batch {int(values['batch'])}"
+    if "frame" in values:
+        detail = ""
+        if "source_episode" in values:
+            detail = f"src {int(values['source_episode'])} "
+        if "episode" in values:
+            detail += f"episode {int(values['episode'])}"
+            if "episodes" in values:
+                detail += f"/{int(values['episodes'])}"
+            detail += " "
+        detail += f"frame {int(values['frame'])}"
+        if "frames" in values:
+            detail += f"/{int(values['frames'])}"
+        return detail
     if "episode" in values:
         detail = f"episode {int(values['episode'])}"
         if "episodes" in values:

@@ -71,6 +71,52 @@ uv run python scripts/audit_dataset.py \
 uv run python scripts/collect_modular_dataset.py --help
 ```
 
+### 2.1 转换 RoboFactory 数据集
+
+`scripts/convert_robofactory_dataset.py` 可直接读取 RoboFactory/ManiSkill 生成的 `.h5` 和同名 `.json` sidecar。源文件保持只读，转换过程按 episode 流式读取，不会把整套 RGB 数据加载进内存。HDF5 输出采用本项目的一 episode 一文件布局；LeRobot 输出使用 Dataset v3 writer，并在结束时执行 `finalize()`。
+
+只转换为本项目的标准 HDF5：
+
+```bash
+uv run python scripts/convert_robofactory_dataset.py \
+  --input ../RoboFactory/data/h5_data/LiftBarrier-rf.h5 \
+  --out-dir datasets/robofactory_lift_barrier \
+  --format hdf5 \
+  --fps 20 \
+  --task "Lift the barrier together"
+```
+
+同时生成 HDF5 和 LeRobot v3；LeRobot 是可选依赖：
+
+```bash
+uv run --with "lerobot>=0.4" python scripts/convert_robofactory_dataset.py \
+  --input ../RoboFactory/data/h5_data/LiftBarrier-rf.h5 \
+  --out-dir datasets/robofactory_lift_barrier \
+  --format hdf5 \
+  --format lerobot \
+  --repo-id local/robofactory-lift-barrier \
+  --fps 20 \
+  --task "Lift the barrier together"
+```
+
+主要字段映射如下：
+
+| RoboFactory/ManiSkill 源字段 | 目标字段 | 规则 |
+|---|---|---|
+| `obs/agent/<agent>/qpos,qvel` | `observation.state` | 按自然排序的 agent 顺序拼接，每个 agent 内先 qpos 后 qvel |
+| `actions/<agent>` | `action` | 按同一 agent 顺序拼接 |
+| 分 agent qpos/qvel/action | `observation.agents.*` / `agents.*.action` | 默认同时保留；`--canonical-only` 可关闭 |
+| `head_camera_agent0` 等 | `observation.images.agent_0` 等 | agent 相机规范为 `agent_N`，全局相机规范为 `global` |
+| `rewards` | `next.reward` | 仅当源数据真实存在 reward 时输出，不伪造零 reward |
+| `terminated` / `truncated` | `next.terminated` / `next.truncated` / `next.done` | `done = terminated OR truncated` |
+| `success` / `fail` | `next.success` / `next.failure` | 保留原始逐帧标签 |
+
+源 observation 有 `T+1` 帧、action 有 `T` 帧，转换后严格保存为 `observation[t], action[t], next_observation[t+1]`。相机内外参默认保存在 `observation.camera_calibration.*`；可用 `--no-images`、`--no-calibration` 做纯 proprioception 转换，或用 `--success-only` 过滤失败 episode。默认任务文本由 `env_id` 规范化得到，建议通过 `--task` 提供准确指令。
+
+输出根目录会生成 `manifest.json`，其中记录 agent/camera 原名映射、集中状态和动作的切片范围、源 episode id、shape、标签可用性及完整字段 schema。为防止混入旧数据，选中的输出子目录和 manifest 必须事先不存在。
+
+转换默认使用与训练入口一致的 Rich 分阶段进度条，显示源 episode、目标 episode 及当前 frame；可用 `--progress-refresh-hz` 调整刷新率，CI 或重定向日志时可用 `--no-progress` 关闭动态显示。
+
 ### 3. 训练离线动力学基线
 
 该步骤生成 linear、MLP 和独立 action-prior 的离线对比结果：

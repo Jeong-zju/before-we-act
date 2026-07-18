@@ -160,13 +160,17 @@ class LeRobotTrajectoryExporter:
     @staticmethod
     def _official_factory() -> Callable[..., Any]:
         try:
-            from lerobot.datasets.lerobot_dataset import LeRobotDataset
+            from lerobot.datasets import LeRobotDataset
         except ImportError as exc:  # pragma: no cover - depends on optional extra.
-            raise RuntimeError(
-                "LeRobot export requires the optional 'lerobot' package. "
-                "Install a LeRobot release with Dataset v3 support, then rerun "
-                "the same command; HDF5 export has no such dependency."
-            ) from exc
+            try:
+                # Compatibility with early Dataset v3 snapshots.
+                from lerobot.datasets.lerobot_dataset import LeRobotDataset
+            except ImportError:
+                raise RuntimeError(
+                    "LeRobot export requires the optional 'lerobot' package. "
+                    "Install lerobot>=0.4 with Dataset v3 support, then rerun "
+                    "the same command; HDF5 export has no such dependency."
+                ) from exc
         return LeRobotDataset.create
 
     def close(self) -> None:
