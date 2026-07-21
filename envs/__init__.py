@@ -5,4 +5,16 @@ Dataset collection may depend on this package, but the dependency must never
 point in the opposite direction.
 """
 
-__all__: list[str] = []
+from envs.visual_required_env import (
+    CAMERA_NAMES,
+    VISUAL_REQUIRED_TASKS,
+    VisualRequiredEnv,
+    VisualRequiredEnvConfig,
+)
+
+__all__ = [
+    "CAMERA_NAMES",
+    "VISUAL_REQUIRED_TASKS",
+    "VisualRequiredEnv",
+    "VisualRequiredEnvConfig",
+]

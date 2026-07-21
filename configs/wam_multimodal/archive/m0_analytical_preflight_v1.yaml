@@ -1,0 +1,120 @@
+version: wam.multimodal.m0/1
+phase: M0
+
+dataset:
+  directory: datasets/visual_required_wam_multimodal_m0
+  schema_profile: wam_multimodal
+  schema_version: wam.multimodal/1.0
+  dataset_card: docs/FE_PC_WAM_PHASE_M0_DATASET_CARD_V1.0_ZH.md
+  formats: [hdf5, mp4]
+  camera_order: [fixed]
+  collection_policy: privileged_scripted_oracle
+  episodes_per_task: 800
+  cue_variants: [0, 1]
+  physical_seed_start: 500000
+  split:
+    unit: physical_seed_pair
+    train:
+      physical_seeds: 300
+      episodes: 600
+      template_ids: [train_a, train_b]
+    validation:
+      physical_seeds: 50
+      episodes: 100
+      template_ids: [validation_a]
+    test:
+      physical_seeds: 50
+      episodes: 100
+      template_ids: [test_a]
+
+camera:
+  stream: fixed
+  width: 256
+  height: 256
+  channels: 3
+  image_hz: 10.0
+  control_hz: 20.0
+  codec: mp4v
+  intrinsics:
+    source: visual_required_analytical_renderer
+    model: orthographic
+  extrinsics:
+    source: visual_required_analytical_renderer
+    convention: camera_pose_in_world
+
+collection:
+  randomize: true
+  max_steps: 160
+  action_history: 4
+  render_only_configured_cameras: true
+  fail_if_output_exists: true
+  rich_progress: true
+
+audit:
+  report: outputs/phase_m0/multimodal_dataset_audit.json
+  loader_history_horizon: 4
+  maximum_errors_reported: 100
+  expected_captured_frame_reuse_fraction: 0.5
+  captured_frame_reuse_tolerance: 0.05
+  maximum_unexpected_duplicate_rate: 0.05
+  maximum_empty_frame_rate: 0.0
+  maximum_corrupt_videos: 0
+
+benchmark:
+  output_directory: outputs/phase_m0/visual_required
+  physical_seeds_per_task: 50
+  physical_seed_start: 600000
+  cue_variants: [0, 1]
+  policies:
+    - state_only
+    - privileged_scripted_oracle
+    - vision_oracle
+    - vision_oracle_opposite_rgb
+  randomize: true
+  max_steps: 160
+  action_history: 4
+  shuffle_mode: opposite_cue_derangement
+  require_identical_seed_pairs: true
+
+legacy_regression:
+  checkpoint: checkpoints/joint_wam
+  expected_checkpoint_tree_sha256: 1c5fc531522163a3f46d065b23b5227ffa32a556451eb729abb2f88198a4d482
+  device: cpu
+  episodes_per_suite: 20
+  standard_seed_start: 120000
+  challenge_seed_start: 220000
+  expected_schema_version: wam.proprio/1.0
+  minimum_success_rate: 1.0
+  maximum_reference_regression: 0.0
+  reference_success_rate:
+    standard: 1.0
+    challenge: 1.0
+
+acceptance:
+  report: outputs/phase_m0/phase_m0_acceptance.json
+  capture_sync_skew_p99_seconds:
+    operator: "<"
+    value: 0.025
+  maximum_action_frame_age_seconds:
+    operator: "<="
+    value: 0.1
+  maximum_state_only_success_rate:
+    operator: "<="
+    value: 0.70
+  minimum_scripted_oracle_success_rate:
+    operator: ">="
+    value: 0.95
+  minimum_vision_oracle_success_rate:
+    operator: ">="
+    value: 0.95
+  minimum_opposite_rgb_success_drop:
+    operator: ">="
+    value: 0.20
+  require_each_task_pass: true
+  require_macro_pass: true
+  require_zero_episode_boundary_crossings: true
+  require_zero_split_seed_overlap: true
+  require_zero_split_template_overlap: true
+  require_no_privileged_policy_inputs: true
+  require_legacy_checkpoint_immutable: true
+  require_strict_checkpoint_reload: true

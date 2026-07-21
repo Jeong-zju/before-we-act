@@ -46,25 +46,34 @@ class HDF5TrajectoryExporter:
         if self._file is not None:
             raise RuntimeError("previous HDF5 episode is still open")
         self.root.mkdir(parents=True, exist_ok=True)
+        final_path = self.root / f"episode_{metadata.episode_index:06d}.hdf5"
+        if final_path.exists():
+            raise FileExistsError(
+                f"refusing to replace completed HDF5 episode: {final_path}"
+            )
+        self._final_path = final_path
+        self._partial_path = final_path.with_suffix(".partial.hdf5")
         self._metadata = metadata
         self._steps = 0
-        self._final_path = self.root / f"episode_{metadata.episode_index:06d}.hdf5"
-        self._partial_path = self._final_path.with_suffix(".partial.hdf5")
         if self._partial_path.exists():
             self._partial_path.unlink()
         self._file = h5py.File(self._partial_path, "w")
-        self._file.attrs.update(
-            {
-                "format_version": self.FORMAT_VERSION,
-                "schema_profile": self.schema.profile,
-                "schema_version": self.schema.version,
-                "fps": metadata.fps,
-                "episode_index": metadata.episode_index,
-                "seed": -1 if metadata.seed is None else metadata.seed,
-                "task": metadata.task,
-                "transition_semantics": "observation[t], action[t], observation[t+1]",
-            }
-        )
+        attributes: dict[str, Any] = {
+            "format_version": self.FORMAT_VERSION,
+            "schema_profile": self.schema.profile,
+            "schema_version": self.schema.version,
+            "fps": metadata.fps,
+            "episode_index": metadata.episode_index,
+            "seed": -1 if metadata.seed is None else metadata.seed,
+            "task": metadata.task,
+            "transition_semantics": "observation[t], action[t], observation[t+1]",
+        }
+        camera_order = _camera_order(self.schema)
+        if camera_order:
+            attributes["camera_order_json"] = json.dumps(
+                camera_order, separators=(",", ":")
+            )
+        self._file.attrs.update(attributes)
         schema_group = self._file.create_group("schema")
         for field in self.schema.fields:
             group = schema_group.create_group(_hdf5_path(field.name))
@@ -74,7 +83,7 @@ class HDF5TrajectoryExporter:
 
         if self.stream_videos:
             for field in self.schema.fields:
-                if not field.is_image:
+                if not field.name.startswith("observation.images."):
                     continue
                 stream = field.name.removeprefix("observation.images.").replace(
                     ".", "_"
@@ -204,6 +213,15 @@ class HDF5TrajectoryExporter:
 
 def _hdf5_path(name: str) -> str:
     return name.replace(".", "/").strip("/")
+
+
+def _camera_order(schema: TrajectorySchema) -> list[str]:
+    prefix = "observation.images."
+    return [
+        field.name.removeprefix(prefix)
+        for field in schema.fields
+        if field.name.startswith(prefix)
+    ]
 
 
 def _metadata_value(value: Any) -> Any:

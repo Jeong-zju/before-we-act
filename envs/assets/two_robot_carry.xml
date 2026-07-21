@@ -12,14 +12,38 @@
     <material name="robot_a_mat" rgba="0.85 0.12 0.10 1"/>
     <material name="robot_b_mat" rgba="0.10 0.25 0.85 1"/>
     <material name="object_mat" rgba="0.10 0.60 0.20 1"/>
+    <material name="visual_neutral_mat" rgba="0.12 0.12 0.14 1" emission="0.35"/>
+    <material name="visual_target_idle_mat" rgba="0.16 0.16 0.18 1" emission="0.10"/>
   </asset>
 
   <worldbody>
     <light name="top_light" pos="0 -2 5" dir="0 0 -1"/>
     <geom name="floor" type="plane" size="5 6 0.1" material="grid"/>
 
-    <camera name="fixed" pos="0 -5.2 4.0" xyaxes="1 0 0 0 0.65 0.76"/>
+    <camera name="fixed" pos="0 -5.2 4.0" xyaxes="1 0 0 0 0.65 0.76" fovy="45"/>
     <camera name="topdown" pos="0 0.4 7.0" xyaxes="1 0 0 0 1 0"/>
+
+    <!--
+      Named M0 visual-task geometry.  All task truth is expressed through
+      renderer-visible material/rgba changes; none of these visual-only geoms
+      participates in robot proprioception.  Collision proxies for the two
+      obstacle lanes are separate from their visual meshes so counterfactual
+      RGB interventions cannot silently change the physical task.
+    -->
+    <geom name="visual_event_signal" type="box" pos="0 -0.12 0.018" size="1.15 0.13 0.012"
+          rgba="0.12 0.12 0.14 1" contype="0" conaffinity="0" mass="0"/>
+    <geom name="visual_target_left" type="cylinder" pos="-0.62 0.62 0.018" size="0.22 0.012"
+          rgba="0.16 0.16 0.18 1" contype="0" conaffinity="0" mass="0"/>
+    <geom name="visual_target_right" type="cylinder" pos="0.62 0.62 0.018" size="0.22 0.012"
+          rgba="0.16 0.16 0.18 1" contype="0" conaffinity="0" mass="0"/>
+    <geom name="visual_obstacle_left" type="box" pos="-0.62 0.08 0.17" size="0.25 0.18 0.17"
+          rgba="0 0 0 0" contype="0" conaffinity="0" mass="0"/>
+    <geom name="visual_obstacle_right" type="box" pos="0.62 0.08 0.17" size="0.25 0.18 0.17"
+          rgba="0 0 0 0" contype="0" conaffinity="0" mass="0"/>
+    <geom name="visual_obstacle_collision_left" type="box" pos="-0.62 0.08 0.17" size="0.25 0.18 0.17"
+          rgba="0 0 0 0" contype="0" conaffinity="0" mass="0" group="5"/>
+    <geom name="visual_obstacle_collision_right" type="box" pos="0.62 0.08 0.17" size="0.25 0.18 0.17"
+          rgba="0 0 0 0" contype="0" conaffinity="0" mass="0" group="5"/>
 
     <geom name="start_marker" type="box" pos="0 -1.35 0.006" size="1.2 0.04 0.005" rgba="0.1 0.1 0.1 0.45" contype="0" conaffinity="0"/>
     <geom name="task_bounds" type="box" pos="0 0.85 0.001" size="2.2 2.85 0.001" rgba="0 0 0 0" contype="0" conaffinity="0"/>
@@ -29,6 +53,8 @@
       <joint name="robot_a_y" type="slide" axis="0 1 0" damping="8" limited="true" range="-2.2 3.5"/>
       <joint name="robot_a_yaw" type="hinge" axis="0 0 1" damping="2" limited="true" range="-3.14 3.14"/>
       <geom name="robot_a_base" type="box" size="0.18 0.14 0.08" material="robot_a_mat" mass="8"/>
+      <geom name="robot_0_brake_light" type="sphere" pos="0 -0.13 0.16" size="0.055"
+            rgba="0.035 0.005 0.005 1" contype="0" conaffinity="0" mass="0"/>
       <site name="robot_a_grip_site" pos="0.0 0.23 0.06" size="0.035" rgba="1 0 0 1"/>
       <camera name="robot_0_camera" pos="0 0.08 0.24" xyaxes="1 0 0 0 0.45 0.89"/>
     </body>
@@ -38,6 +64,8 @@
       <joint name="robot_b_y" type="slide" axis="0 1 0" damping="8" limited="true" range="-2.2 3.5"/>
       <joint name="robot_b_yaw" type="hinge" axis="0 0 1" damping="2" limited="true" range="-3.14 3.14"/>
       <geom name="robot_b_base" type="box" size="0.18 0.14 0.08" material="robot_b_mat" mass="8"/>
+      <geom name="robot_1_brake_light" type="sphere" pos="0 -0.13 0.16" size="0.055"
+            rgba="0.035 0.005 0.005 1" contype="0" conaffinity="0" mass="0"/>
       <site name="robot_b_grip_site" pos="0.0 0.23 0.06" size="0.035" rgba="0 0 1 1"/>
       <camera name="robot_1_camera" pos="0 0.08 0.24" xyaxes="1 0 0 0 0.45 0.89"/>
     </body>

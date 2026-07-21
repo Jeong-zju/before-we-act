@@ -72,6 +72,14 @@ class _FakeEnvironment:
         del camera
         return np.full((height, width, 3), self.value, dtype=np.uint8)
 
+    def camera_calibration(self, *, camera, width, height):
+        del camera
+        return {
+            "intrinsics": np.eye(3, dtype=np.float32),
+            "extrinsics": np.eye(4, dtype=np.float32),
+            "resolution": np.asarray([height, width], dtype=np.int64),
+        }
+
     def close(self):
         pass
 
@@ -420,14 +428,46 @@ def test_human_annotations_label_viewer_but_do_not_mutate_raw_frame():
         update_cooperative_stop_viewer_labels(viewer, observation, info)
         assert viewer.user_scn.ngeom == 2
         labels = [viewer.user_scn.geoms[index].label for index in range(2)]
-        assert "BRAKE ROBOT" in labels[info["braking_agent"]]
-        assert f"{info['brake_start_time']:.2f}s" in labels[info["braking_agent"]]
-        assert labels[info["responding_agent"]] == "RESPONDER"
+        assert labels == ["CRUISING", "CRUISING"]
         for agent_id in range(2):
             position = viewer.user_scn.geoms[agent_id].pos
             assert position[:2] == pytest.approx(
                 observation[f"robot_{agent_id}"]["base_pose"][:2]
             )
+
+        terminated = truncated = False
+        while not info["brake_event_active"] and not (terminated or truncated):
+            observation, _, terminated, truncated, info = env.step(
+                env.scripted_action()
+            )
+        update_cooperative_stop_viewer_labels(viewer, observation, info)
+        labels = [viewer.user_scn.geoms[index].label for index in range(2)]
+        assert "BRAKE ROBOT" in labels[info["braking_agent"]]
+        assert labels[info["responding_agent"]] == "RESPONDER"
+    finally:
+        env.close()
+
+
+def test_brake_lights_are_dark_before_event_and_only_braking_agent_lights() -> None:
+    env = TwoRobotCooperativeStopEnv(
+        CooperativeStopEnvConfig(
+            include_camera_images=False,
+            brake_start_time_min=0.1,
+            brake_start_time_max=0.1,
+        )
+    )
+    try:
+        _, info = env.reset(seed=0, randomize=False)
+        before = env.model.geom_rgba[np.asarray(env.brake_light_geom_ids)].copy()
+        np.testing.assert_allclose(before[:, 0], [0.025, 0.025])
+        assert not info["brake_event_active"]
+
+        terminated = truncated = False
+        while not info["brake_event_active"] and not (terminated or truncated):
+            _, _, terminated, truncated, info = env.step(env.scripted_action())
+        after = env.model.geom_rgba[np.asarray(env.brake_light_geom_ids)]
+        assert after[info["braking_agent"], 0] == pytest.approx(1.0)
+        assert after[info["responding_agent"], 0] == pytest.approx(0.025)
     finally:
         env.close()
 

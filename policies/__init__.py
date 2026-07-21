@@ -7,6 +7,11 @@ from policies.collection import (
 )
 from policies.action_prior import ActionPriorPolicy
 from policies.joint_wam import JointWAMPolicyConfig, JointWAMPolicy
+from policies.visual_required import (
+    PrivilegedScriptedOraclePolicy,
+    StateOnlyPolicy,
+    VisionOraclePolicy,
+)
 
 __all__ = [
     "ActionPriorPolicy",
@@ -15,4 +20,7 @@ __all__ = [
     "CollectionBehavior",
     "CooperativeStopCollectionPolicy",
     "JointWAMPolicy",
+    "PrivilegedScriptedOraclePolicy",
+    "StateOnlyPolicy",
+    "VisionOraclePolicy",
 ]

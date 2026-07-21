@@ -42,8 +42,7 @@ def annotate_cooperative_stop_frame(
         event_elapsed = max(0.0, current_time - brake_time)
         event_status = f"BRAKING ACTIVE | elapsed {event_elapsed:.2f}s"
     else:
-        countdown = max(0.0, brake_time - current_time)
-        event_status = f"BRAKE START IN {countdown:.2f}s"
+        event_status = "BRAKE SIGNAL INACTIVE"
 
     braking_speed = float(info.get("braking_agent_speed", 0.0))
     responding_speed = float(info.get("responding_agent_speed", 0.0))
@@ -58,14 +57,23 @@ def annotate_cooperative_stop_frame(
     else:
         response_status = "WAITING"
 
-    lines = (
-        f"BRAKE ROBOT: robot_{braking_agent} @ {brake_time:.2f}s",
-        event_status,
-        (
-            f"RESPONDER: robot_{responding_agent} | {response_status} | "
-            f"v={responding_speed:.2f} | brake v={braking_speed:.2f} m/s"
-        ),
-    )
+    if event_active:
+        lines = (
+            f"BRAKE ROBOT: robot_{braking_agent} @ {brake_time:.2f}s",
+            event_status,
+            (
+                f"RESPONDER: robot_{responding_agent} | {response_status} | "
+                f"v={responding_speed:.2f} | brake v={braking_speed:.2f} m/s"
+            ),
+        )
+    else:
+        # Future agent identity and schedule are simulator truth.  Human-facing
+        # overlays must not reveal them before the raw brake light activates.
+        lines = (
+            "BRAKE ROBOT: NOT YET ANNOUNCED",
+            event_status,
+            "BOTH ROBOTS: CRUISING",
+        )
     _draw_text_panel(annotated, lines)
     return annotated
 
@@ -89,7 +97,10 @@ def update_cooperative_stop_viewer_labels(
         for agent_id in range(2):
             robot = observation[f"robot_{agent_id}"]
             base_pose = np.asarray(robot["base_pose"], dtype=np.float64)
-            if agent_id == braking_agent:
+            if not event_active:
+                label = "CRUISING"
+                rgba = np.asarray([0.55, 0.55, 0.55, 1.0], dtype=np.float32)
+            elif agent_id == braking_agent:
                 phase = "since" if event_active else "starts"
                 label = f"BRAKE ROBOT | {phase} {brake_time:.2f}s"
                 rgba = np.asarray([1.0, 0.25, 0.10, 1.0], dtype=np.float32)

@@ -1,0 +1,229 @@
+name: wam.visual_required/m1-latent-wam-dinov3
+format_version: wam.multimodal.m1.config/2
+
+data:
+  directory: datasets/mujoco_visual_required_wam_multimodal_m0
+  manifest: datasets/mujoco_visual_required_wam_multimodal_m0/manifest.json
+  schema_version: wam.multimodal/1.1
+  expected_manifest_sha256: d0e1289035286db2bf64a7aca63cf767e04b92eeda582877723f8fc1ba5d1c08
+  camera_order: [fixed]
+  source_camera_order: [fixed, robot_0_camera, robot_1_camera]
+  state_dim: 22
+  action_dim: 8
+  state_history: 32
+  visual_history_frames: 2
+  action_horizon: 8
+  future_visual_horizons: [1, 2, 4, 8]
+  control_hz: 20.0
+  image_hz: 10.0
+  balance_tasks: true
+  include_only_complete_chunks: true
+
+initialization:
+  legacy_joint_wam_checkpoint: checkpoints/joint_wam
+  expected_legacy_tree_sha256: 1c5fc531522163a3f46d065b23b5227ffa32a556451eb729abb2f88198a4d482
+  vision_backbone: dinov3_vitl16_lvd
+  vision_model_id: facebook/dinov3-vitl16-pretrain-lvd1689m
+  vision_revision: dd0a398fa8e84f2a37179332f6c561d20276300b
+  vision_config: artifacts/vision/dinov3_vitl16_lvd/config.json
+  expected_vision_config_sha256: ce962b0c8ca4f2deb48c6fdfd6035257e3769f1d4d9154c92aba51991e46e290
+  vision_weights: artifacts/vision/dinov3_vitl16_lvd/model.safetensors
+  expected_vision_weights_sha256: dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179
+  vision_preprocess: dinov3_imagenet_rgb_resize_square_antialias_v1
+
+model:
+  task_vocabulary:
+    - visual_event_stop
+    - visual_target_select
+    - visual_obstacle_avoid
+  vision_input_size: 96
+  vision_encoder_input_size: 256
+  vision_encoder_batch_size: 16
+  vision_patch_dim: 1024
+  resampler_width: 512
+  resampler_layers: 3
+  resampler_heads: 8
+  resampler_tokens: 16
+  resampler_mlp_ratio: 4
+  raw_patch_grid: 8
+  raw_patch_hidden_dim: 128
+  raw_shortcut_hidden_dim: 512
+  visual_skip_initial_scale: 0.1
+  fusion_heads: 8
+  fusion_mlp_ratio: 4
+  future_latent_dim: 1024
+  future_visual_horizons: [1, 2, 4, 8]
+  dropout: 0.0
+  use_pretrained_frozen_backbone: true
+  freeze_legacy_anchor_world: true
+  freeze_embedded_prior_anchor: true
+
+action_chunk:
+  horizon: 8
+  execution_steps: 2
+  solver_steps: 4
+  solver: euler
+  expert_count: 1
+  warm_start_mode: shift_repeat_last
+  replan_warm_start_enabled: false
+  anchor_residual_scale_visual: 1.0
+  anchor_residual_scale_cooperative: 0.1
+  normalized_action_clip: 10.0
+  warm_start_probability: 0.0
+  warm_start_noise_std: 0.0
+  policy_fixed_action_dims: [3, 7]
+  executed_prefix_weight: 2.0
+
+training:
+  seeds: [101, 202, 303]
+  variants:
+    - state_only
+    - vision_only
+    - state_vision_no_future
+    - state_vision_future
+    - state_vision_param_matched_mlp
+  batch_size: 64
+  num_workers: 4
+  validation_num_workers: 2
+  pair_num_workers: 2
+  prefetch_factor: 2
+  persistent_workers: true
+  weight_decay: 0.00001
+  gradient_clip_norm: 5.0
+  stage_1:
+    name: adapter_fusion
+    steps: 96
+    learning_rate: 0.0003
+    world_learning_rate: 0.0
+    train_visual_adapter: true
+    train_fusion: true
+    train_future_head: false
+    train_action_flow: false
+    train_world_model: false
+  stage_2:
+    name: fusion_future_action
+    steps: 256
+    learning_rate: 0.0002
+    world_learning_rate: 0.0
+    train_visual_adapter: true
+    train_fusion: true
+    train_future_head: true
+    train_action_flow: true
+    train_world_model: false
+  stage_3:
+    name: legacy_low_lr
+    steps: 48
+    learning_rate: 0.0002
+    world_learning_rate: 0.00002
+    train_visual_adapter: true
+    train_fusion: true
+    train_future_head: true
+    train_action_flow: true
+    train_world_model: true
+  losses:
+    flow_matching: 0.5
+    action_endpoint: 12.0
+    action_smoothness: 0.05
+    future_visual_latent: 1.0
+    future_state: 0.1
+  causal_pairs:
+    enabled: true
+    contract_version: wam.multimodal.m1.causal_pairs/1
+    construction: first_equal_history_rgb_different_execute2_action_delta_v2
+    apply_to_vision_variants: true
+    filter_unobservable_conflicts: true
+    gradient_scope: visual_adapter_fusion_only
+    pair_batch_size: 8
+    factual_endpoint: 6.0
+    action_delta: 6.0
+    delta_direction: 0.25
+    executed_prefix_weight: 4.0
+    calibration_steps: 96
+    calibration_learning_rate: 0.0001
+  state_causal_pairs:
+    enabled: true
+    diagnostic_only: true
+    formal_enabled: false
+    rejection_reason: gap1_not_runtime_replan_and_cold_only
+    contract_version: wam.multimodal.m1.state_causal_pairs/1
+    construction: adjacent_equal_rgb_past_state_feedback_execute2_v1
+    apply_to_state_variants: true
+    vision_only_pair_supervision: disabled_no_state
+    gradient_scope: non_anchor_flow_only_model_frozen
+    decision_gap: 1
+    state_valid_steps: 4
+    past_action_valid_steps: 3
+    visual_history_frames: 2
+    step0_min_action_delta: 0.001
+    feedback_action_dims: [0, 4]
+    zero_delta_action_dims: [1, 2, 5, 6]
+    feedback_state_position_dims: [0, 11]
+    feedback_equality_atol: 0.0000001
+    pair_batch_size: 8
+    factual_endpoint: 2.0
+    action_delta: 1.0
+    delta_direction: 0.1
+    target_rms_floor: 0.01
+    calibration_steps: 96
+    calibration_learning_rate: 0.0001
+  overfit_samples: 256
+  overfit_steps: 200
+  one_percent_fraction: 0.01
+  decision_window_boost: 4.0
+  select_metric: validation_action_chunk_rmse
+  checkpoint_root: checkpoints/phase_m1_dinov3
+  report_root: outputs/phase_m1_dinov3/training
+
+evaluation:
+  physical_seed_start: 710000
+  smoke_physical_seeds_per_task: 20
+  formal_physical_seeds_per_task: 100
+  cue_variants: [0, 1]
+  conditions:
+    - clean
+    - shuffle_rgb
+    - freeze_first_rgb
+    - occlude_cue
+    - shuffle_state
+  same_pairs_for_all_models: true
+  fallback_enabled: false
+  max_steps: 160
+  control_hz: 20.0
+  visual_refresh_hz: 10.0
+  policy_camera_order: [fixed]
+  legacy_regression_episodes_per_suite: 500
+  legacy_standard_seed_start: 120000
+  legacy_challenge_seed_start: 220000
+  output_directory: outputs/phase_m1_dinov3/evaluation
+
+statistics:
+  confidence: 0.95
+  bootstrap_samples: 10000
+  bootstrap_seed: 1907
+  minimum_training_seeds: 3
+
+acceptance:
+  upstream_m0_acceptance: outputs/phase_m0_mujoco/phase_m0_acceptance.json
+  expected_upstream_m0_acceptance_sha256: 7a54e067eaf7580434000e2be4ed3ecf777dcfc3037db114b7eca2a6b7825c76
+  primary_visual_value_gate: paired_success_gain_10pp
+  minimum_trainable_parameters: 20000000
+  maximum_trainable_parameters: 60000000
+  minimum_visual_gain: 0.10
+  maximum_legacy_regression: 0.05
+  minimum_visual_intervention_drop: 0.15
+  minimum_state_shuffle_drop: 0.05
+  maximum_sensor_to_action_p95_ms: 50.0
+  maximum_decimated_action_age_ms: 100.0
+  require_probe_object_rmse_improvement: true
+  require_probe_event_balanced_accuracy_improvement: true
+  require_strict_reload: true
+  require_no_privileged_inputs: true
+  require_direct_action_source_coverage: 1.0
+  output: outputs/phase_m1_dinov3/phase_m1_acceptance.json
+
+limitations:
+  - The DINOv3 frozen teacher is gated and governed by the DINOv3 License; artifacts must be provisioned before training.
+  - M0-scale data only; no 10k-20k M1 extension is claimed before DINOv3 re-acceptance.
+  - Demonstrations are successful scripted-oracle trajectories, so failure-risk learning is not claimed.
+  - Object IDs are template-scoped and do not establish unseen-object generalization.
+  - The visual-required simulator uses geometric acceleration-limited control and is not a real-robot dynamics claim.

@@ -13,6 +13,7 @@ from envs.runtime import SimulationTransition
 
 _MISSING = object()
 PROPRIO_WAM_SCHEMA_VERSION = "wam.proprio/1.0"
+MULTIMODAL_WAM_SCHEMA_VERSION = "wam.multimodal/1.1"
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,16 @@ def schema_profile(
     """Build common VLA/WAM profiles, including optional live RGB streams."""
 
     profile = profile.lower().replace("-", "_")
+    if profile in {"wam_multimodal", "multimodal_wam"} and not cameras:
+        cameras = ("fixed",)
+    if len(cameras) != len(set(cameras)):
+        raise ValueError("camera names must be unique and ordered explicitly")
+    if any(not str(camera).strip() for camera in cameras):
+        raise ValueError("camera names cannot be empty")
+    if profile in {"wam_multimodal", "multimodal_wam"} and any(
+        "." in str(camera) or "/" in str(camera) for camera in cameras
+    ):
+        raise ValueError("multimodal camera names cannot contain '.' or '/'")
     common = (
         FieldSpec("timestamp", "timestamp", "float64"),
         FieldSpec("frame_index", "frame_index", "int64"),
@@ -240,6 +251,164 @@ def schema_profile(
             fields=fields,
             version=PROPRIO_WAM_SCHEMA_VERSION,
         )
+    if profile in {"wam_multimodal", "multimodal_wam"}:
+        current_image_fields: list[FieldSpec] = []
+        next_image_fields: list[FieldSpec] = []
+        current_camera_fields: list[FieldSpec] = []
+        next_camera_fields: list[FieldSpec] = []
+        for raw_camera in cameras:
+            camera = str(raw_camera)
+            current_image_fields.extend(
+                (
+                    FieldSpec(
+                        f"observation.images.{camera}",
+                        f"images.{camera}",
+                        "uint8",
+                    ),
+                    FieldSpec(
+                        f"observation.image_timestamp.{camera}",
+                        f"image_timestamps.{camera}",
+                        "float64",
+                    ),
+                    FieldSpec(
+                        f"observation.image_state_timestamp.{camera}",
+                        f"image_state_timestamps.{camera}",
+                        "float64",
+                    ),
+                    FieldSpec(
+                        f"observation.image_frame_index.{camera}",
+                        f"image_frame_indices.{camera}",
+                        "int64",
+                    ),
+                )
+            )
+            next_image_fields.extend(
+                (
+                    FieldSpec(
+                        f"next_observation.images.{camera}",
+                        f"next_images.{camera}",
+                        "uint8",
+                    ),
+                    FieldSpec(
+                        f"next_observation.image_timestamp.{camera}",
+                        f"next_image_timestamps.{camera}",
+                        "float64",
+                    ),
+                    FieldSpec(
+                        f"next_observation.image_state_timestamp.{camera}",
+                        f"next_image_state_timestamps.{camera}",
+                        "float64",
+                    ),
+                    FieldSpec(
+                        f"next_observation.image_frame_index.{camera}",
+                        f"next_image_frame_indices.{camera}",
+                        "int64",
+                    ),
+                )
+            )
+            current_camera_fields.extend(
+                (
+                    FieldSpec(
+                        f"camera.intrinsics.{camera}",
+                        f"camera_intrinsics.{camera}",
+                        "float32",
+                    ),
+                    FieldSpec(
+                        f"camera.extrinsics.{camera}",
+                        f"camera_extrinsics.{camera}",
+                        "float32",
+                    ),
+                    FieldSpec(
+                        f"camera.resolution.{camera}",
+                        f"camera_resolutions.{camera}",
+                        "int64",
+                    ),
+                )
+            )
+            next_camera_fields.extend(
+                (
+                    FieldSpec(
+                        f"next_camera.intrinsics.{camera}",
+                        f"next_camera_intrinsics.{camera}",
+                        "float32",
+                    ),
+                    FieldSpec(
+                        f"next_camera.extrinsics.{camera}",
+                        f"next_camera_extrinsics.{camera}",
+                        "float32",
+                    ),
+                    FieldSpec(
+                        f"next_camera.resolution.{camera}",
+                        f"next_camera_resolutions.{camera}",
+                        "int64",
+                    ),
+                )
+            )
+        fields = (
+            (
+                FieldSpec("timestamp", "timestamp", "float64"),
+                FieldSpec("frame_index", "frame_index", "int64"),
+                FieldSpec("episode_index", "episode_index", "int64"),
+                FieldSpec("seed", "metadata.seed", "int64"),
+                FieldSpec("task.text", "task"),
+                FieldSpec("task.id", "metadata.task_id"),
+                FieldSpec(
+                    "observation.state", "observation.proprioception", "float32"
+                ),
+            )
+            + tuple(current_image_fields)
+            + (
+                FieldSpec("action.commanded", "action", "float32"),
+                FieldSpec("action.executed", "info.executed_action", "float32"),
+                FieldSpec(
+                    "next_observation.state",
+                    "next_observation.proprioception",
+                    "float32",
+                ),
+            )
+            + tuple(next_image_fields)
+            + tuple(current_camera_fields)
+            + tuple(next_camera_fields)
+            + (
+                FieldSpec(
+                    "event.visual_signal_active",
+                    "info.visual_signal_active",
+                    "bool",
+                ),
+                FieldSpec(
+                    "event.visual_signal_onset_step",
+                    "info.visual_signal_onset_step",
+                    "int64",
+                ),
+                FieldSpec(
+                    "event.visual_signal_kind",
+                    "info.visual_signal_kind",
+                ),
+                FieldSpec(
+                    "event.rendered_cue_variant",
+                    "info.rendered_cue_variant",
+                    "int64",
+                ),
+                FieldSpec("reward", "reward", "float32"),
+                FieldSpec("terminated", "terminated", "bool"),
+                FieldSpec("truncated", "truncated", "bool"),
+                FieldSpec("done", "done", "bool"),
+                FieldSpec("success", "info.success", "bool"),
+                FieldSpec("failure", "info.failure", "bool"),
+                FieldSpec("failure_reason", "info.failure_reason"),
+                FieldSpec("schema_version", "metadata.schema_version"),
+                FieldSpec("behavior_id", "metadata.behavior_id"),
+                FieldSpec("environment_config", "metadata.environment_config"),
+                FieldSpec(
+                    "randomization_config", "metadata.randomization_config"
+                ),
+            )
+        )
+        return TrajectorySchema(
+            profile="wam_multimodal",
+            fields=fields,
+            version=MULTIMODAL_WAM_SCHEMA_VERSION,
+        )
     if profile in {"rmbench", "robotwin"}:
         fields = (
             common
@@ -272,7 +441,7 @@ def schema_profile(
         return TrajectorySchema(profile=profile, fields=fields)
     raise ValueError(
         f"unknown schema profile {profile!r}; expected vla, wam, wam_proprio, "
-        "robocasa, or rmbench"
+        "wam_multimodal, robocasa, or rmbench"
     )
 
 
@@ -299,6 +468,32 @@ def extract_source(
         "episode_index": transition.episode_index,
         "images": transition.images,
         "next_images": transition.next_images,
+        "image_timestamps": getattr(transition, "image_timestamps", {}),
+        "next_image_timestamps": getattr(
+            transition, "next_image_timestamps", {}
+        ),
+        "image_state_timestamps": getattr(
+            transition, "image_state_timestamps", {}
+        ),
+        "next_image_state_timestamps": getattr(
+            transition, "next_image_state_timestamps", {}
+        ),
+        "image_frame_indices": getattr(transition, "image_frame_indices", {}),
+        "next_image_frame_indices": getattr(
+            transition, "next_image_frame_indices", {}
+        ),
+        "camera_intrinsics": getattr(transition, "camera_intrinsics", {}),
+        "next_camera_intrinsics": getattr(
+            transition, "next_camera_intrinsics", {}
+        ),
+        "camera_extrinsics": getattr(transition, "camera_extrinsics", {}),
+        "next_camera_extrinsics": getattr(
+            transition, "next_camera_extrinsics", {}
+        ),
+        "camera_resolutions": getattr(transition, "camera_resolutions", {}),
+        "next_camera_resolutions": getattr(
+            transition, "next_camera_resolutions", {}
+        ),
         "metadata": transition.metadata,
     }
     root_name, separator, remainder = source.partition(".")
@@ -360,6 +555,7 @@ def _coerce(value: Any, dtype: str | None) -> Any:
 
 __all__ = [
     "FieldSpec",
+    "MULTIMODAL_WAM_SCHEMA_VERSION",
     "PROPRIO_WAM_SCHEMA_VERSION",
     "TrajectorySchema",
     "extract_source",

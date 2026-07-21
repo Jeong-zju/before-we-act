@@ -8,6 +8,8 @@ from typing import Any, Dict, Tuple
 import mujoco
 import numpy as np
 
+from envs.mujoco_camera import camera_calibration as mujoco_camera_calibration
+
 
 DEFAULT_TASK_INSTRUCTION = (
     "carry the object together; when one robot slows to a stop, "
@@ -112,6 +114,22 @@ class TwoRobotCooperativeStopEnv:
         self.robot_camera_names = ("robot_0_camera", "robot_1_camera")
         for camera_name in self.robot_camera_names:
             self._named_id(mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+        self.brake_light_geom_ids = (
+            self._named_id(mujoco.mjtObj.mjOBJ_GEOM, "robot_0_brake_light"),
+            self._named_id(mujoco.mjtObj.mjOBJ_GEOM, "robot_1_brake_light"),
+        )
+        self._visual_task_geom_ids = tuple(
+            self._named_id(mujoco.mjtObj.mjOBJ_GEOM, name)
+            for name in (
+                "visual_event_signal",
+                "visual_target_left",
+                "visual_target_right",
+                "visual_obstacle_left",
+                "visual_obstacle_right",
+                "visual_obstacle_collision_left",
+                "visual_obstacle_collision_right",
+            )
+        )
 
         self.rng = np.random.default_rng(self.cfg.seed)
         self.step_count = 0
@@ -139,6 +157,24 @@ class TwoRobotCooperativeStopEnv:
         self._best_response_progress = 0.0
         self._previous_speeds = np.zeros(2, dtype=np.float64)
         self._renderers: dict[tuple[int, int], mujoco.Renderer] = {}
+        self._reset_visual_indicators()
+
+    def _reset_visual_indicators(self) -> None:
+        for geom_id in self._visual_task_geom_ids:
+            self.model.geom_rgba[geom_id] = np.asarray(
+                [0.0, 0.0, 0.0, 0.0], dtype=np.float32
+            )
+            self.model.geom_contype[geom_id] = 0
+            self.model.geom_conaffinity[geom_id] = 0
+        self._set_brake_lights(None)
+
+    def _set_brake_lights(self, braking_agent: int | None) -> None:
+        off = np.asarray([0.025, 0.004, 0.004, 1.0], dtype=np.float32)
+        on = np.asarray([1.0, 0.0, 0.0, 1.0], dtype=np.float32)
+        for agent_id, geom_id in enumerate(self.brake_light_geom_ids):
+            self.model.geom_rgba[geom_id] = (
+                on if braking_agent == agent_id else off
+            )
 
     def _validate_config(self) -> None:
         if self.cfg.scenario != "standard":
@@ -283,6 +319,7 @@ class TwoRobotCooperativeStopEnv:
         self.stop_hold_count = 0
         self._best_response_progress = 0.0
         self._previous_speeds[:] = 0.0
+        self._reset_visual_indicators()
 
         home_a = self.geometry.home_qpos[
             self.robot_a_qpos_addr : self.robot_a_qpos_addr + 3
@@ -422,6 +459,7 @@ class TwoRobotCooperativeStopEnv:
             and np.all(forward_speeds >= self.cfg.min_cruise_forward_speed)
             and abs(float(speeds[0] - speeds[1])) <= self.cfg.max_pre_brake_speed_error
         )
+        self._set_brake_lights(self.braking_agent)
 
     def _limit_velocity_change(
         self, current: np.ndarray, desired: np.ndarray
@@ -982,6 +1020,21 @@ class TwoRobotCooperativeStopEnv:
         renderer.update_scene(self.data, camera=camera)
         return np.asarray(renderer.render(), dtype=np.uint8).copy()
 
+    def camera_calibration(
+        self,
+        *,
+        camera: str = "fixed",
+        width: int = 640,
+        height: int = 360,
+    ) -> dict[str, Any]:
+        return mujoco_camera_calibration(
+            self.model,
+            self.data,
+            camera=camera,
+            width=width,
+            height=height,
+        )
+
     def close(self) -> None:
         for renderer in self._renderers.values():
             renderer.close()
@@ -1055,6 +1108,9 @@ class TwoRobotCooperativeStopEnv:
         self._previous_speeds = np.asarray(
             state["previous_speeds"], dtype=np.float64
         ).copy()
+        self._set_brake_lights(
+            self.braking_agent if self.brake_event_active else None
+        )
         self.rng.bit_generator.state = copy.deepcopy(state["rng_state"])
         mujoco.mj_forward(self.model, self.data)
 
