@@ -11,6 +11,13 @@ import torch
 from torch.utils.data import DataLoader
 
 from train import m1_manifest_dataset as manifest_dataset_module
+from train.m1_data_protocol import (
+    VISUAL_CUE_PAIR_PROTOCOL,
+    build_m1_window_dataset,
+    detect_m1_data_protocol,
+    load_m1_data_manifest,
+    m1_data_capabilities,
+)
 from train.m1_manifest_dataset import (
     CANONICAL_CAMERA_ORDER,
     M1CausalPairDataset,
@@ -23,6 +30,34 @@ from train.m1_manifest_dataset import (
 
 TASKS = ("visual_target_select", "visual_event_stop")
 SPLITS = ("train", "validation", "test")
+
+
+def test_protocol_dispatch_preserves_strict_visual_cue_loader(tmp_path: Path) -> None:
+    manifest_path = _write_manifest_fixture(tmp_path)
+    assert detect_m1_data_protocol(manifest_path) == VISUAL_CUE_PAIR_PROTOCOL
+    manifest = load_m1_data_manifest(manifest_path)
+    assert isinstance(manifest, M1ManifestIndex)
+    capabilities = m1_data_capabilities(manifest)
+    assert capabilities.causal_pairs
+    assert capabilities.event_probe_labels
+    assert capabilities.decision_window_sampling
+
+    dataset = build_m1_window_dataset(
+        manifest,
+        split="train",
+        state_history=6,
+        action_chunk=8,
+        cameras=("fixed",),
+        visual_history=2,
+        future_horizons=(1, 2, 4, 8),
+        hdf5_cache_size=1,
+    )
+    assert isinstance(dataset, M1WindowDataset)
+    try:
+        assert len(dataset) == 20
+        assert frozenset(dataset[0]) == M1WindowDataset.SAMPLE_KEYS
+    finally:
+        dataset.close()
 
 
 def test_manifest_audits_pairs_splits_hdf5_and_checkpoint_hashes(

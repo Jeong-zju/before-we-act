@@ -104,6 +104,7 @@ class StatefulActionFlowConfig:
     anchor_hidden_layers: int = 2
     anchor_min_log_std: float = -5.0
     anchor_max_log_std: float = 1.0
+    anchor_mode: str = "frozen_prior"
 
     def __post_init__(self) -> None:
         for name in (
@@ -122,6 +123,8 @@ class StatefulActionFlowConfig:
             raise ValueError("time_embedding_dim must be even")
         if self.anchor_min_log_std >= self.anchor_max_log_std:
             raise ValueError("invalid anchor log-std bounds")
+        if self.anchor_mode not in {"frozen_prior", "none"}:
+            raise ValueError("anchor_mode must be 'frozen_prior' or 'none'")
 
 
 __all__ = [

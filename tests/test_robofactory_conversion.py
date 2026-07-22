@@ -9,7 +9,13 @@ import numpy as np
 import pytest
 
 from data.exporters import HDF5TrajectoryExporter, LeRobotTrajectoryExporter
-from data.robofactory import ROBOFACTORY_SCHEMA_VERSION, RoboFactoryDataset
+from data.robofactory import (
+    COMMAND_ECHO_ACTION_SOURCE,
+    ROBOFACTORY_M1_PROFILE,
+    ROBOFACTORY_M1_SCHEMA_VERSION,
+    ROBOFACTORY_SCHEMA_VERSION,
+    RoboFactoryDataset,
+)
 from train.progress import progress_detail
 
 
@@ -149,6 +155,135 @@ def test_robofactory_lerobot_conversion_uses_canonical_features_and_finalizes(
     assert progress_detail(progress_values[-1]) == "src 7 episode 1/1 frame 3/3"
 
 
+def test_robofactory_m1_scratch_conversion_freezes_liftbarrier_semantics(
+    tmp_path: Path,
+) -> None:
+    source_path = _write_robofactory_source(tmp_path / "LiftBarrier-rf.h5")
+    output = tmp_path / "converted_m1"
+
+    with RoboFactoryDataset(source_path) as source:
+        schema = source.build_schema(
+            profile="m1-scratch",
+            cameras=("global",),
+            include_calibration=False,
+            include_agent_fields=False,
+        )
+        manifest = source.convert(
+            (HDF5TrajectoryExporter(output, schema),),
+            fps=20,
+            schema=schema,
+            task="Lift the barrier together",
+            task_id="lift_barrier",
+            executed_action_source=COMMAND_ECHO_ACTION_SOURCE,
+            success_only=True,
+        )
+
+    assert manifest["format_version"] == "robofactory.conversion_manifest/2.0"
+    assert manifest["schema_profile"] == ROBOFACTORY_M1_PROFILE
+    assert manifest["schema_version"] == ROBOFACTORY_M1_SCHEMA_VERSION
+    assert manifest["task_id"] == "lift_barrier"
+    assert manifest["data_semantics"]["state"] == {
+        "field": "observation.state",
+        "agent_order": ["panda-0", "panda-1"],
+        "per_agent_component_order": ["qpos", "qvel"],
+        "ordering_rule": "natural_agent_order_then_qpos_then_qvel",
+    }
+    assert manifest["data_semantics"]["action"] == {
+        "commanded_field": "action.commanded",
+        "executed_field": "action.executed",
+        "history_field": "action.commanded",
+        "history_semantics": "past_controller_commands",
+        "agent_order": ["panda-0", "panda-1"],
+        "control_mode": "pd_joint_pos",
+        "executed_action_source": "command_echo",
+        "executed_action_equivalence": "exact_copy_of_commanded",
+        "independent_actuator_feedback_available": False,
+    }
+    assert manifest["data_semantics"]["timing"]["control_hz"] == 20.0
+    assert manifest["data_semantics"]["timing"]["image_hz"] == 20.0
+    assert manifest["data_semantics"]["vision"]["camera_order"] == ["global"]
+    assert manifest["field_mapping"]["centralized_action"] == [
+        {
+            "source": "actions/panda-0",
+            "target": "action.commanded",
+            "slice": [0, 2],
+        },
+        {
+            "source": "actions/panda-1",
+            "target": "action.commanded",
+            "slice": [2, 4],
+        },
+    ]
+    assert manifest["field_mapping"]["camera_names"] == {
+        "head_camera_global": "observation.images.global"
+    }
+
+    episode_path = output / "episode_000000.hdf5"
+    with h5py.File(episode_path, "r") as episode:
+        assert episode.attrs["schema_profile"] == ROBOFACTORY_M1_PROFILE
+        assert episode.attrs["schema_version"] == ROBOFACTORY_M1_SCHEMA_VERSION
+        assert episode.attrs["fps"] == 20.0
+        assert episode.attrs["task_id"] == "lift_barrier"
+        assert episode.attrs["action_history_field"] == "action.commanded"
+        assert episode.attrs["action_history_semantics"] == "past_controller_commands"
+        assert episode.attrs["executed_action_source"] == "command_echo"
+        assert (
+            episode.attrs["executed_action_semantics"]
+            == "command_echo_assumed_actuator_executed"
+        )
+        assert bool(episode.attrs["command_equals_executed_assumption"])
+        assert not bool(episode.attrs["independent_actuator_feedback_available"])
+        assert json.loads(episode.attrs["camera_order_json"]) == ["global"]
+        assert episode["data/seed"][:].tolist() == [109, 109, 109]
+        assert episode["data/task/id"].asstr()[:].tolist() == [
+            "lift_barrier",
+            "lift_barrier",
+            "lift_barrier",
+        ]
+        assert episode["data/action/commanded"].shape == (3, 4)
+        assert episode["data/action/executed"].shape == (3, 4)
+        np.testing.assert_array_equal(
+            episode["data/action/commanded"][:],
+            episode["data/action/executed"][:],
+        )
+        assert episode["data/observation/images/global"].shape == (3, 2, 3, 3)
+        assert episode["data/next_observation/images/global"].shape == (3, 2, 3, 3)
+        assert episode["data/observation/images/global"][0, 0, 0, 0] == 90
+        assert episode["data/next_observation/images/global"][0, 0, 0, 0] == 91
+        assert episode["data/observation/image_frame_index/global"][:].tolist() == [
+            0,
+            1,
+            2,
+        ]
+        assert episode[
+            "data/next_observation/image_frame_index/global"
+        ][:].tolist() == [1, 2, 3]
+        np.testing.assert_allclose(
+            episode["data/observation/image_timestamp/global"][:],
+            [0.0, 0.05, 0.1],
+        )
+        np.testing.assert_allclose(
+            episode["data/next_observation/image_timestamp/global"][:],
+            [0.05, 0.1, 0.15],
+        )
+        assert "agent_0" not in episode["data/observation/images"]
+
+
+def test_robofactory_m1_scratch_requires_explicit_command_echo(
+    tmp_path: Path,
+) -> None:
+    source_path = _write_robofactory_source(tmp_path / "LiftBarrier-rf.h5")
+    with RoboFactoryDataset(source_path) as source:
+        schema = source.build_schema(
+            profile="m1-scratch",
+            cameras=("global",),
+            include_calibration=False,
+            include_agent_fields=False,
+        )
+        with pytest.raises(ValueError, match="command_echo"):
+            source.convert((), fps=20, schema=schema)
+
+
 def test_robofactory_conversion_rejects_observation_action_misalignment(
     tmp_path: Path,
 ) -> None:
@@ -211,7 +346,12 @@ def _write_robofactory_source(
                 camera = sensor_data.create_group(camera_name)
                 camera.create_dataset(
                     "rgb",
-                    data=np.full((steps + 1, 2, 3, 3), value, dtype=np.uint8),
+                    data=np.stack(
+                        [
+                            np.full((2, 3, 3), value + frame, dtype=np.uint8)
+                            for frame in range(steps + 1)
+                        ]
+                    ),
                 )
                 parameters = sensor_param.create_group(camera_name)
                 parameters.create_dataset(

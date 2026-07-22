@@ -164,9 +164,26 @@ class HDF5TrajectoryExporter:
             sort_keys=True,
             separators=(",", ":"),
         )
-        for key in ("behavior_id", "schema_version"):
+        for key in (
+            "behavior_id",
+            "schema_profile",
+            "schema_version",
+            "task_id",
+            "control_mode",
+            "control_frequency_hz",
+            "image_frequency_hz",
+            "action_history_field",
+            "action_history_semantics",
+            "executed_action_field",
+            "executed_action_source",
+            "executed_action_semantics",
+            "command_equals_executed_assumption",
+            "independent_actuator_feedback_available",
+        ):
             if key in normalized:
-                self._file.attrs[key] = normalized[key]
+                value = normalized[key]
+                if value is not None:
+                    self._file.attrs[key] = value
 
     def _append(self, root: h5py.Group, path: str, value: Any) -> None:
         parts = path.split("/")

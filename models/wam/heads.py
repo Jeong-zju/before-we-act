@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from torch import Tensor, nn
 
 
+class _EmptyProjection(nn.Module):
+    """Return a stable empty final dimension without creating zero-size weights."""
+
+    def forward(self, hidden: Tensor) -> Tensor:
+        return hidden.new_empty(*hidden.shape[:-1], 0)
+
+
 @dataclass(frozen=True)
 class RWMHeadOutput:
     normalized_delta_mean: Tensor
@@ -37,7 +44,11 @@ class RWMHeads(nn.Module):
         self.max_log_std = float(max_log_std)
         self.delta_mean = nn.Linear(hidden_dim, state_dim)
         self.delta_log_std = nn.Linear(hidden_dim, state_dim)
-        self.gripper_closed = nn.Linear(hidden_dim, closed_count)
+        self.gripper_closed = (
+            nn.Linear(hidden_dim, closed_count)
+            if closed_count > 0
+            else _EmptyProjection()
+        )
         self.reward = nn.Linear(hidden_dim, 1)
         self.done = nn.Linear(hidden_dim, 1)
         self.success = nn.Linear(hidden_dim, 1)

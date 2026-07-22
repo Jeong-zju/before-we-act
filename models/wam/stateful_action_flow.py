@@ -47,16 +47,18 @@ class StatefulActionFlow(nn.Module):
         if stats.action_std.shape != (config.action_dim,):
             raise ValueError("action normalization std has the wrong dimension")
         self.config = config
-        self.anchor_prior = ActionPrior(
-            ActionPriorConfig(
-                feature_dim=config.feature_dim,
-                action_dim=config.action_dim,
-                hidden_dim=config.anchor_hidden_dim,
-                hidden_layers=config.anchor_hidden_layers,
-                min_log_std=config.anchor_min_log_std,
-                max_log_std=config.anchor_max_log_std,
+        self.anchor_prior: ActionPrior | None = None
+        if config.anchor_mode == "frozen_prior":
+            self.anchor_prior = ActionPrior(
+                ActionPriorConfig(
+                    feature_dim=config.feature_dim,
+                    action_dim=config.action_dim,
+                    hidden_dim=config.anchor_hidden_dim,
+                    hidden_layers=config.anchor_hidden_layers,
+                    min_log_std=config.anchor_min_log_std,
+                    max_log_std=config.anchor_max_log_std,
+                )
             )
-        )
         chunk_width = config.horizon * config.action_dim
         input_width = (
             config.feature_dim
@@ -97,18 +99,28 @@ class StatefulActionFlow(nn.Module):
     def set_anchor_from_prior(self, prior: ActionPrior) -> None:
         """Copy the accepted prior into the flow artifact, then freeze it."""
 
+        if self.anchor_prior is None:
+            raise RuntimeError("anchor_mode='none' cannot accept an action prior")
         if prior.config != self.anchor_prior.config:
             raise ValueError("action prior architecture does not match flow anchor")
         self.anchor_prior.load_state_dict(prior.state_dict(), strict=True)
         self.freeze_anchor()
 
     def freeze_anchor(self) -> None:
+        if self.anchor_prior is None:
+            return
         self.anchor_prior.eval()
         for parameter in self.anchor_prior.parameters():
             parameter.requires_grad_(False)
 
     def anchor_action(self, features: Tensor) -> Tensor:
+        if self.anchor_prior is None:
+            raise RuntimeError("action flow has no anchor prior")
         return self.anchor_prior.deterministic_action(features)
+
+    @property
+    def has_anchor(self) -> bool:
+        return self.anchor_prior is not None
 
     def forward(
         self,

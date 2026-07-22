@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -17,6 +18,9 @@ from data.trajectory import FieldSpec, TrajectorySchema
 from envs.runtime import RolloutSummary, SimulationTransition
 
 ROBOFACTORY_SCHEMA_VERSION = "robofactory.mani_skill/1.0"
+ROBOFACTORY_M1_SCHEMA_VERSION = "wam.robofactory.multimodal/1.0"
+ROBOFACTORY_M1_PROFILE = "robofactory_m1"
+COMMAND_ECHO_ACTION_SOURCE = "command_echo"
 _EPISODE_PATTERN = re.compile(r"^traj_(\d+)$")
 
 
@@ -128,11 +132,28 @@ class RoboFactoryDataset:
     def build_schema(
         self,
         *,
+        profile: str = "robofactory",
+        cameras: Sequence[str] | None = None,
         include_images: bool = True,
         include_calibration: bool = True,
         include_agent_fields: bool = True,
     ) -> TrajectorySchema:
-        """Build a canonical LeRobot/WAM schema plus lossless multi-agent fields."""
+        """Build the legacy schema or the explicit M1 scratch data contract."""
+
+        normalized_profile = profile.lower().replace("-", "_")
+        selected_cameras = self._select_cameras(cameras)
+        if normalized_profile in {"m1_scratch", ROBOFACTORY_M1_PROFILE}:
+            return self._build_m1_schema(
+                cameras=selected_cameras,
+                include_images=include_images,
+                include_calibration=include_calibration,
+                include_agent_fields=include_agent_fields,
+            )
+        if normalized_profile != "robofactory":
+            raise ValueError(
+                f"unknown RoboFactory schema profile {profile!r}; expected "
+                "'robofactory' or 'm1-scratch'"
+            )
 
         fields: list[FieldSpec] = [
             FieldSpec("timestamp", "timestamp", "float64"),
@@ -202,10 +223,10 @@ class RoboFactoryDataset:
                     f"images.{camera.target_name}",
                     "uint8",
                 )
-                for camera in self.layout.cameras
+                for camera in selected_cameras
             )
         if include_calibration:
-            for camera in self.layout.cameras:
+            for camera in selected_cameras:
                 for calibration in camera.calibration_fields:
                     fields.append(
                         FieldSpec(
@@ -222,6 +243,164 @@ class RoboFactoryDataset:
             version=ROBOFACTORY_SCHEMA_VERSION,
         )
 
+    def _build_m1_schema(
+        self,
+        *,
+        cameras: Sequence[RoboFactoryCameraLayout],
+        include_images: bool,
+        include_calibration: bool,
+        include_agent_fields: bool,
+    ) -> TrajectorySchema:
+        fields: list[FieldSpec] = [
+            FieldSpec("timestamp", "timestamp", "float64"),
+            FieldSpec("frame_index", "frame_index", "int64"),
+            FieldSpec("episode_index", "episode_index", "int64"),
+            FieldSpec("seed", "metadata.seed", "int64"),
+            FieldSpec("task.id", "metadata.task_id"),
+            FieldSpec("task.text", "task"),
+            FieldSpec("observation.state", "observation.proprioception", "float32"),
+        ]
+        if include_images:
+            for camera in cameras:
+                name = camera.target_name
+                fields.extend(
+                    (
+                        FieldSpec(
+                            f"observation.images.{name}", f"images.{name}", "uint8"
+                        ),
+                        FieldSpec(
+                            f"observation.image_timestamp.{name}",
+                            f"image_timestamps.{name}",
+                            "float64",
+                        ),
+                        FieldSpec(
+                            f"observation.image_state_timestamp.{name}",
+                            f"image_state_timestamps.{name}",
+                            "float64",
+                        ),
+                        FieldSpec(
+                            f"observation.image_frame_index.{name}",
+                            f"image_frame_indices.{name}",
+                            "int64",
+                        ),
+                    )
+                )
+        fields.extend(
+            (
+                FieldSpec("action.commanded", "action", "float32"),
+                FieldSpec("action.executed", "info.executed_action", "float32"),
+                FieldSpec(
+                    "next_observation.state",
+                    "next_observation.proprioception",
+                    "float32",
+                ),
+            )
+        )
+        if include_images:
+            for camera in cameras:
+                name = camera.target_name
+                fields.extend(
+                    (
+                        FieldSpec(
+                            f"next_observation.images.{name}",
+                            f"next_images.{name}",
+                            "uint8",
+                        ),
+                        FieldSpec(
+                            f"next_observation.image_timestamp.{name}",
+                            f"next_image_timestamps.{name}",
+                            "float64",
+                        ),
+                        FieldSpec(
+                            f"next_observation.image_state_timestamp.{name}",
+                            f"next_image_state_timestamps.{name}",
+                            "float64",
+                        ),
+                        FieldSpec(
+                            f"next_observation.image_frame_index.{name}",
+                            f"next_image_frame_indices.{name}",
+                            "int64",
+                        ),
+                    )
+                )
+        if self.layout.has_rewards:
+            fields.append(FieldSpec("reward", "reward", "float32"))
+        fields.extend(
+            (
+                FieldSpec("terminated", "terminated", "bool"),
+                FieldSpec("truncated", "truncated", "bool"),
+                FieldSpec("done", "done", "bool"),
+            )
+        )
+        if self.layout.has_success:
+            fields.append(FieldSpec("success", "info.success", "bool"))
+        if self.layout.has_failure:
+            fields.append(FieldSpec("failure", "info.failure", "bool"))
+
+        if include_agent_fields:
+            for agent in self.layout.agents:
+                name = agent.target_name
+                fields.extend(
+                    (
+                        FieldSpec(
+                            f"observation.agents.{name}.qpos",
+                            f"observation.agents.{name}.qpos",
+                            "float32",
+                        ),
+                        FieldSpec(
+                            f"observation.agents.{name}.qvel",
+                            f"observation.agents.{name}.qvel",
+                            "float32",
+                        ),
+                        FieldSpec(
+                            f"action.agents.{name}.commanded",
+                            f"info.agent_actions.{name}",
+                            "float32",
+                        ),
+                        FieldSpec(
+                            f"action.agents.{name}.executed",
+                            f"info.agent_executed_actions.{name}",
+                            "float32",
+                        ),
+                        FieldSpec(
+                            f"next_observation.agents.{name}.qpos",
+                            f"next_observation.agents.{name}.qpos",
+                            "float32",
+                        ),
+                        FieldSpec(
+                            f"next_observation.agents.{name}.qvel",
+                            f"next_observation.agents.{name}.qvel",
+                            "float32",
+                        ),
+                    )
+                )
+
+        if include_calibration:
+            for camera in cameras:
+                name = camera.target_name
+                for calibration in camera.calibration_fields:
+                    fields.extend(
+                        (
+                            FieldSpec(
+                                f"observation.camera_calibration.{name}.{calibration}",
+                                f"observation.camera_calibration.{name}.{calibration}",
+                                "float32",
+                            ),
+                            FieldSpec(
+                                "next_observation.camera_calibration."
+                                f"{name}.{calibration}",
+                                "next_observation.camera_calibration."
+                                f"{name}.{calibration}",
+                                "float32",
+                            ),
+                        )
+                    )
+        return TrajectorySchema(
+            profile=ROBOFACTORY_M1_PROFILE,
+            fields=tuple(fields),
+            version=ROBOFACTORY_M1_SCHEMA_VERSION,
+        )
+
     def convert(
         self,
         exporters: Sequence[TrajectoryExporter],
@@ -229,6 +408,8 @@ class RoboFactoryDataset:
         fps: float,
         schema: TrajectorySchema,
         task: str | None = None,
+        task_id: str | None = None,
+        executed_action_source: str | None = None,
         max_episodes: int | None = None,
         success_only: bool = False,
         progress: Callable[[Mapping[str, Any]], None] | None = None,
@@ -246,15 +427,49 @@ class RoboFactoryDataset:
         instruction = task.strip() if task is not None else _task_from_env_id(self.env_id)
         if not instruction:
             raise ValueError("task instruction cannot be empty")
+        normalized_task_id = (
+            task_id.strip() if task_id is not None else _task_id_from_env_id(self.env_id)
+        )
+        if any(field.source == "metadata.task_id" for field in schema.fields):
+            if not normalized_task_id:
+                raise ValueError("task_id cannot be empty for the M1 scratch schema")
+        if executed_action_source is not None:
+            executed_action_source = executed_action_source.lower().replace("-", "_")
+        requires_executed_action = any(
+            field.source == "info.executed_action" for field in schema.fields
+        )
+        if requires_executed_action and (
+            executed_action_source != COMMAND_ECHO_ACTION_SOURCE
+        ):
+            raise ValueError(
+                "the M1 scratch schema requires executed_action_source='command_echo'; "
+                "this records an explicit command echo, not independent actuator feedback"
+            )
+        if any(field.source == "metadata.seed" for field in schema.fields):
+            missing_seed_ids = [
+                episode.source_id for episode in selected if episode.seed is None
+            ]
+            if missing_seed_ids:
+                raise ValueError(
+                    "the M1 scratch schema requires an episode seed; missing for source "
+                    f"episodes {missing_seed_ids[:10]}"
+                )
 
         observer = ExportObserver(exporters, fps=fps)
         summaries: list[dict[str, Any]] = []
         started = time.monotonic()
-        include_images = any(
-            field.source.startswith("images.") for field in schema.fields
+        exported_camera_names = _exported_camera_names(schema)
+        exported_cameras = tuple(
+            camera
+            for name in exported_camera_names
+            for camera in self.layout.cameras
+            if camera.target_name == name
         )
+        include_images = bool(exported_cameras)
         include_calibration = any(
-            field.source.startswith("observation.camera_calibration.")
+            field.source.startswith(
+                ("observation.camera_calibration.", "next_observation.camera_calibration.")
+            )
             for field in schema.fields
         )
         try:
@@ -264,7 +479,14 @@ class RoboFactoryDataset:
                 initial_observation = self._observation(
                     group, 0, include_calibration=include_calibration
                 )
-                episode_metadata = self._episode_metadata(episode)
+                episode_metadata = self._episode_metadata(
+                    episode,
+                    schema=schema,
+                    fps=fps,
+                    task_id=normalized_task_id,
+                    exported_cameras=exported_cameras,
+                    executed_action_source=executed_action_source,
+                )
                 observer.on_episode_start(
                     episode_index=output_index,
                     seed=episode.seed,
@@ -280,7 +502,13 @@ class RoboFactoryDataset:
                     reward = self._scalar(group, "rewards", frame_index, 0.0)
                     terminated = bool(group["terminated"][frame_index])
                     truncated = bool(group["truncated"][frame_index])
-                    info = self._transition_info(group, frame_index)
+                    commanded_action = self._action(group, frame_index)
+                    info = self._transition_info(
+                        group,
+                        frame_index,
+                        commanded_action=commanded_action,
+                        executed_action_source=executed_action_source,
+                    )
                     next_observation = self._observation(
                         group,
                         frame_index + 1,
@@ -291,7 +519,7 @@ class RoboFactoryDataset:
                         frame_index=frame_index,
                         timestamp=frame_index / float(fps),
                         observation=observation,
-                        action=self._action(group, frame_index),
+                        action=commanded_action,
                         next_observation=next_observation,
                         reward=reward,
                         terminated=terminated,
@@ -299,10 +527,39 @@ class RoboFactoryDataset:
                         info=info,
                         task=instruction,
                         images=(
-                            self._images(group, frame_index)
+                            self._images(group, frame_index, exported_cameras)
                             if include_images
                             else {}
                         ),
+                        next_images=(
+                            self._images(group, frame_index + 1, exported_cameras)
+                            if include_images
+                            else {}
+                        ),
+                        image_timestamps={
+                            camera.target_name: frame_index / float(fps)
+                            for camera in exported_cameras
+                        },
+                        next_image_timestamps={
+                            camera.target_name: (frame_index + 1) / float(fps)
+                            for camera in exported_cameras
+                        },
+                        image_state_timestamps={
+                            camera.target_name: frame_index / float(fps)
+                            for camera in exported_cameras
+                        },
+                        next_image_state_timestamps={
+                            camera.target_name: (frame_index + 1) / float(fps)
+                            for camera in exported_cameras
+                        },
+                        image_frame_indices={
+                            camera.target_name: frame_index
+                            for camera in exported_cameras
+                        },
+                        next_image_frame_indices={
+                            camera.target_name: frame_index + 1
+                            for camera in exported_cameras
+                        },
                         metadata=episode_metadata,
                     )
                     observer.on_transition(transition)
@@ -347,7 +604,11 @@ class RoboFactoryDataset:
             observer.close()
 
         return {
-            "format_version": "robofactory.conversion_manifest/1.0",
+            "format_version": (
+                "robofactory.conversion_manifest/2.0"
+                if schema.profile == ROBOFACTORY_M1_PROFILE
+                else "robofactory.conversion_manifest/1.0"
+            ),
             "schema_profile": schema.profile,
             "schema_version": schema.version,
             "source": {
@@ -358,6 +619,12 @@ class RoboFactoryDataset:
                     else None
                 ),
                 "size_bytes": self.path.stat().st_size,
+                "hdf5_sha256": _sha256_file(self.path),
+                "metadata_json_sha256": (
+                    _sha256_file(self.metadata_path)
+                    if self.metadata_path.is_file()
+                    else None
+                ),
                 "env_id": self.env_id,
                 "metadata": {
                     str(key): value
@@ -366,14 +633,24 @@ class RoboFactoryDataset:
                 },
             },
             "task": instruction,
+            "task_id": normalized_task_id,
             "fps": float(fps),
             "transition_semantics": "observation[t], action[t], observation[t+1]",
-            "field_mapping": self.field_mapping(),
+            "data_semantics": self._data_semantics(
+                schema=schema,
+                fps=fps,
+                exported_cameras=exported_cameras,
+                executed_action_source=executed_action_source,
+            ),
+            "field_mapping": self.field_mapping(schema=schema),
             "layout": {
                 "state_size": self.layout.state_size,
                 "action_size": self.layout.action_size,
                 "agents": [asdict(agent) for agent in self.layout.agents],
                 "cameras": [asdict(camera) for camera in self.layout.cameras],
+                "exported_cameras": [
+                    asdict(camera) for camera in exported_cameras
+                ],
                 "has_rewards": self.layout.has_rewards,
                 "has_success": self.layout.has_success,
                 "has_failure": self.layout.has_failure,
@@ -406,9 +683,17 @@ class RoboFactoryDataset:
         )
         return len(selected), transitions
 
-    def field_mapping(self) -> dict[str, Any]:
+    def field_mapping(
+        self, *, schema: TrajectorySchema | None = None
+    ) -> dict[str, Any]:
         """Describe every semantic rename and centralized concatenation order."""
 
+        action_target = _field_name_for_source(schema, "action") or "action"
+        exported_camera_names = (
+            set(_exported_camera_names(schema))
+            if schema is not None
+            else {camera.target_name for camera in self.layout.cameras}
+        )
         state_slices: list[dict[str, Any]] = []
         action_slices: list[dict[str, Any]] = []
         state_offset = 0
@@ -431,7 +716,7 @@ class RoboFactoryDataset:
             action_slices.append(
                 {
                     "source": f"actions/{agent.source_name}",
-                    "target": "action",
+                    "target": action_target,
                     "slice": [action_offset, action_offset + size],
                 }
             )
@@ -445,16 +730,126 @@ class RoboFactoryDataset:
             "camera_names": {
                 camera.source_name: f"observation.images.{camera.target_name}"
                 for camera in self.layout.cameras
+                if camera.target_name in exported_camera_names
             },
+            "command_echo": (
+                {
+                    "source": action_target,
+                    "target": "action.executed",
+                    "equivalence": "exact_copy",
+                    "independent_actuator_feedback": False,
+                }
+                if schema is not None
+                and any(field.name == "action.executed" for field in schema.fields)
+                else None
+            ),
             "labels": {
-                "rewards": "next.reward" if self.layout.has_rewards else None,
-                "terminated": "next.terminated",
-                "truncated": "next.truncated",
-                "terminated OR truncated": "next.done",
-                "success": "next.success" if self.layout.has_success else None,
-                "fail": "next.failure" if self.layout.has_failure else None,
+                "rewards": (
+                    _field_name_for_source(schema, "reward")
+                    if self.layout.has_rewards
+                    else None
+                ),
+                "terminated": _field_name_for_source(schema, "terminated"),
+                "truncated": _field_name_for_source(schema, "truncated"),
+                "terminated OR truncated": _field_name_for_source(schema, "done"),
+                "success": (
+                    _field_name_for_source(schema, "info.success")
+                    if self.layout.has_success
+                    else None
+                ),
+                "fail": (
+                    _field_name_for_source(schema, "info.failure")
+                    if self.layout.has_failure
+                    else None
+                ),
             },
         }
+
+    def _data_semantics(
+        self,
+        *,
+        schema: TrajectorySchema,
+        fps: float,
+        exported_cameras: Sequence[RoboFactoryCameraLayout],
+        executed_action_source: str | None,
+    ) -> dict[str, Any]:
+        commanded_field = _field_name_for_source(schema, "action") or "action"
+        executed_field = _field_name_for_source(schema, "info.executed_action")
+        return {
+            "state": {
+                "field": "observation.state",
+                "agent_order": [agent.source_name for agent in self.layout.agents],
+                "per_agent_component_order": ["qpos", "qvel"],
+                "ordering_rule": "natural_agent_order_then_qpos_then_qvel",
+            },
+            "action": {
+                "commanded_field": commanded_field,
+                "executed_field": executed_field,
+                "history_field": commanded_field,
+                "history_semantics": "past_controller_commands",
+                "agent_order": [agent.source_name for agent in self.layout.agents],
+                "control_mode": self._control_mode(),
+                "executed_action_source": executed_action_source,
+                "executed_action_equivalence": (
+                    "exact_copy_of_commanded"
+                    if executed_action_source == COMMAND_ECHO_ACTION_SOURCE
+                    else None
+                ),
+                "independent_actuator_feedback_available": False,
+            },
+            "timing": {
+                "control_hz": float(fps),
+                "image_hz": float(fps),
+                "sampling": "one_rgb_frame_per_control_step",
+                "current": "state[t], commanded_action[t], rgb[t]",
+                "next": "state[t+1], rgb[t+1]",
+            },
+            "vision": {
+                "camera_order": [camera.target_name for camera in exported_cameras],
+                "source_camera_order": [
+                    camera.source_name for camera in exported_cameras
+                ],
+            },
+        }
+
+    def _select_cameras(
+        self, camera_names: Sequence[str] | None
+    ) -> tuple[RoboFactoryCameraLayout, ...]:
+        if camera_names is None:
+            return self.layout.cameras
+        if not camera_names:
+            raise ValueError("camera selection cannot be empty")
+        selected: list[RoboFactoryCameraLayout] = []
+        for raw_name in camera_names:
+            name = str(raw_name).strip()
+            matches = [
+                camera
+                for camera in self.layout.cameras
+                if name in {camera.source_name, camera.target_name}
+            ]
+            if not matches:
+                available = sorted(
+                    {
+                        item
+                        for camera in self.layout.cameras
+                        for item in (camera.source_name, camera.target_name)
+                    }
+                )
+                raise ValueError(
+                    f"unknown RoboFactory camera {name!r}; available: {available}"
+                )
+            camera = matches[0]
+            if camera in selected:
+                raise ValueError(f"duplicate RoboFactory camera selection {name!r}")
+            selected.append(camera)
+        return tuple(selected)
+
+    def _control_mode(self) -> str | None:
+        env_kwargs = self.env_info.get("env_kwargs", {})
+        if not isinstance(env_kwargs, Mapping):
+            return None
+        value = env_kwargs.get("control_mode")
+        return None if value is None else str(value)
 
     def _selected_episodes(
         self,
@@ -726,7 +1121,12 @@ class RoboFactoryDataset:
             ]
         ).astype(np.float32, copy=False)
 
-    def _images(self, group: h5py.Group, index: int) -> dict[str, np.ndarray]:
+    def _images(
+        self,
+        group: h5py.Group,
+        index: int,
+        cameras: Sequence[RoboFactoryCameraLayout],
+    ) -> dict[str, np.ndarray]:
         sensor_data = group.get("obs/sensor_data")
         if not isinstance(sensor_data, h5py.Group):
             return {}
@@ -734,39 +1134,88 @@ class RoboFactoryDataset:
             camera.target_name: np.asarray(
                 sensor_data[camera.source_name]["rgb"][index], dtype=np.uint8
             )
-            for camera in self.layout.cameras
+            for camera in cameras
         }
 
-    def _transition_info(self, group: h5py.Group, index: int) -> dict[str, Any]:
+    def _transition_info(
+        self,
+        group: h5py.Group,
+        index: int,
+        *,
+        commanded_action: np.ndarray,
+        executed_action_source: str | None,
+    ) -> dict[str, Any]:
         actions = _group(group, "actions")
-        info: dict[str, Any] = {
-            "agent_actions": {
-                agent.target_name: np.asarray(
-                    actions[agent.source_name][index], dtype=np.float32
-                )
-                for agent in self.layout.agents
-            }
+        agent_actions = {
+            agent.target_name: np.asarray(
+                actions[agent.source_name][index], dtype=np.float32
+            )
+            for agent in self.layout.agents
         }
+        info: dict[str, Any] = {
+            "agent_actions": agent_actions,
+        }
+        if executed_action_source == COMMAND_ECHO_ACTION_SOURCE:
+            info["executed_action"] = commanded_action.copy()
+            info["agent_executed_actions"] = {
+                name: action.copy() for name, action in agent_actions.items()
+            }
         if self.layout.has_success:
             info["success"] = bool(group["success"][index])
         if self.layout.has_failure:
             info["failure"] = bool(group["fail"][index])
         return info
 
-    def _episode_metadata(self, episode: RoboFactoryEpisode) -> dict[str, Any]:
+    def _episode_metadata(
+        self,
+        episode: RoboFactoryEpisode,
+        *,
+        schema: TrajectorySchema,
+        fps: float,
+        task_id: str,
+        exported_cameras: Sequence[RoboFactoryCameraLayout],
+        executed_action_source: str | None,
+    ) -> dict[str, Any]:
+        commanded_field = _field_name_for_source(schema, "action") or "action"
+        executed_field = _field_name_for_source(schema, "info.executed_action")
         return {
-            "schema_version": ROBOFACTORY_SCHEMA_VERSION,
+            "schema_profile": schema.profile,
+            "schema_version": schema.version,
             "source_format": "RoboFactory/ManiSkill HDF5",
             "source_episode_id": episode.source_id,
             "source_episode_key": episode.source_key,
             "source_env_id": self.env_id,
             "source_episode_metadata": dict(episode.metadata),
+            "seed": episode.seed,
+            "task_id": task_id,
+            "control_mode": self._control_mode(),
+            "control_frequency_hz": float(fps),
+            "image_frequency_hz": float(fps),
             "agent_name_map": {
                 agent.source_name: agent.target_name for agent in self.layout.agents
             },
+            "agent_order": [agent.source_name for agent in self.layout.agents],
+            "state_component_order": ["qpos", "qvel"],
+            "state_layout": self.field_mapping(schema=schema)["centralized_state"],
+            "action_layout": self.field_mapping(schema=schema)["centralized_action"],
             "camera_name_map": {
-                camera.source_name: camera.target_name for camera in self.layout.cameras
+                camera.source_name: camera.target_name
+                for camera in exported_cameras
             },
+            "camera_order": [camera.target_name for camera in exported_cameras],
+            "action_history_field": commanded_field,
+            "action_history_semantics": "past_controller_commands",
+            "executed_action_field": executed_field,
+            "executed_action_source": executed_action_source,
+            "executed_action_semantics": (
+                "command_echo_assumed_actuator_executed"
+                if executed_action_source == COMMAND_ECHO_ACTION_SOURCE
+                else None
+            ),
+            "command_equals_executed_assumption": (
+                executed_action_source == COMMAND_ECHO_ACTION_SOURCE
+            ),
+            "independent_actuator_feedback_available": False,
             "reward_available": self.layout.has_rewards,
         }
 
@@ -863,7 +1312,50 @@ def _task_from_env_id(env_id: str) -> str:
     return value[:1].upper() + value[1:] if value else "RoboFactory task"
 
 
+def _task_id_from_env_id(env_id: str) -> str:
+    value = re.sub(r"(?i)(?:[-_]rf)$", "", env_id).strip()
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    return _identifier(value)
+
+
+def _exported_camera_names(schema: TrajectorySchema) -> tuple[str, ...]:
+    prefix = "observation.images."
+    return tuple(
+        field.name.removeprefix(prefix)
+        for field in schema.fields
+        if field.name.startswith(prefix)
+    )
+
+
+def _field_name_for_source(
+    schema: TrajectorySchema | None, source: str
+) -> str | None:
+    if schema is None:
+        return {
+            "reward": "next.reward",
+            "terminated": "next.terminated",
+            "truncated": "next.truncated",
+            "done": "next.done",
+            "info.success": "next.success",
+            "info.failure": "next.failure",
+        }.get(source)
+    return next(
+        (field.name for field in schema.fields if field.source == source), None
+    )
+
+
+def _sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 __all__ = [
+    "COMMAND_ECHO_ACTION_SOURCE",
+    "ROBOFACTORY_M1_PROFILE",
+    "ROBOFACTORY_M1_SCHEMA_VERSION",
     "ROBOFACTORY_SCHEMA_VERSION",
     "RoboFactoryAgentLayout",
     "RoboFactoryCameraLayout",

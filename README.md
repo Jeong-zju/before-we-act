@@ -88,6 +88,95 @@ uv run python scripts/convert_robofactory_dataset.py \
   --task "Lift the barrier together"
 ```
 
+为 LiftBarrier M1 scratch 训练生成版本化 HDF5（DINO 之外的任务侧模型从零训练）使用独立 profile。下面的命令固定 20 Hz、只导出 global 相机，并显式声明 `action.executed` 是 `action.commanded` 的 command echo：
+
+```bash
+uv run python scripts/convert_robofactory_dataset.py \
+  --input ../RoboFactory/data/h5_data/LiftBarrier-rf.h5 \
+  --metadata-json ../RoboFactory/data/h5_data/LiftBarrier-rf.json \
+  --out-dir datasets/robofactory_lift_barrier_m1_v1 \
+  --profile m1-scratch \
+  --format hdf5 \
+  --camera global \
+  --fps 20 \
+  --task-id lift_barrier \
+  --task "Lift the barrier together" \
+  --executed-action-source command-echo \
+  --canonical-only \
+  --compression gzip
+```
+
+该 profile 的动作语义是：
+
+- `action.commanded` 是权威动作监督，也是历史动作的来源。
+- `action.executed` 是 commanded action 的逐元素精确副本，仅作为显式标注的 command echo 兼容字段；它不是独立测得的 actuator feedback。
+- state 按 agent 自然顺序排列，每个 agent 内固定为 `qpos` 后接 `qvel`；action 使用相同 agent 顺序。
+- current/next RGB 分别来自源数据的 `rgb[t]` 和 `rgb[t+1]`，图像与控制频率均为 20 Hz。
+
+转换完成后，生成 seed-disjoint 的训练 manifest 和仅使用 train transition 拟合的归一化统计。该命令默认加载 LiftBarrier 的 16D 双 Panda `pd_joint_pos` action codec；HDF5 保持 raw controller action，训练 window 和 action 统计变换到 canonical `[-1,1]`：
+
+```bash
+uv run python scripts/prepare_robofactory_m1_training_artifacts.py \
+  --dataset-dir datasets/robofactory_lift_barrier_m1_v1 \
+  --transition-selection through-first-done-inclusive
+```
+
+如果目录中已有 codec 引入前的 `training_manifest.json`/`normalization.npz`，需要显式增加 `--overwrite` 重新生成；scratch 训练入口会拒绝 `codec.applied=false` 或 raw-domain normalization。
+
+该命令默认使用 `split_seed=7` 和 `0.8/0.1/0.1`，对当前 150 个唯一 seed 生成 120/15/15 个 episode 的 train/validation/test 划分。它会全量校验 HDF5 contract、记录每个文件的 SHA256，并输出：
+
+- `training_manifest.json`：相对 HDF5 路径、文件 hash、episode/seed/split、数据语义、终止截断口径和 split 汇总；
+- `training_manifest.json.sha256`：训练 manifest 自身的 SHA256；
+- `normalization.npz`：仅从 train split 的 selected transitions 计算；state/delta 保持物理域，action 是 codec 变换后的 canonical-domain population moments。
+
+源数据在首次 `done=true` 后仍保存了一段 transition，因此 `--transition-selection` 是必填项。推荐的 `through-first-done-inclusive` 保留首次 terminal transition 并排除其后记录；若确实要训练全部记录，必须显式改为 `all-recorded`。codec 使用 ManiSkill Panda 关节限制做逐维仿射变换，不使用本数据集 observed min/max，且越界 raw action 会直接中止产物生成。
+
+用协议分发器严格校验 manifest/HDF5/normalization，并实际读取三个 split 的首尾 M1 window：
+
+```bash
+uv run python scripts/smoke_m1_data_protocol.py \
+  --manifest datasets/robofactory_lift_barrier_m1_v1/training_manifest.json \
+  --splits train validation test \
+  --state-history 32 \
+  --action-chunk 8 \
+  --visual-history 2 \
+  --future-horizons 1 2 4 8 \
+  --camera global
+```
+
+该 manifest 会分发到 `generic_multimodal_trajectory` loader：它不读取/伪造 cue、event 或 causal-pair 字段，历史动作来自 `action.commanded`，并严格只索引 manifest 中选定的 episode 前缀。原 M0 visual-cue manifest 仍分发到旧的严格 loader，保留 pair/event 门禁。快速开发时可临时增加 `--skip-hdf5-hashes`，正式预检不要跳过文件 hash。
+
+完成上述产物更新后，scratch 专用训练入口为：
+
+```bash
+uv run python scripts/train_liftbarrier_m1_scratch.py \
+  --config configs/wam_multimodal/m1_liftbarrier_scratch.yaml \
+  --device auto
+```
+
+该入口只构建一次随机任务侧模型，冻结 DINOv3，不读取 legacy checkpoint/action prior，依次运行 dynamics、action-flow、multimodal fusion、future-joint 四阶段，并保存 `wam.multimodal.m1.scratch_checkpoint/1`。模型内部始终使用 canonical 16D action；`ScratchM1Policy` 在观测历史入口 encode，在控制器输出前 decode 回 raw `pd_joint_pos`。
+
+正式 checkpoint 完成后，使用两个隔离 Python 环境进行 RoboFactory 闭环成功率评测、逐集视频渲染及结果固化，参见 [`docs/ROBOFACTORY_M1_CLOSED_LOOP_ROLLOUT_ZH.md`](docs/ROBOFACTORY_M1_CLOSED_LOOP_ROLLOUT_ZH.md)。
+
+正式入口默认启用 Rich 终端显示：启动时列出 `1/4..4/4` 的阶段表，训练时同时显示总阶段进度和当前阶段的 step、loss、gradient norm、GPU allocated memory、耗时与 ETA。Rich 输出写到 stderr，训练结束的 JSON 仍单独写到 stdout，便于重定向保存。
+
+LiftBarrier 配置同时启用以下吞吐策略：
+
+- 启动时把 train split 所需的 7 个数值/RGB HDF5 字段解压到连续的 PyTorch shared-memory tensor；当前 manifest 为 7,277 个 window、约 3.54 GiB，共享给所有 worker，不产生每 worker 一份的 RAM 副本；
+- 预载前同时检查 `MemAvailable` 和 `/dev/shm`，默认最多使用可用 RAM 的 50% 和 `/dev/shm` 的 90%，不足时 fail closed；
+- `num_workers: auto` 使用一半逻辑 CPU、上限 12，配合 `spawn`、`persistent_workers=true`、`prefetch_factor=4`、CUDA pinned memory 和每 worker 单 Torch thread；
+- 每个训练阶段只读取真实需要的字段：前两个 state/action 阶段完全不搬运 RGB，fusion 阶段不读取 future RGB，只有 future-joint 阶段读取 future RGB；
+- pinned batch 使用独立 CUDA stream 提前搬运下一批，与当前批计算重叠；固定输入尺寸启用 cuDNN benchmark，FP32 参数默认允许 TF32 tensor-core matmul。
+
+正式训练前可检查 RAM 条件：
+
+```bash
+free -h
+df -h /dev/shm
+```
+
+当前配置至少需要约 3.54 GiB 空闲 `/dev/shm`，还应为 DataLoader 预取、模型和系统保留余量。正式训练不要使用 `--skip-hdf5-sha256`；只有无交互 CI 才需要 `--no-rich-progress`。
+
 同时生成 HDF5 和 LeRobot v3；LeRobot 是可选依赖：
 
 ```bash

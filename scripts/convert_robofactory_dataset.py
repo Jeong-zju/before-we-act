@@ -33,6 +33,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument(
+        "--profile",
+        choices=("robofactory", "m1-scratch"),
+        default="robofactory",
+        help=(
+            "Output schema. 'm1-scratch' writes current/next RGB, frame IDs, "
+            "commanded action, and an explicitly declared executed-action source."
+        ),
+    )
+    parser.add_argument(
         "--format",
         action="append",
         choices=("hdf5", "lerobot"),
@@ -49,6 +58,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--task",
         default=None,
         help="Natural-language task; defaults to the normalized source env_id.",
+    )
+    parser.add_argument(
+        "--task-id",
+        default=None,
+        help="Stable task identifier; defaults to a snake_case source env_id.",
+    )
+    parser.add_argument(
+        "--camera",
+        action="append",
+        default=None,
+        help=(
+            "Export one camera by source or normalized name, for example 'global'. "
+            "Repeat for multiple cameras; defaults to all source cameras."
+        ),
+    )
+    parser.add_argument(
+        "--executed-action-source",
+        choices=("command-echo",),
+        default=None,
+        help=(
+            "How action.executed is produced. 'command-echo' writes an exact copy "
+            "of action.commanded and records that no independent actuator feedback exists."
+        ),
     )
     parser.add_argument(
         "--episodes",
@@ -118,6 +150,20 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--episodes must be positive")
     if args.progress_refresh_hz <= 0:
         raise ValueError("--progress-refresh-hz must be positive")
+    if args.profile == "m1-scratch":
+        if formats != ("hdf5",):
+            raise ValueError("--profile m1-scratch currently supports --format hdf5 only")
+        if args.no_images:
+            raise ValueError("--profile m1-scratch requires RGB; omit --no-images")
+        if args.executed_action_source != "command-echo":
+            raise ValueError(
+                "--profile m1-scratch requires the explicit option "
+                "--executed-action-source command-echo"
+            )
+    elif args.executed_action_source is not None:
+        raise ValueError(
+            "--executed-action-source is only valid with --profile m1-scratch"
+        )
     _require_empty_targets(args.out_dir, formats)
 
     with TrainingProgress(
@@ -139,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
                 show_loss_chart=False,
             )
             schema = source.build_schema(
+                profile=args.profile,
+                cameras=args.camera,
                 include_images=not args.no_images,
                 include_calibration=not args.no_calibration,
                 include_agent_fields=not args.canonical_only,
@@ -177,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
                 fps=args.fps,
                 schema=schema,
                 task=args.task,
+                task_id=args.task_id,
+                executed_action_source=args.executed_action_source,
                 max_episodes=args.episodes,
                 success_only=args.success_only,
                 progress=conversion_progress.advance,

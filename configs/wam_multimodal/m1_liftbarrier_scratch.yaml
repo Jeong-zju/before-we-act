@@ -1,0 +1,174 @@
+name: wam.robofactory/lift-barrier-m1-scratch
+format_version: wam.multimodal.m1.scratch_config/1
+
+data:
+  manifest: datasets/robofactory_lift_barrier_m1_v1/training_manifest.json
+  dataset_protocol: generic_multimodal_trajectory
+  state_dim: 36
+  action_dim: 16
+  state_history: 32
+  action_horizon: 8
+  visual_history_frames: 2
+  future_visual_horizons: [1, 2, 4, 8]
+  camera_order: [global]
+  control_hz: 20.0
+  image_hz: 20.0
+
+action_codec:
+  path: configs/action_codecs/liftbarrier_pd_joint_pos_16d.json
+  expected_semantic_sha256: 3dfd5e2ccd6db44756ab504d3c5a22ea5b594d2d190008508fee9448ec439f59
+  storage_domain: raw_pd_joint_pos_commanded
+  model_domain: canonical_unit_action
+
+vision:
+  encoder_name: dinov3_vitl16_lvd
+  model_id: facebook/dinov3-vitl16-pretrain-lvd1689m
+  revision: dd0a398fa8e84f2a37179332f6c561d20276300b
+  config_path: artifacts/vision/dinov3_vitl16_lvd/config.json
+  weights_path: artifacts/vision/dinov3_vitl16_lvd/model.safetensors
+  expected_config_sha256: ce962b0c8ca4f2deb48c6fdfd6035257e3769f1d4d9154c92aba51991e46e290
+  expected_weights_sha256: dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179
+  preprocess_id: dinov3_imagenet_rgb_resize_square_antialias_v1
+  input_size: 256
+  inference_batch_size: 16
+  frozen: true
+
+build:
+  initialization_mode: scratch
+  seed: 101
+  world:
+    state_dim: 36
+    action_dim: 16
+    history_horizon: 32
+    train_forecast_horizon: 8
+    planning_horizon: 20
+    encoder_hidden_dim: 256
+    gru_hidden_dim: 256
+    gru_layers: 2
+    dropout: 0.0
+    predict_delta: true
+    min_log_std: -8.0
+    max_log_std: 2.0
+    yaw_indices: []
+    gripper_closed_indices: []
+  action_flow:
+    action_dim: 16
+    horizon: 8
+    hidden_dim: 512
+    hidden_layers: 4
+    time_embedding_dim: 32
+    anchor_hidden_dim: 256
+    anchor_hidden_layers: 2
+    anchor_min_log_std: -5.0
+    anchor_max_log_std: 1.0
+    anchor_mode: none
+  latent_wam:
+    task_vocabulary: [lift_barrier]
+    use_state: true
+    use_vision: true
+    capacity_control: future_head
+    action_dim: 16
+    task_embedding_dim: 128
+    fusion_hidden_dim: 2048
+    action_mlp_hidden_dim: 1024
+    future_hidden_dim: 2048
+    future_action_hidden_dim: 512
+    future_latent_dim: 1024
+    visual_skip_initial_scale: 0.1
+    future_horizons: [1, 2, 4, 8]
+    resampler:
+      input_dim: 1024
+      width: 512
+      num_latents: 16
+      num_layers: 3
+      num_heads: 8
+      mlp_ratio: 4
+      dropout: 0.0
+      raw_patch_grid: 8
+      raw_patch_hidden_dim: 128
+      raw_shortcut_hidden_dim: 512
+      max_visual_history: 4
+      max_visual_cameras: 4
+
+flow_objective:
+  execution_steps: 2
+  solver_steps: 4
+  solver: euler
+  normalized_action_clip: 10.0
+  warm_start_probability: 0.5
+  warm_start_noise_std: 0.01
+  policy_fixed_action_dims: []
+  executed_prefix_weight: 2.0
+
+training:
+  batch_size: 32
+  # "auto" resolves to half the logical CPUs, capped at 12 workers.
+  num_workers: auto
+  prefetch_factor: 4
+  persistent_workers: true
+  pin_memory: true
+  multiprocessing_context: spawn
+  in_order: true
+  hdf5_cache_size: 32
+  # Decode the train split once into torch shared-memory tensors. Spawned
+  # DataLoader workers reuse one physical copy instead of reopening gzip HDF5.
+  preload_to_ram: true
+  preload_shared_memory: true
+  preload_max_available_fraction: 0.5
+  # FP32 parameters with TensorFloat-32 matmuls preserve the existing optimizer
+  # contract while using NVIDIA tensor cores. BF16 remains an explicit option.
+  precision: fp32
+  torch_float32_matmul_precision: high
+  allow_tf32: true
+  cudnn_benchmark: true
+  weight_decay: 0.00001
+  stages:
+    - name: scratch_dynamics_warmup
+      objective: dynamics_warmup
+      steps: 2000
+      world_learning_rate: 0.0003
+      losses:
+        flow_matching: 0.0
+        action_endpoint: 0.0
+        action_smoothness: 0.0
+        future_visual_latent: 0.0
+        future_state: 1.0
+    - name: scratch_action_flow_warmup
+      objective: action_flow_warmup
+      steps: 2000
+      action_flow_learning_rate: 0.0003
+      losses:
+        flow_matching: 0.5
+        action_endpoint: 12.0
+        action_smoothness: 0.05
+        future_visual_latent: 0.0
+        future_state: 0.0
+    - name: scratch_multimodal_fusion
+      objective: multimodal_fusion
+      steps: 3000
+      action_flow_learning_rate: 0.00015
+      multimodal_learning_rate: 0.0003
+      losses:
+        flow_matching: 0.5
+        action_endpoint: 12.0
+        action_smoothness: 0.05
+        future_visual_latent: 0.0
+        future_state: 0.0
+    - name: scratch_future_joint
+      objective: future_joint
+      steps: 3000
+      world_learning_rate: 0.00002
+      action_flow_learning_rate: 0.0001
+      multimodal_learning_rate: 0.0002
+      future_learning_rate: 0.0002
+      losses:
+        flow_matching: 0.5
+        action_endpoint: 12.0
+        action_smoothness: 0.05
+        future_visual_latent: 1.0
+        future_state: 0.1
+
+checkpoint:
+  output: checkpoints/m1_liftbarrier_scratch_seed101
+  format_version: wam.multimodal.m1.scratch_checkpoint/1
+  bundle_legacy_weights: false
