@@ -1,14 +1,18 @@
 # FE-PC WAM 多模态扩模技术路线 V1.0
 
-> 调研截止：2026-07-18
+> 调研截止：2026-07-18；工程状态更新：2026-07-22
 >
 > 目标：在保留现有 proprioceptive Joint WAM 可复现基线的前提下，逐步扩展到至少使用机器人 state 与 RGB 视觉、可联合预测未来世界与动作、最终能够对齐 DreamZero 一类开源 World Action Model 的多任务模型。
 >
 > 本文中的参数量、显存和周期，除明确链接到开源项目的事实外，均是用于排期的工程预算，不是论文复现保证。
+>
+> **2026-07-22 数据边界变更**：Phase M2 当前只允许使用 RoboFactory 仓库原生多任务数据、原生任务 YAML、原生 scene builder 与原生成功判据；不再采集或读取 `fe_pc_wam` 自建 `VisualRequiredEnv`/cooperative-stop 场景作为 M2 训练或质量验收数据。M0/M1 自建场景结果仅保留为历史接口与回归证据。
+>
+> **去中心化研究定位**：本路线的 M0–M2 仍是多模态 WAM 工程与 centralized-input empirical baseline/backbone candidate，不是 oracle，也不直接构成每机本地执行的去中心化策略。M2 之后另行训练的 task/partner intent posterior、centralized critic、CTDE、反事实 team-value 与 information-firewall 方案见 [Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)。
 
 ## 1. 结论先行
 
-**[事实]** 当前系统已经有一个可工作的 Joint WAM，但它仍是小规模、单任务、纯 proprioception 模型：本地实例化统计为 world model `954,172` 参数、action flow `4,608,592` 参数，合计 `5,562,764` 个可训练参数。它在 cooperative-stop 的 standard/challenge 上已与 action prior 同为 100%，说明 pipeline 可执行，也说明当前任务已经无法提供继续扩模所需的学习信号。
+**[事实]** 仓库保留了 `5,562,764` 参数的 proprioceptive Joint WAM 回归锚点，Phase M1 DINOv3 latent WAM 已于 2026-07-21 验收。Phase M2 已新增 RoboFactory-only 的 180,255,096 参数生产配置与同构缩小 smoke 配置；原 cooperative-stop/VisualRequiredEnv 不再向 M2 提供训练数据或质量结论。
 
 **[判断]** 推荐的主路线不是直接把 5.6M 模型替换为 14B DreamZero，而是：
 
@@ -205,7 +209,7 @@ M0-v2 canonical 资产采用仓库内同一份 MuJoCo XML、`mujoco.Renderer`、
 - **语义、人工与回归复核**：两项新门禁通过；三任务×三视角代表性 MP4 复核确认 onset 信号隔离、刹车灯按动作延后独立点红且无绿灯；400 个 event cue pair 的 5,600 个决策前行在 state/action/时序上零差异。旧 checkpoint 锚点 `1c5fc531…d482` 严格重载且树哈希不变，standard/challenge 各 `20/20`；仓库全量测试 `176 passed`。
 - **Canonical 证据哈希**：manifest `d0e1289035286db2bf64a7aca63cf767e04b92eeda582877723f8fc1ba5d1c08`，audit `d2e09ed494fe221c1caf4de27242f93887ab7c21ee0549ce1dd1d03e3b0042d2`，benchmark `cd27cb7787e8abfaa91ef60ffb602ce071b0dec4c83a9967dead87e36f2a9e19`，acceptance `7a54e067eaf7580434000e2be4ed3ecf777dcfc3037db114b7eca2a6b7825c76`；`rejected_brake_cue_mirror_20260719` 目录不参与本结论。
 
-**判断边界**：M0 证明的是多模态数据、时序/标定契约与视觉因果 benchmark 闭环，不是已训练的多模态 WAM 或对象泛化结论。本 Gate 的 `object_combination_id` 是 template-scoped split identity；其零重叠不代表 XML 几何/材质的 unseen-object 隔离，物理对象多样性与 unseen-object split 留待 M1/M2 验证。
+**判断边界**：M0 证明的是多模态数据、时序/标定契约与视觉因果 benchmark 闭环，不是已训练的多模态 WAM 或对象泛化结论。本 Gate 的 `object_combination_id` 是 template-scoped split identity；其零重叠不代表 XML 几何/材质的 unseen-object 隔离。M2 数据边界已经改为 RoboFactory-only，因此不能再声称 M0 对象 identity 会自然延续到 M2。
 
 ## 5. ~~Phase M1：视觉条件 latent WAM（DINOv3 重构）~~（已验收，2026-07-21；修订统计协议）
 
@@ -281,38 +285,54 @@ M1 失败时先修数据与 fusion，不允许仅把 hidden dim 加倍后继续�
 
 **判断边界**：本结论支持“总体证据与多数初始化 seed 证明视觉价值和 state 依赖”，不支持“所有初始化都稳定”——seed 101 的视觉增益 `-3.6667pp`（95% CI `[-5.6667, -1.6667]pp`）和 state-shuffle 下降 `-5.0000pp`（95% CI `[-6.6667, -3.3333]pp`）仍是明确的训练稳定性技术债，必须继续报告，不得删除失败 seed 或挑选 checkpoint。本阶段仍不声明 warm-start/异步运行、失败风险学习、unseen-object 泛化或真实机器人有效性。
 
-## 6. Phase M2：150–350M block-causal 多模态 WAM
+## 6. ~~Phase M2：150–350M block-causal 多模态 WAM~~（工程实现与烟测已验收，2026-07-22；物理闭环质量待外部运行）
 
 **周期预算：6–10 周。算力预算：2–4×48–80GB GPU。**
 
-### 6.1 架构升级
+### 6.1 已落地架构
 
-将 GRU 主干替换为 block-causal Transformer：
+M2 已将 M1 GRU 路线替换为真正的 block-causal Transformer：
 
-- `d_model=768–1024`，12–18 层；
-- history 4–8 个视觉时刻、16–32 个 state/action 时刻；
-- 每个时间块含 visual、state、past-action、task token；
-- future block 同时生成 visual latent、state latent 与 16-step action chunk；
-- action head 继续用 flow matching，保留 warm start 和 observation re-ground；
-- 增加 embodiment/task adapter，但当前 8 维动作不做无意义 padding。
+- 生产配置为 `d_model=1024`、12 个 pre-norm block、16 heads、`ffn_dim=4096`，连同两层文本 adapter、最多 4-Panda 拼接维度的 state/action adapters 与 agent-count embedding 共 `180,255,096` 个可训练参数；冻结 DINOv3 teacher 不计入 trainable parameters；
+- history 使用 16 个 state/action 时刻与 4 个视觉时刻，每个历史 block 依次含 task、state、past-action、vision token；
+- action query 生成 16-step rectified-flow action chunk，支持 execute-2 shift warm start；future query 在生成动作条件下预测 H=16 normalized state 与 `[1,4,8,16]` DINO visual latent；
+- 固定 boolean attention mask 保证历史 token 只看当前/过去 block，action token 只看历史和 causal action prefix，任何 action query 都不能读取 future query 或 future target；fast path 直接截断 future tokens；
+- 自然语言采用 checkpoint-stable UTF-8 byte tokenizer 与两层 text Transformer，不依赖硬编码 cue，也不把它描述为预训练语言理解；task ID 与 1/2/3/4-Panda embodiment embedding 作为附加条件；
+- RoboFactory 的 18D/agent state 与 8D/agent action 按 agent 自然顺序拼接后进入每时刻单个 state/action token，并以 dimension mask 处理最多 4-Panda 的 padding；当前实现**不是**显式 per-agent token/slot。loss 和输出都会把无效维度清零，因此 padding 不是伪 actuator；
+- frozen DINO 当前/未来 RGB 在同一次 GPU batch 中编码；训练入口支持 BF16/TF32、task-balanced distributed sampler、pinned memory、异步 H2D、持久 DataLoader workers、可乱序预取和 fail-closed RAM/`/dev/shm` 预算。
 
-M2 起自然语言进入正式输入。语言不是用户基础要求，但没有任务条件就无法做多任务与 DreamZero 类 zero-shot 测试。
+### 6.2 更新后的数据范围
 
-### 6.2 数据规模
+M2 的 canonical 数据源改为 RoboFactory 原生 11 任务：`CameraAlignment`、`LiftBarrier`、`LongPipelineDelivery`、`PassShoe`、`PickMeat`、`PlaceFood`、`StackCube`、`StrikeCube`、`TakePhoto`、`ThreeRobotsStackCube`、`TwoRobotsStackCube`。当前规则为：
 
-- 内部 visual-required 任务至少 20k–50k episodes；
-- 至少 20 个任务/目标组合、3 类视觉随机化，并沿用 M0 的 3 个 canonical 相机视角；
-- 失败、恢复、扰动轨迹占 20–40%，不能只保留成功 episode；
-- 引入 RoboTwin 2.0 或 RoboCasa 的一个小分片，验证 action/state adapter 不绑定当前环境。
+- 只允许 RoboFactory `table`/`robocasa` 原生配置生成或官方发布的 HDF5；`RoboFactoryMultitaskDataset` 除 schema profile/version 外还会校验 conversion-manifest SHA-256、原生 env/config 路径、planner source type、controller 与 RGB source，遇到自建场景或无原生 provenance 的 manifest 立即拒绝；
+- 每个任务独立执行 episode-seed split、train-only normalization、HDF5 SHA-256 与 action codec 审计，再由 M2 wrapper 做 task-balanced composition，不把 episode 拆散到不同 split；
+- 每个任务保留原生 agent 数和 controller bounds；1/2/3/4-Panda 分别对应 18/36/54/72D state 与 8/16/24/32D action。`LongPipelineDelivery` 与 `TakePhoto` 均为原生 4-Panda 任务，不允许截断成 3 个 agent；
+- 单臂任务原生唯一工作区相机名为 `head_camera`，多臂任务为 `head_camera_global`；转换器只把二者无损规范化为训练侧 `global`，rollout 端仍按任务读取真实原生 sensor key，不修改任务 YAML、视角或 RGB；
+- 首轮建议每任务 150 条成功 planner trajectory，用于多任务 BC/WAM 基线。由于当前 RoboFactory planner 数据不提供独立 actuator feedback，`action.executed` 明确记录为 command echo；当前阶段不声称已经学习失败恢复，也不再沿用旧“失败轨迹 20–40%”纸面配额；
+- 不再把 M0 三个自建 visual-required 任务、RoboTwin、LIBERO 或另建 MuJoCo 场景混入 M2 matched-data 表。外部 benchmark 只有在数据要求再次放开后另立阶段。
 
-### 6.3 Gate M2
+### 6.3 更新后的 Gate M2
 
-- seen task、unseen object、unseen scene、unseen camera 四个 split 分开报告；
-- 在 matched-data 条件下优于 M1，且不是仅靠参数量：去掉 future latent loss 的同规模模型必须作为对照；
-- `state+vision` 在 visual-required suite 相对两种单模态模型均有统计显著优势；
-- H=16 state NRMSE、视觉对象跟踪误差、action recoverability 随 horizon 的退化曲线可控；
-- action-only fast path 与显式 future-latent path 的成功率差距不超过 5pp，延迟至少降低 2 倍；若不满足，保留 future-latent online path 并继续分析；
-- 至少 3 个训练 seeds，正式评测每个 suite 100–500 episodes，报告 paired confidence interval。
+质量验收以 RoboFactory 物理闭环 rollout 为主，离线 loss 只作排错：
+
+- 至少 8 个、目标 11 个 RoboFactory 原生任务进入同一 checkpoint；seen task 的 held-out episode seeds 分任务报告，不只报 macro average；
+- 训练使用 3 个初始化 seeds；每个训练 seed/任务先跑未预览的 20-seed closed-loop smoke，失败即停止 100-seed 正式运行；
+- 正式入口必须证明 `direct_model_action_coverage=1`、`fallback_used=false`，为每集保存 MP4、task/seed、action source、P50/P95 latency 与 success；
+- fast path 与显式 future path 使用完全相同的 task/checkpoint/evaluation seeds；成功率差距目标不超过 5pp，同时报告实际 latency 比值，不为通过 Gate 删除失败 seed；
+- future-state/visual latent、state-only/vision-only/future-loss ablation 仍需保留，但不允许用较好的离线数字覆盖闭环失败；
+- 因当前数据没有独立 unseen-object/scene/camera identity，M2 不再虚构这三类 split 已验收。可报告的是 RoboFactory task 与 episode-seed 泛化；对象/场景级泛化等待上游数据提供稳定 identity。
+
+### 6.4 工程烟测验收（2026-07-22）
+
+**验收结论：[判断] Phase M2 的代码实现与本轮要求的烟测通过，因此划去本节标题。** 该结论不等于 180M 正式模型已经获得可用闭环成功率；模型质量必须由外部终端完成训练与 RoboFactory rollout 后再判断。
+
+- **真实数据链路**：使用现有 `datasets/robofactory_lift_barrier_m1_v1/training_manifest.json`，smoke 读取 1 个 RoboFactory 任务、360 个 stride 后窗口；schema guard 明确拒绝自建场景。另逐项静态审计 11 份上游 table YAML，确认 agent 数覆盖 1/2/3/4、最大维度为 72D/32D，规范化工作区 RGB 均为 320×240。该单任务 smoke 与 YAML 契约审计只证明代码链，不冒充 11 任务训练。
+- **阶段与进度**：同一入口显示 `stage=1/5` RAM policy、`2/5` world representation、`3/5` causal action flow、`4/5` joint world-action、`5/5` save/reload；三段各跑 1 step，Rich bar、loss 曲线、elapsed/remaining 均正常。
+- **模型/损失/保存**：160,056 参数同构 smoke 模型完成 future-state、future-visual、flow、endpoint 与 smoothness 反向传播；checkpoint 严格重载最大绝对差为 `0`。生产配置独立实例化确认 `180,255,096` trainable parameters。
+- **因果与运行时**：新增 9 个 M2 定向测试全部通过，覆盖 future→action 禁止边、fast/future action 不变性、reset 左填充无 NaN、UTF-8 task condition、单/多臂相机规范化、4-agent RPC 顺序、自建 schema/无原生 provenance 拒绝和 checkpoint strict round-trip；连同 RoboFactory conversion、M1 scratch/RPC 定向回归共 `33 passed`。
+- **stateful policy smoke**：fast/future 两种模式均连续输出有限 16D LiftBarrier raw controller action；第 3 个 control step 正确进入 execute-2 warm start，future 模式同时返回 state/visual shadow 输出，且 action source 分别为 `m2_block_causal_fast_path`/`m2_block_causal_future_path`，无 fallback。当前 RoboFactory 成功示教没有逐步 risk/progress 标签，因此 M2 不输出未经监督的伪风险分数。
+- **物理闭环边界**：隔离环境启动原生 LiftBarrier 时在 SAPIEN 初始化阶段报 `RuntimeError: failed to find device "cuda"`，发生在模型 client 连接和首个 action 之前。因此本轮没有伪造 M2 成功率，也没有把该失败算作策略失败。外部 GPU/Vulkan 终端须按 `docs/runbooks/20260722_FE_PC_WAM_M2_COMMANDS_ZH.md` 先跑 3-episode smoke，再跑 fast/future 正式配对 rollout；闭环 MP4/summary 才是质量验收主证据。
 
 ## 7. Phase M3：0.8–1.5B action-centered Video WAM
 
@@ -433,15 +453,15 @@ FVD/LPIPS/肉眼好看不是 WAM 的充分指标。M3 必须增加：
 
 ## 10. Benchmark 与统计协议
 
-### 10.1 三层 benchmark
+### 10.1 分阶段 benchmark
 
 | 层级 | 内容 | 目的 |
 |---|---|---|
-| Internal-A | 原 cooperative-stop standard/challenge | 防止 state/control 基础能力回归 |
-| Internal-B | visual event/target/obstacle + scene randomization | 证明视觉使用与 world-action coupling |
-| External | RoboTwin 2.0、LIBERO-Plus、RoboCasa GR1 中逐步选择 | 与开源 WAM/VLA 形成可比较结果 |
+| M0/M1 历史回归 | cooperative-stop + visual event/target/obstacle | 保留已验收接口/视觉因果证据，不向 M2 提供训练数据 |
+| M2 canonical | RoboFactory 原生 11 任务、held-out episode seeds、fast/future paired rollout | 当前唯一训练与质量验收域 |
+| M3+ 候选外部 | RoboTwin 2.0、LIBERO-Plus、RoboCasa GR1 | 只有数据边界再次放开后才立项 |
 
-不要一开始同时接三个外部 benchmark。推荐先 RoboTwin 2.0，因为 Fast-WAM、LingBot-VA、GigaWorld、Kairos 都提供相关入口；然后选 LIBERO-Plus 测泛化，最后用 RoboCasa/whole-body 测真实复杂度。
+当前不要为对齐论文数字混入三个外部 benchmark。M2 先把 RoboFactory 多任务 closed-loop 做实；将来若放开数据，优先选择与 Fast-WAM、LingBot-VA、GigaWorld、Kairos 有共同入口的 RoboTwin，再选 LIBERO-Plus 与 RoboCasa。
 
 ### 10.2 两张主表
 
@@ -457,7 +477,7 @@ FVD/LPIPS/肉眼好看不是 WAM 的充分指标。M3 必须增加：
 - closed-loop success、progress、return、失败原因；
 - state NRMSE、visual latent/keypoint error、action recoverability、world-real consistency；
 - state-only / vision-only / state+vision 与 modality shuffle/drop/counterfactual；
-- seen/unseen task、object、scene、camera、embodiment；
+- seen/unseen task、object、scene、camera、embodiment；若上游没有稳定 identity，必须明确标为“不具备该 split”，不能用随机 episode split 代替；
 - OOD AUROC、uncertainty-error correlation、risk calibration；
 - sensor-to-action P50/P95/P99、model refresh Hz、control Hz、action chunk age、deadline miss；
 - peak VRAM、tokens/s、GPU-hours、数据小时数、参数量与 active parameters；
@@ -487,10 +507,13 @@ models/wam_multimodal/
 
 train/
   multimodal_trajectory_dataset.py
-  multimodal_losses.py
+  robofactory_multitask_dataset.py
+  m2_training.py
+  m2_checkpointing.py
 
 policies/
   multimodal_joint_wam.py
+  robofactory_m2.py
 
 scripts/
   collect_wam_multimodal_dataset.py
@@ -498,6 +521,10 @@ scripts/
   prepare_dinov3_encoder.py
   train_multimodal_wam.py
   evaluate_multimodal_wam.py
+  create_robofactory_panda_action_codec.py
+  train_robofactory_m2.py
+  serve_robofactory_m2_rollout.py
+  run_robofactory_m2_inference.py
 
 external_adapters/
   fastwam/
@@ -510,6 +537,10 @@ external_adapters/
 - `data/trajectory.py`：提供 `wam.multimodal/1.1` profile、三相机 current/next calibration/timestamp 与事件审计字段；
 - `scripts/collect_wam_multimodal_dataset.py`：采集 MuJoCo 三相机 HDF5/MP4，并对 image/state 同步、camera rig 和 provenance 做 fail-closed 绑定；
 - `train/multimodal_trajectory_dataset.py`：保持 state-only loader 不变，严格读取三相机窗口、时间戳和逐 capture 标定，避免破坏当前 state-only 测试基线；
+- `train/robofactory_multitask_dataset.py`：只组合审核后的 RoboFactory manifest，执行 task-balanced sampling、1/2/3/4-agent mask 与 RAM preload；
+- `models/wam_multimodal/block_causal_transformer.py`：实现 M2 block mask、文本/embodiment adapter、flow action 与 future latent heads；
+- `scripts/train_robofactory_m2.py`：负责 Rich 阶段进度、CPU/GPU/RAM 并行策略、单机或 `torchrun` 训练与 strict checkpoint；
+- `scripts/serve_robofactory_m2_rollout.py` + `scripts/run_robofactory_m2_inference.py`：隔离 RoboFactory Python 3.9 与 WAM Python 3.11，保存 direct-action 闭环证据；
 - `policies/joint_wam.py`：不直接塞入大模型逻辑，新增 multimodal policy；
 - checkpoint manifest 增加 vision backbone、tokenizer、camera order、frame sampling、task vocabulary 和 external base SHA-256；
 - DreamZero/GigaWorld/LingBot 分别依赖不同 PyTorch/CUDA/Python 组合，使用独立环境或容器，通过 Policy API/WebSocket 连接主评测器。
@@ -537,14 +568,13 @@ external_adapters/
 - 完成 state-only/vision-only/fusion/future-loss 四组消融；
 - 通过 20-seed direct/no-fallback gate 后跑 100–500 seeds。
 
-### 第 9–12 周：M2 起步
+### ~~第 9–12 周：M2 工程起步~~（2026-07-22 已完成）
 
-- 实现 block-causal mask 单元测试；
-- 将 task text、state、image、past action 统一成时间块；
-- 训练 50–100M 缩小版验证 loss 与吞吐，再扩到 150–350M；
-- 同时用独立环境跑一次 Fast-WAM released checkpoint，打通外部 benchmark 与 Policy API。
+- block-causal mask、task text/state/image/past action block、180M 生产配置、同构 smoke、strict checkpoint 和 RoboFactory RPC 已落地；
+- 下一执行项改为按 `docs/runbooks/20260722_FE_PC_WAM_M2_COMMANDS_ZH.md` 生成 11 任务数据、训练 3 seeds，并在原生 RoboFactory 上完成 fast/future 配对闭环；
+- Fast-WAM released checkpoint 不再是当前 M2 完成条件，避免引入非 RoboFactory 数据。若后续仅使用 RoboFactory matched-data 完成适配，可另作 M3 对照。
 
-90 天的成功定义是 **M1 正式通过 + M2 可训练 smoke + Fast-WAM 外部基线可运行**，不是完成 14B。
+当前里程碑状态是 **M1 正式通过 + M2 可训练 smoke/运行时链路通过**；尚未完成的是 M2 180M 三 seed 训练和原生 RoboFactory 物理闭环质量验收，不是 14B 扩模。
 
 ## 13. 资源决策
 
@@ -580,7 +610,7 @@ external_adapters/
 ### 15.2 这个路线可能错的理由
 
 - LingBot-VA 2.0 的“具身原生预训练”若迅速完整开源，直接适配 native tokenizer 可能比沿 video generator 逐级扩展更有效；
-- 当前 cooperative-stop 与真实接触操控差异很大，M1/M2 上的收益未必能预测 DreamZero 级操作泛化；
+- M1 cooperative-stop/visual-required 与真实接触操控差异很大；M2 已转向 RoboFactory 原生操作，但 planner-only 成功示教仍不能代表失败恢复或真实机器人泛化；
 - Fast-WAM/GigaWorld 的 action-only 结论可能依赖其 benchmark，接触密集或强反事实任务仍可能需要 online imagination；
 - DreamZero 的零样本收益来自预训练数据、video backbone 与系统优化的组合，单独复制架构未必复现。
 
@@ -588,8 +618,8 @@ external_adapters/
 
 ## 16. 最终技术决策
 
-近期正式目标锁定为：
+近期正式目标更新为：
 
-> 先完成一个同时读取 state、RGB、past action 和 task condition 的 20–60M latent Joint WAM，在视觉必需且 prior 未饱和的任务上证明视觉和 future modeling 的独立收益；随后迁移到 150–350M block-causal Transformer，并以 Fast-WAM/GigaWorld-Policy 的 action-centered 结构为 1B 级主线。只有 5B 开源 WAM 的 matched-data 实验优于内部 1B 模型，才进入 DreamZero 14B。
+> M1 历史结果冻结；M2 使用且只使用 RoboFactory 原生多任务数据，先完成 180M block-causal checkpoint 的 3-seed 训练，再以 direct/no-fallback 的原生 closed-loop rollout 决定是否继续。只有 fast/future 配对结果证明 future supervision 有控制价值，才进入 M3 的 0.8–1.5B video WAM；只有后续 5B 开源 WAM 在同一 RoboFactory matched-data 下优于内部模型，才考虑 DreamZero 14B。
 
 这个顺序既保留当前工程资产，又与 2026 年开源 WAM 的主流收敛方向一致：causal video-action modeling、state/action 显式 token、训练时 world supervision、部署时异步 chunk 与可选 action-only fast path。

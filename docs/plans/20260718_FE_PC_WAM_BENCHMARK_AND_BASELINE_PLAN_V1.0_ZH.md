@@ -72,4 +72,4 @@ world model 在专家动作和生成动作上提供 action-conditioned state、r
 - standalone/frozen-backbone 对照未按同预算运行：不得声称 joint training 带来控制收益。
 - 单卡 smoke 无法稳定完成或 checkpoint 不能严格重载：停止扩大 benchmark。
 
-阶段性设计与已退出路线的详细记录见 [`archive/PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md`](archive/PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md)。
+阶段性设计与已退出路线的详细记录见 [`../archive/20260718_PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md`](../archive/20260718_PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md)。

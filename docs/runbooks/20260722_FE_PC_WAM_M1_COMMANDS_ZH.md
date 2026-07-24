@@ -4,13 +4,10 @@
 
 当前仓库有两条可独立使用的 M1 路线：
 
-1. **仓库内 canonical Phase M1**：在 `fe_pc_wam` 单一 Python 3.11 环境中，
-   使用 `VisualRequiredEnv` 的三个视觉任务训练和闭环评测 DINOv3 latent WAM；
-2. **RoboFactory LiftBarrier scratch M1**：先在 RoboFactory Python 3.9 环境中
-   生成/运行仿真，再在 `fe_pc_wam` Python 3.11 环境中转换、训练和推理。
+1. **仓库内 canonical Phase M1**：在 `fe_pc_wam` 单一 Python 3.11 环境中，使用 `VisualRequiredEnv` 的三个视觉任务训练和闭环评测 DINOv3 latent WAM；
+2. **RoboFactory LiftBarrier scratch M1**：先在 RoboFactory Python 3.9 环境中生成/运行仿真，再在 `fe_pc_wam` Python 3.11 环境中转换、训练和推理。
 
-命令按当前工作区 `/home/jeong/zeno/wam` 编写。数据集、checkpoint 和正式评测
-产物都应采用新目录；不要覆盖已经通过验收的证据。
+命令按当前工作区 `/home/jeong/zeno/wam` 编写。数据集、checkpoint 和正式评测产物都应采用新目录；不要覆盖已经通过验收的证据。
 
 ## 1. 共用环境和 DINOv3 工件
 
@@ -55,13 +52,11 @@ uv run --frozen python scripts/prepare_dinov3_encoder.py \
 - `visual_target_select`
 - `visual_obstacle_avoid`
 
-策略输入是 22D proprioception、8D action 和 `fixed` 相机 RGB。canonical 配置为
-`configs/wam_multimodal/m1_latent_wam_dinov3.yaml`。
+策略输入是 22D proprioception、8D action 和 `fixed` 相机 RGB。canonical 配置为 `configs/wam_multimodal/m1_latent_wam_dinov3.yaml`。
 
 ## A1. M1 输入数据与初始化检查
 
-M1 直接读取已经固定的多模态 manifest，不执行数据转换。这里只检查 M1 的输入
-依赖，不运行任何 M0 命令：
+M1 直接读取已经固定的多模态 manifest，不执行数据转换。这里只检查 M1 的输入依赖，不运行任何 M0 命令：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
@@ -75,8 +70,7 @@ printf '%s  %s\n' \
   | sha256sum -c -
 ```
 
-运行 M1 专用 preflight。它会校验 manifest/HDF5、legacy Joint WAM、DINOv3、
-数据窗口、因果 pair、256-sample overfit 和 1% 训练链路。使用时间戳隔离诊断产物：
+运行 M1 专用 preflight。它会校验 manifest/HDF5、legacy Joint WAM、DINOv3、数据窗口、因果 pair、256-sample overfit 和 1% 训练链路。使用时间戳隔离诊断产物：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
@@ -97,8 +91,7 @@ uv run --frozen python scripts/train_multimodal_wam.py \
 
 ## A2. 仓库内 M1 训练 smoke
 
-以下命令只训练 `state_vision_future/seed_101`，并将三个 stage 缩放到 1%，用于
-验证完整 M1 训练和 checkpoint 保存链路：
+以下命令只训练 `state_vision_future/seed_101`，并将三个 stage 缩放到 1%，用于验证完整 M1 训练和 checkpoint 保存链路：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
@@ -127,8 +120,7 @@ uv run --frozen python scripts/train_multimodal_wam.py \
 - `state_vision_future`
 - `state_vision_param_matched_mlp`
 
-canonical 输出为 `checkpoints/phase_m1_dinov3` 和
-`outputs/phase_m1_dinov3/training`。全新正式运行前执行：
+canonical 输出为 `checkpoints/phase_m1_dinov3` 和 `outputs/phase_m1_dinov3/training`。全新正式运行前执行：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
@@ -150,8 +142,7 @@ uv run --frozen python scripts/train_multimodal_wam.py \
   --torch-threads 16
 ```
 
-如果 canonical 正式训练曾正常写出部分 checkpoint/report 后被中断，只使用入口
-自带的严格 resume，不手工拼接产物：
+如果 canonical 正式训练曾正常写出部分 checkpoint/report 后被中断，只使用入口自带的严格 resume，不手工拼接产物：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
@@ -177,9 +168,7 @@ jq -e '
 
 ## A4. 仓库内 M1 正式闭环评测
 
-该入口在仓库内 `VisualRequiredEnv` 上运行正式 clean/intervention 闭环评测。它会
-自动先跑 smoke gate，再覆盖 100 个 physical seeds、2 个 cue、5 个 variant 和
-3 个训练 seed：
+该入口在仓库内 `VisualRequiredEnv` 上运行正式 clean/intervention 闭环评测。它会自动先跑 smoke gate，再覆盖 100 个 physical seeds、2 个 cue、5 个 variant 和 3 个训练 seed：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
@@ -239,8 +228,7 @@ jq -e '
 
 ## A6. 仓库内 M1 legacy regression
 
-该命令对 standard/challenge 各运行 500 个 seed，验证 M1 没有破坏原
-proprioceptive cooperative-stop 能力：
+该命令对 standard/challenge 各运行 500 个 seed，验证 M1 没有破坏原 proprioceptive cooperative-stop 能力：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
@@ -264,8 +252,7 @@ jq -e '
 
 ## A7. 仓库内 Gate M1 最终验收
 
-只有训练、visual-required 闭环、future probe 和 legacy regression 全部完成后，
-才运行最终 acceptance：
+只有训练、visual-required 闭环、future probe 和 legacy regression 全部完成后，才运行最终 acceptance：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
@@ -292,8 +279,7 @@ jq -e '
 
 ## A8. 仓库内 M1 诊断 rollout 与 MP4
 
-该命令不改写正式 acceptance，使用正式 DINOv3 `state_vision_future` checkpoint
-运行新的诊断 seeds 并录制 MP4：
+该命令不改写正式 acceptance，使用正式 DINOv3 `state_vision_future` checkpoint 运行新的诊断 seeds 并录制 MP4：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
@@ -326,9 +312,7 @@ jq '.aggregation | {overall, by_task, by_train_seed, by_cue}' \
 
 # 路线 B：RoboFactory LiftBarrier scratch M1
 
-这条路线使用 36D state、16D 双 Panda `pd_joint_pos` action 和 global RGB。数据
-生成/环境端在 RoboFactory Python 3.9 中运行；转换、训练和推理端在 FE-PC WAM
-Python 3.11 中运行。
+这条路线使用 36D state、16D 双 Panda `pd_joint_pos` action 和 global RGB。数据生成/环境端在 RoboFactory Python 3.9 中运行；转换、训练和推理端在 FE-PC WAM Python 3.11 中运行。
 
 ## B1. 生成 RoboFactory 数据集
 
@@ -465,8 +449,7 @@ uv run --frozen python scripts/train_liftbarrier_m1_scratch.py \
 
 ## B5. LiftBarrier M1 不跨环境验证
 
-这里的“不跨环境”只验证数据、代码和 checkpoint 契约，不启动 RoboFactory，
-因此不能给出真实闭环成功率。
+这里的“不跨环境”只验证数据、代码和 checkpoint 契约，不启动 RoboFactory，因此不能给出真实闭环成功率。
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
@@ -557,8 +540,7 @@ python ../fe_pc_wam/scripts/serve_robofactory_m1_rollout.py \
   --output-dir ../fe_pc_wam/outputs/robofactory_m1_closed_loop_smoke_seed900_n3
 ```
 
-等待终端 1 显示 `waiting for the M1 inference client`。终端 2 使用 FE-PC WAM
-Python 3.11：
+等待终端 1 显示 `waiting for the M1 inference client`。终端 2 使用 FE-PC WAM Python 3.11：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
