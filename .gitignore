@@ -6,6 +6,7 @@ __pycache__/
 
 # Python / uv environment
 .env
+/configs/automation.env
 .venv/
 .venv-*/
 .uv-cache/

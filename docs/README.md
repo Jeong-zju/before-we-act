@@ -12,6 +12,7 @@
 
 ## 运行手册（`runbooks/`）
 
+- [远程自动化：从零部署、训练与闭环验证](runbooks/20260726_FE_PC_WAM_AUTOMATION_ZH.md)
 - [Phase M1 外部终端指令](runbooks/20260722_FE_PC_WAM_M1_COMMANDS_ZH.md)
 - [Phase M2 外部终端指令](runbooks/20260722_FE_PC_WAM_M2_COMMANDS_ZH.md)
 - [RoboFactory LiftBarrier M1 闭环 Rollout](runbooks/20260722_ROBOFACTORY_M1_CLOSED_LOOP_ROLLOUT_ZH.md)

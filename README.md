@@ -30,6 +30,12 @@ outputs/                       # 本地可再生产物，全部由 Git 忽略
 
 完整文档导航见 [`docs/README.md`](docs/README.md)；历史阶段方案已移入 `docs/archive`，不再作为现行入口说明。
 
+远程服务器可使用 [`scripts/wam_automation.sh`](scripts/wam_automation.sh)
+把代码/RoboFactory 下载、双 uv 环境、Hugging Face 数据、DINOv3、训练和
+真实闭环验证按顺序组合执行；`full` 可从零运行完整链路，`full-smoke`
+用于低成本预检。配置、断点续跑、数据上传和一键命令见
+[`FE-PC WAM 远程自动化运行手册`](docs/runbooks/20260726_FE_PC_WAM_AUTOMATION_ZH.md)。
+
 ## 数据收集、训练与验证全流程
 
 以下命令均从仓库根目录执行，并且必须等待前一步成功结束后再进入下一步：
