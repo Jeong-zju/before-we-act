@@ -1,12 +1,14 @@
 # FE-PC WAM
 
-FE-PC WAM 是一个只使用双机器人 proprioception 的 Joint World-Action Model 项目。当前 cooperative-stop 任务使用 22 维集中式状态和 8 维连续动作；主方法以 recurrent world model 的 belief 为条件生成 stateful action-flow chunk，并使用冻结 action prior 作为训练监督与部署 anchor。
+FE-PC WAM 是一个从 legacy proprioceptive Joint WAM 逐步扩展到多模态 WAM 与去中心化多机器人协作的研究仓库。已验收的 cooperative-stop legacy baseline 使用双机器人 22 维集中式状态和 8 维连续动作；M1/M2 与后续 IG-DeWAM 是独立的扩展阶段，不能套用 legacy 任务的结论。
 
-当前正式结果已经通过：关闭 fallback 的 prior-anchored Joint WAM direct 与 action prior 在 standard 和 challenge 各 500 个未见 seeds 上均为 100%，`policy_acceptable=true`。现有任务已饱和，因此该结果不用于声称 joint training 带来了额外控制收益。完整判断见 [Benchmark 与 Baseline 计划](docs/FE_PC_WAM_BENCHMARK_AND_BASELINE_PLAN_V1.0_ZH.md)。
+当前正式结果已经通过：关闭 fallback 的 prior-anchored Joint WAM direct 与 action prior 在 standard 和 challenge 各 500 个未见 seeds 上均为 100%，`policy_acceptable=true`。现有任务已饱和，因此该结果不用于声称 joint training 带来了额外控制收益。完整判断见 [Benchmark 与 Baseline 计划](docs/plans/20260718_FE_PC_WAM_BENCHMARK_AND_BASELINE_PLAN_V1.0_ZH.md)。
 
-从当前纯 proprioception 系统逐步扩展到同时使用机器人 state、RGB 视觉并对齐 DreamZero 一类开源 World Action Model 的实施顺序，见 [多模态扩模技术路线](docs/FE_PC_WAM_MULTIMODAL_SCALING_ROADMAP_V1.0_ZH.md)。
+从当前多模态模型逐步研究按机器人组织表示、本地动作生成、协作信息接入和联合未来决策的实施顺序，见 [P1 多机器人协作模型结构与动作生成技术路线](docs/plans/20260725_P1_MULTI_ROBOT_MODEL_ARCHITECTURE_ACTION_GENERATION_ROADMAP_V2.0_ZH.md)。
 
-Joint coupling 保持 prior-anchored contract：flow 学习冻结 action prior rollout，world model 在专家动作与生成动作上提供 action-conditioned world/risk coupling；部署动作固定为 `anchor + 0.1 × (flow - anchor)`。独立 action prior 同时保留为主 baseline 和可选 fallback。
+面向后续移动操作中的去中心化多机器人协作，现行研究主线显式分离 team-task intent 与 partner intent，再通过可审计接口将二者作用于 world/action/team-value 联合模型；当前 global M2 只作为 centralized-input empirical baseline/backbone candidate，而非 oracle 或最终去中心化策略。完整问题定义、双轴任务分类、CTDE 架构、反事实团队价值训练与致命实验见 [Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](docs/plans/20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)。
+
+以下 Joint coupling/prior-anchor contract 仅描述 legacy cooperative-stop baseline：flow 学习冻结 action prior rollout，world model 在专家动作与生成动作上提供 action-conditioned world/risk coupling；部署动作固定为 `anchor + 0.1 × (flow - anchor)`。它不是 M2 或 IG-DeWAM 的默认部署公式。
 
 ## 目录
 
@@ -20,12 +22,13 @@ train/                        # 数据加载、训练目标与自包含 checkpoi
 eval/                         # open-loop、closed-loop 与正式验收
 scripts/                      # 数据采集、训练和评测入口
 tests/                        # 数据流程、模型、checkpoint 与最终验收测试
+docs/                         # plans、runbooks、reports 与 archive 分类文档
 datasets/cooperative_stop_wam_proprio/
 checkpoints/joint_wam/
 outputs/                       # 本地可再生产物，全部由 Git 忽略
 ```
 
-历史阶段方案已移入 `docs/archive`，不再作为现行入口说明。
+完整文档导航见 [`docs/README.md`](docs/README.md)；历史阶段方案已移入 `docs/archive`，不再作为现行入口说明。
 
 ## 数据收集、训练与验证全流程
 
@@ -156,7 +159,7 @@ uv run python scripts/train_liftbarrier_m1_scratch.py \
 
 该入口只构建一次随机任务侧模型，冻结 DINOv3，不读取 legacy checkpoint/action prior，依次运行 dynamics、action-flow、multimodal fusion、future-joint 四阶段，并保存 `wam.multimodal.m1.scratch_checkpoint/1`。模型内部始终使用 canonical 16D action；`ScratchM1Policy` 在观测历史入口 encode，在控制器输出前 decode 回 raw `pd_joint_pos`。
 
-正式 checkpoint 完成后，使用两个隔离 Python 环境进行 RoboFactory 闭环成功率评测、逐集视频渲染及结果固化，参见 [`docs/ROBOFACTORY_M1_CLOSED_LOOP_ROLLOUT_ZH.md`](docs/ROBOFACTORY_M1_CLOSED_LOOP_ROLLOUT_ZH.md)。
+正式 checkpoint 完成后，使用两个隔离 Python 环境进行 RoboFactory 闭环成功率评测、逐集视频渲染及结果固化，参见 [`docs/runbooks/20260722_ROBOFACTORY_M1_CLOSED_LOOP_ROLLOUT_ZH.md`](docs/runbooks/20260722_ROBOFACTORY_M1_CLOSED_LOOP_ROLLOUT_ZH.md)。
 
 正式入口默认启用 Rich 终端显示：启动时列出 `1/4..4/4` 的阶段表，训练时同时显示总阶段进度和当前阶段的 step、loss、gradient norm、GPU allocated memory、耗时与 ETA。Rich 输出写到 stderr，训练结束的 JSON 仍单独写到 stdout，便于重定向保存。
 

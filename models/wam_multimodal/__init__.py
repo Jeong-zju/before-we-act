@@ -1,4 +1,12 @@
-"""Visual-conditioned latent WAM modules for Phase M1."""
+"""Visual-conditioned latent WAM modules for multimodal phases M1 and M2."""
+
+from models.wam_multimodal.block_causal_transformer import (
+    BlockCausalWAM,
+    BlockCausalWAMConfig,
+    BlockCausalWAMOutput,
+    UTF8TaskEncoder,
+    build_block_causal_attention_mask,
+)
 
 from models.wam_multimodal.latent_wam import (
     CapacityControl,
@@ -26,6 +34,7 @@ from models.wam_multimodal.vision_encoder import (
     DEFAULT_DINOV3_WEIGHTS_SHA256,
     DINOV3_ENCODER_SPECS,
     DINOV3_PREPROCESS_ID,
+    DINOV3_RECTANGULAR_PREPROCESS_ID,
     DINOv3EncoderSpec,
     FrozenDINOv3Config,
     FrozenDINOv3Encoder,
@@ -44,6 +53,9 @@ from models.wam_multimodal.vision_encoder import (
 
 __all__ = [
     "ActionConditionedFutureLatentHead",
+    "BlockCausalWAM",
+    "BlockCausalWAMConfig",
+    "BlockCausalWAMOutput",
     "CANONICAL_FUTURE_HORIZONS",
     "CapacityControl",
     "DEFAULT_DINOV3_ENCODER",
@@ -53,6 +65,7 @@ __all__ = [
     "DEFAULT_DINOV3_WEIGHTS_SHA256",
     "DINOV3_ENCODER_SPECS",
     "DINOV3_PREPROCESS_ID",
+    "DINOV3_RECTANGULAR_PREPROCESS_ID",
     "DINOv3EncoderSpec",
     "FrozenDINOv3Config",
     "FrozenDINOv3Encoder",
@@ -70,9 +83,11 @@ __all__ = [
     "PerceiverResampler",
     "PerceiverResamplerConfig",
     "SpatialVisualTokenAdapter",
+    "UTF8TaskEncoder",
     "VisualAdapterOutput",
     "VisionEncoderOutput",
     "build_resnet18_classifier",
+    "build_block_causal_attention_mask",
     "canonical_json_sha256",
     "default_resnet18_weights_path",
     "sha256_file",

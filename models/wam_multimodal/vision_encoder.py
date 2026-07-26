@@ -38,6 +38,9 @@ DEFAULT_DINOV3_CONFIG_SHA256 = (
     "ce962b0c8ca4f2deb48c6fdfd6035257e3769f1d4d9154c92aba51991e46e290"
 )
 DINOV3_PREPROCESS_ID = "dinov3_imagenet_rgb_resize_square_antialias_v1"
+DINOV3_RECTANGULAR_PREPROCESS_ID = (
+    "dinov3_imagenet_rgb_resize_rectangular_antialias_v2"
+)
 
 
 @dataclass(frozen=True)
@@ -95,7 +98,9 @@ class FrozenDINOv3Config:
     weights_path: str | Path
     expected_weights_sha256: str
     expected_config_sha256: str
-    input_size: int = 256
+    input_size: int | None = 256
+    input_height: int | None = None
+    input_width: int | None = None
     preprocess_id: str = DINOV3_PREPROCESS_ID
     inference_batch_size: int = 8
 
@@ -122,11 +127,37 @@ class FrozenDINOv3Config:
             character not in "0123456789abcdef" for character in config_digest
         ):
             raise ValueError("expected_config_sha256 must be a lowercase SHA-256")
-        if int(self.input_size) <= 0 or int(self.input_size) % spec.patch_size:
-            raise ValueError(
-                f"DINOv3 input_size must be a positive multiple of {spec.patch_size}"
-            )
-        if self.preprocess_id != DINOV3_PREPROCESS_ID:
+        rectangular = self.input_height is not None or self.input_width is not None
+        if rectangular:
+            if self.input_height is None or self.input_width is None:
+                raise ValueError(
+                    "DINOv3 input_height and input_width must be configured together"
+                )
+            if self.input_size is not None:
+                raise ValueError(
+                    "DINOv3 rectangular input cannot also configure input_size"
+                )
+            dimensions = (int(self.input_height), int(self.input_width))
+            if any(value <= 0 or value % spec.patch_size for value in dimensions):
+                raise ValueError(
+                    "DINOv3 input_height/input_width must be positive multiples "
+                    f"of {spec.patch_size}"
+                )
+            if self.preprocess_id != DINOV3_RECTANGULAR_PREPROCESS_ID:
+                raise ValueError(
+                    "rectangular DINOv3 input requires the rectangular preprocess id"
+                )
+        else:
+            if self.input_size is None:
+                raise ValueError("DINOv3 input_size is required for square preprocessing")
+            if int(self.input_size) <= 0 or int(self.input_size) % spec.patch_size:
+                raise ValueError(
+                    f"DINOv3 input_size must be a positive multiple of {spec.patch_size}"
+                )
+        if self.preprocess_id not in {
+            DINOV3_PREPROCESS_ID,
+            DINOV3_RECTANGULAR_PREPROCESS_ID,
+        }:
             raise ValueError(f"unsupported DINOv3 preprocess {self.preprocess_id!r}")
         if int(self.inference_batch_size) <= 0:
             raise ValueError("inference_batch_size must be positive")
@@ -134,6 +165,16 @@ class FrozenDINOv3Config:
         object.__setattr__(self, "weights_path", Path(self.weights_path))
         object.__setattr__(self, "expected_weights_sha256", digest)
         object.__setattr__(self, "expected_config_sha256", config_digest)
+
+    @property
+    def image_height(self) -> int:
+        return int(
+            self.input_size if self.input_height is None else self.input_height
+        )
+
+    @property
+    def image_width(self) -> int:
+        return int(self.input_size if self.input_width is None else self.input_width)
 
 
 @dataclass(frozen=True)
@@ -441,7 +482,6 @@ class FrozenResNet18Encoder(nn.Module):
             pooled_latent=pooled_latent,
         )
 
-
 class FrozenDINOv3Encoder(nn.Module):
     """Permanently frozen DINOv3 ViT returning patch tokens and CLS latent.
 
@@ -526,8 +566,9 @@ class FrozenDINOv3Encoder(nn.Module):
 
     @property
     def patch_count(self) -> int:
-        spatial = self.config.input_size // self.patch_size
-        return spatial * spatial
+        rows = self.config.image_height // self.patch_size
+        columns = self.config.image_width // self.patch_size
+        return rows * columns
 
     def _freeze(self) -> None:
         self.backbone.eval()
@@ -559,11 +600,11 @@ class FrozenDINOv3Encoder(nn.Module):
                 raise ValueError("floating RGB must be scaled to [0,1]")
         else:
             raise TypeError("RGB must be uint8 or floating point")
-        size = self.config.input_size
-        if tuple(normalized.shape[-2:]) != (size, size):
+        size = (self.config.image_height, self.config.image_width)
+        if tuple(normalized.shape[-2:]) != size:
             normalized = F.interpolate(
                 normalized,
-                size=(size, size),
+                size=size,
                 mode="bilinear",
                 align_corners=False,
                 antialias=True,
@@ -572,13 +613,19 @@ class FrozenDINOv3Encoder(nn.Module):
         return normalized, leading_shape
 
     def forward(self, images: Tensor) -> VisionEncoderOutput:
-        prepared, leading_shape = self.preprocess(images)
+        if images.ndim < 4 or images.shape[-3] != 3:
+            raise ValueError("images must have shape [...,3,H,W]")
+        leading_shape = tuple(int(value) for value in images.shape[:-3])
+        flattened = images.reshape(-1, *images.shape[-3:])
+        if flattened.shape[0] == 0:
+            raise ValueError("DINOv3 requires at least one RGB frame")
         spatial_batches: list[Tensor] = []
         pooled_batches: list[Tensor] = []
         step = self.config.inference_batch_size
         with torch.inference_mode():
-            for start in range(0, prepared.shape[0], step):
-                output = self.backbone(pixel_values=prepared[start : start + step])
+            for start in range(0, flattened.shape[0], step):
+                prepared, _ = self.preprocess(flattened[start : start + step])
+                output = self.backbone(pixel_values=prepared)
                 hidden = output.last_hidden_state
                 if hidden.ndim != 3 or hidden.shape[-1] != self.output_dim:
                     raise RuntimeError("DINOv3 returned an invalid hidden-state shape")
@@ -599,6 +646,103 @@ class FrozenDINOv3Encoder(nn.Module):
         return VisionEncoderOutput(
             spatial_tokens=spatial_tokens,
             pooled_latent=pooled_latent,
+        )
+
+    def forward_pooled(self, images: Tensor) -> Tensor:
+        """Encode only CLS latents with bounded resize/backbone memory.
+
+        This remains the bounded CLS path for legacy one-token contexts and
+        future-visual targets.  Spatial M2 contexts use ``forward_spatial_grid``
+        so they retain local evidence without materializing all 1,200 patches.
+        """
+
+        if images.ndim < 4 or images.shape[-3] != 3:
+            raise ValueError("images must have shape [...,3,H,W]")
+        leading_shape = tuple(int(value) for value in images.shape[:-3])
+        flattened = images.reshape(-1, *images.shape[-3:])
+        if flattened.shape[0] == 0:
+            raise ValueError("DINOv3 requires at least one RGB frame")
+        pooled_batches: list[Tensor] = []
+        step = self.config.inference_batch_size
+        expected_tokens = 1 + self.register_tokens + self.patch_count
+        with torch.inference_mode():
+            for start in range(0, flattened.shape[0], step):
+                prepared, _ = self.preprocess(flattened[start : start + step])
+                hidden = self.backbone(pixel_values=prepared).last_hidden_state
+                if hidden.ndim != 3 or hidden.shape[1:] != (
+                    expected_tokens,
+                    self.output_dim,
+                ):
+                    raise RuntimeError("DINOv3 returned an invalid hidden-state shape")
+                pooled_batches.append(hidden[:, 0, :])
+        pooled = torch.cat(pooled_batches, dim=0).contiguous()
+        return pooled.reshape(*leading_shape, self.output_dim).detach()
+
+    def forward_spatial_grid(
+        self,
+        images: Tensor,
+        *,
+        grid_height: int,
+        grid_width: int,
+    ) -> VisionEncoderOutput:
+        """Encode a bounded spatial grid plus CLS without retaining 1,200 tokens.
+
+        M2 needs spatial evidence for precise gripper/object alignment, but
+        feeding every DINO patch token into the causal Transformer is
+        prohibitively expensive.  Adaptive pooling preserves a small ordered
+        grid for each named camera while CLS remains the future-visual target.
+        """
+
+        if images.ndim < 4 or images.shape[-3] != 3:
+            raise ValueError("images must have shape [...,3,H,W]")
+        if grid_height <= 0 or grid_width <= 0:
+            raise ValueError("spatial grid dimensions must be positive")
+        patch_rows = self.config.image_height // self.patch_size
+        patch_columns = self.config.image_width // self.patch_size
+        if grid_height > patch_rows or grid_width > patch_columns:
+            raise ValueError("spatial grid exceeds the DINO patch grid")
+        leading_shape = tuple(int(value) for value in images.shape[:-3])
+        flattened = images.reshape(-1, *images.shape[-3:])
+        if flattened.shape[0] == 0:
+            raise ValueError("DINOv3 requires at least one RGB frame")
+        spatial_batches: list[Tensor] = []
+        pooled_batches: list[Tensor] = []
+        step = self.config.inference_batch_size
+        expected_tokens = 1 + self.register_tokens + self.patch_count
+        with torch.inference_mode():
+            for start in range(0, flattened.shape[0], step):
+                prepared, _ = self.preprocess(flattened[start : start + step])
+                hidden = self.backbone(pixel_values=prepared).last_hidden_state
+                if hidden.ndim != 3 or hidden.shape[1:] != (
+                    expected_tokens,
+                    self.output_dim,
+                ):
+                    raise RuntimeError("DINOv3 returned an invalid hidden-state shape")
+                special_tokens = 1 + self.register_tokens
+                patches = hidden[:, special_tokens:, :].transpose(1, 2).reshape(
+                    hidden.shape[0],
+                    self.output_dim,
+                    patch_rows,
+                    patch_columns,
+                )
+                spatial = F.adaptive_avg_pool2d(
+                    patches,
+                    (grid_height, grid_width),
+                ).flatten(2).transpose(1, 2)
+                spatial_batches.append(spatial)
+                pooled_batches.append(hidden[:, 0, :])
+        spatial_tokens = torch.cat(spatial_batches, dim=0).contiguous().reshape(
+            *leading_shape,
+            grid_height * grid_width,
+            self.output_dim,
+        )
+        pooled_latent = torch.cat(pooled_batches, dim=0).contiguous().reshape(
+            *leading_shape,
+            self.output_dim,
+        )
+        return VisionEncoderOutput(
+            spatial_tokens=spatial_tokens.detach(),
+            pooled_latent=pooled_latent.detach(),
         )
 
 
@@ -684,6 +828,7 @@ __all__ = [
     "DEFAULT_DINOV3_WEIGHTS_SHA256",
     "DINOV3_ENCODER_SPECS",
     "DINOV3_PREPROCESS_ID",
+    "DINOV3_RECTANGULAR_PREPROCESS_ID",
     "DINOv3EncoderSpec",
     "FrozenDINOv3Config",
     "FrozenDINOv3Encoder",

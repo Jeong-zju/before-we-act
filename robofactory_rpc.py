@@ -254,6 +254,109 @@ def split_liftbarrier_action(action: Any) -> dict[str, np.ndarray]:
     }
 
 
+def extract_robofactory_observation(
+    observation: Mapping[str, Any],
+    *,
+    agent_order: tuple[str, ...],
+    camera_name: str = "head_camera_global",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map a native RoboFactory multi-Panda observation to M2 arrays."""
+
+    if not agent_order or len(agent_order) != len(set(agent_order)):
+        raise ValueError("agent_order must be non-empty and unique")
+    try:
+        agents = observation["agent"]
+        sensor_data = observation["sensor_data"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("RoboFactory observation lacks agent/sensor_data") from exc
+    state_parts: list[np.ndarray] = []
+    for agent_name in agent_order:
+        try:
+            agent = agents[agent_name]
+            qpos = _unbatch_vector(agent["qpos"], expected=9, name=f"{agent_name}.qpos")
+            qvel = _unbatch_vector(agent["qvel"], expected=9, name=f"{agent_name}.qvel")
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"RoboFactory observation lacks state for {agent_name}") from exc
+        state_parts.extend((qpos, qvel))
+    state = np.ascontiguousarray(np.concatenate(state_parts), dtype=np.float32)
+    if state.shape != (18 * len(agent_order),) or not np.isfinite(state).all():
+        raise ValueError("RoboFactory centralized M2 state is invalid")
+    try:
+        rgb = _to_numpy(sensor_data[camera_name]["rgb"])
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"RoboFactory observation lacks RGB camera {camera_name!r}") from exc
+    if rgb.ndim == 4 and rgb.shape[0] == 1:
+        rgb = rgb[0]
+    if rgb.ndim != 3 or rgb.shape[-1] != 3 or rgb.dtype != np.uint8:
+        raise ValueError(f"{camera_name}.rgb must be lossless uint8 HWC")
+    return state, np.ascontiguousarray(rgb)
+
+
+def extract_robofactory_multiview_observation(
+    observation: Mapping[str, Any],
+    *,
+    agent_order: tuple[str, ...],
+    camera_names: Mapping[str, str],
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Map one native observation to centralized state plus named RGB views."""
+
+    normalized = {
+        str(name): str(source)
+        for name, source in camera_names.items()
+    }
+    if (
+        not normalized
+        or len(normalized) != len(camera_names)
+        or len(set(normalized.values())) != len(normalized)
+    ):
+        raise ValueError("camera_names must map unique logical views to sources")
+    first_source = next(iter(normalized.values()))
+    state, first_rgb = extract_robofactory_observation(
+        observation,
+        agent_order=agent_order,
+        camera_name=first_source,
+    )
+    images: dict[str, np.ndarray] = {}
+    sensor_data = observation.get("sensor_data")
+    if not isinstance(sensor_data, Mapping):
+        raise ValueError("RoboFactory observation lacks sensor_data")
+    for logical_name, source_name in normalized.items():
+        if source_name == first_source:
+            rgb = first_rgb
+        else:
+            try:
+                rgb = _to_numpy(sensor_data[source_name]["rgb"])
+            except (KeyError, TypeError) as exc:
+                raise ValueError(
+                    f"RoboFactory observation lacks RGB camera {source_name!r}"
+                ) from exc
+            if rgb.ndim == 4 and rgb.shape[0] == 1:
+                rgb = rgb[0]
+            if rgb.ndim != 3 or rgb.shape[-1] != 3 or rgb.dtype != np.uint8:
+                raise ValueError(
+                    f"{source_name}.rgb must be lossless uint8 HWC"
+                )
+        images[logical_name] = np.ascontiguousarray(rgb)
+    shapes = {tuple(value.shape) for value in images.values()}
+    if len(shapes) != 1:
+        raise ValueError(f"RoboFactory camera shapes differ: {sorted(shapes)}")
+    return state, images
+
+
+def split_robofactory_action(
+    action: Any, *, agent_order: tuple[str, ...]
+) -> dict[str, np.ndarray]:
+    """Split one canonical-order raw command into 8D Panda controller inputs."""
+
+    value = np.asarray(action, dtype=np.float32)
+    if value.shape != (8 * len(agent_order),) or not np.isfinite(value).all():
+        raise ValueError("RoboFactory M2 action has the wrong finite shape")
+    return {
+        agent: np.ascontiguousarray(value[index * 8 : (index + 1) * 8])
+        for index, agent in enumerate(agent_order)
+    }
+
+
 def scalar_bool(value: Any, *, name: str) -> bool:
     """Convert one tensor/array scalar to bool without ambiguous broadcasting."""
 
@@ -263,6 +366,18 @@ def scalar_bool(value: Any, *, name: str) -> bool:
     if array.dtype != np.bool_:
         raise ValueError(f"{name} must be a boolean scalar")
     return bool(array.reshape(-1)[0])
+
+
+def scalar_float(value: Any, *, name: str) -> float:
+    """Convert one tensor/array scalar to a finite Python float."""
+
+    array = _to_numpy(value)
+    if array.size != 1:
+        raise ValueError(f"{name} must contain exactly one scalar")
+    result = float(array.reshape(-1)[0])
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
 
 
 def wilson_interval(
@@ -342,9 +457,13 @@ __all__ = [
     "RoboFactoryRPCError",
     "configure_socket",
     "extract_liftbarrier_observation",
+    "extract_robofactory_multiview_observation",
+    "extract_robofactory_observation",
     "receive_message",
     "scalar_bool",
+    "scalar_float",
     "send_message",
     "split_liftbarrier_action",
+    "split_robofactory_action",
     "wilson_interval",
 ]

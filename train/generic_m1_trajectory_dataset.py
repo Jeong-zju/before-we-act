@@ -310,6 +310,7 @@ class GenericM1WindowDataset(Dataset[dict[str, torch.Tensor]]):
             "past_actions",
             "past_action_valid_mask",
             "images",
+            "image_valid_mask",
             "task_index",
             "action_targets",
             "future_states",
@@ -318,6 +319,14 @@ class GenericM1WindowDataset(Dataset[dict[str, torch.Tensor]]):
             "future_horizons",
         }
     )
+    HORIZON_MASK_KEYS = frozenset(
+        {
+            "action_target_valid_mask",
+            "future_state_valid_mask",
+            "future_visual_valid_mask",
+        }
+    )
+    AVAILABLE_SAMPLE_KEYS = SAMPLE_KEYS | HORIZON_MASK_KEYS
 
     def __init__(
         self,
@@ -331,6 +340,8 @@ class GenericM1WindowDataset(Dataset[dict[str, torch.Tensor]]):
         future_horizons: Sequence[int] = (1, 2, 4, 8),
         stride: int = 1,
         hdf5_cache_size: int = 8,
+        allow_incomplete_horizon: bool = False,
+        allow_incomplete_visual_history: bool = False,
         verify_hdf5_sha256: bool = True,
         verify_hdf5_contract: bool = True,
         verify_normalization: bool = True,
@@ -391,6 +402,10 @@ class GenericM1WindowDataset(Dataset[dict[str, torch.Tensor]]):
         self.future_horizons = horizons
         self.stride = int(stride)
         self.hdf5_cache_size = int(hdf5_cache_size)
+        self.allow_incomplete_horizon = bool(allow_incomplete_horizon)
+        self.allow_incomplete_visual_history = bool(
+            allow_incomplete_visual_history
+        )
         self.task_order = manifest_index.task_order
         self.task_to_index = manifest_index.task_to_index
         self.records = manifest_index.records_for_split(self.split)
@@ -430,13 +445,23 @@ class GenericM1WindowDataset(Dataset[dict[str, torch.Tensor]]):
                     ][: record.num_steps],
                     dtype=np.int64,
                 )
-            last_decision = record.num_steps - complete_horizon
+            last_decision = (
+                record.num_steps - 1
+                if self.allow_incomplete_horizon
+                else record.num_steps - complete_horizon
+            )
             for decision_t in range(0, last_decision + 1, self.stride):
                 rows = _latest_unique_rows(
                     frame_indices,
                     end_inclusive=decision_t,
                     count=self.visual_history,
                 )
+                if rows is None and self.allow_incomplete_visual_history:
+                    rows = _latest_available_unique_rows(
+                        frame_indices,
+                        end_inclusive=decision_t,
+                        maximum_count=self.visual_history,
+                    )
                 if rows is not None:
                     self._index.append(
                         _GenericM1Window(record_index, decision_t, rows)
@@ -456,15 +481,26 @@ class GenericM1WindowDataset(Dataset[dict[str, torch.Tensor]]):
         return len(self._index)
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        return self._projected_item(index, self.SAMPLE_KEYS)
+        requested = (
+            self.AVAILABLE_SAMPLE_KEYS
+            if self.allow_incomplete_horizon
+            else self.SAMPLE_KEYS
+        )
+        return self._projected_item(index, requested)
 
     def project(self, sample_keys: Collection[str]) -> Dataset[dict[str, torch.Tensor]]:
         requested = frozenset(str(name) for name in sample_keys)
         if not requested:
             raise ValueError("M1 projected sample keys cannot be empty")
-        unknown = requested.difference(self.SAMPLE_KEYS)
+        unknown = requested.difference(self.AVAILABLE_SAMPLE_KEYS)
         if unknown:
             raise ValueError(f"unknown M1 projected sample keys: {sorted(unknown)}")
+        if requested.intersection(self.HORIZON_MASK_KEYS) and not (
+            self.allow_incomplete_horizon
+        ):
+            raise ValueError(
+                "horizon validity masks require allow_incomplete_horizon=True"
+            )
         return _GenericM1Projection(self, requested)
 
     def estimate_ram_preload_bytes(
@@ -576,7 +612,7 @@ class GenericM1WindowDataset(Dataset[dict[str, torch.Tensor]]):
             if sample_keys is None
             else frozenset(str(name) for name in sample_keys)
         )
-        unknown = requested.difference(self.SAMPLE_KEYS)
+        unknown = requested.difference(self.AVAILABLE_SAMPLE_KEYS)
         if unknown:
             raise ValueError(f"unknown M1 RAM preload sample keys: {sorted(unknown)}")
         paths: set[str] = set()
@@ -667,36 +703,68 @@ class GenericM1WindowDataset(Dataset[dict[str, torch.Tensor]]):
                 if "past_action_valid_mask" in requested:
                     sample["past_action_valid_mask"] = torch.from_numpy(mask)
 
-            if "images" in requested:
-                sample["images"] = torch.from_numpy(
-                    _read_rgb_rows(
+            if {"images", "image_valid_mask"}.intersection(requested):
+                image_valid = np.zeros(
+                    (self.visual_history, len(self.cameras)), dtype=np.bool_
+                )
+                image_start = self.visual_history - len(window.visual_rows)
+                image_valid[image_start:] = True
+                if "images" in requested:
+                    image_height, image_width, channels = self.image_shape_hwc
+                    if channels != 3:  # pragma: no cover - manifest invariant.
+                        raise RuntimeError("generic M1 images must be RGB")
+                    images = np.zeros(
+                        (
+                            self.visual_history,
+                            len(self.cameras),
+                            3,
+                            image_height,
+                            image_width,
+                        ),
+                        dtype=np.uint8,
+                    )
+                    images[image_start:] = _read_rgb_rows(
                         file,
                         prefix=self.manifest.current_image_prefix,
                         rows=window.visual_rows,
                         cameras=self.cameras,
                     )
-                )
+                    sample["images"] = torch.from_numpy(images)
+                if "image_valid_mask" in requested:
+                    sample["image_valid_mask"] = torch.from_numpy(image_valid)
             if "action_targets" in requested:
+                available = min(self.action_chunk, record.num_steps - decision_t)
                 values = np.asarray(
                     file[self.manifest.action_field][
-                        decision_t : decision_t + self.action_chunk
+                        decision_t : decision_t + available
                     ],
                     dtype=np.float32,
                 )
                 if self.manifest.action_codec is not None:
                     values = self.manifest.action_codec.encode(values)
+                if self.allow_incomplete_horizon:
+                    values = _repeat_last_to_horizon(values, self.action_chunk)
                 sample["action_targets"] = torch.from_numpy(values.copy())
             if "future_states" in requested:
+                available = min(self.action_chunk, record.num_steps - decision_t)
                 values = np.asarray(
                     file[self.manifest.next_state_field][
-                        decision_t : decision_t + self.action_chunk
+                        decision_t : decision_t + available
                     ],
                     dtype=np.float32,
                 )
+                if self.allow_incomplete_horizon:
+                    values = _repeat_last_to_horizon(values, self.action_chunk)
                 sample["future_states"] = torch.from_numpy(values.copy())
 
+            remaining = record.num_steps - decision_t
             future_rows = tuple(
-                decision_t + horizon - 1 for horizon in self.future_horizons
+                (
+                    decision_t + min(horizon, remaining) - 1
+                    if self.allow_incomplete_horizon
+                    else decision_t + horizon - 1
+                )
+                for horizon in self.future_horizons
             )
             if "future_images" in requested:
                 sample["future_images"] = torch.from_numpy(
@@ -717,16 +785,33 @@ class GenericM1WindowDataset(Dataset[dict[str, torch.Tensor]]):
                             decision_t
                         ]
                     )
+                    unique_rows, inverse = np.unique(
+                        np.asarray(future_rows, dtype=np.int64),
+                        return_inverse=True,
+                    )
                     target_ids = np.asarray(
                         file[f"data/next_observation/image_frame_index/{camera}"][
-                            list(future_rows)
+                            unique_rows.tolist()
                         ],
                         dtype=np.int64,
-                    )
+                    )[inverse]
                     for horizon_index, target_id in enumerate(target_ids.tolist()):
                         novelty[horizon_index, camera_index] = target_id != previous
                         previous = int(target_id)
                 sample["future_image_novelty_mask"] = torch.from_numpy(novelty)
+            if "action_target_valid_mask" in requested:
+                sample["action_target_valid_mask"] = torch.arange(
+                    self.action_chunk
+                ).lt(remaining)
+            if "future_state_valid_mask" in requested:
+                sample["future_state_valid_mask"] = torch.arange(
+                    self.action_chunk
+                ).lt(remaining)
+            if "future_visual_valid_mask" in requested:
+                sample["future_visual_valid_mask"] = torch.tensor(
+                    [horizon <= remaining for horizon in self.future_horizons],
+                    dtype=torch.bool,
+                )
 
         if frozenset(sample) != requested:  # pragma: no cover - invariant.
             raise RuntimeError("generic M1 projected sample key contract drifted")
@@ -805,6 +890,11 @@ class GenericM1WindowDataset(Dataset[dict[str, torch.Tensor]]):
             "state_history": self.state_history,
             "action_chunk": self.action_chunk,
             "visual_history": self.visual_history,
+            "allow_incomplete_horizon": self.allow_incomplete_horizon,
+            "allow_incomplete_visual_history": (
+                self.allow_incomplete_visual_history
+            ),
+            "visual_history_alignment": "deployable_suffix_left_padding",
             "cameras": list(self.cameras),
             "future_horizons": list(self.future_horizons),
             "state_dim": self.state_dim,
@@ -1419,10 +1509,15 @@ def _read_rgb_rows(
     rows: Sequence[int],
     cameras: Sequence[str],
 ) -> np.ndarray:
-    per_camera = [
-        np.asarray(file[f"{prefix}/{camera}"][list(rows)], dtype=np.uint8)
-        for camera in cameras
-    ]
+    unique_rows, inverse = np.unique(
+        np.asarray(rows, dtype=np.int64), return_inverse=True
+    )
+    per_camera = []
+    for camera in cameras:
+        selected = np.asarray(
+            file[f"{prefix}/{camera}"][unique_rows.tolist()], dtype=np.uint8
+        )
+        per_camera.append(selected[inverse])
     values = np.stack(per_camera, axis=1)
     return np.ascontiguousarray(values.transpose(0, 1, 4, 2, 3))
 
@@ -1444,6 +1539,38 @@ def _latest_unique_rows(
         if len(rows) == int(count):
             return tuple(reversed(rows))
     return None
+
+
+def _latest_available_unique_rows(
+    frame_indices: np.ndarray,
+    *,
+    end_inclusive: int,
+    maximum_count: int,
+) -> tuple[int, ...]:
+    rows: list[int] = []
+    seen: set[int] = set()
+    for row in range(int(end_inclusive), -1, -1):
+        frame_id = int(frame_indices[row])
+        if frame_id in seen:
+            continue
+        seen.add(frame_id)
+        rows.append(row)
+        if len(rows) == int(maximum_count):
+            break
+    if not rows:
+        raise RuntimeError("trajectory decision has no available RGB frame")
+    return tuple(reversed(rows))
+
+
+def _repeat_last_to_horizon(values: np.ndarray, horizon: int) -> np.ndarray:
+    if values.ndim < 1 or values.shape[0] <= 0 or values.shape[0] > horizon:
+        raise ValueError("tail padding requires between one and horizon values")
+    if values.shape[0] == horizon:
+        return values
+    padded = np.empty((horizon, *values.shape[1:]), dtype=values.dtype)
+    padded[: values.shape[0]] = values
+    padded[values.shape[0] :] = values[-1]
+    return padded
 
 
 def _mapping(value: Mapping[str, Any], key: str) -> Mapping[str, Any]:

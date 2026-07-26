@@ -1,0 +1,113 @@
+name: wam.robofactory/m2-lift-barrier-single-task
+format_version: wam.robofactory.m2.config/4
+
+data:
+  manifests:
+    - datasets/robofactory_multitask/lift_barrier/training_manifest.json
+  minimum_tasks: 1
+  state_history: 16
+  action_horizon: 16
+  task_action_horizons:
+    lift_barrier: 16
+  visual_history_frames: 4
+  future_visual_horizons: [1, 4, 8, 16]
+  camera_order: [global]
+  max_agents: 2
+  max_state_dim: 36
+  max_action_dim: 16
+  max_text_tokens: 96
+  stride: 1
+  smoke_stride: 16
+  hdf5_cache_size: 16
+
+vision:
+  encoder_name: dinov3_vitl16_lvd
+  model_id: facebook/dinov3-vitl16-pretrain-lvd1689m
+  revision: dd0a398fa8e84f2a37179332f6c561d20276300b
+  config_path: artifacts/vision/dinov3_vitl16_lvd/config.json
+  weights_path: artifacts/vision/dinov3_vitl16_lvd/model.safetensors
+  expected_config_sha256: ce962b0c8ca4f2deb48c6fdfd6035257e3769f1d4d9154c92aba51991e46e290
+  expected_weights_sha256: dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179
+  preprocess_id: dinov3_imagenet_rgb_resize_square_antialias_v1
+  input_size: 256
+  inference_batch_size: 64
+
+model:
+  visual_feature_dim: 1024
+  text_vocab_size: 257
+  d_model: 1024
+  num_layers: 12
+  num_heads: 16
+  ffn_dim: 4096
+  text_layers: 2
+  dropout: 0.0
+
+action_generation:
+  solver_steps: 1
+  solver: euler
+  normalized_action_clip: 10.0
+  execution_steps: 2
+  warm_start: false
+
+training:
+  seed: 101
+  batch_size: 16
+  sampling:
+    strategy: coverage_then_temperature_without_replacement_cycles
+    samples_per_epoch: auto
+    coverage_epochs: 1
+    temperature_alpha: 0.5
+  num_workers: auto
+  prefetch_factor: 4
+  persistent_workers: true
+  pin_memory: true
+  multiprocessing_context: spawn
+  in_order: false
+  preload_to_ram: false
+  preload_shared_memory: false
+  preload_max_available_fraction: 0.65
+  precision: bf16
+  torch_float32_matmul_precision: high
+  allow_tf32: true
+  cudnn_benchmark: true
+  weight_decay: 0.00001
+  gradient_clip_norm: 1.0
+  executed_prefix_weight: 4.0
+  warm_start_probability: 0.0
+  warm_start_noise_std: 0.0
+  stages:
+    - name: 1_world_representation_warmup
+      steps: 2000
+      learning_rate: 0.0002
+      losses:
+        flow_matching: 0.0
+        action_endpoint: 0.0
+        action_smoothness: 0.0
+        future_state: 1.0
+        future_visual_latent: 1.0
+    - name: 2_deployed_action_bootstrap
+      steps: 4000
+      learning_rate: 0.00015
+      losses:
+        flow_matching: 1.0
+        action_endpoint: 12.0
+        action_smoothness: 0.05
+        future_state: 0.0
+        future_visual_latent: 0.0
+    - name: 3_joint_world_action
+      steps: 12000
+      learning_rate: 0.00008
+      losses:
+        flow_matching: 1.0
+        action_endpoint: 12.0
+        action_smoothness: 0.05
+        future_state: 1.0
+        future_visual_latent: 1.0
+
+checkpoint:
+  output: checkpoints/phase_m2_liftbarrier_tailfixed_seed101
+  report: outputs/phase_m2_liftbarrier_tailfixed/seed101_training.json
+
+rollout:
+  closed_loop_tasks:
+    - LiftBarrier-rf

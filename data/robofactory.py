@@ -22,6 +22,7 @@ ROBOFACTORY_M1_SCHEMA_VERSION = "wam.robofactory.multimodal/1.0"
 ROBOFACTORY_M1_PROFILE = "robofactory_m1"
 COMMAND_ECHO_ACTION_SOURCE = "command_echo"
 _EPISODE_PATTERN = re.compile(r"^traj_(\d+)$")
+_FLAT_SINGLE_AGENT_NAME = "panda-0"
 
 
 @dataclass(frozen=True)
@@ -108,9 +109,11 @@ class RoboFactoryDataset:
             self.episodes = self._load_episodes()
             if not self.episodes:
                 raise ValueError("RoboFactory dataset contains no traj_<id> groups")
-            self.layout = self._infer_layout(
-                self._file[self.episodes[0].source_key]
+            first_group = self._file[self.episodes[0].source_key]
+            self._flat_single_agent_layout = self._uses_flat_single_agent_layout(
+                first_group
             )
+            self.layout = self._infer_layout(first_group)
             self._validate_episode(
                 self._file[self.episodes[0].source_key], self.episodes[0]
             )
@@ -413,6 +416,9 @@ class RoboFactoryDataset:
         max_episodes: int | None = None,
         success_only: bool = False,
         progress: Callable[[Mapping[str, Any]], None] | None = None,
+        episode_indices: Sequence[int] | None = None,
+        output_indices: Sequence[int] | None = None,
+        compute_source_hashes: bool = True,
     ) -> dict[str, Any]:
         """Stream selected episodes through the configured output backends."""
 
@@ -423,6 +429,32 @@ class RoboFactoryDataset:
         selected = self._selected_episodes(
             max_episodes=max_episodes, success_only=success_only
         )
+        if episode_indices is None:
+            normalized_episode_indices = tuple(range(len(selected)))
+        else:
+            normalized_episode_indices = tuple(int(index) for index in episode_indices)
+            if len(set(normalized_episode_indices)) != len(
+                normalized_episode_indices
+            ):
+                raise ValueError("episode_indices cannot contain duplicates")
+            if any(
+                index < 0 or index >= len(selected)
+                for index in normalized_episode_indices
+            ):
+                raise IndexError("episode_indices contains an out-of-range index")
+            selected = tuple(selected[index] for index in normalized_episode_indices)
+        if output_indices is None:
+            normalized_output_indices = normalized_episode_indices
+        else:
+            normalized_output_indices = tuple(int(index) for index in output_indices)
+        if len(normalized_output_indices) != len(selected):
+            raise ValueError("output_indices must match the selected episode count")
+        if len(set(normalized_output_indices)) != len(normalized_output_indices):
+            raise ValueError("output_indices cannot contain duplicates")
+        if any(index < 0 for index in normalized_output_indices):
+            raise ValueError("output_indices cannot contain negative values")
+        if not selected:
+            raise ValueError("episode_indices selected no episodes")
 
         instruction = task.strip() if task is not None else _task_from_env_id(self.env_id)
         if not instruction:
@@ -473,7 +505,9 @@ class RoboFactoryDataset:
             for field in schema.fields
         )
         try:
-            for output_index, episode in enumerate(selected):
+            for selection_index, (output_index, episode) in enumerate(
+                zip(normalized_output_indices, selected, strict=True)
+            ):
                 group = self._file[episode.source_key]
                 steps = self._validate_episode(group, episode)
                 initial_observation = self._observation(
@@ -567,7 +601,7 @@ class RoboFactoryDataset:
                         progress(
                             {
                                 "source_episode": episode.source_id,
-                                "episode": output_index + 1,
+                                "episode": selection_index + 1,
                                 "episodes": len(selected),
                                 "frame": frame_index + 1,
                                 "frames": steps,
@@ -619,10 +653,12 @@ class RoboFactoryDataset:
                     else None
                 ),
                 "size_bytes": self.path.stat().st_size,
-                "hdf5_sha256": _sha256_file(self.path),
+                "hdf5_sha256": (
+                    _sha256_file(self.path) if compute_source_hashes else None
+                ),
                 "metadata_json_sha256": (
                     _sha256_file(self.metadata_path)
-                    if self.metadata_path.is_file()
+                    if compute_source_hashes and self.metadata_path.is_file()
                     else None
                 ),
                 "env_id": self.env_id,
@@ -704,9 +740,14 @@ class RoboFactoryDataset:
                 ("qvel", agent.qvel_shape),
             ):
                 size = int(np.prod(shape))
+                source = (
+                    f"obs/agent/{component}"
+                    if self._flat_single_agent_layout
+                    else f"obs/agent/{agent.source_name}/{component}"
+                )
                 state_slices.append(
                     {
-                        "source": f"obs/agent/{agent.source_name}/{component}",
+                        "source": source,
                         "target": "observation.state",
                         "slice": [state_offset, state_offset + size],
                     }
@@ -715,7 +756,11 @@ class RoboFactoryDataset:
             size = int(np.prod(agent.action_shape))
             action_slices.append(
                 {
-                    "source": f"actions/{agent.source_name}",
+                    "source": (
+                        "actions"
+                        if self._flat_single_agent_layout
+                        else f"actions/{agent.source_name}"
+                    ),
                     "target": action_target,
                     "slice": [action_offset, action_offset + size],
                 }
@@ -935,21 +980,39 @@ class RoboFactoryDataset:
         )
 
     def _infer_layout(self, group: h5py.Group) -> RoboFactoryLayout:
-        actions = _group(group, "actions")
+        actions = group.get("actions")
         observation_agents = _group(group, "obs/agent")
-        source_agents = tuple(sorted(actions.keys(), key=_natural_key))
-        if not source_agents:
-            raise ValueError("RoboFactory trajectory has no agents under actions/")
-        if set(source_agents) != set(observation_agents.keys()):
-            raise ValueError(
-                "actions/ and obs/agent/ must contain the same agent names"
-            )
+        if isinstance(actions, h5py.Dataset):
+            source_agents = (_FLAT_SINGLE_AGENT_NAME,)
+            if not all(
+                isinstance(observation_agents.get(name), h5py.Dataset)
+                for name in ("qpos", "qvel")
+            ):
+                raise ValueError(
+                    "flat single-agent actions require obs/agent/qpos and "
+                    "obs/agent/qvel datasets"
+                )
+        elif isinstance(actions, h5py.Group):
+            source_agents = tuple(sorted(actions.keys(), key=_natural_key))
+            if not source_agents:
+                raise ValueError("RoboFactory trajectory has no agents under actions/")
+            if set(source_agents) != set(observation_agents.keys()):
+                raise ValueError(
+                    "actions/ and obs/agent/ must contain the same agent names"
+                )
+        else:
+            raise KeyError("required HDF5 dataset or group 'actions' is missing")
         agent_aliases = _unique_aliases(source_agents, _identifier)
         agents: list[RoboFactoryAgentLayout] = []
         for source_name in source_agents:
-            action = _dataset(actions, source_name)
-            qpos = _dataset(observation_agents[source_name], "qpos")
-            qvel = _dataset(observation_agents[source_name], "qvel")
+            if isinstance(actions, h5py.Dataset):
+                action = actions
+                observation_agent = observation_agents
+            else:
+                action = _dataset(actions, source_name)
+                observation_agent = _group(observation_agents, source_name)
+            qpos = _dataset(observation_agent, "qpos")
+            qvel = _dataset(observation_agent, "qvel")
             agents.append(
                 RoboFactoryAgentLayout(
                     source_name=source_name,
@@ -1002,10 +1065,16 @@ class RoboFactoryDataset:
         self, group: h5py.Group, episode: RoboFactoryEpisode
     ) -> int:
         prefix = episode.source_key
-        actions = _group(group, "actions")
+        if (
+            self._uses_flat_single_agent_layout(group)
+            != self._flat_single_agent_layout
+        ):
+            raise ValueError(
+                f"{prefix}: single-agent action representation changed within dataset"
+            )
         steps: int | None = None
         for agent in self.layout.agents:
-            action = _dataset(actions, agent.source_name)
+            action = self._agent_action_dataset(group, agent)
             if tuple(action.shape[1:]) != agent.action_shape:
                 raise ValueError(f"{prefix}: action shape changed for {agent.source_name}")
             steps = int(action.shape[0]) if steps is None else steps
@@ -1015,16 +1084,27 @@ class RoboFactoryDataset:
             raise ValueError(f"{prefix}: empty trajectories are not supported")
 
         observation_agents = _group(group, "obs/agent")
-        if set(observation_agents.keys()) != {
+        if self._uses_flat_single_agent_layout(group):
+            if len(self.layout.agents) != 1:
+                raise ValueError(
+                    f"{prefix}: flat actions are only valid for a single agent"
+                )
+        elif set(observation_agents.keys()) != {
             agent.source_name for agent in self.layout.agents
         }:
             raise ValueError(f"{prefix}: agent names differ from the dataset layout")
         for agent in self.layout.agents:
+            observation_agent = self._agent_observation_group(group, agent)
             for name, shape in (("qpos", agent.qpos_shape), ("qvel", agent.qvel_shape)):
-                dataset = _dataset(observation_agents[agent.source_name], name)
+                dataset = _dataset(observation_agent, name)
                 if dataset.shape[0] != steps + 1:
+                    source_path = (
+                        f"obs/agent/{name}"
+                        if self._flat_single_agent_layout
+                        else f"obs/agent/{agent.source_name}/{name}"
+                    )
                     raise ValueError(
-                        f"{prefix}: obs/agent/{agent.source_name}/{name} must "
+                        f"{prefix}: {source_path} must "
                         f"have T+1={steps + 1} rows, got {dataset.shape[0]}"
                     )
                 if tuple(dataset.shape[1:]) != shape:
@@ -1080,11 +1160,10 @@ class RoboFactoryDataset:
         *,
         include_calibration: bool,
     ) -> dict[str, Any]:
-        source_agents = _group(group, "obs/agent")
         agents: dict[str, dict[str, np.ndarray]] = {}
         state_parts: list[np.ndarray] = []
         for agent in self.layout.agents:
-            source = source_agents[agent.source_name]
+            source = self._agent_observation_group(group, agent)
             qpos = np.asarray(source["qpos"][index], dtype=np.float32)
             qvel = np.asarray(source["qvel"][index], dtype=np.float32)
             agents[agent.target_name] = {"qpos": qpos, "qvel": qvel}
@@ -1111,12 +1190,12 @@ class RoboFactoryDataset:
         }
 
     def _action(self, group: h5py.Group, index: int) -> np.ndarray:
-        actions = _group(group, "actions")
         return np.concatenate(
             [
-                np.asarray(actions[agent.source_name][index], dtype=np.float32).reshape(
-                    -1
-                )
+                np.asarray(
+                    self._agent_action_dataset(group, agent)[index],
+                    dtype=np.float32,
+                ).reshape(-1)
                 for agent in self.layout.agents
             ]
         ).astype(np.float32, copy=False)
@@ -1145,10 +1224,9 @@ class RoboFactoryDataset:
         commanded_action: np.ndarray,
         executed_action_source: str | None,
     ) -> dict[str, Any]:
-        actions = _group(group, "actions")
         agent_actions = {
             agent.target_name: np.asarray(
-                actions[agent.source_name][index], dtype=np.float32
+                self._agent_action_dataset(group, agent)[index], dtype=np.float32
             )
             for agent in self.layout.agents
         }
@@ -1165,6 +1243,41 @@ class RoboFactoryDataset:
         if self.layout.has_failure:
             info["failure"] = bool(group["fail"][index])
         return info
+
+    def _uses_flat_single_agent_layout(self, group: h5py.Group) -> bool:
+        return isinstance(group.get("actions"), h5py.Dataset)
+
+    def _agent_action_dataset(
+        self,
+        group: h5py.Group,
+        agent: RoboFactoryAgentLayout,
+    ) -> h5py.Dataset:
+        actions = group.get("actions")
+        if isinstance(actions, h5py.Dataset):
+            if agent.source_name != _FLAT_SINGLE_AGENT_NAME:
+                raise ValueError(
+                    "flat single-agent actions can only map to "
+                    f"{_FLAT_SINGLE_AGENT_NAME!r}"
+                )
+            return actions
+        if isinstance(actions, h5py.Group):
+            return _dataset(actions, agent.source_name)
+        raise KeyError("required HDF5 dataset or group 'actions' is missing")
+
+    def _agent_observation_group(
+        self,
+        group: h5py.Group,
+        agent: RoboFactoryAgentLayout,
+    ) -> h5py.Group:
+        observations = _group(group, "obs/agent")
+        if self._uses_flat_single_agent_layout(group):
+            if agent.source_name != _FLAT_SINGLE_AGENT_NAME:
+                raise ValueError(
+                    "flat single-agent observations can only map to "
+                    f"{_FLAT_SINGLE_AGENT_NAME!r}"
+                )
+            return observations
+        return _group(observations, agent.source_name)
 
     def _episode_metadata(
         self,
@@ -1284,7 +1397,15 @@ def _camera_alias(value: str) -> str:
     match = re.fullmatch(r"(?:head_)?camera_agent_?(\d+)", normalized)
     if match is not None:
         return f"agent_{match.group(1)}"
-    if normalized in {"head_camera_global", "camera_global", "global_camera"}:
+    # Single-Panda upstream tasks expose their only workspace sensor as
+    # ``head_camera``; multi-Panda tasks expose the equivalent shared view as
+    # ``head_camera_global``.  Canonicalize both without changing RGB bytes.
+    if normalized in {
+        "head_camera",
+        "head_camera_global",
+        "camera_global",
+        "global_camera",
+    }:
         return "global"
     return normalized
 

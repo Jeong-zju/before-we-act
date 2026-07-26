@@ -90,6 +90,73 @@ def test_robofactory_hdf5_conversion_aligns_and_renames_multi_agent_data(
         }
 
 
+def test_robofactory_conversion_supports_global_subset_indices(
+    tmp_path: Path,
+) -> None:
+    source_path = _write_robofactory_source(tmp_path / "LiftBarrier-rf.h5")
+    output = tmp_path / "subset"
+    with RoboFactoryDataset(source_path) as source:
+        schema = source.build_schema(include_calibration=False)
+        manifest = source.convert(
+            (HDF5TrajectoryExporter(output, schema),),
+            fps=20,
+            schema=schema,
+            episode_indices=(1,),
+            output_indices=(7,),
+            compute_source_hashes=False,
+        )
+
+    assert [item["episode_index"] for item in manifest["episodes"]] == [7]
+    assert [item["source_episode_id"] for item in manifest["episodes"]] == [9]
+    assert manifest["source"]["hdf5_sha256"] is None
+    assert (output / "episode_000007.hdf5").is_file()
+    assert not (output / "episode_000000.hdf5").exists()
+
+
+def test_parallel_converter_writes_ordered_collision_free_hdf5(
+    tmp_path: Path,
+) -> None:
+    from scripts import convert_robofactory_dataset as converter
+
+    source_path = _write_robofactory_source(tmp_path / "LiftBarrier-rf.h5")
+    output = tmp_path / "parallel"
+    assert converter.main(
+        [
+            "--input",
+            str(source_path),
+            "--out-dir",
+            str(output),
+            "--format",
+            "hdf5",
+            "--profile",
+            "m1-scratch",
+            "--executed-action-source",
+            "command-echo",
+            "--camera",
+            "global",
+            "--episodes",
+            "2",
+            "--num-workers",
+            "2",
+            "--compression",
+            "none",
+            "--no-progress",
+        ]
+    ) == 0
+
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["conversion_execution"] == {
+        "multiprocessing_context": "spawn",
+        "num_workers": 2,
+        "parallel_unit": "episode",
+    }
+    assert [item["source_episode_id"] for item in manifest["episodes"]] == [7, 9]
+    assert sorted(path.name for path in (output / "hdf5").iterdir()) == [
+        "episode_000000.hdf5",
+        "episode_000001.hdf5",
+    ]
+
+
 def test_robofactory_lerobot_conversion_uses_canonical_features_and_finalizes(
     tmp_path: Path,
 ) -> None:
@@ -269,6 +336,78 @@ def test_robofactory_m1_scratch_conversion_freezes_liftbarrier_semantics(
         assert "agent_0" not in episode["data/observation/images"]
 
 
+def test_robofactory_m1_conversion_normalizes_flat_single_agent_layout(
+    tmp_path: Path,
+) -> None:
+    source_path = _write_single_agent_robofactory_source(
+        tmp_path / "PickMeat-rf.h5"
+    )
+    output = tmp_path / "converted_pick_meat"
+
+    with RoboFactoryDataset(source_path) as source:
+        assert [agent.source_name for agent in source.layout.agents] == ["panda-0"]
+        assert source.layout.state_size == 4
+        assert source.layout.action_size == 2
+        assert {
+            camera.source_name: camera.target_name for camera in source.layout.cameras
+        } == {"head_camera": "global"}
+        schema = source.build_schema(
+            profile="m1-scratch",
+            cameras=("global",),
+            include_calibration=False,
+            include_agent_fields=False,
+        )
+        manifest = source.convert(
+            (HDF5TrajectoryExporter(output, schema),),
+            fps=20,
+            schema=schema,
+            task="Pick the meat together",
+            task_id="pick_meat",
+            executed_action_source=COMMAND_ECHO_ACTION_SOURCE,
+            success_only=True,
+        )
+
+    assert manifest["field_mapping"]["centralized_state"] == [
+        {
+            "source": "obs/agent/qpos",
+            "target": "observation.state",
+            "slice": [0, 2],
+        },
+        {
+            "source": "obs/agent/qvel",
+            "target": "observation.state",
+            "slice": [2, 4],
+        },
+    ]
+    assert manifest["field_mapping"]["centralized_action"] == [
+        {
+            "source": "actions",
+            "target": "action.commanded",
+            "slice": [0, 2],
+        }
+    ]
+    assert manifest["data_semantics"]["action"]["agent_order"] == ["panda-0"]
+    assert manifest["field_mapping"]["camera_names"] == {
+        "head_camera": "observation.images.global"
+    }
+
+    with h5py.File(output / "episode_000000.hdf5", "r") as episode:
+        np.testing.assert_allclose(
+            episode["data/observation/state"][0], [0.0, 1.0, 10.0, 11.0]
+        )
+        np.testing.assert_allclose(
+            episode["data/next_observation/state"][0], [2.0, 3.0, 12.0, 13.0]
+        )
+        np.testing.assert_allclose(
+            episode["data/action/commanded"][0], [20.0, 21.0]
+        )
+        np.testing.assert_array_equal(
+            episode["data/action/commanded"][:],
+            episode["data/action/executed"][:],
+        )
+        assert episode["data/observation/images/global"].shape == (3, 2, 3, 3)
+
+
 def test_robofactory_m1_scratch_requires_explicit_command_echo(
     tmp_path: Path,
 ) -> None:
@@ -400,6 +539,62 @@ def _write_robofactory_source(
                 "elapsed_steps": steps,
                 "success": True,
             },
+        ],
+    }
+    path.with_suffix(".json").write_text(json.dumps(sidecar), encoding="utf-8")
+    return path
+
+
+def _write_single_agent_robofactory_source(path: Path) -> Path:
+    steps = 3
+    with h5py.File(path, "w") as file:
+        trajectory = file.create_group("traj_0")
+        trajectory.create_dataset(
+            "actions",
+            data=np.arange(steps * 2, dtype=np.float32).reshape(steps, 2) + 20,
+        )
+        observations = trajectory.create_group("obs")
+        agent = observations.create_group("agent")
+        agent.create_dataset(
+            "qpos",
+            data=np.arange((steps + 1) * 2, dtype=np.float32).reshape(
+                steps + 1, 2
+            ),
+        )
+        agent.create_dataset(
+            "qvel",
+            data=np.arange((steps + 1) * 2, dtype=np.float32).reshape(
+                steps + 1, 2
+            )
+            + 10,
+        )
+        sensor_data = observations.create_group("sensor_data")
+        camera = sensor_data.create_group("head_camera")
+        camera.create_dataset(
+            "rgb",
+            data=np.stack(
+                [
+                    np.full((2, 3, 3), 30 + frame, dtype=np.uint8)
+                    for frame in range(steps + 1)
+                ]
+            ),
+        )
+        trajectory.create_dataset("terminated", data=[False, False, True])
+        trajectory.create_dataset("truncated", data=[False, False, False])
+        trajectory.create_dataset("success", data=[False, False, True])
+
+    sidecar = {
+        "env_info": {
+            "env_id": "PickMeat-rf",
+            "env_kwargs": {"control_mode": "pd_joint_pos"},
+        },
+        "episodes": [
+            {
+                "episode_id": 0,
+                "episode_seed": 3000,
+                "elapsed_steps": steps,
+                "success": True,
+            }
         ],
     }
     path.with_suffix(".json").write_text(json.dumps(sidecar), encoding="utf-8")

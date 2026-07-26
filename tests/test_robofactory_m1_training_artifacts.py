@@ -70,6 +70,7 @@ def test_generic_m1_loader_consumes_training_manifest_without_cue_fields(
         assert sample["past_actions"].shape == (3, 1)
         assert sample["past_action_valid_mask"].tolist() == [False, False, False]
         assert sample["images"].shape == (1, 1, 3, 2, 3)
+        assert sample["image_valid_mask"].tolist() == [[True]]
         assert sample["action_targets"].shape == (1, 1)
         assert sample["future_states"].shape == (1, 2)
         assert sample["future_images"].shape == (1, 1, 3, 2, 3)
@@ -97,6 +98,81 @@ def test_generic_m1_loader_consumes_training_manifest_without_cue_fields(
         checkpoint = dataset.checkpoint_lineage()
         assert checkpoint["manifest_sha256"] == artifacts.manifest_sha256
         assert checkpoint["normalization_verified"] is True
+    finally:
+        dataset.close()
+
+
+def test_generic_m1_tail_windows_repeat_pad_without_supervising_padding(
+    tmp_path: Path,
+) -> None:
+    root = _write_dataset(tmp_path / "dataset", episode_count=6)
+    artifacts = _prepare(
+        root,
+        transition_selection="through-first-done-inclusive",
+    )
+    dataset = GenericM1WindowDataset(
+        artifacts.manifest_path,
+        split="train",
+        state_history=4,
+        action_chunk=2,
+        visual_history=1,
+        future_horizons=(1, 2),
+        allow_incomplete_horizon=True,
+    )
+    try:
+        # Four train episodes have two selected transitions each.  The final
+        # decision remains a training context instead of being dropped merely
+        # because fewer than two future transitions remain.
+        assert len(dataset) == 8
+        tail = dataset[1]
+        assert frozenset(tail) == GenericM1WindowDataset.AVAILABLE_SAMPLE_KEYS
+        assert dataset.sample_lineage(1).decision_t == 1
+        assert tail["action_target_valid_mask"].tolist() == [True, False]
+        assert tail["future_state_valid_mask"].tolist() == [True, False]
+        assert tail["future_visual_valid_mask"].tolist() == [True, False]
+        torch.testing.assert_close(
+            tail["action_targets"][0], tail["action_targets"][1]
+        )
+        torch.testing.assert_close(
+            tail["future_states"][0], tail["future_states"][1]
+        )
+    finally:
+        dataset.close()
+
+
+def test_generic_m1_prefix_windows_right_align_short_visual_history(
+    tmp_path: Path,
+) -> None:
+    root = _write_dataset(tmp_path / "dataset", episode_count=6)
+    artifacts = _prepare(
+        root,
+        transition_selection="through-first-done-inclusive",
+    )
+    dataset = GenericM1WindowDataset(
+        artifacts.manifest_path,
+        split="train",
+        state_history=4,
+        action_chunk=2,
+        visual_history=2,
+        future_horizons=(1, 2),
+        allow_incomplete_horizon=True,
+        allow_incomplete_visual_history=True,
+    )
+    try:
+        assert len(dataset) == 8
+        reset = dataset[0]
+        assert dataset.sample_lineage(0).decision_t == 0
+        assert reset["images"].shape == (2, 1, 3, 2, 3)
+        assert reset["image_valid_mask"].tolist() == [
+            [False],
+            [True],
+        ]
+        assert bool(reset["images"][0].eq(0).all())
+        second = dataset[1]
+        assert second["image_valid_mask"].tolist() == [
+            [True],
+            [True],
+        ]
     finally:
         dataset.close()
 

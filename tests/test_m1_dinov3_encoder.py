@@ -24,6 +24,7 @@ from models.wam import (
 )
 from models.wam_multimodal import (
     DINOV3_PREPROCESS_ID,
+    DINOV3_RECTANGULAR_PREPROCESS_ID,
     DINOv3EncoderSpec,
     FrozenDINOv3Config,
     FrozenDINOv3Encoder,
@@ -165,6 +166,33 @@ def test_dinov3_loads_strictly_from_verified_local_artifacts(
         tiny_dinov3_artifact.encoder_config(model_id="offline/wrong-model")
     with pytest.raises(ValueError, match="full lowercase commit SHA"):
         tiny_dinov3_artifact.encoder_config(revision="main")
+
+
+def test_dinov3_rectangular_preprocess_preserves_4_by_3_contract(
+    tiny_dinov3_artifact: _TinyDINOv3Artifact,
+) -> None:
+    encoder = tiny_dinov3_artifact.encoder(
+        input_size=None,
+        input_height=32,
+        input_width=48,
+        preprocess_id=DINOV3_RECTANGULAR_PREPROCESS_ID,
+    )
+    prepared, leading = encoder.preprocess(
+        torch.randint(0, 256, (2, 3, 40, 60), dtype=torch.uint8)
+    )
+    assert leading == (2,)
+    assert prepared.shape == (2, 3, 32, 48)
+    assert encoder.patch_count == 6
+    images = torch.zeros(2, 3, 40, 60, dtype=torch.uint8)
+    output = encoder(images)
+    assert output.spatial_tokens.shape == (2, 6, _TINY_DIM)
+    assert output.pooled_latent.shape == (2, _TINY_DIM)
+    torch.testing.assert_close(
+        encoder.forward_pooled(images),
+        output.pooled_latent,
+        rtol=0.0,
+        atol=0.0,
+    )
 
 
 def test_dinov3_loads_official_unprefixed_safetensors_strictly(

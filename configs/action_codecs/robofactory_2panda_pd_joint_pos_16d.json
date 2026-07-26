@@ -1,0 +1,68 @@
+{
+  "action_dim": 16,
+  "codec_id": "robofactory.2x_panda_pd_joint_pos/1",
+  "encoded_domain": "canonical_unit_action",
+  "encoded_range": [
+    -1.0,
+    1.0
+  ],
+  "format_version": "wam.action_codec.affine/1",
+  "high": [
+    2.8973,
+    1.7628,
+    2.8973,
+    -0.0698,
+    2.8973,
+    3.7525,
+    2.8973,
+    1.0,
+    2.8973,
+    1.7628,
+    2.8973,
+    -0.0698,
+    2.8973,
+    3.7525,
+    2.8973,
+    1.0
+  ],
+  "low": [
+    -2.8973,
+    -1.7628,
+    -2.8973,
+    -3.0718,
+    -2.8973,
+    -0.0175,
+    -2.8973,
+    -1.0,
+    -2.8973,
+    -1.7628,
+    -2.8973,
+    -3.0718,
+    -2.8973,
+    -0.0175,
+    -2.8973,
+    -1.0
+  ],
+  "metadata": {
+    "agent_order": [
+      "panda-0",
+      "panda-1"
+    ],
+    "control_mode": "pd_joint_pos",
+    "per_agent_action_order": [
+      "panda_joint1",
+      "panda_joint2",
+      "panda_joint3",
+      "panda_joint4",
+      "panda_joint5",
+      "panda_joint6",
+      "panda_joint7",
+      "gripper_normalized_command"
+    ],
+    "provenance": {
+      "arm_bounds": "ManiSkill Panda panda_v2.urdf joint limits; arm normalize_action=false",
+      "gripper_bounds": "ManiSkill PDJointPosMimicController normalized controller input"
+    }
+  },
+  "raw_domain": "raw_pd_joint_pos_commanded"
+}
