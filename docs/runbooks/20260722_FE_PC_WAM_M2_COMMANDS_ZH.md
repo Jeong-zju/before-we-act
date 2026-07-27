@@ -195,13 +195,20 @@ script -qefc \
 ```
 
 训练后运行双任务闭环门控。脚本依次验证训练 seed `3000`、validation
-seed `3003`、未见 seed `900–902`；每个任务要求 `1/1`、`1/1`、
+seed `3099`、未见 seed `900–902`；每个任务要求 `1/1`、`1/1`、
 至少 `2/3` 成功并保留视频：
 
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
 bash scripts/run_m2_liftbarrier_longpipeline_multiview_gate.sh
 ```
+
+> **2026-07-27 状态：该 checkpoint 已闭环失败并清理。**
+> `feat/model-improvements` 的 seed 101 checkpoint 在最新 Gate 中，
+> LiftBarrier 为 `0/1`、`1/1`、`1/3`，LongPipelineDelivery 为
+> `0/1`、`0/1`、`0/3`，不得作为可接受模型使用。完整身份、判定依据和后续
+> 分支见
+> [`20260727_M2_MULTIVIEW_CLOSED_LOOP_FAILURE_ZH.md`](../reports/20260727_M2_MULTIVIEW_CLOSED_LOOP_FAILURE_ZH.md)。
 
 ## 0. 当前门控：只训练和验证 LiftBarrier
 
