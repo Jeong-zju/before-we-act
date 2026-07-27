@@ -15,6 +15,10 @@ export RF_PYTHON="${RF_PYTHON:-${ROBOFACTORY_ROOT}/.venv/bin/python}"
 ROBOFACTORY_REPO_URL="${ROBOFACTORY_REPO_URL:-https://github.com/MARS-EAI/RoboFactory.git}"
 ROBOFACTORY_COMMIT_SHA="${ROBOFACTORY_COMMIT_SHA:-5868242322414a91454e22f1dd9641f613ba1bcf}"
 ROBOFACTORY_ASSET_REVISION="${ROBOFACTORY_ASSET_REVISION:-58ad250efb3de75f956c852ba8ad50e7ca30409f}"
+LIFT_DATASET_REPO="${LIFT_DATASET_REPO:-zeno-ai/robofactory-lift-barrier-multiview}"
+LIFT_DATASET_REVISION="${LIFT_DATASET_REVISION:-6ab620091677e69370412f08cd7adecacc28c146}"
+LPD_DATASET_REPO="${LPD_DATASET_REPO:-zeno-ai/robofactory-long-pipeline-delivery-multiview}"
+LPD_DATASET_REVISION="${LPD_DATASET_REVISION:-fee628311ff52a3ae0ddfddf82379c63d28f7533}"
 
 doctor() {
   command -v uv >/dev/null
@@ -51,22 +55,44 @@ prepare_data() {
     test -f "${lpd}"
     return
   fi
-  : "${HF_M2_DATASET_REPO:?set HF_M2_DATASET_REPO when data is not pre-mounted}"
-  : "${HF_M2_DATASET_REVISION:?set immutable HF_M2_DATASET_REVISION}"
-  [[ "${HF_M2_DATASET_REVISION}" =~ ^[0-9a-f]{40}$ ]]
   local available_gb
   available_gb="$(df --output=avail -BG "${FE_ROOT}" | tail -1 | tr -dc '0-9')"
   if (( available_gb < 550 )); then
     printf >&2 'Need at least 550 GiB free to download the existing M2 corpus.\n'
     exit 3
   fi
-  (
-    cd "${FE_ROOT}"
-    uv run --frozen hf download "${HF_M2_DATASET_REPO}" \
-      --repo-type dataset \
-      --revision "${HF_M2_DATASET_REVISION}" \
-      --local-dir datasets/robofactory_multitask
-  )
+  if [[ -n "${HF_M2_DATASET_REPO:-}" ]]; then
+    : "${HF_M2_DATASET_REVISION:?set immutable HF_M2_DATASET_REVISION}"
+    [[ "${HF_M2_DATASET_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+    (
+      cd "${FE_ROOT}"
+      uv run --frozen hf download "${HF_M2_DATASET_REPO}" \
+        --repo-type dataset \
+        --revision "${HF_M2_DATASET_REVISION}" \
+        --local-dir datasets/robofactory_multitask
+    )
+  else
+    [[ "${LIFT_DATASET_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+    [[ "${LPD_DATASET_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+    if [[ ! -f "${lift}" ]]; then
+      (
+        cd "${FE_ROOT}"
+        uv run --frozen hf download "${LIFT_DATASET_REPO}" \
+          --repo-type dataset \
+          --revision "${LIFT_DATASET_REVISION}" \
+          --local-dir datasets/robofactory_multitask/lift_barrier
+      )
+    fi
+    if [[ ! -f "${lpd}" ]]; then
+      (
+        cd "${FE_ROOT}"
+        uv run --frozen hf download "${LPD_DATASET_REPO}" \
+          --repo-type dataset \
+          --revision "${LPD_DATASET_REVISION}" \
+          --local-dir datasets/robofactory_multitask/long_pipeline_delivery
+      )
+    fi
+  fi
   test -f "${lift}"
   test -f "${lpd}"
 }
