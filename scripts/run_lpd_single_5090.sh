@@ -110,6 +110,9 @@ prepare_vision() {
 }
 
 prepare_robofactory() {
+  local asset_root="${ROBOFACTORY_ROOT}/robofactory/assets"
+  local asset_archive="${asset_root}/assets.zip"
+  local asset_sentinel="${asset_root}/scenes/table/table.glb"
   if [[ ! -d "${ROBOFACTORY_ROOT}/.git" ]]; then
     git clone "${ROBOFACTORY_REPO_URL}" "${ROBOFACTORY_ROOT}"
     git -C "${ROBOFACTORY_ROOT}" checkout --detach "${ROBOFACTORY_COMMIT_SHA}"
@@ -129,15 +132,21 @@ prepare_robofactory() {
     uv pip install --python "${RF_PYTHON}" --no-deps \
       --editable "${ROBOFACTORY_ROOT}"
   fi
-  if [[ ! -d "${ROBOFACTORY_ROOT}/robofactory/assets" ]]; then
+  if [[ ! -s "${asset_sentinel}" ]]; then
     (
       cd "${FE_ROOT}"
       uv run --frozen hf download sparklexfantasy/RoboFactory_asset \
         --repo-type dataset \
         --revision "${ROBOFACTORY_ASSET_REVISION}" \
-        --local-dir "${ROBOFACTORY_ROOT}/robofactory/assets"
+        --local-dir "${asset_root}"
     )
+    test -s "${asset_archive}"
+    "${RF_PYTHON}" "${FE_ROOT}/scripts/extract_robofactory_assets.py" \
+      --archive "${asset_archive}" \
+      --output-dir "${asset_root}" \
+      --require scenes/table/table.glb
   fi
+  test -s "${asset_sentinel}"
 }
 
 prepare() {
