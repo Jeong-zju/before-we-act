@@ -6,14 +6,15 @@ WORKSPACE="$(cd "${FE_ROOT}/.." && pwd)"
 MODE="${1:-full}"
 export CUDA_VISIBLE_DEVICES="${GPU_INDEX:-0}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-${FE_ROOT}/.uv-cache}"
-export LPD_EXPERIMENT_SLUG="lpd_temporal_ensemble"
-export LPD_CONFIG="${FE_ROOT}/configs/wam_multimodal/m2_lpd_temporal_ensemble.yaml"
-export LPD_CHECKPOINT="${FE_ROOT}/checkpoints/lpd_temporal_ensemble_seed101"
-export LPD_POLICY_KIND="wam"
+export LPD_EXPERIMENT_SLUG="lpd_static_dino_act_moe"
+export LPD_CONFIG="${FE_ROOT}/configs/static_act/lpd_static_dino_act_moe.yaml"
+export LPD_CHECKPOINT="${FE_ROOT}/checkpoints/lpd_static_dino_act_moe/checkpoint_080000.pt"
+export LPD_POLICY_KIND="static_act"
 export ROBOFACTORY_ROOT="${ROBOFACTORY_ROOT:-${WORKSPACE}/RoboFactory}"
 export RF_PYTHON="${RF_PYTHON:-${ROBOFACTORY_ROOT}/.venv/bin/python}"
 ROBOFACTORY_REPO_URL="${ROBOFACTORY_REPO_URL:-https://github.com/MARS-EAI/RoboFactory.git}"
 ROBOFACTORY_COMMIT_SHA="${ROBOFACTORY_COMMIT_SHA:-5868242322414a91454e22f1dd9641f613ba1bcf}"
+ROBOFACTORY_ASSET_REVISION="${ROBOFACTORY_ASSET_REVISION:-58ad250efb3de75f956c852ba8ad50e7ca30409f}"
 
 doctor() {
   command -v uv >/dev/null
@@ -72,6 +73,7 @@ prepare_robofactory() {
     git -C "${ROBOFACTORY_ROOT}" checkout --detach "${ROBOFACTORY_COMMIT_SHA}"
   fi
   test "$(git -C "${ROBOFACTORY_ROOT}" rev-parse HEAD)" = "${ROBOFACTORY_COMMIT_SHA}"
+  test -z "$(git -C "${ROBOFACTORY_ROOT}" status --porcelain --untracked-files=no)"
   if [[ ! -x "${RF_PYTHON}" ]]; then
     uv venv --python 3.9 "${ROBOFACTORY_ROOT}/.venv"
     uv pip install --python "${RF_PYTHON}" \
@@ -86,7 +88,6 @@ prepare_robofactory() {
       --editable "${ROBOFACTORY_ROOT}"
   fi
   if [[ ! -d "${ROBOFACTORY_ROOT}/robofactory/assets" ]]; then
-    : "${ROBOFACTORY_ASSET_REVISION:?set immutable ROBOFACTORY_ASSET_REVISION}"
     (
       cd "${FE_ROOT}"
       uv run --frozen hf download sparklexfantasy/RoboFactory_asset \
@@ -109,19 +110,17 @@ prepare() {
 }
 
 train() {
-  if [[ -f "${LPD_CHECKPOINT}/schema.json" ]]; then
+  if [[ -f "${LPD_CHECKPOINT}" ]]; then
     printf 'Reusing completed checkpoint %s\n' "${LPD_CHECKPOINT}"
     return
   fi
   (
     cd "${FE_ROOT}"
-    PYTHONUNBUFFERED=1 uv run --frozen python scripts/train_robofactory_m2.py \
+    PYTHONUNBUFFERED=1 uv run --frozen python scripts/train_static_rgb_act_moe.py \
       --config "${LPD_CONFIG}" \
-      --device cuda:0 \
-      --torch-threads 8 \
-      --seed 101
+      --device cuda:0
   )
-  test -f "${LPD_CHECKPOINT}/schema.json"
+  test -f "${LPD_CHECKPOINT}"
 }
 
 gate() {

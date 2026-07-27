@@ -259,11 +259,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if not isinstance(diagnostics, Mapping):
                     raise RuntimeError("M2 response lacks diagnostics")
                 source = str(diagnostics.get("action_source", ""))
-                expected_source = (
-                    "m2_block_causal_future_path"
-                    if args.future_path
-                    else "m2_block_causal_fast_path"
-                )
+                expected_source = str(client["policy"]["action_source"])
                 if (
                     source != expected_source
                     or diagnostics.get("fallback_used") is not False
@@ -429,12 +425,24 @@ def _validate_client(raw: Any, *, contract: Mapping[str, Any]) -> dict[str, Any]
     value = dict(raw)
     if value.get("checkpoint_format") not in {
         "wam.robofactory.m2.checkpoint/5",
+        "wam.robofactory.static_rgb_act_moe.checkpoint/1",
     }:
-        raise RuntimeError("client did not load a Phase M2 checkpoint")
+        raise RuntimeError("client did not load a supported direct-policy checkpoint")
     if contract["task_id"] not in value.get("task_vocabulary", []):
         raise RuntimeError("M2 checkpoint does not contain the requested task")
     if value.get("future_path") is not contract["future_path"]:
         raise RuntimeError("M2 client/environment future-path modes differ")
+    policy = value.get("policy")
+    if (
+        not isinstance(policy, Mapping)
+        or policy.get("action_source")
+        not in {
+            "m2_block_causal_fast_path",
+            "m2_block_causal_future_path",
+            "static_rgb_dino_act_moe",
+        }
+    ):
+        raise RuntimeError("client did not declare a supported direct action source")
     return value
 
 
@@ -452,14 +460,18 @@ def _summary(
     interval = wilson_interval(successes, episodes) if episodes else (0.0, 0.0)
     returns = [float(value["episode_return"]) for value in results]
     completed = fatal_error is None and episodes == args.episodes
-    direct = completed and all(
-        value.get("action_sources")
-        == [
-            "m2_block_causal_future_path"
-            if args.future_path
-            else "m2_block_causal_fast_path"
-        ]
-        for value in results
+    expected_source = (
+        None
+        if client is None
+        else client.get("policy", {}).get("action_source")
+    )
+    direct = (
+        completed
+        and isinstance(expected_source, str)
+        and all(
+            value.get("action_sources") == [expected_source]
+            for value in results
+        )
     )
     return {
         "format_version": "wam.robofactory.m2.rollout_summary/2",

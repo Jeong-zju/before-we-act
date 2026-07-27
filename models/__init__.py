@@ -31,3 +31,17 @@ __all__ = [
     "WorldModelInputs",
     "WorldModelOutput",
 ]
+
+from models.static_rgb_act import (
+    StaticRGBMoEACT,
+    StaticRGBMoEACTConfig,
+    TemporalChunkEnsembler,
+    Top2SparseMoE,
+)
+
+__all__ += [
+    "StaticRGBMoEACT",
+    "StaticRGBMoEACTConfig",
+    "TemporalChunkEnsembler",
+    "Top2SparseMoE",
+]
