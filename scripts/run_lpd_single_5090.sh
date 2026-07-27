@@ -35,6 +35,22 @@ prepare_data() {
   if [[ -f "${lift}" && -f "${lpd}" ]]; then
     return
   fi
+  if [[ -n "${M2_DATA_ROOT:-}" ]]; then
+    local mounted
+    mounted="$(realpath "${M2_DATA_ROOT}")"
+    test -f "${mounted}/lift_barrier/training_manifest.json"
+    test -f "${mounted}/long_pipeline_delivery/training_manifest.json"
+    if [[ -e "${FE_ROOT}/datasets/robofactory_multitask" ]]; then
+      printf >&2 'Refusing to replace partial data path: %s\n' \
+        "${FE_ROOT}/datasets/robofactory_multitask"
+      exit 3
+    fi
+    mkdir -p "${FE_ROOT}/datasets"
+    ln -s "${mounted}" "${FE_ROOT}/datasets/robofactory_multitask"
+    test -f "${lift}"
+    test -f "${lpd}"
+    return
+  fi
   : "${HF_M2_DATASET_REPO:?set HF_M2_DATASET_REPO when data is not pre-mounted}"
   : "${HF_M2_DATASET_REVISION:?set immutable HF_M2_DATASET_REVISION}"
   [[ "${HF_M2_DATASET_REVISION}" =~ ^[0-9a-f]{40}$ ]]
