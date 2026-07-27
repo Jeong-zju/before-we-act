@@ -195,8 +195,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         state = batch["state"].to(device, non_blocking=True)
         actions = batch["actions"].to(device, non_blocking=True)
         valid = batch["valid"].to(device, non_blocking=True)
-        with torch.inference_mode():
-            vision_tokens = vision(images).spatial_tokens
+        vision_tokens = _frozen_vision_tokens(vision, images)
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast("cuda", dtype=torch.bfloat16):
             prediction, mu, logvar, router_aux = model(
@@ -353,6 +352,17 @@ def _vision(config: Mapping[str, Any]) -> FrozenDINOv3Encoder:
             inference_batch_size=int(value.get("inference_batch_size", 2)),
         )
     )
+
+
+def _frozen_vision_tokens(
+    vision: FrozenDINOv3Encoder,
+    images: Tensor,
+) -> Tensor:
+    # The ACT projection is trainable and autograd must save these features
+    # while computing parameter gradients.  no_grad() freezes DINO without
+    # creating inference tensors, which cannot be saved for backward.
+    with torch.no_grad():
+        return vision(images).spatial_tokens
 
 
 def _task_runtime(dataset: RoboFactoryMultitaskDataset) -> list[dict[str, Any]]:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import torch
+from torch import nn
 
 from models.static_rgb_act import (
     StaticRGBMoEACT,
@@ -10,6 +13,7 @@ from models.static_rgb_act import (
 )
 from scripts.train_static_rgb_act_moe import (
     _TaskBalancedBatchSampler,
+    _frozen_vision_tokens,
     _local_batch,
 )
 
@@ -54,6 +58,38 @@ def test_static_rgb_act_output_and_zero_latent_inference_contract():
 
     assert first.shape == (2, config.horizon, config.action_dim)
     torch.testing.assert_close(first, second, rtol=0.0, atol=0.0)
+
+
+def test_frozen_vision_features_are_valid_inputs_for_act_backpropagation():
+    config = _config()
+
+    class Vision(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.projection = nn.Linear(3, config.vision_dim)
+
+        def forward(self, images):
+            pooled = images.float().mean(dim=(-1, -2))
+            tokens = self.projection(pooled)[:, None].expand(-1, 12, -1)
+            return SimpleNamespace(spatial_tokens=tokens)
+
+    vision = Vision()
+    model = StaticRGBMoEACT(config)
+    images = torch.randn(2, 3, 8, 8)
+    tokens = _frozen_vision_tokens(vision, images)
+
+    assert not torch.is_inference(tokens)
+    assert not tokens.requires_grad
+
+    prediction = model(
+        tokens,
+        torch.randn(2, config.state_dim),
+        torch.randn(2, config.horizon, config.action_dim),
+    )[0]
+    prediction.square().mean().backward()
+
+    assert vision.projection.weight.grad is None
+    assert model.vision_projection[1].weight.grad is not None
 
 
 def test_temporal_ensemble_prefers_newer_chunks():
