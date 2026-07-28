@@ -147,7 +147,9 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     assert "export HF_TOKEN" not in launcher
     assert "export HF_TOKEN" not in prepare
     assert "export HF_TOKEN='hf_...'" not in runbook
-    assert 'fetch --no-tags origin "${refspecs[@]}"' in launcher
+    assert "config --get-all remote.origin.fetch" in launcher
+    assert "config --add remote.origin.fetch" in launcher
+    assert "git -C \"${FE_ROOT}\" fetch --no-tags origin" in launcher
     assert "tmux new-session" not in launcher
     assert "tmux attach" not in launcher
     assert "tmux attach -t" not in runbook
