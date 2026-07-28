@@ -7,6 +7,15 @@ WORKTREE_ROOT="${S0_WORKTREE_ROOT:-${WORKSPACE_ROOT}/worktrees}"
 RUN_ID="${S0_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 ATTACH=auto
 DRY_RUN=0
+HF_TOKEN_INPUT=""
+
+# S0 owns these defaults. A fresh clone therefore needs no path exports.
+SHARED_DATA_ROOT="${FE_ROOT}/datasets/robofactory_multitask"
+SHARED_ARTIFACT_ROOT="${FE_ROOT}/artifacts"
+SHARED_UV_CACHE="${FE_ROOT}/.uv-cache"
+SHARED_UV_ENV="${FE_ROOT}/.venv"
+ROBOFACTORY_ROOT="${WORKSPACE_ROOT}/RoboFactory"
+RF_PYTHON="${ROBOFACTORY_ROOT}/.venv/bin/python"
 
 usage() {
   printf 'usage: %s [--run-id ID] [--attach|--no-attach] [--dry-run]\n' "$0"
@@ -49,6 +58,7 @@ SESSION="${S0_TMUX_SESSION:-wam-s0-${RUN_ID}}"
 RUN_ROOT="${S0_RUN_ROOT:-${FE_ROOT}/outputs/s0_runs/${RUN_ID}}"
 READY_FILE="${RUN_ROOT}/shared.ready"
 FAILED_FILE="${RUN_ROOT}/shared.failed"
+HF_TOKEN_FIFO="${RUN_ROOT}/.hf_token.fifo"
 
 CANDIDATES=(B0 B1 B2 B3)
 BRANCHES=(
@@ -73,11 +83,83 @@ shell_join() {
   printf '%s' "${result% }"
 }
 
+require_commands() {
+  local name
+  for name in git tmux jq nvidia-smi python3 df sha256sum; do
+    if ! command -v "${name}" >/dev/null; then
+      printf >&2 'Missing required system command: %s\n' "${name}"
+      exit 3
+    fi
+  done
+}
+
+ensure_uv() {
+  if command -v uv >/dev/null; then
+    return
+  fi
+  local bootstrap="${WORKSPACE_ROOT}/.s0-tools/uv"
+  printf 'uv was not found; installing pinned uv 0.9.26 into %s\n' "${bootstrap}"
+  if [[ ! -x "${bootstrap}/bin/uv" ]]; then
+    python3 -m venv "${bootstrap}"
+    "${bootstrap}/bin/python" -m pip install \
+      --disable-pip-version-check \
+      'uv==0.9.26'
+  fi
+  PATH="${bootstrap}/bin:${PATH}"
+  command -v uv >/dev/null
+}
+
+prompt_hf_token() {
+  if [[ ! -r /dev/tty ]]; then
+    printf >&2 \
+      'An interactive terminal is required to read the Hugging Face token.\n'
+    exit 3
+  fi
+  printf 'Hugging Face read token (input hidden): ' >/dev/tty
+  IFS= read -r -s HF_TOKEN_INPUT </dev/tty
+  printf '\n' >/dev/tty
+  if [[ "${HF_TOKEN_INPUT}" != hf_* || \
+    "${HF_TOKEN_INPUT}" =~ [[:space:]] ]]; then
+    printf >&2 \
+      'The Hugging Face token must start with hf_ and contain no spaces.\n'
+    exit 3
+  fi
+}
+
+fetch_candidate_branches() {
+  local refspecs=()
+  local branch
+  for branch in "${BRANCHES[@]}"; do
+    refspecs+=(
+      "+refs/heads/${branch}:refs/remotes/origin/${branch}"
+    )
+  done
+  printf 'Fetching the four immutable S0 candidate branches from origin.\n'
+  git -C "${FE_ROOT}" fetch --no-tags origin "${refspecs[@]}"
+  for branch in "${BRANCHES[@]}"; do
+    git -C "${FE_ROOT}" show-ref \
+      --verify --quiet "refs/remotes/origin/${branch}"
+    if ! git -C "${FE_ROOT}" show-ref \
+      --verify --quiet "refs/heads/${branch}"; then
+      git -C "${FE_ROOT}" branch --track "${branch}" "origin/${branch}"
+    fi
+    if [[ "$(git -C "${FE_ROOT}" rev-parse "${branch}")" != \
+      "$(git -C "${FE_ROOT}" rev-parse "origin/${branch}")" ]]; then
+      printf >&2 \
+        'Local branch %s differs from origin/%s; refusing an ambiguous run.\n' \
+        "${branch}" "${branch}"
+      exit 3
+    fi
+  done
+}
+
 candidate_command() {
   local gpu="$1"
   local command
   command="$(shell_join \
     env \
+    -u HF_TOKEN \
+    "PATH=${PATH}" \
     "GPU_INDEX=${gpu}" \
     "S0_RUN_ID=${RUN_ID}" \
     "S0_RUN_ROOT=${RUN_ROOT}" \
@@ -86,6 +168,10 @@ candidate_command() {
     "S0_BASE_REPO=${FE_ROOT}" \
     "S0_GATE_EPISODES=${S0_GATE_EPISODES:-20}" \
     "S0_GATE_SEED_START=${S0_GATE_SEED_START:-900}" \
+    "S0_UV_CACHE_DIR=${SHARED_UV_CACHE}" \
+    "S0_UV_ENV=${SHARED_UV_ENV}" \
+    "S0_ROBOFACTORY_ROOT=${ROBOFACTORY_ROOT}" \
+    "S0_RF_PYTHON=${RF_PYTHON}" \
     bash scripts/run_s0_candidate.sh
   )"
   printf '%s' "${command}"
@@ -95,6 +181,10 @@ printf 'S0 parent: %s @ %s\n' \
   "$(git -C "${FE_ROOT}" branch --show-current)" \
   "$(git -C "${FE_ROOT}" rev-parse HEAD)"
 printf 'Run root: %s\nTmux session: %s\n' "${RUN_ROOT}" "${SESSION}"
+printf 'Shared dataset: %s\nShared artifacts: %s\n' \
+  "${SHARED_DATA_ROOT}" "${SHARED_ARTIFACT_ROOT}"
+printf 'Shared uv env/cache: %s | %s\nRoboFactory: %s\n' \
+  "${SHARED_UV_ENV}" "${SHARED_UV_CACHE}" "${ROBOFACTORY_ROOT}"
 for index in "${!CANDIDATES[@]}"; do
   printf '%s GPU%s  %-43s  %s/%s\n' \
     "${CANDIDATES[index]}" "${index}" "${BRANCHES[index]}" \
@@ -103,12 +193,21 @@ done
 
 if (( DRY_RUN )); then
   printf '\nDry run: no worktrees, files, tmux sessions or GPU jobs were changed.\n'
+  printf 'HF token: will be requested with hidden interactive input.\n'
+  printf 'Branches: will be fetched from origin and tracked locally when absent.\n'
   printf 'prepare: %s\n' "$(shell_join \
     env \
+    -u HF_TOKEN \
+    "PATH=${PATH}" \
     GPU_INDEX=0 \
     "S0_RUN_ROOT=${RUN_ROOT}" \
     "S0_READY_FILE=${READY_FILE}" \
     "S0_FAILED_FILE=${FAILED_FILE}" \
+    "S0_HF_TOKEN_FIFO=${HF_TOKEN_FIFO}" \
+    "UV_CACHE_DIR=${SHARED_UV_CACHE}" \
+    "UV_PROJECT_ENVIRONMENT=${SHARED_UV_ENV}" \
+    "ROBOFACTORY_ROOT=${ROBOFACTORY_ROOT}" \
+    "RF_PYTHON=${RF_PYTHON}" \
     bash scripts/prepare_s0_shared.sh
   )"
   for index in "${!CANDIDATES[@]}"; do
@@ -117,10 +216,7 @@ if (( DRY_RUN )); then
   exit 0
 fi
 
-command -v git >/dev/null
-command -v tmux >/dev/null
-command -v nvidia-smi >/dev/null
-command -v python3 >/dev/null
+require_commands
 if [[ "$(git -C "${FE_ROOT}" branch --show-current)" != "feat/model-improvements" ]]; then
   printf >&2 'Launch S0 from the feat/model-improvements worktree.\n'
   exit 3
@@ -143,6 +239,9 @@ if [[ -e "${RUN_ROOT}" ]]; then
   exit 3
 fi
 
+fetch_candidate_branches
+ensure_uv
+
 mkdir -p "${WORKTREE_ROOT}"
 WORKTREES=()
 for index in "${!CANDIDATES[@]}"; do
@@ -164,6 +263,7 @@ for index in "${!CANDIDATES[@]}"; do
   WORKTREES+=("${path}")
 done
 
+prompt_hf_token
 init_arguments=(
   "${FE_ROOT}/scripts/s0_runtime.py" init
   --run-root "${RUN_ROOT}"
@@ -176,17 +276,41 @@ for index in "${!CANDIDATES[@]}"; do
 done
 python3 "${init_arguments[@]}"
 
+mkfifo "${HF_TOKEN_FIFO}"
+chmod 600 "${HF_TOKEN_FIFO}"
+cleanup_secret() {
+  HF_TOKEN_INPUT=""
+  unset HF_TOKEN_INPUT
+  if [[ -p "${HF_TOKEN_FIFO}" ]]; then
+    unlink "${HF_TOKEN_FIFO}"
+  fi
+}
+trap cleanup_secret EXIT
+
 prepare_command="$(shell_join \
   env \
+  -u HF_TOKEN \
+  "PATH=${PATH}" \
   GPU_INDEX=0 \
   "S0_RUN_ROOT=${RUN_ROOT}" \
   "S0_READY_FILE=${READY_FILE}" \
   "S0_FAILED_FILE=${FAILED_FILE}" \
+  "S0_HF_TOKEN_FIFO=${HF_TOKEN_FIFO}" \
+  "UV_CACHE_DIR=${SHARED_UV_CACHE}" \
+  "UV_PROJECT_ENVIRONMENT=${SHARED_UV_ENV}" \
+  "ROBOFACTORY_ROOT=${ROBOFACTORY_ROOT}" \
+  "RF_PYTHON=${RF_PYTHON}" \
   bash scripts/prepare_s0_shared.sh
 )"
 tmux new-session -d -s "${SESSION}" -n prepare -c "${FE_ROOT}" "${prepare_command}"
 tmux set-option -t "${SESSION}" remain-on-exit on
 tmux set-option -t "${SESSION}" history-limit 200000
+
+# The secret crosses into the prepare window through a mode-0600 FIFO. It is
+# never exported by the launcher and never appears in a tmux command or argv.
+printf '%s\n' "${HF_TOKEN_INPUT}" >"${HF_TOKEN_FIFO}"
+cleanup_secret
+trap - EXIT
 
 for index in "${!CANDIDATES[@]}"; do
   tmux new-window -d \

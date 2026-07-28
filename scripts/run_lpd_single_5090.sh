@@ -99,9 +99,6 @@ prepare_data() {
 }
 
 prepare_vision() {
-  if [[ -f "${FE_ROOT}/artifacts/vision/dinov3_vitl16_lvd/model.safetensors" ]]; then
-    return
-  fi
   : "${HF_TOKEN:?HF_TOKEN is required for the gated DINOv3 artifact}"
   (
     cd "${FE_ROOT}"
@@ -155,8 +152,10 @@ prepare() {
     cd "${FE_ROOT}"
     uv sync --frozen
   )
-  prepare_data
+  # Validate gated access and the pinned weight before starting the much larger
+  # dataset transfers. Existing artifacts are hash/architecture checked here.
   prepare_vision
+  prepare_data
   prepare_robofactory
   doctor
 }

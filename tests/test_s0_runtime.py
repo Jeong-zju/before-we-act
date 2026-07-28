@@ -110,5 +110,28 @@ def test_s0_launcher_dry_run_has_four_gpu_assignments(tmp_path):
     assert "B1 GPU1" in result.stdout
     assert "B2 GPU2" in result.stdout
     assert "B3 GPU3" in result.stdout
+    assert "HF token: will be requested with hidden interactive input" in result.stdout
+    assert "Branches: will be fetched from origin" in result.stdout
+    assert "Shared dataset:" in result.stdout
+    assert "S0_HF_TOKEN_FIFO=" in result.stdout
     assert "no worktrees, files, tmux sessions or GPU jobs were changed" in result.stdout
     assert not (tmp_path / "run").exists()
+
+
+def test_s0_launcher_prompts_for_secret_without_exporting_it():
+    launcher = (ROOT / "scripts/launch_s0_4gpu_tmux.sh").read_text(
+        encoding="utf-8"
+    )
+    prepare = (ROOT / "scripts/prepare_s0_shared.sh").read_text(encoding="utf-8")
+    runbook = (
+        ROOT / "docs/runbooks/20260728_S0_4GPU_TMUX_ZH.md"
+    ).read_text(encoding="utf-8")
+
+    assert "read -r -s HF_TOKEN_INPUT" in launcher
+    assert "mkfifo" in launcher
+    assert "chmod 600" in launcher
+    assert "env \\\n    -u HF_TOKEN" in launcher
+    assert "export HF_TOKEN" not in launcher
+    assert "export HF_TOKEN" not in prepare
+    assert "export HF_TOKEN='hf_...'" not in runbook
+    assert 'fetch --no-tags origin "${refspecs[@]}"' in launcher
