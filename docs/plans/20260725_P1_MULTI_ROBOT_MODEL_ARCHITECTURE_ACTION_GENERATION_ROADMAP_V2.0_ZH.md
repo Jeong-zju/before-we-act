@@ -443,6 +443,115 @@ F1 的 head、FM loss 和 ODE solver 作为一个原子垂直切片共同实现�
 
 R1 只比较 F0/F1 的同任务闭环成功率。若 F1 在每个任务都不低于 F0，则通过并进入后续阶段，成功率持平也算通过；若任一任务下降，则保留 F0。
 
+#### 6.1.1 S1-R1 两分支与两卡隔离契约
+
+S1-R1 从 `feat/model-improvements` 的同一公共基础设施提交创建两个分支：`s1/r1-f0-legacy` 只把 S0-B0 固化为 R1-F0 复跑坐标，`s1/r1-f1-flow-cold` 只完成 `legacy_cvae → rectified_flow_cold` 原子替换。两个分支分别使用 GPU 0/1、独立 worktree、独立 checkpoint/output/log，但通过符号链接只读共享模型改进分支中的 `datasets/` 与 `artifacts/`，并共享同一个 uv 环境、uv cache 和 RoboFactory 安装。F0/F1 都固定 80,000 updates、训练 seed 101、Gate20 seeds 900–919、sparse top-2 MoE、DINOv3、100-step chunk 和 temporal ensemble；F1 默认使用标准高斯 cold source、FM velocity MSE 和 4-step Euler，不开启 warm start、future path、dense decoder 或 active-agent weighting。
+
+launcher 复用服务器已经存在的唯一永久 tmux session，只创建 `<run-id>-prepare`、`<run-id>-f0`、`<run-id>-f1` 和 `<run-id>-monitor` 四个 window，并为每个 window 设置 `remain-on-exit=on`；它不会创建、attach 或退出 tmux session。monitor 同时显示两条训练的 update/loss、两个闭环任务的成功数、候选 phase 和两张 GPU 的利用率/显存。训练或验证进程退出后 window 仍保留，便于查看日志。
+
+#### 6.1.2 Vast.ai 两卡从零一键部署、训练、验证与监控
+
+以下命令假设 Vast.ai 已经自动进入唯一的永久 tmux session，服务器恰好暴露两张 GPU，且 `/workspace/fe-pc-wam` 尚不存在。命令不会执行 `apt update`，HF token 只会通过隐藏输入和 mode-0600 FIFO 交给共享准备 window，不写进 shell export、tmux command 或 argv：
+
+```bash
+cd /workspace
+
+for s1_cmd in git tmux jq python3 nvidia-smi flock df sha256sum; do
+  command -v "${s1_cmd}" >/dev/null || {
+    echo "缺少服务器命令：${s1_cmd}"
+    exit 1
+  }
+done
+
+test -n "${TMUX:-}" || {
+  echo "错误：当前终端不在 Vast.ai 的永久 tmux session 中"
+  exit 1
+}
+
+test "$(tmux list-sessions -F '#S' | wc -l)" -eq 1 || {
+  echo "错误：服务器必须有且仅有一个 tmux session"
+  tmux list-sessions
+  exit 1
+}
+
+test "$(nvidia-smi -L | wc -l)" -eq 2 || {
+  echo "错误：S1-R1 必须恰好暴露两张 GPU"
+  nvidia-smi -L
+  exit 1
+}
+
+df -h /workspace
+
+test ! -e /workspace/fe-pc-wam || {
+  echo "错误：/workspace/fe-pc-wam 已存在，请不要覆盖"
+  exit 1
+}
+
+git clone \
+  --branch feat/model-improvements \
+  --single-branch \
+  https://github.com/Jeong-zju/fe-pc-wam.git \
+  /workspace/fe-pc-wam
+
+cd /workspace/fe-pc-wam
+git rev-parse --short HEAD
+
+test -x ./scripts/launch_s1_r1_2gpu_tmux.sh
+test -x ./scripts/stop_s1_r1_2gpu_tmux.sh
+
+./scripts/launch_s1_r1_2gpu_tmux.sh \
+  --run-id s1-r1-round1 \
+  --dry-run
+
+./scripts/launch_s1_r1_2gpu_tmux.sh \
+  --run-id s1-r1-round1
+```
+
+正式启动时在隐藏提示中粘贴同时具备 DINOv3 gated 模型、两个训练数据集和 `RoboFactory_asset` 读取权限的 HF token。启动后 launcher 默认切到 `s1-r1-round1-monitor`；可随时从永久 session 的任意非目标 window 执行以下只读监测指令：
+
+```bash
+cd /workspace/fe-pc-wam
+
+python3 scripts/s1_r1_runtime.py monitor \
+  --once \
+  --run-root outputs/s1_r1_runs/s1-r1-round1
+
+tmux select-window \
+  -t "$(tmux display-message -p '#S'):s1-r1-round1-monitor"
+```
+
+所有运行产物位于 `/workspace/fe-pc-wam/outputs/s1_r1_runs/s1-r1-round1/`。共享准备日志和哈希分别为 `prepare.log`、`shared_artifact_sha256.txt`；F0/F1 的训练进度、checkpoint、验证 JSON、视频和完整候选日志分别位于 `candidates/f0/` 与 `candidates/f1/`。monitor 中 Gate20 的 `lift=x/20`、`lpd=y/20` 是本轮唯一推进依据：只有 F1 两个任务都不低于 F0 才进入 R2。
+
+#### 6.1.3 S1-R1 一键退出但保留永久 tmux 与全部产物
+
+退出脚本必须从永久 session 中不属于 `s1-r1-round1-prepare/f0/f1/monitor` 的基础 `bash` window 执行。它只根据 run manifest 和进程环境中的绝对 `S1_R1_RUN_ROOT` 定位本轮进程，依次发送 Ctrl-C、SIGTERM、必要时 SIGKILL，再关闭本轮四个 window；不会调用 `tmux kill-session`，不会删除共享数据、DINO/RoboFactory 权重、worktree、checkpoint、resume、日志、视频或验证结果：
+
+```bash
+cd /workspace/fe-pc-wam
+
+git switch feat/model-improvements
+git pull --ff-only
+
+test -f ./outputs/s1_r1_runs/s1-r1-round1/run_manifest.json
+test -x ./scripts/stop_s1_r1_2gpu_tmux.sh
+
+./scripts/stop_s1_r1_2gpu_tmux.sh \
+  --run-id s1-r1-round1 \
+  --dry-run
+
+./scripts/stop_s1_r1_2gpu_tmux.sh \
+  --run-id s1-r1-round1
+
+tmux list-windows \
+  -F '#{window_index}: #{window_name} pane_dead=#{pane_dead}'
+
+nvidia-smi \
+  --query-compute-apps=pid,process_name,used_memory \
+  --format=csv,noheader
+```
+
+一键退出完成后，Vast.ai 的永久 tmux session 必须仍存在；若之后要恢复训练，保留的 `resume.pt` 会被各候选训练器读取，但为避免复用已经关闭的 window/run manifest，应使用新的 `--run-id` 启动并按需把对应 resume/checkpoint 放入新 run 的候选隔离目录。
+
 ### 6.2 R2a/R2b：两个可选单变量微轮次（可四卡并行）
 
 R1-F1 通过后冻结为父提交 `P_flow`。以下两对候选可以同时租用四张卡：
