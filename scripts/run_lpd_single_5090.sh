@@ -10,6 +10,7 @@ export LPD_EXPERIMENT_SLUG="${LPD_EXPERIMENT_SLUG:-lpd_static_dino_act_moe_unifo
 export LPD_CONFIG="${LPD_CONFIG:-${FE_ROOT}/configs/static_act/lpd_static_dino_act_moe.yaml}"
 export LPD_CHECKPOINT="${LPD_CHECKPOINT:-${FE_ROOT}/checkpoints/lpd_static_dino_act_moe_uniform_loss/checkpoint_080000.pt}"
 export LPD_POLICY_KIND="${LPD_POLICY_KIND:-static_act}"
+export LPD_PROGRESS_LOG="${LPD_PROGRESS_LOG:-${FE_ROOT}/outputs/${LPD_EXPERIMENT_SLUG}/training_progress.jsonl}"
 export ROBOFACTORY_ROOT="${ROBOFACTORY_ROOT:-${WORKSPACE}/RoboFactory}"
 export RF_PYTHON="${RF_PYTHON:-${ROBOFACTORY_ROOT}/.venv/bin/python}"
 ROBOFACTORY_REPO_URL="${ROBOFACTORY_REPO_URL:-https://github.com/MARS-EAI/RoboFactory.git}"
@@ -161,17 +162,35 @@ prepare() {
 }
 
 train() {
-  if [[ -f "${LPD_CHECKPOINT}" ]]; then
+  if [[ -e "${LPD_CHECKPOINT}" ]]; then
     printf 'Reusing completed checkpoint %s\n' "${LPD_CHECKPOINT}"
     return
   fi
-  (
-    cd "${FE_ROOT}"
-    PYTHONUNBUFFERED=1 uv run --frozen python scripts/train_static_rgb_act_moe.py \
-      --config "${LPD_CONFIG}" \
-      --device cuda:0
-  )
-  test -f "${LPD_CHECKPOINT}"
+  case "${LPD_POLICY_KIND}" in
+    static_act)
+      (
+        cd "${FE_ROOT}"
+        PYTHONUNBUFFERED=1 uv run --frozen python scripts/train_static_rgb_act_moe.py \
+          --config "${LPD_CONFIG}" \
+          --device cuda:0 \
+          --progress-log "${LPD_PROGRESS_LOG}"
+      )
+      ;;
+    wam)
+      (
+        cd "${FE_ROOT}"
+        PYTHONUNBUFFERED=1 uv run --frozen python scripts/train_robofactory_m2.py \
+          --config "${LPD_CONFIG}" \
+          --device cuda:0 \
+          --progress-log "${LPD_PROGRESS_LOG}"
+      )
+      ;;
+    *)
+      printf >&2 'unknown LPD_POLICY_KIND=%q\n' "${LPD_POLICY_KIND}"
+      exit 2
+      ;;
+  esac
+  test -e "${LPD_CHECKPOINT}"
 }
 
 gate() {

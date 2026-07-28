@@ -1,0 +1,57 @@
+format_version: wam.robofactory.wam_flow.round_manifest/1
+round_id: s0-reference-20260728
+source_parent_commit: a1e8814dc46bdb5de3b28f8001cdfc563d532f6e
+hypothesis: >-
+  Freeze four reproducible reference coordinates that isolate decoder family,
+  the existing Rectified Flow path, and temporal aggregation before S1.
+
+data:
+  shared_read_only_root: datasets/robofactory_multitask
+  manifests:
+    - path: lift_barrier/training_manifest.json
+      sha256: a4180b2730c1ca5bbe8f28359f91bad9575a60197698c7ae650a54b14612aeb0
+    - path: long_pipeline_delivery/training_manifest.json
+      sha256: 35ce94c4cbe121c2fbc1013d8a5366a2c4799c3ce78f46baf3e12fc00b2b7114
+  action_normalization: manifest_bound_affine_statistics
+
+vision:
+  encoder: facebook/dinov3-vitl16-pretrain-lvd1689m
+  revision: dd0a398fa8e84f2a37179332f6c561d20276300b
+  config_sha256: 135ecd23e34a70b6fbed8b083fdecb319b7e3a54e3d849258bbe4ddcf1783bb5
+  weights_sha256: dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179
+  frozen: true
+
+training:
+  seed: 101
+  optimizer_updates: 80000
+  active_agent_loss_weighting: false
+  comparison_basis: identical_optimizer_updates
+  gpu_count: 4
+  gpu_assignment:
+    B0: 0
+    B1: 1
+    B2: 2
+    B3: 3
+  note: >-
+    B3 intentionally reuses the immutable B0 checkpoint so temporal ensemble
+    versus latest chunk remains a pure inference comparison.
+
+validation:
+  tasks: [LiftBarrier-rf, LongPipelineDelivery-rf]
+  episodes_per_task: 20
+  seed_start: 900
+  paired_initial_conditions: true
+  direct_model_action_coverage: 1.0
+  metrics:
+    - success_rate
+    - task_progress
+    - failure_type
+    - inference_latency_p50
+    - inference_latency_p95
+    - direct_model_action_coverage
+
+candidates:
+  - B0
+  - B1
+  - B2
+  - B3

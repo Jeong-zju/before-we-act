@@ -54,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--resume", type=Path)
+    parser.add_argument(
+        "--progress-log",
+        type=Path,
+        help="Optional JSONL progress log for external S0 monitoring.",
+    )
     parser.add_argument("--no-resume", action="store_true")
     return parser
 
@@ -153,8 +158,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.resume is not None
         else (ROOT / str(checkpoint_config["resume"])).resolve()
     )
+    progress_log = (
+        args.progress_log.expanduser().resolve()
+        if args.progress_log is not None
+        else (
+            (ROOT / str(checkpoint_config["progress_log"])).resolve()
+            if checkpoint_config.get("progress_log") is not None
+            else None
+        )
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     resume.parent.mkdir(parents=True, exist_ok=True)
+    if progress_log is not None:
+        progress_log.parent.mkdir(parents=True, exist_ok=True)
     start = 0
     if not args.no_resume and resume.is_file():
         saved = torch.load(resume, map_location=device, weights_only=False)
@@ -218,18 +234,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         optimizer.step()
         scheduler.step()
         if update % 100 == 0 or update == 1:
-            print(
-                json.dumps(
-                    {
-                        "update": update,
-                        "loss": float(loss.detach()),
-                        "mse": float(mse.detach()),
-                        "kl": float(kl.detach()),
-                        "router_aux": float(router_aux.detach()),
-                    }
-                ),
-                flush=True,
-            )
+            progress = {
+                "update": update,
+                "updates": updates,
+                "loss": float(loss.detach()),
+                "mse": float(mse.detach()),
+                "kl": float(kl.detach()),
+                "router_aux": float(router_aux.detach()),
+            }
+            print(json.dumps(progress), flush=True)
+            if progress_log is not None:
+                _append_jsonl(progress_log, progress)
         if update % save_interval == 0 and update < updates:
             _atomic_torch_save(
                 {
@@ -387,6 +402,13 @@ def _atomic_torch_save(payload: Mapping[str, Any], path: Path) -> None:
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
+
+
+def _append_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, sort_keys=True, allow_nan=False) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def _mapping(value: Mapping[str, Any], key: str) -> Mapping[str, Any]:
