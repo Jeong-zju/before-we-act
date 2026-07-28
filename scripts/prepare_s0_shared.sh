@@ -18,7 +18,7 @@ if [[ ! -p "${S0_HF_TOKEN_FIFO}" ]]; then
 fi
 HF_TOKEN_INPUT=""
 IFS= read -r HF_TOKEN_INPUT <"${S0_HF_TOKEN_FIFO}"
-unlink "${S0_HF_TOKEN_FIFO}"
+unlink "${S0_HF_TOKEN_FIFO}" 2>/dev/null || true
 if [[ "${HF_TOKEN_INPUT}" != hf_* || "${HF_TOKEN_INPUT}" =~ [[:space:]] ]]; then
   printf >&2 'The protected Hugging Face token input was invalid.\n'
   exit 3
@@ -32,9 +32,7 @@ on_exit() {
   local code=$?
   HF_TOKEN_INPUT=""
   unset HF_TOKEN_INPUT
-  if [[ -p "${S0_HF_TOKEN_FIFO}" ]]; then
-    unlink "${S0_HF_TOKEN_FIFO}"
-  fi
+  unlink "${S0_HF_TOKEN_FIFO}" 2>/dev/null || true
   if (( code != 0 )); then
     touch "${S0_FAILED_FILE}"
     printf >&2 'S0 shared preparation failed with code %d.\n' "${code}"
