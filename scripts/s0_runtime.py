@@ -16,7 +16,7 @@ import time
 from typing import Any, Mapping, Sequence
 
 
-FORMAT_VERSION = "wam.robofactory.s0.runtime/1"
+FORMAT_VERSION = "wam.robofactory.s0.runtime/2"
 CANDIDATES = ("B0", "B1", "B2", "B3")
 TERMINAL_PHASES = frozenset({"complete", "failed"})
 
@@ -29,6 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
     initialize.add_argument("--run-root", type=Path, required=True)
     initialize.add_argument("--run-id", required=True)
     initialize.add_argument("--session", required=True)
+    initialize.add_argument("--window-prefix", required=True)
+    initialize.add_argument("--monitor-window", required=True)
     initialize.add_argument("--base-repo", type=Path, required=True)
     initialize.add_argument(
         "--worktree",
@@ -62,6 +64,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             session=args.session,
             base_repo=args.base_repo,
             worktrees=args.worktree,
+            window_prefix=args.window_prefix,
+            monitor_window=args.monitor_window,
         )
         return 0
     if args.command == "status":
@@ -90,6 +94,8 @@ def initialize_run(
     session: str,
     base_repo: Path,
     worktrees: Sequence[str],
+    window_prefix: str = "",
+    monitor_window: str = "",
 ) -> None:
     root = run_root.expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -108,6 +114,9 @@ def initialize_run(
         "format_version": FORMAT_VERSION,
         "run_id": run_id,
         "tmux_session": session,
+        "tmux_mode": "shared_existing_session",
+        "tmux_window_prefix": window_prefix,
+        "tmux_monitor_window": monitor_window,
         "created_at": _now(),
         "base_repo": str(base_repo.expanduser().resolve()),
         "worktrees": parsed_worktrees,
@@ -176,7 +185,8 @@ def render_monitor(run_root: Path) -> str:
     lines = [
         (
             f"WAM S0 monitor | run={manifest.get('run_id', run_root.name)} | "
-            f"tmux={manifest.get('tmux_session', '?')} | {_now()}"
+            f"tmux={manifest.get('tmux_session', '?')} | "
+            f"window={manifest.get('tmux_monitor_window', '?')} | {_now()}"
         ),
         f"artifacts: {run_root}",
         "",
@@ -198,8 +208,10 @@ def render_monitor(run_root: Path) -> str:
         )
     lines.extend(("", *_gpu_lines()))
     lines.append(
-        "Detach safely with Ctrl-b d. Reattach with: "
-        f"tmux attach -t {manifest.get('tmux_session', '<session>')}"
+        "Permanent tmux session remains active. Switch to this monitor with: "
+        f"tmux select-window -t "
+        f"{manifest.get('tmux_session', '<session>')}:"
+        f"{manifest.get('tmux_monitor_window', '<monitor-window>')}"
     )
     return "\n".join(lines)
 
