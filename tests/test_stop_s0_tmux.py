@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 
 
@@ -220,3 +221,38 @@ def test_p1_documents_complete_zero_start_and_scoped_stop_commands() -> None:
     assert "--dry-run" in document
     assert "tmux kill-session" in document
     assert "不会删除数据集" in document
+
+
+def test_p1_natural_paragraphs_use_one_physical_line() -> None:
+    lines = P1.read_text(encoding="utf-8").splitlines()
+    in_fence = False
+    in_display_math = False
+    previous_prose: tuple[int, str] | None = None
+    wrapped: list[str] = []
+
+    for number, line in enumerate(lines, start=1):
+        if line.startswith("```"):
+            in_fence = not in_fence
+            previous_prose = None
+            continue
+        if in_fence:
+            continue
+        if line == "$$":
+            in_display_math = not in_display_math
+            previous_prose = None
+            continue
+        if in_display_math:
+            continue
+
+        is_prose = bool(line) and not line[0].isspace() and not re.match(
+            r"^(#{1,6} |>|[-*+] |[0-9]+\. |\||```|\$\$)",
+            line,
+        )
+        if is_prose and previous_prose is not None:
+            wrapped.append(
+                f"{previous_prose[0]}-{number}: "
+                f"{previous_prose[1]!r} / {line!r}"
+            )
+        previous_prose = (number, line) if is_prose else None
+
+    assert not wrapped, "自然段存在硬换行：\n" + "\n".join(wrapped)

@@ -248,9 +248,7 @@ S0 只建立参考坐标，不产生结构 winner：B1/B3 分别诊断 decoder �
 
 #### 5.1.1 Vast.ai 四卡从零一键部署与运行
 
-以下命令假设远程服务器已经自动进入唯一的永久 tmux session，且
-`/workspace/fe-pc-wam` 不存在。命令不执行 `apt update`，也不允许通过
-`export HF_TOKEN=...` 传递 Hugging Face token：
+以下命令假设远程服务器已经自动进入唯一的永久 tmux session，且 `/workspace/fe-pc-wam` 不存在。命令不执行 `apt update`，也不允许通过 `export HF_TOKEN=...` 传递 Hugging Face token：
 
 ```bash
 cd /workspace
@@ -324,18 +322,11 @@ test -x ./scripts/stop_s0_4gpu_tmux.sh
   --run-id s0-round1
 ```
 
-正式启动时在隐藏提示中粘贴同时具备 DINOv3 gated 模型、两个训练数据集和
-`RoboFactory_asset` 读取权限的 HF token。launcher 只在永久 session 中创建
-`s0-round1-prepare`、`s0-round1-b0`、`s0-round1-b1`、
-`s0-round1-b2`、`s0-round1-b3` 和 `s0-round1-monitor`，不会创建、
-attach 或退出 tmux session。
+正式启动时在隐藏提示中粘贴同时具备 DINOv3 gated 模型、两个训练数据集和 `RoboFactory_asset` 读取权限的 HF token。launcher 只在永久 session 中创建 `s0-round1-prepare`、`s0-round1-b0`、`s0-round1-b1`、`s0-round1-b2`、`s0-round1-b3` 和 `s0-round1-monitor`，不会创建、attach 或退出 tmux session。
 
 #### 5.1.2 当前 S0 run 一键终止与窗口关闭
 
-必须从永久 session 中不属于目标 run 的基础 `bash` window 执行。以下命令先
-核验工具、session、代码和 run manifest，打印只读终止计划，然后终止
-`s0-round1` 的训练、验证、RoboFactory rollout server、dataloader 和 monitor
-进程，最后关闭上述六个 window：
+必须从永久 session 中不属于目标 run 的基础 `bash` window 执行。以下命令先核验工具、session、代码和 run manifest，打印只读终止计划，然后终止 `s0-round1` 的训练、验证、RoboFactory rollout server、dataloader 和 monitor 进程，最后关闭上述六个 window：
 
 ```bash
 cd /workspace/fe-pc-wam
@@ -392,11 +383,7 @@ nvidia-smi \
   --format=csv,noheader
 ```
 
-终止器只匹配 manifest 中记录的 session/window 前缀，以及进程环境中与本轮
-绝对路径完全一致的 `S0_RUN_ROOT`。它先发送 Ctrl-C，等待 10 秒，再按需发送
-SIGTERM 和 SIGKILL。它禁止从目标 run window 内自我终止，也不会调用
-`tmux kill-session`，不会删除数据集、DINO/RoboFactory 权重、worktree、
-checkpoint、partial/resume checkpoint、日志、视频或 Gate JSON。
+终止器只匹配 manifest 中记录的 session/window 前缀，以及进程环境中与本轮绝对路径完全一致的 `S0_RUN_ROOT`。它先发送 Ctrl-C，等待 10 秒，再按需发送 SIGTERM 和 SIGKILL。它禁止从目标 run window 内自我终止，也不会调用 `tmux kill-session`，不会删除数据集、DINO/RoboFactory 权重、worktree、checkpoint、partial/resume checkpoint、日志、视频或 Gate JSON。
 
 ### 5.2 必须并行完成的任务审计
 
