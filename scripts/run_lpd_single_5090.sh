@@ -34,6 +34,21 @@ doctor() {
   )
 }
 
+verify_hf_token() {
+  : "${HF_TOKEN:?HF_TOKEN is required for DINOv3 and dataset downloads}"
+  if [[ "${HF_TOKEN}" != hf_* || "${HF_TOKEN}" == *[[:space:]]* ]]; then
+    printf >&2 'HF_TOKEN must be a single Hugging Face user access token beginning with hf_.\n'
+    exit 3
+  fi
+  (
+    cd "${FE_ROOT}"
+    # Pass the exact interactive token directly to the Hub API. Do not rely on
+    # a cached `hf auth login` credential and never place the token in argv.
+    HF_TOKEN="${HF_TOKEN}" uv run --frozen python -c \
+      'import os; from huggingface_hub import HfApi; HfApi().whoami(token=os.environ["HF_TOKEN"]); print("Hugging Face token verified.")'
+  )
+}
+
 prepare_data() {
   local lift="${FE_ROOT}/datasets/robofactory_multitask/lift_barrier/training_manifest.json"
   local lpd="${FE_ROOT}/datasets/robofactory_multitask/long_pipeline_delivery/training_manifest.json"
@@ -67,7 +82,7 @@ prepare_data() {
     [[ "${HF_M2_DATASET_REVISION}" =~ ^[0-9a-f]{40}$ ]]
     (
       cd "${FE_ROOT}"
-      uv run --frozen hf download "${HF_M2_DATASET_REPO}" \
+      HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download "${HF_M2_DATASET_REPO}" \
         --repo-type dataset \
         --revision "${HF_M2_DATASET_REVISION}" \
         --local-dir datasets/robofactory_multitask
@@ -78,7 +93,7 @@ prepare_data() {
     if [[ ! -f "${lift}" ]]; then
       (
         cd "${FE_ROOT}"
-        uv run --frozen hf download "${LIFT_DATASET_REPO}" \
+        HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download "${LIFT_DATASET_REPO}" \
           --repo-type dataset \
           --revision "${LIFT_DATASET_REVISION}" \
           --local-dir datasets/robofactory_multitask/lift_barrier
@@ -87,7 +102,7 @@ prepare_data() {
     if [[ ! -f "${lpd}" ]]; then
       (
         cd "${FE_ROOT}"
-        uv run --frozen hf download "${LPD_DATASET_REPO}" \
+        HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download "${LPD_DATASET_REPO}" \
           --repo-type dataset \
           --revision "${LPD_DATASET_REVISION}" \
           --local-dir datasets/robofactory_multitask/long_pipeline_delivery
@@ -102,7 +117,7 @@ prepare_vision() {
   : "${HF_TOKEN:?HF_TOKEN is required for the gated DINOv3 artifact}"
   (
     cd "${FE_ROOT}"
-    uv run --frozen python scripts/prepare_dinov3_encoder.py \
+    HF_TOKEN="${HF_TOKEN}" uv run --frozen python scripts/prepare_dinov3_encoder.py \
       --encoder dinov3_vitl16_lvd
   )
 }
@@ -133,7 +148,7 @@ prepare_robofactory() {
   if [[ ! -s "${asset_sentinel}" ]]; then
     (
       cd "${FE_ROOT}"
-      uv run --frozen hf download sparklexfantasy/RoboFactory_asset \
+      HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download sparklexfantasy/RoboFactory_asset \
         --repo-type dataset \
         --revision "${ROBOFACTORY_ASSET_REVISION}" \
         --local-dir "${asset_root}"
@@ -152,6 +167,7 @@ prepare() {
     cd "${FE_ROOT}"
     uv sync --frozen
   )
+  verify_hf_token
   # Validate gated access and the pinned weight before starting the much larger
   # dataset transfers. Existing artifacts are hash/architecture checked here.
   prepare_vision

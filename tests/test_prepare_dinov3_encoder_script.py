@@ -199,6 +199,7 @@ def test_download_preflight_reports_gated_approval_before_transfer(
             tmp_path,
             model_id=DEFAULT_DINOV3_MODEL_ID,
             revision=DEFAULT_DINOV3_REVISION,
+            token="hf_unit_test_secret",
         )
 
     message = str(caught.value)
@@ -214,6 +215,7 @@ def test_download_preflight_heads_both_files_before_pinned_transfer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    token = "hf_unit_test_secret"
     metadata_calls: list[tuple[str, dict[str, object]]] = []
     transfer_calls: list[dict[str, object]] = []
 
@@ -231,6 +233,7 @@ def test_download_preflight_heads_both_files_before_pinned_transfer(
         tmp_path,
         model_id=DEFAULT_DINOV3_MODEL_ID,
         revision=DEFAULT_DINOV3_REVISION,
+        token=token,
     )
 
     assert len(metadata_calls) == 2
@@ -238,7 +241,7 @@ def test_download_preflight_heads_both_files_before_pinned_transfer(
         prepare.CONFIG_FILENAME,
         prepare.WEIGHTS_FILENAME,
     ]
-    assert all(call[1]["token"] is True for call in metadata_calls)
+    assert all(call[1]["token"] == token for call in metadata_calls)
     assert all(call[1]["timeout"] == 30.0 for call in metadata_calls)
     assert transfer_calls == [
         {
@@ -247,6 +250,22 @@ def test_download_preflight_heads_both_files_before_pinned_transfer(
             "revision": DEFAULT_DINOV3_REVISION,
             "allow_patterns": list(prepare.DOWNLOAD_PATTERNS),
             "local_dir": tmp_path,
-            "token": True,
+            "token": token,
         }
     ]
+
+
+def test_required_hf_token_uses_only_the_explicit_environment_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    with pytest.raises(RuntimeError, match="HF_TOKEN"):
+        prepare._required_hf_token()
+
+    token = "hf_unit_test_secret"
+    monkeypatch.setenv("HF_TOKEN", token)
+    assert prepare._required_hf_token() == token
+
+    monkeypatch.setenv("HF_TOKEN", "hf_invalid token")
+    with pytest.raises(RuntimeError, match="HF_TOKEN"):
+        prepare._required_hf_token()
