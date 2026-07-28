@@ -2,7 +2,7 @@ format_version: wam.robofactory.wam_flow.candidate_card/1
 round_id: s0-reference-20260728
 candidate_id: B0
 branch: round/s0-b0-legacy-moe-ensemble
-source_parent_commit: a1e8814dc46bdb5de3b28f8001cdfc563d532f6e
+source_parent_commit: 07fd136fadd8831d6c111a7be5e9908056b6743d
 hypothesis: >-
   The current sparse top-2 MoE legacy chunk policy with temporal ensemble is a
   reproducible behavior reference under uniform per-agent loss.
