@@ -254,6 +254,7 @@ def _download_snapshot(
     *,
     model_id: str,
     revision: str,
+    token: str,
 ) -> None:
     try:
         from huggingface_hub import (
@@ -286,7 +287,7 @@ def _download_snapshot(
                     repo_type="model",
                     revision=revision,
                 ),
-                token=True,
+                token=token,
                 timeout=30.0,
                 retry_on_errors=True,
             )
@@ -334,7 +335,7 @@ def _download_snapshot(
             revision=revision,
             allow_patterns=list(DOWNLOAD_PATTERNS),
             local_dir=destination,
-            token=True,
+            token=token,
         )
     except Exception as exc:  # noqa: BLE001 - normalize Hub/network failures
         raise RuntimeError(
@@ -343,6 +344,16 @@ def _download_snapshot(
             "the command; if only the large Xet transfer fails, retry once with "
             "HF_HUB_DISABLE_XET=1."
         ) from exc
+
+
+def _required_hf_token() -> str:
+    token = os.environ.get("HF_TOKEN", "")
+    if not token.startswith("hf_") or any(character.isspace() for character in token):
+        raise RuntimeError(
+            "HF_TOKEN must contain the hidden interactive Hugging Face user "
+            "access token before downloading DINOv3"
+        )
+    return token
 
 
 def _install_verified_snapshot(snapshot_dir: Path, output_dir: Path) -> None:
@@ -424,6 +435,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
 
+        token = _required_hf_token()
         output_dir.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
             prefix=f".{args.encoder}.download-",
@@ -434,6 +446,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 snapshot_dir,
                 model_id=spec.model_id,
                 revision=revision,
+                token=token,
             )
             downloaded = _validate_artifact_directory(
                 snapshot_dir,

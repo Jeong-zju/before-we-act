@@ -136,6 +136,12 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
         encoding="utf-8"
     )
     prepare = (ROOT / "scripts/prepare_s0_shared.sh").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts/run_lpd_single_5090.sh").read_text(
+        encoding="utf-8"
+    )
+    dino = (ROOT / "scripts/prepare_dinov3_encoder.py").read_text(
+        encoding="utf-8"
+    )
     runbook = (
         ROOT / "docs/runbooks/20260728_S0_4GPU_TMUX_ZH.md"
     ).read_text(encoding="utf-8")
@@ -147,6 +153,14 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     assert "export HF_TOKEN" not in launcher
     assert "export HF_TOKEN" not in prepare
     assert "export HF_TOKEN='hf_...'" not in runbook
+    assert "HfApi().whoami(token=os.environ[\"HF_TOKEN\"])" in runner
+    assert runner.count('HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download') == 4
+    assert (
+        'HF_TOKEN="${HF_TOKEN}" uv run --frozen python '
+        "scripts/prepare_dinov3_encoder.py"
+    ) in runner
+    assert "token=True" not in dino
+    assert "token=token" in dino
     assert "config --get-all remote.origin.fetch" in launcher
     assert "config --add remote.origin.fetch" in launcher
     assert "git -C \"${FE_ROOT}\" fetch --no-tags origin" in launcher
