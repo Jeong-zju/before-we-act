@@ -246,6 +246,158 @@ flowchart LR
 
 S0 只建立参考坐标，不产生结构 winner：B1/B3 分别诊断 decoder 与推理聚合，B2 是旧 M2 工程参考而不是可直接晋级的“改进分支”。正式的 Flow 改进必须在 R1 中从冻结父提交以原子垂直切片重新实现和验证。
 
+#### 5.1.1 Vast.ai 四卡从零一键部署与运行
+
+以下命令假设远程服务器已经自动进入唯一的永久 tmux session，且
+`/workspace/fe-pc-wam` 不存在。命令不执行 `apt update`，也不允许通过
+`export HF_TOKEN=...` 传递 Hugging Face token：
+
+```bash
+cd /workspace
+
+# 1. 检查服务器必需命令；不执行 apt update。
+for s0_cmd in git tmux jq python3 nvidia-smi flock df sha256sum; do
+  command -v "${s0_cmd}" >/dev/null || {
+    echo "缺少服务器命令：${s0_cmd}"
+    exit 1
+  }
+done
+
+# 2. 确认当前就在 Vast.ai 提供的永久 tmux session 中。
+test -n "${TMUX:-}" || {
+  echo "错误：当前终端不在 tmux session 中"
+  exit 1
+}
+
+test "$(tmux list-sessions -F '#S' | wc -l)" -eq 1 || {
+  echo "错误：服务器必须有且仅有一个 tmux session"
+  tmux list-sessions
+  exit 1
+}
+
+echo "当前 tmux session：$(tmux display-message -p '#S')"
+
+# 3. 确认正好有四张 GPU。
+nvidia-smi -L
+
+test "$(nvidia-smi -L | wc -l)" -eq 4 || {
+  echo "错误：没有检测到正好四张 GPU"
+  exit 1
+}
+
+# 4. 检查磁盘空间。
+df -h /workspace
+
+# 5. 确保目标目录不存在，防止覆盖已有文件。
+test ! -e /workspace/fe-pc-wam || {
+  echo "错误：/workspace/fe-pc-wam 已存在，请不要覆盖"
+  exit 1
+}
+
+# 6. 下载模型改进分支代码。
+git clone \
+  --branch feat/model-improvements \
+  --single-branch \
+  https://github.com/Jeong-zju/fe-pc-wam.git \
+  /workspace/fe-pc-wam
+
+cd /workspace/fe-pc-wam
+
+# 7. 校验代码至少包含已验证的一键启动、B2 路由和安全终止能力。
+git rev-parse --short HEAD
+
+git merge-base --is-ancestor 8d39651 HEAD || {
+  echo "错误：远程代码早于最低安全版本 8d39651"
+  exit 1
+}
+
+test -x ./scripts/launch_s0_4gpu_tmux.sh
+test -x ./scripts/stop_s0_4gpu_tmux.sh
+
+# 8. 先检查一键部署计划；不会下载、训练或创建窗口。
+./scripts/launch_s0_4gpu_tmux.sh \
+  --run-id s0-round1 \
+  --dry-run
+
+# 9. 正式一键启动。
+./scripts/launch_s0_4gpu_tmux.sh \
+  --run-id s0-round1
+```
+
+正式启动时在隐藏提示中粘贴同时具备 DINOv3 gated 模型、两个训练数据集和
+`RoboFactory_asset` 读取权限的 HF token。launcher 只在永久 session 中创建
+`s0-round1-prepare`、`s0-round1-b0`、`s0-round1-b1`、
+`s0-round1-b2`、`s0-round1-b3` 和 `s0-round1-monitor`，不会创建、
+attach 或退出 tmux session。
+
+#### 5.1.2 当前 S0 run 一键终止与窗口关闭
+
+必须从永久 session 中不属于目标 run 的基础 `bash` window 执行。以下命令先
+核验工具、session、代码和 run manifest，打印只读终止计划，然后终止
+`s0-round1` 的训练、验证、RoboFactory rollout server、dataloader 和 monitor
+进程，最后关闭上述六个 window：
+
+```bash
+cd /workspace/fe-pc-wam
+
+# 1. 检查终止器依赖；不执行 apt update。
+for s0_stop_cmd in tmux jq grep nvidia-smi realpath sleep; do
+  command -v "${s0_stop_cmd}" >/dev/null || {
+    echo "缺少服务器命令：${s0_stop_cmd}"
+    exit 1
+  }
+done
+
+# 2. 确认仍在唯一的永久 tmux session 中。
+test -n "${TMUX:-}" || {
+  echo "错误：当前终端不在 tmux session 中"
+  exit 1
+}
+
+test "$(tmux list-sessions -F '#S' | wc -l)" -eq 1 || {
+  echo "错误：服务器必须有且仅有一个 tmux session"
+  tmux list-sessions
+  exit 1
+}
+
+cd /workspace/fe-pc-wam
+
+# 3. 更新终止器并校验最低安全版本。
+git switch feat/model-improvements
+git pull --ff-only
+
+git merge-base --is-ancestor 8d39651 HEAD || {
+  echo "错误：代码不包含安全终止器 8d39651"
+  exit 1
+}
+
+test -x ./scripts/stop_s0_4gpu_tmux.sh
+test -f ./outputs/s0_runs/s0-round1/run_manifest.json
+
+# 4. 只读检查：不发送信号、不关闭窗口。
+./scripts/stop_s0_4gpu_tmux.sh \
+  --run-id s0-round1 \
+  --dry-run
+
+# 5. 正式终止该 run 并关闭它创建的六个 window。
+./scripts/stop_s0_4gpu_tmux.sh \
+  --run-id s0-round1
+
+# 6. 核对永久 session 仍存在，并查看是否还有 GPU 计算进程。
+tmux list-windows \
+  -F '#{window_index}: #{window_name} pane_dead=#{pane_dead}'
+
+nvidia-smi \
+  --query-compute-apps=pid,process_name,used_memory \
+  --format=csv,noheader
+```
+
+终止器只匹配 manifest 中记录的 session/window 前缀，以及进程环境中与本轮
+绝对路径完全一致的 `S0_RUN_ROOT`。它先发送 Ctrl-C，等待 10 秒，再按需发送
+SIGTERM 和 SIGKILL。它禁止从目标 run window 内自我终止，也不会调用
+`tmux kill-session`，不会删除数据集、DINO/RoboFactory 权重、worktree、
+checkpoint、partial/resume checkpoint、日志、视频或 Gate JSON。
+
 ### 5.2 必须并行完成的任务审计
 
 对 LiftBarrier 和 LongPipelineDelivery 至少检查：

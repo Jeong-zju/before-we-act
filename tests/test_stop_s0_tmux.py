@@ -7,6 +7,11 @@ import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
+P1 = (
+    ROOT
+    / "docs/plans/"
+    "20260725_P1_MULTI_ROBOT_MODEL_ARCHITECTURE_ACTION_GENERATION_ROADMAP_V2.0_ZH.md"
+)
 
 
 def _fake_commands(tmp_path: Path) -> tuple[Path, Path]:
@@ -169,3 +174,18 @@ def test_stop_s0_terminates_only_tagged_run_and_closes_six_windows(
         if unrelated.poll() is None:
             unrelated.terminate()
             unrelated.wait(timeout=5)
+
+
+def test_p1_documents_complete_zero_start_and_scoped_stop_commands() -> None:
+    document = P1.read_text(encoding="utf-8")
+
+    assert "Vast.ai 四卡从零一键部署与运行" in document
+    assert "git clone \\" in document
+    assert "--single-branch" in document
+    assert "launch_s0_4gpu_tmux.sh \\" in document
+    assert "--run-id s0-round1" in document
+    assert "当前 S0 run 一键终止与窗口关闭" in document
+    assert "stop_s0_4gpu_tmux.sh \\" in document
+    assert "--dry-run" in document
+    assert "tmux kill-session" in document
+    assert "不会删除数据集" in document
