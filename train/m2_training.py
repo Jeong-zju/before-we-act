@@ -37,7 +37,6 @@ class M2BatchLoss:
     future_state: Tensor
     future_visual_latent: Tensor
     incomplete_horizon_fraction: Tensor
-    active_agent_fraction: Tensor
     past_action_history_dropped_fraction: Tensor
 
     def detached_metrics(self) -> dict[str, float]:
@@ -250,8 +249,6 @@ def m2_batch_loss(
     warm_start_noise_std: float,
     execution_steps: int,
     executed_prefix_weight: float,
-    active_agent_loss_weight: float = 1.0,
-    active_agent_delta_threshold: float = 0.005,
     past_action_history_dropout_probability: float = 0.0,
     state_history_noise_std: float = 0.0,
     past_action_history_noise_std: float = 0.0,
@@ -266,8 +263,6 @@ def m2_batch_loss(
         raise ValueError("invalid M2 deployed solver controls")
     if executed_prefix_weight < 1.0:
         raise ValueError("M2 executed-prefix weight must be at least one")
-    if active_agent_loss_weight < 1.0 or active_agent_delta_threshold < 0.0:
-        raise ValueError("invalid M2 active-agent loss controls")
     if not 0.0 <= past_action_history_dropout_probability <= 1.0:
         raise ValueError("invalid M2 past-action history dropout probability")
     if state_history_noise_std < 0.0 or past_action_history_noise_std < 0.0:
@@ -364,21 +359,6 @@ def m2_batch_loss(
             0.0,
         )
     past_action_history_dropped_fraction = history_drop.float().mean()
-    agent_weights, active_agent_fraction = _active_agent_weights(
-        targets,
-        target_valid=target_valid,
-        action_dimension_mask=batch["action_dimension_mask"].bool(),
-        past_actions=batch["past_actions"],
-        past_action_valid_mask=batch["past_action_valid_mask"].bool(),
-        max_agents=core.config.max_agents,
-        active_weight=active_agent_loss_weight,
-        delta_threshold=active_agent_delta_threshold,
-    )
-    per_agent_action_dim = core.config.max_action_dim // core.config.max_agents
-    action_agent_weights = agent_weights.repeat_interleave(
-        per_agent_action_dim,
-        dim=-1,
-    )
     needs_future = bool(weights.future_state or weights.future_visual_latent)
     output = model(
         **context,
@@ -396,7 +376,7 @@ def m2_batch_loss(
     flow_matching = _weighted_masked_mean(
         (output.action_velocity - target_velocity).square(),
         action_mask,
-        action_weights[None, :, None] * action_agent_weights,
+        action_weights[None, :, None],
     )
     needs_endpoint = bool(weights.action_endpoint or weights.action_smoothness)
     if needs_endpoint:
@@ -414,17 +394,17 @@ def m2_batch_loss(
         action_endpoint = _weighted_masked_mean(
             (endpoint - targets).square(),
             action_mask,
-            action_weights[None, :, None] * action_agent_weights,
+            action_weights[None, :, None],
         )
         executed_mask = action_mask.clone()
         executed_mask[:, execution_steps:] = False
         action_endpoint_executed_prefix = _masked_mean(
-            (endpoint - targets).square() * action_agent_weights,
+            (endpoint - targets).square(),
             executed_mask,
         )
         incomplete_mask = action_mask & incomplete_horizon[:, None, None]
         action_endpoint_incomplete_horizon = _masked_mean(
-            (endpoint - targets).square() * action_agent_weights,
+            (endpoint - targets).square(),
             incomplete_mask,
         )
         smooth_valid = target_valid[:, 1:] & target_valid[:, :-1]
@@ -440,9 +420,7 @@ def m2_batch_loss(
                 - (targets[:, 1:] - targets[:, :-1])
             ).square(),
             smooth_mask,
-            smooth_weights[None, :, None]
-            * torch.maximum(agent_weights[:, 1:], agent_weights[:, :-1])
-            .repeat_interleave(per_agent_action_dim, dim=-1),
+            smooth_weights[None, :, None],
         )
     else:
         action_endpoint = targets.new_zeros(())
@@ -459,16 +437,8 @@ def m2_batch_loss(
             batch["state_dimension_mask"].bool()[:, None, :]
             & future_state_valid[:, :, None]
         )
-        if core.config.max_state_dim % core.config.max_agents:
-            raise ValueError("M2 state width must contain complete agent slots")
-        per_agent_state_dim = core.config.max_state_dim // core.config.max_agents
-        state_agent_weights = agent_weights.repeat_interleave(
-            per_agent_state_dim,
-            dim=-1,
-        )
         future_state = _masked_mean(
-            (output.future_states - batch["future_states"]).square()
-            * state_agent_weights,
+            (output.future_states - batch["future_states"]).square(),
             state_mask,
         )
         predicted_visual = F.normalize(output.future_visual_latents.float(), dim=-1)
@@ -511,70 +481,10 @@ def m2_batch_loss(
         future_state=future_state,
         future_visual_latent=future_visual,
         incomplete_horizon_fraction=incomplete_horizon_fraction,
-        active_agent_fraction=active_agent_fraction,
         past_action_history_dropped_fraction=(
             past_action_history_dropped_fraction
         ),
     )
-
-
-def _active_agent_weights(
-    targets: Tensor,
-    *,
-    target_valid: Tensor,
-    action_dimension_mask: Tensor,
-    past_actions: Tensor,
-    past_action_valid_mask: Tensor,
-    max_agents: int,
-    active_weight: float,
-    delta_threshold: float,
-) -> tuple[Tensor, Tensor]:
-    """Return per-step agent weights with a constant mean over valid agents.
-
-    RoboFactory Panda actions use an 8D slot per agent.  LongPipelineDelivery
-    normally moves one of four agents at a time, so a flat scalar mean lets
-    three idle agents dominate the training signal.  Activity weighting keeps
-    every sample/step at unit mean weight while reallocating scalar weight from
-    idle to moving agent slots.
-    """
-
-    if targets.ndim != 3 or target_valid.shape != targets.shape[:2]:
-        raise ValueError("M2 targets/validity have incompatible shapes")
-    if max_agents <= 0 or targets.shape[-1] % max_agents:
-        raise ValueError("M2 action width must contain complete agent slots")
-    per_agent_dim = targets.shape[-1] // max_agents
-    if action_dimension_mask.shape != (targets.shape[0], targets.shape[-1]):
-        raise ValueError("M2 action dimension mask has the wrong shape")
-    if past_actions.shape != (
-        targets.shape[0],
-        past_action_valid_mask.shape[1],
-        targets.shape[-1],
-    ):
-        raise ValueError("M2 past actions have the wrong shape")
-    active, step_valid = _agent_activity_mask(
-        targets,
-        target_valid=target_valid,
-        action_dimension_mask=action_dimension_mask,
-        past_actions=past_actions,
-        past_action_valid_mask=past_action_valid_mask,
-        max_agents=max_agents,
-        delta_threshold=delta_threshold,
-    )
-    raw = torch.where(
-        active,
-        targets.new_full((), float(active_weight)),
-        targets.new_ones(()),
-    )
-    raw = raw * step_valid.to(raw)
-    valid_count = step_valid.sum(dim=-1, keepdim=True).clamp_min(1)
-    scale = valid_count.to(raw) / raw.sum(dim=-1, keepdim=True).clamp_min(1.0)
-    normalized = raw * scale
-    active_count = active.sum()
-    valid_agent_steps = step_valid.sum()
-    fraction = (
-        active_count.to(targets) / valid_agent_steps.to(targets).clamp_min(1.0)
-    )
-    return normalized, fraction
 
 
 def _agent_activity_mask(

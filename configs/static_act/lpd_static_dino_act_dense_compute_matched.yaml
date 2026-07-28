@@ -52,8 +52,6 @@ training:
   gradient_clip_norm: 1.0
   kl_weight: 0.001
   router_aux_weight: 0.0
-  active_agent_weight: 4.0
-  active_delta_threshold: 0.005
   save_interval: 1000
 
 inference:
@@ -62,5 +60,5 @@ inference:
   normalized_action_clip: 10.0
 
 checkpoint:
-  output: checkpoints/lpd_static_dino_act_dense_compute_matched/checkpoint_080000.pt
-  resume: checkpoints/lpd_static_dino_act_dense_compute_matched/resume.pt
+  output: checkpoints/lpd_static_dino_act_dense_compute_matched_uniform_loss/checkpoint_080000.pt
+  resume: checkpoints/lpd_static_dino_act_dense_compute_matched_uniform_loss/resume.pt

@@ -503,12 +503,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         executed_prefix_weight=float(
                             training.get("executed_prefix_weight", 1.0)
                         ),
-                        active_agent_loss_weight=float(
-                            training.get("active_agent_loss_weight", 1.0)
-                        ),
-                        active_agent_delta_threshold=float(
-                            training.get("active_agent_delta_threshold", 0.005)
-                        ),
                         past_action_history_dropout_probability=float(
                             training.get(
                                 "past_action_history_dropout_probability",
@@ -646,12 +640,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "dataset_lineage_sha256": dataset.lineage_sha256(),
                     "config_path": str(config_path),
                     "sampling": sampler.summary(),
-                    "active_agent_loss_weight": float(
-                        training.get("active_agent_loss_weight", 1.0)
-                    ),
-                    "active_agent_delta_threshold": float(
-                        training.get("active_agent_delta_threshold", 0.005)
-                    ),
                     "past_action_history_dropout_probability": float(
                         training.get(
                             "past_action_history_dropout_probability",
@@ -726,12 +714,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "loss_reduction": "per_sample_valid_element_mean",
                 "executed_prefix_weight": float(
                     training.get("executed_prefix_weight", 1.0)
-                ),
-                "active_agent_loss_weight": float(
-                    training.get("active_agent_loss_weight", 1.0)
-                ),
-                "active_agent_delta_threshold": float(
-                    training.get("active_agent_delta_threshold", 0.005)
                 ),
                 "past_action_history_dropout_probability": float(
                     training.get(

@@ -64,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--precision", choices=("fp32", "bf16"), default="bf16")
+    parser.add_argument(
+        "--activity-delta-threshold",
+        type=float,
+        default=0.005,
+        help="Diagnostic threshold only; it never changes training loss weights.",
+    )
     return parser
 
 
@@ -174,9 +180,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         num_workers=0,
         pin_memory=device.type == "cuda",
     )
-    threshold = float(
-        _mapping(config, "training").get("active_agent_delta_threshold", 0.005)
-    )
+    if args.activity_delta_threshold < 0.0:
+        raise ValueError("--activity-delta-threshold must be non-negative")
+    threshold = float(args.activity_delta_threshold)
     execution_steps = int(_mapping(schema, "action_generation")["execution_steps"])
     accumulators: dict[str, list[dict[str, dict[str, float]]]] = {
         contract.task_id: [

@@ -84,8 +84,6 @@ training:
   weight_decay: 0.00001
   gradient_clip_norm: 1.0
   executed_prefix_weight: 4.0
-  active_agent_loss_weight: 4.0
-  active_agent_delta_threshold: 0.005
   past_action_history_dropout_probability: 0.5
   state_history_noise_std: 0.02
   past_action_history_noise_std: 0.02

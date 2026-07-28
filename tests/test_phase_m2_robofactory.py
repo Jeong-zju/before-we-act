@@ -29,7 +29,6 @@ from scripts.run_robofactory_m2_inference import _validate_contract
 from train.m2_checkpointing import load_m2_checkpoint, save_m2_checkpoint
 from train.m2_training import (
     M2LossWeights,
-    _active_agent_weights,
     _masked_mean,
     m2_batch_loss,
     shift_action_chunk,
@@ -376,48 +375,6 @@ def test_masked_loss_is_invariant_to_valid_dimension_count() -> None:
         ]
     )
     assert _masked_mean(value, mask).item() == pytest.approx(4.0)
-
-
-def test_active_agent_weighting_reallocates_without_agent_count_inflation() -> None:
-    targets = torch.zeros(1, 4, 32)
-    targets[:, 1:, 24] = torch.tensor([0.1, 0.2, 0.3])
-    target_valid = torch.ones(1, 4, dtype=torch.bool)
-    action_dimensions = torch.ones(1, 32, dtype=torch.bool)
-    past_actions = torch.zeros(1, 3, 32)
-    past_valid = torch.tensor([[False, False, True]])
-    weights, fraction = _active_agent_weights(
-        targets,
-        target_valid=target_valid,
-        action_dimension_mask=action_dimensions,
-        past_actions=past_actions,
-        past_action_valid_mask=past_valid,
-        max_agents=4,
-        active_weight=4.0,
-        delta_threshold=0.005,
-    )
-    torch.testing.assert_close(weights.mean(dim=-1), torch.ones(1, 4))
-    assert bool((weights[:, :, 3] > weights[:, :, :3].amax(dim=-1)).all())
-    assert fraction.item() == pytest.approx(0.25)
-
-    two_agent_dimensions = action_dimensions.clone()
-    two_agent_dimensions[:, 16:] = False
-    two_agent_targets = torch.zeros_like(targets)
-    two_agent_targets[:, 1:, 8] = torch.tensor([0.1, 0.2, 0.3])
-    two_agent_weights, _ = _active_agent_weights(
-        two_agent_targets,
-        target_valid=target_valid,
-        action_dimension_mask=two_agent_dimensions,
-        past_actions=past_actions,
-        past_action_valid_mask=past_valid,
-        max_agents=4,
-        active_weight=4.0,
-        delta_threshold=0.005,
-    )
-    torch.testing.assert_close(
-        two_agent_weights[:, :, :2].mean(dim=-1),
-        torch.ones(1, 4),
-    )
-    assert bool(two_agent_weights[:, :, 2:].eq(0.0).all())
 
 
 def test_warm_start_shift_stays_inside_each_task_horizon() -> None:

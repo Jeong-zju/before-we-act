@@ -170,8 +170,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     save_interval = int(training.get("save_interval", 1000))
     beta = float(training.get("kl_weight", 1e-3))
     router_weight = float(training.get("router_aux_weight", 1e-2))
-    active_weight = float(training.get("active_agent_weight", 4.0))
-    active_threshold = float(training.get("active_delta_threshold", 0.005))
     workers = int(training.get("num_workers", 4))
     loader = DataLoader(
         dataset,
@@ -205,14 +203,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             assert mu is not None and logvar is not None
             step_mse = (prediction - actions).square().mean(dim=-1)
-            per_agent = (step_mse * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1)
-            deltas = (actions[:, 1:] - actions[:, :-1]).abs().amax(dim=(1, 2))
-            weights_local = torch.where(
-                deltas > active_threshold,
-                per_agent.new_tensor(active_weight),
-                per_agent.new_tensor(1.0),
-            )
-            mse = (per_agent * weights_local).sum() / weights_local.sum()
+            per_sample = (step_mse * valid).sum(dim=1) / valid.sum(
+                dim=1
+            ).clamp_min(1)
+            mse = per_sample.mean()
             kl = -0.5 * (
                 1 + logvar - mu.square() - logvar.exp()
             ).sum(dim=-1).mean()
@@ -232,9 +226,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "mse": float(mse.detach()),
                         "kl": float(kl.detach()),
                         "router_aux": float(router_aux.detach()),
-                        "active_fraction": float(
-                            (deltas > active_threshold).float().mean()
-                        ),
                     }
                 ),
                 flush=True,
