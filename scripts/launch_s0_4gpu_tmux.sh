@@ -65,6 +65,7 @@ RUN_ROOT="${S0_RUN_ROOT:-${FE_ROOT}/outputs/s0_runs/${RUN_ID}}"
 READY_FILE="${RUN_ROOT}/shared.ready"
 FAILED_FILE="${RUN_ROOT}/shared.failed"
 HF_TOKEN_FIFO="${RUN_ROOT}/.hf_token.fifo"
+source "${FE_ROOT}/scripts/s0_hf_token_fifo.sh"
 
 CANDIDATES=(B0 B1 B2 B3)
 BRANCHES=(
@@ -426,12 +427,6 @@ for index in "${!CANDIDATES[@]}"; do
   WORKTREES+=("${path}")
 done
 
-cleanup_secret() {
-  HF_TOKEN_INPUT=""
-  unset HF_TOKEN_INPUT
-  unlink "${HF_TOKEN_FIFO}" 2>/dev/null || true
-}
-
 START_PREPARE=0
 if (( RESUME_LAUNCH )); then
   if [[ -f "${FAILED_FILE}" ]]; then
@@ -477,10 +472,8 @@ if (( START_PREPARE )); then
   if (( RESUME_LAUNCH )); then
     prompt_hf_token
   fi
-  cleanup_secret
-  mkfifo "${HF_TOKEN_FIFO}"
-  chmod 600 "${HF_TOKEN_FIFO}"
-  trap cleanup_secret EXIT
+  s0_prepare_hf_token_fifo
+  trap s0_cleanup_hf_secret EXIT
 
   prepare_command="$(shell_join \
     env \
@@ -505,8 +498,7 @@ if (( START_PREPARE )); then
 
   # The secret crosses into the prepare window through a mode-0600 FIFO. It is
   # never exported by the launcher and never appears in a tmux command or argv.
-  printf '%s\n' "${HF_TOKEN_INPUT}" >"${HF_TOKEN_FIFO}"
-  cleanup_secret
+  s0_deliver_hf_token
   trap - EXIT
 fi
 

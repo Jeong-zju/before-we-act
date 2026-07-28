@@ -136,6 +136,9 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
         encoding="utf-8"
     )
     prepare = (ROOT / "scripts/prepare_s0_shared.sh").read_text(encoding="utf-8")
+    token_fifo = (ROOT / "scripts/s0_hf_token_fifo.sh").read_text(
+        encoding="utf-8"
+    )
     runner = (ROOT / "scripts/run_lpd_single_5090.sh").read_text(
         encoding="utf-8"
     )
@@ -150,8 +153,23 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     ).read_text(encoding="utf-8")
 
     assert "read -r -s HF_TOKEN_INPUT" in launcher
-    assert "mkfifo" in launcher
-    assert "chmod 600" in launcher
+    assert "s0_prepare_hf_token_fifo" in launcher
+    assert "s0_deliver_hf_token" in launcher
+    handoff_start = launcher.index("if (( START_PREPARE )); then")
+    handoff_end = launcher.index(
+        'for index in "${!CANDIDATES[@]}"; do',
+        handoff_start,
+    )
+    handoff = launcher[handoff_start:handoff_end]
+    assert handoff.index("s0_prepare_hf_token_fifo") < handoff.index(
+        "create_persistent_window"
+    )
+    assert handoff.index("create_persistent_window") < handoff.index(
+        "s0_deliver_hf_token"
+    )
+    assert "\n  s0_cleanup_hf_secret\n" not in handoff
+    assert "mkfifo" in token_fifo
+    assert "chmod 600" in token_fifo
     assert "env \\\n    -u HF_TOKEN" in launcher
     assert "export HF_TOKEN" not in launcher
     assert "export HF_TOKEN" not in prepare
@@ -180,10 +198,55 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     assert "resolve_existing_tmux_session" in launcher
     assert "Resuming partially created S0 windows" in launcher
     assert "Preserving existing candidate window" in launcher
-    assert 'unlink "${HF_TOKEN_FIFO}" 2>/dev/null || true' in launcher
+    assert 'unlink "${HF_TOKEN_FIFO}" 2>/dev/null || true' in token_fifo
     assert 'unlink "${S0_HF_TOKEN_FIFO}" 2>/dev/null || true' in prepare
     assert "flock -x" in prepare
     assert ".shared_prepare.lock" in prepare
     assert "table/table.glb" in prepare
     assert "ROBOFACTORY_ASSET_SENTINEL" in gate
     assert "Missing RoboFactory closed-loop asset" in gate
+
+
+def test_s0_token_fifo_preserves_secret_until_reader_receives_it(
+    tmp_path: Path,
+) -> None:
+    fifo = tmp_path / "token.fifo"
+    received = tmp_path / "received"
+    token = "hf_unit_test_secret"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            """
+set -Eeuo pipefail
+source "$1"
+HF_TOKEN_FIFO="$2"
+HF_TOKEN_INPUT="$3"
+s0_prepare_hf_token_fifo
+(
+  IFS= read -r value <"${HF_TOKEN_FIFO}"
+  printf '%s' "${value}" >"$4"
+) &
+reader_pid=$!
+s0_deliver_hf_token
+wait "${reader_pid}"
+test ! -e "${HF_TOKEN_FIFO}"
+test -z "${HF_TOKEN_INPUT+x}"
+""",
+            "bash",
+            str(ROOT / "scripts/s0_hf_token_fifo.sh"),
+            str(fifo),
+            token,
+            str(received),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+    assert received.read_text(encoding="utf-8") == token
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert token not in result.stdout
+    assert token not in result.stderr
