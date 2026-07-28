@@ -30,7 +30,15 @@ def test_s0_runtime_tracks_training_and_paired_validation(tmp_path):
         session="wam-s0-fixture",
         base_repo=ROOT,
         worktrees=worktrees,
+        window_prefix="fixture",
+        monitor_window="fixture-monitor",
     )
+    manifest = json.loads(
+        (run_root / "run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["tmux_mode"] == "shared_existing_session"
+    assert manifest["tmux_window_prefix"] == "fixture"
+    assert manifest["tmux_monitor_window"] == "fixture-monitor"
     update_status(
         run_root,
         candidate="B0",
@@ -70,6 +78,9 @@ def test_s0_runtime_tracks_training_and_paired_validation(tmp_path):
     assert read_latest_jsonl(progress)["update"] == 100
     rendered = render_monitor(run_root)
     assert "wam-s0-fixture" in rendered
+    assert "fixture-monitor" in rendered
+    assert "tmux select-window" in rendered
+    assert "tmux attach" not in rendered
     assert "B0" in rendered
 
 
@@ -114,7 +125,9 @@ def test_s0_launcher_dry_run_has_four_gpu_assignments(tmp_path):
     assert "Branches: will be fetched from origin" in result.stdout
     assert "Shared dataset:" in result.stdout
     assert "S0_HF_TOKEN_FIFO=" in result.stdout
-    assert "no worktrees, files, tmux sessions or GPU jobs were changed" in result.stdout
+    assert "current or only existing permanent session" in result.stdout
+    assert "window=fixture-b0" in result.stdout
+    assert "no worktrees, files, tmux windows or GPU jobs were changed" in result.stdout
     assert not (tmp_path / "run").exists()
 
 
@@ -135,3 +148,8 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     assert "export HF_TOKEN" not in prepare
     assert "export HF_TOKEN='hf_...'" not in runbook
     assert 'fetch --no-tags origin "${refspecs[@]}"' in launcher
+    assert "tmux new-session" not in launcher
+    assert "tmux attach" not in launcher
+    assert "tmux attach -t" not in runbook
+    assert "tmux new-window" in launcher
+    assert "resolve_existing_tmux_session" in launcher

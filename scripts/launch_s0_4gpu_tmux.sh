@@ -5,7 +5,7 @@ FE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE_ROOT="$(cd "${FE_ROOT}/.." && pwd)"
 WORKTREE_ROOT="${S0_WORKTREE_ROOT:-${WORKSPACE_ROOT}/worktrees}"
 RUN_ID="${S0_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
-ATTACH=auto
+FOCUS_MONITOR=auto
 DRY_RUN=0
 HF_TOKEN_INPUT=""
 
@@ -18,7 +18,9 @@ ROBOFACTORY_ROOT="${WORKSPACE_ROOT}/RoboFactory"
 RF_PYTHON="${ROBOFACTORY_ROOT}/.venv/bin/python"
 
 usage() {
-  printf 'usage: %s [--run-id ID] [--attach|--no-attach] [--dry-run]\n' "$0"
+  printf \
+    'usage: %s [--run-id ID] [--focus-monitor|--no-focus-monitor] [--dry-run]\n' \
+    "$0"
 }
 
 while (( $# )); do
@@ -27,12 +29,12 @@ while (( $# )); do
       RUN_ID="${2:?--run-id requires a value}"
       shift 2
       ;;
-    --attach)
-      ATTACH=yes
+    --focus-monitor)
+      FOCUS_MONITOR=yes
       shift
       ;;
-    --no-attach)
-      ATTACH=no
+    --no-focus-monitor)
+      FOCUS_MONITOR=no
       shift
       ;;
     --dry-run)
@@ -54,7 +56,10 @@ if [[ ! "${RUN_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
   printf >&2 'Invalid run id: %q\n' "${RUN_ID}"
   exit 2
 fi
-SESSION="${S0_TMUX_SESSION:-wam-s0-${RUN_ID}}"
+SESSION="${S0_TMUX_SESSION:-<current-or-only-existing-session>}"
+WINDOW_PREFIX="${S0_WINDOW_PREFIX:-${RUN_ID}}"
+PREPARE_WINDOW="${WINDOW_PREFIX}-prepare"
+MONITOR_WINDOW="${WINDOW_PREFIX}-monitor"
 RUN_ROOT="${S0_RUN_ROOT:-${FE_ROOT}/outputs/s0_runs/${RUN_ID}}"
 READY_FILE="${RUN_ROOT}/shared.ready"
 FAILED_FILE="${RUN_ROOT}/shared.failed"
@@ -72,6 +77,12 @@ WORKTREE_NAMES=(
   s0-b1-legacy-dense-ensemble
   s0-b2-flow-reference
   s0-b3-legacy-moe-latest
+)
+CANDIDATE_WINDOWS=(
+  "${WINDOW_PREFIX}-b0"
+  "${WINDOW_PREFIX}-b1"
+  "${WINDOW_PREFIX}-b2"
+  "${WINDOW_PREFIX}-b3"
 )
 
 shell_join() {
@@ -91,6 +102,71 @@ require_commands() {
       exit 3
     fi
   done
+}
+
+resolve_existing_tmux_session() {
+  local requested="${S0_TMUX_SESSION:-}"
+  local sessions=()
+  if [[ -n "${TMUX:-}" ]]; then
+    SESSION="$(tmux display-message -p '#S')"
+    return
+  fi
+  if [[ -n "${requested}" ]]; then
+    if ! tmux has-session -t "${requested}" 2>/dev/null; then
+      printf >&2 'Requested tmux session does not exist: %s\n' "${requested}"
+      exit 3
+    fi
+    SESSION="${requested}"
+    return
+  fi
+  mapfile -t sessions < <(tmux list-sessions -F '#S' 2>/dev/null || true)
+  if (( ${#sessions[@]} != 1 )); then
+    printf >&2 \
+      'Run inside the permanent tmux session, or ensure exactly one session exists; found %d.\n' \
+      "${#sessions[@]}"
+    exit 3
+  fi
+  SESSION="${sessions[0]}"
+}
+
+assert_s0_windows_absent() {
+  local existing=()
+  local desired
+  local observed
+  mapfile -t existing < <(tmux list-windows -t "${SESSION}" -F '#W')
+  for desired in \
+    "${PREPARE_WINDOW}" \
+    "${CANDIDATE_WINDOWS[@]}" \
+    "${MONITOR_WINDOW}"; do
+    for observed in "${existing[@]}"; do
+      if [[ "${observed}" == "${desired}" ]]; then
+        printf >&2 \
+          'Tmux window already exists in session %s: %s\n' \
+          "${SESSION}" "${desired}"
+        exit 3
+      fi
+    done
+  done
+}
+
+create_persistent_window() {
+  local name="$1"
+  local directory="$2"
+  local command="$3"
+  local window_id
+  window_id="$(
+    tmux new-window \
+      -d \
+      -P \
+      -F '#{window_id}' \
+      -t "${SESSION}:" \
+      -n "${name}" \
+      -c "${directory}" \
+      "${command}"
+  )"
+  tmux set-option -w -t "${window_id}" remain-on-exit on
+  tmux set-option -w -t "${window_id}" history-limit 200000
+  printf '%s' "${window_id}"
 }
 
 ensure_uv() {
@@ -177,22 +253,29 @@ candidate_command() {
   printf '%s' "${command}"
 }
 
-printf 'S0 parent: %s @ %s\n' \
-  "$(git -C "${FE_ROOT}" branch --show-current)" \
-  "$(git -C "${FE_ROOT}" rev-parse HEAD)"
-printf 'Run root: %s\nTmux session: %s\n' "${RUN_ROOT}" "${SESSION}"
-printf 'Shared dataset: %s\nShared artifacts: %s\n' \
-  "${SHARED_DATA_ROOT}" "${SHARED_ARTIFACT_ROOT}"
-printf 'Shared uv env/cache: %s | %s\nRoboFactory: %s\n' \
-  "${SHARED_UV_ENV}" "${SHARED_UV_CACHE}" "${ROBOFACTORY_ROOT}"
-for index in "${!CANDIDATES[@]}"; do
-  printf '%s GPU%s  %-43s  %s/%s\n' \
-    "${CANDIDATES[index]}" "${index}" "${BRANCHES[index]}" \
-    "${WORKTREE_ROOT}" "${WORKTREE_NAMES[index]}"
-done
+print_plan() {
+  printf 'S0 parent: %s @ %s\n' \
+    "$(git -C "${FE_ROOT}" branch --show-current)" \
+    "$(git -C "${FE_ROOT}" rev-parse HEAD)"
+  printf 'Run root: %s\nExisting tmux session: %s\n' "${RUN_ROOT}" "${SESSION}"
+  printf 'Window prefix: %s\n' "${WINDOW_PREFIX}"
+  printf 'Shared dataset: %s\nShared artifacts: %s\n' \
+    "${SHARED_DATA_ROOT}" "${SHARED_ARTIFACT_ROOT}"
+  printf 'Shared uv env/cache: %s | %s\nRoboFactory: %s\n' \
+    "${SHARED_UV_ENV}" "${SHARED_UV_CACHE}" "${ROBOFACTORY_ROOT}"
+  for index in "${!CANDIDATES[@]}"; do
+    printf '%s GPU%s  %-43s  %s/%s  window=%s\n' \
+      "${CANDIDATES[index]}" "${index}" "${BRANCHES[index]}" \
+      "${WORKTREE_ROOT}" "${WORKTREE_NAMES[index]}" \
+      "${CANDIDATE_WINDOWS[index]}"
+  done
+}
 
 if (( DRY_RUN )); then
-  printf '\nDry run: no worktrees, files, tmux sessions or GPU jobs were changed.\n'
+  print_plan
+  printf \
+    '\nDry run: no worktrees, files, tmux windows or GPU jobs were changed.\n'
+  printf 'Tmux: will reuse the current or only existing permanent session.\n'
   printf 'HF token: will be requested with hidden interactive input.\n'
   printf 'Branches: will be fetched from origin and tracked locally when absent.\n'
   printf 'prepare: %s\n' "$(shell_join \
@@ -217,6 +300,9 @@ if (( DRY_RUN )); then
 fi
 
 require_commands
+resolve_existing_tmux_session
+assert_s0_windows_absent
+print_plan
 if [[ "$(git -C "${FE_ROOT}" branch --show-current)" != "feat/model-improvements" ]]; then
   printf >&2 'Launch S0 from the feat/model-improvements worktree.\n'
   exit 3
@@ -228,10 +314,6 @@ fi
 GPU_COUNT="$(nvidia-smi -L | sed -n '$=')"
 if (( GPU_COUNT < 4 )); then
   printf >&2 'S0 requires at least four visible GPUs; found %d.\n' "${GPU_COUNT}"
-  exit 3
-fi
-if tmux has-session -t "${SESSION}" 2>/dev/null; then
-  printf >&2 'Tmux session already exists: %s\n' "${SESSION}"
   exit 3
 fi
 if [[ -e "${RUN_ROOT}" ]]; then
@@ -269,6 +351,8 @@ init_arguments=(
   --run-root "${RUN_ROOT}"
   --run-id "${RUN_ID}"
   --session "${SESSION}"
+  --window-prefix "${WINDOW_PREFIX}"
+  --monitor-window "${MONITOR_WINDOW}"
   --base-repo "${FE_ROOT}"
 )
 for index in "${!CANDIDATES[@]}"; do
@@ -302,9 +386,11 @@ prepare_command="$(shell_join \
   "RF_PYTHON=${RF_PYTHON}" \
   bash scripts/prepare_s0_shared.sh
 )"
-tmux new-session -d -s "${SESSION}" -n prepare -c "${FE_ROOT}" "${prepare_command}"
-tmux set-option -t "${SESSION}" remain-on-exit on
-tmux set-option -t "${SESSION}" history-limit 200000
+create_persistent_window \
+  "${PREPARE_WINDOW}" \
+  "${FE_ROOT}" \
+  "${prepare_command}" \
+  >/dev/null
 
 # The secret crosses into the prepare window through a mode-0600 FIFO. It is
 # never exported by the launcher and never appears in a tmux command or argv.
@@ -313,24 +399,30 @@ cleanup_secret
 trap - EXIT
 
 for index in "${!CANDIDATES[@]}"; do
-  tmux new-window -d \
-    -t "${SESSION}" \
-    -n "$(printf '%s' "${CANDIDATES[index]}" | tr '[:upper:]' '[:lower:]')" \
-    -c "${WORKTREES[index]}" \
-    "$(candidate_command "${index}")"
+  create_persistent_window \
+    "${CANDIDATE_WINDOWS[index]}" \
+    "${WORKTREES[index]}" \
+    "$(candidate_command "${index}")" \
+    >/dev/null
 done
 monitor_command="$(shell_join \
   python3 scripts/s0_runtime.py monitor \
   --run-root "${RUN_ROOT}" \
   --interval 5
 )"
-tmux new-window -d -t "${SESSION}" -n monitor -c "${FE_ROOT}" "${monitor_command}"
-tmux select-window -t "${SESSION}:monitor"
+MONITOR_WINDOW_ID="$(
+  create_persistent_window "${MONITOR_WINDOW}" "${FE_ROOT}" "${monitor_command}"
+)"
 
-printf '\nS0 is running persistently in tmux.\n'
-printf 'Attach: tmux attach -t %s\n' "${SESSION}"
+printf '\nS0 windows are running in the existing permanent tmux session %s.\n' \
+  "${SESSION}"
+printf 'Monitor window: %s (target %s)\n' \
+  "${MONITOR_WINDOW}" "${MONITOR_WINDOW_ID}"
+printf 'Switch monitor: tmux select-window -t %s:%s\n' \
+  "${SESSION}" "${MONITOR_WINDOW}"
 printf 'Monitor once: python3 %s/scripts/s0_runtime.py monitor --once --run-root %s\n' \
   "${FE_ROOT}" "${RUN_ROOT}"
-if [[ "${ATTACH}" == "yes" || ( "${ATTACH}" == "auto" && -t 0 && -t 1 ) ]]; then
-  exec tmux attach -t "${SESSION}"
+if [[ "${FOCUS_MONITOR}" == "yes" || \
+  ( "${FOCUS_MONITOR}" == "auto" && -n "${TMUX:-}" ) ]]; then
+  tmux select-window -t "${MONITOR_WINDOW_ID}"
 fi
