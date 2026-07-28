@@ -47,6 +47,7 @@ EOF
     cat "${state}"
     ;;
   send-keys)
+    if [[ "${TMUX_FAIL_SEND_KEYS:-0}" == "1" ]]; then exit 8; fi
     ;;
   kill-window)
     target="${3}"
@@ -174,6 +175,36 @@ def test_stop_s0_terminates_only_tagged_run_and_closes_six_windows(
         if unrelated.poll() is None:
             unrelated.terminate()
             unrelated.wait(timeout=5)
+
+
+def test_stop_s0_tolerates_dead_or_disappearing_panes(tmp_path: Path) -> None:
+    fake_bin, calls = _fake_commands(tmp_path)
+    run_root = tmp_path / "run"
+    _manifest(run_root)
+    environment = _environment(tmp_path, fake_bin, calls)
+    environment["TMUX_FAIL_SEND_KEYS"] = "1"
+
+    subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts/stop_s0_4gpu_tmux.sh"),
+            "--run-id",
+            "s0-round1",
+            "--run-root",
+            str(run_root),
+            "--grace-seconds",
+            "0",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=environment,
+    )
+
+    log = calls.read_text(encoding="utf-8")
+    assert log.count("send-keys") == 6
+    assert log.count("kill-window") == 6
 
 
 def test_p1_documents_complete_zero_start_and_scoped_stop_commands() -> None:

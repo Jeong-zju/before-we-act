@@ -180,7 +180,10 @@ fi
 # run their normal SIGINT cleanup before escalating.
 for name in "${TARGET_WINDOWS[@]}"; do
   if window_id="$(tmux_window_id "${name}")"; then
-    tmux send-keys -t "${window_id}" C-c
+    # A completed candidate can leave a dead pane, or a pane can disappear
+    # between lookup and signaling. Final process/window verification below is
+    # authoritative, so these expected races must not abort the stop sequence.
+    tmux send-keys -t "${window_id}" C-c 2>/dev/null || true
   fi
 done
 
@@ -205,11 +208,16 @@ mapfile -t remaining < <(run_process_ids)
 if (( ${#remaining[@]} > 0 )); then
   printf 'Sending SIGKILL to remaining run processes: %s\n' "${remaining[*]}"
   kill -KILL "${remaining[@]}" 2>/dev/null || true
+  for (( second=0; second<5; second++ )); do
+    mapfile -t remaining < <(run_process_ids)
+    (( ${#remaining[@]} == 0 )) && break
+    sleep 1
+  done
 fi
 
 for name in "${TARGET_WINDOWS[@]}"; do
   if window_id="$(tmux_window_id "${name}")"; then
-    tmux kill-window -t "${window_id}"
+    tmux kill-window -t "${window_id}" 2>/dev/null || true
   fi
 done
 
