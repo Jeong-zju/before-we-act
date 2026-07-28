@@ -78,6 +78,9 @@ def test_s0_round_manifest_freezes_shared_data_and_uniform_loss():
     value = yaml.safe_load(path.read_text(encoding="utf-8"))
 
     assert value["source_parent_commit"] == (
+        "07fd136fadd8831d6c111a7be5e9908056b6743d"
+    )
+    assert value["training"]["frozen_model_start_commit"] == (
         "a1e8814dc46bdb5de3b28f8001cdfc563d532f6e"
     )
     assert value["training"]["optimizer_updates"] == 80000

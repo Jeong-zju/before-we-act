@@ -1,6 +1,6 @@
 format_version: wam.robofactory.wam_flow.round_manifest/1
 round_id: s0-reference-20260728
-source_parent_commit: a1e8814dc46bdb5de3b28f8001cdfc563d532f6e
+source_parent_commit: 07fd136fadd8831d6c111a7be5e9908056b6743d
 hypothesis: >-
   Freeze four reproducible reference coordinates that isolate decoder family,
   the existing Rectified Flow path, and temporal aggregation before S1.
@@ -22,6 +22,7 @@ vision:
   frozen: true
 
 training:
+  frozen_model_start_commit: a1e8814dc46bdb5de3b28f8001cdfc563d532f6e
   seed: 101
   optimizer_updates: 80000
   active_agent_loss_weighting: false
