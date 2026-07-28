@@ -97,7 +97,7 @@ shell_join() {
 
 require_commands() {
   local name
-  for name in git tmux jq nvidia-smi python3 df sha256sum; do
+  for name in git tmux jq nvidia-smi python3 df sha256sum flock; do
     if ! command -v "${name}" >/dev/null; then
       printf >&2 'Missing required system command: %s\n' "${name}"
       exit 3

@@ -11,6 +11,7 @@ LPD_POLICY_KIND="${LPD_POLICY_KIND:?set LPD_POLICY_KIND to wam or static_act}"
 LPD_GATE_MODE="${LPD_GATE_MODE:-gate}"
 LPD_PORT="${LPD_PORT:-8872}"
 LPD_RUN_ID="${LPD_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+ROBOFACTORY_ASSET_SENTINEL="${ROBOFACTORY_ROOT}/robofactory/assets/scenes/table/table.glb"
 SERVER_PID=""
 
 case "${LPD_GATE_MODE}" in
@@ -41,6 +42,12 @@ trap cleanup_server EXIT INT TERM
 test -x "${RF_PYTHON}"
 test -f "${LPD_CONFIG}"
 test -e "${LPD_CHECKPOINT}"
+if [[ ! -s "${ROBOFACTORY_ASSET_SENTINEL}" ]]; then
+  printf >&2 \
+    'Missing RoboFactory closed-loop asset %s; run the one-click prepare stage first.\n' \
+    "${ROBOFACTORY_ASSET_SENTINEL}"
+  exit 3
+fi
 test ! -e "${OUTPUT_ROOT}"
 if [[ -n "$(git -C "${FE_ROOT}" status --porcelain --untracked-files=no)" ]]; then
   printf >&2 'Refusing to evaluate with tracked source changes. Commit them first.\n'

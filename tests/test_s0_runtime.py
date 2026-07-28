@@ -139,7 +139,9 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     runner = (ROOT / "scripts/run_lpd_single_5090.sh").read_text(
         encoding="utf-8"
     )
-    retry = (ROOT / "scripts/hf_download_retry.sh").read_text(encoding="utf-8")
+    gate = (ROOT / "scripts/run_lpd_fixed_seed_gate.sh").read_text(
+        encoding="utf-8"
+    )
     dino = (ROOT / "scripts/prepare_dinov3_encoder.py").read_text(
         encoding="utf-8"
     )
@@ -155,13 +157,17 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     assert "export HF_TOKEN" not in prepare
     assert "export HF_TOKEN='hf_...'" not in runbook
     assert "HfApi().whoami(token=os.environ[\"HF_TOKEN\"])" in runner
-    assert runner.count("hf_download_with_retry") == 4
-    assert '"DINOv3 weights"' in runner
-    assert '"RoboFactory assets over HTTP"' in runner
-    assert 'HF_TOKEN="${HF_TOKEN}"' in retry
-    assert 'HF_HUB_DISABLE_XET="${disable_xet}"' in retry
-    assert "HF_DOWNLOAD_ATTEMPTS:-5" in retry
-    assert "sleep" in retry
+    assert runner.count('HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download') == 4
+    assert (
+        'HF_TOKEN="${HF_TOKEN}" uv run --frozen python '
+        "scripts/prepare_dinov3_encoder.py"
+    ) in runner
+    assert "c79ff1e and 859cecd" in runner
+    prepare_calls = runner[runner.index("prepare() {") : runner.index("train() {")]
+    assert prepare_calls.index("prepare_data") < prepare_calls.index("prepare_vision")
+    assert prepare_calls.index("prepare_vision") < prepare_calls.index(
+        "prepare_robofactory"
+    )
     assert "token=True" not in dino
     assert "token=token" in dino
     assert "config --get-all remote.origin.fetch" in launcher
@@ -176,54 +182,8 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     assert "Preserving existing candidate window" in launcher
     assert 'unlink "${HF_TOKEN_FIFO}" 2>/dev/null || true' in launcher
     assert 'unlink "${S0_HF_TOKEN_FIFO}" 2>/dev/null || true' in prepare
-
-
-def test_hf_retry_uses_exact_token_disables_xet_and_recovers(
-    tmp_path: Path,
-) -> None:
-    command = tmp_path / "fake-hf-command"
-    calls = tmp_path / "calls"
-    command.write_text(
-        """#!/usr/bin/env bash
-set -eu
-printf '%s|%s\\n' "${HF_TOKEN}" "${HF_HUB_DISABLE_XET}" >>"${CALL_LOG}"
-count="$(wc -l <"${CALL_LOG}")"
-if (( count < 3 )); then
-  exit 29
-fi
-""",
-        encoding="utf-8",
-    )
-    command.chmod(0o755)
-    token = "hf_unit_test_secret"
-    result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            'source "$1"; hf_with_retry "fixture asset" 1 "$2"',
-            "bash",
-            str(ROOT / "scripts/hf_download_retry.sh"),
-            str(command),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "HF_TOKEN": token,
-            "HF_DOWNLOAD_ATTEMPTS": "4",
-            "HF_DOWNLOAD_INITIAL_BACKOFF_SECONDS": "0",
-            "CALL_LOG": str(calls),
-        },
-    )
-
-    assert calls.read_text(encoding="utf-8").splitlines() == [
-        f"{token}|1",
-        f"{token}|1",
-        f"{token}|1",
-    ]
-    assert "attempt 1/4" in result.stdout
-    assert "attempt 3/4" in result.stdout
-    assert result.stderr.count("retrying in 0 seconds") == 2
-    assert token not in result.stdout
-    assert token not in result.stderr
+    assert "flock -x" in prepare
+    assert ".shared_prepare.lock" in prepare
+    assert "table/table.glb" in prepare
+    assert "ROBOFACTORY_ASSET_SENTINEL" in gate
+    assert "Missing RoboFactory closed-loop asset" in gate
