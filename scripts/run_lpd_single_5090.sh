@@ -20,6 +20,7 @@ LIFT_DATASET_REPO="${LIFT_DATASET_REPO:-zeno-ai/robofactory-lift-barrier-multivi
 LIFT_DATASET_REVISION="${LIFT_DATASET_REVISION:-6ab620091677e69370412f08cd7adecacc28c146}"
 LPD_DATASET_REPO="${LPD_DATASET_REPO:-zeno-ai/robofactory-long-pipeline-delivery-multiview}"
 LPD_DATASET_REVISION="${LPD_DATASET_REVISION:-fee628311ff52a3ae0ddfddf82379c63d28f7533}"
+source "${FE_ROOT}/scripts/hf_download_retry.sh"
 
 doctor() {
   command -v uv >/dev/null
@@ -82,7 +83,7 @@ prepare_data() {
     [[ "${HF_M2_DATASET_REVISION}" =~ ^[0-9a-f]{40}$ ]]
     (
       cd "${FE_ROOT}"
-      HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download "${HF_M2_DATASET_REPO}" \
+      hf_download_with_retry "combined M2 dataset" 0 "${HF_M2_DATASET_REPO}" \
         --repo-type dataset \
         --revision "${HF_M2_DATASET_REVISION}" \
         --local-dir datasets/robofactory_multitask
@@ -93,7 +94,7 @@ prepare_data() {
     if [[ ! -f "${lift}" ]]; then
       (
         cd "${FE_ROOT}"
-        HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download "${LIFT_DATASET_REPO}" \
+        hf_download_with_retry "LiftBarrier dataset" 0 "${LIFT_DATASET_REPO}" \
           --repo-type dataset \
           --revision "${LIFT_DATASET_REVISION}" \
           --local-dir datasets/robofactory_multitask/lift_barrier
@@ -102,7 +103,7 @@ prepare_data() {
     if [[ ! -f "${lpd}" ]]; then
       (
         cd "${FE_ROOT}"
-        HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download "${LPD_DATASET_REPO}" \
+        hf_download_with_retry "LongPipelineDelivery dataset" 0 "${LPD_DATASET_REPO}" \
           --repo-type dataset \
           --revision "${LPD_DATASET_REVISION}" \
           --local-dir datasets/robofactory_multitask/long_pipeline_delivery
@@ -117,8 +118,11 @@ prepare_vision() {
   : "${HF_TOKEN:?HF_TOKEN is required for the gated DINOv3 artifact}"
   (
     cd "${FE_ROOT}"
-    HF_TOKEN="${HF_TOKEN}" uv run --frozen python scripts/prepare_dinov3_encoder.py \
-      --encoder dinov3_vitl16_lvd
+    hf_with_retry \
+      "DINOv3 weights" \
+      1 \
+      uv run --frozen python scripts/prepare_dinov3_encoder.py \
+        --encoder dinov3_vitl16_lvd
   )
 }
 
@@ -148,7 +152,10 @@ prepare_robofactory() {
   if [[ ! -s "${asset_sentinel}" ]]; then
     (
       cd "${FE_ROOT}"
-      HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download sparklexfantasy/RoboFactory_asset \
+      hf_download_with_retry \
+        "RoboFactory assets over HTTP" \
+        1 \
+        sparklexfantasy/RoboFactory_asset \
         --repo-type dataset \
         --revision "${ROBOFACTORY_ASSET_REVISION}" \
         --local-dir "${asset_root}"
