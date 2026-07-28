@@ -423,10 +423,18 @@ def _validate_client(raw: Any, *, contract: Mapping[str, Any]) -> dict[str, Any]
     if not isinstance(raw, Mapping):
         raise RuntimeError("M2 ready.client must be an object")
     value = dict(raw)
-    if value.get("checkpoint_format") not in {
-        "wam.robofactory.m2.checkpoint/5",
-        "wam.robofactory.static_rgb_act_moe.checkpoint/1",
-    }:
+    checkpoint_format = value.get("checkpoint_format")
+    supported_sources = {
+        "wam.robofactory.m2.checkpoint/5": {
+            "m2_block_causal_fast_path",
+            "m2_block_causal_future_path",
+        },
+        "wam.robofactory.static_rgb_act_moe.checkpoint/1": {
+            "static_rgb_dino_act_moe",
+            "static_rgb_dino_act_dense",
+        },
+    }
+    if checkpoint_format not in supported_sources:
         raise RuntimeError("client did not load a supported direct-policy checkpoint")
     if contract["task_id"] not in value.get("task_vocabulary", []):
         raise RuntimeError("M2 checkpoint does not contain the requested task")
@@ -435,12 +443,7 @@ def _validate_client(raw: Any, *, contract: Mapping[str, Any]) -> dict[str, Any]
     policy = value.get("policy")
     if (
         not isinstance(policy, Mapping)
-        or policy.get("action_source")
-        not in {
-            "m2_block_causal_fast_path",
-            "m2_block_causal_future_path",
-            "static_rgb_dino_act_moe",
-        }
+        or policy.get("action_source") not in supported_sources[checkpoint_format]
     ):
         raise RuntimeError("client did not declare a supported direct action source")
     return value

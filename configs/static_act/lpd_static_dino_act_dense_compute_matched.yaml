@@ -1,4 +1,4 @@
-name: wam.robofactory/lpd-static-dino-act-moe
+name: wam.robofactory/lpd-static-dino-act-dense-compute-matched
 format_version: wam.robofactory.static_rgb_act_moe.config/1
 
 data:
@@ -37,7 +37,9 @@ model:
   latent_dim: 32
   experts: 4
   dropout: 0.1
-  decoder_kind: sparse_moe
+  decoder_kind: dense
+  # Top-2 MoE evaluates two 1536-wide experts per token. A 3072-wide dense
+  # FFN is the primary compute-matched routing ablation.
   dense_ffn_dim: 3072
 
 training:
@@ -49,7 +51,7 @@ training:
   weight_decay: 0.0001
   gradient_clip_norm: 1.0
   kl_weight: 0.001
-  router_aux_weight: 0.01
+  router_aux_weight: 0.0
   active_agent_weight: 4.0
   active_delta_threshold: 0.005
   save_interval: 1000
@@ -60,5 +62,5 @@ inference:
   normalized_action_clip: 10.0
 
 checkpoint:
-  output: checkpoints/lpd_static_dino_act_moe/checkpoint_080000.pt
-  resume: checkpoints/lpd_static_dino_act_moe/resume.pt
+  output: checkpoints/lpd_static_dino_act_dense_compute_matched/checkpoint_080000.pt
+  resume: checkpoints/lpd_static_dino_act_dense_compute_matched/resume.pt

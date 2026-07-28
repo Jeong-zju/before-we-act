@@ -42,7 +42,12 @@ test -x "${RF_PYTHON}"
 test -f "${LPD_CONFIG}"
 test -e "${LPD_CHECKPOINT}"
 test ! -e "${OUTPUT_ROOT}"
+if [[ -n "$(git -C "${FE_ROOT}" status --porcelain --untracked-files=no)" ]]; then
+  printf >&2 'Refusing to evaluate with tracked source changes. Commit them first.\n'
+  exit 3
+fi
 mkdir -p "${OUTPUT_ROOT}"
+SOURCE_COMMIT="$(git -C "${FE_ROOT}" rev-parse HEAD)"
 
 run_case() {
   local task="$1"
@@ -111,48 +116,19 @@ run_case LiftBarrier-rf lift_barrier 500
 run_case LongPipelineDelivery-rf long_pipeline_delivery 1500
 
 SUMMARY="${OUTPUT_ROOT}/gate_summary.json"
-jq -n \
-  --arg mode "${LPD_GATE_MODE}" \
-  --arg experiment "${LPD_EXPERIMENT_SLUG}" \
-  --arg config "${LPD_CONFIG}" \
-  --arg checkpoint "${LPD_CHECKPOINT}" \
-  --argjson seed_start "${SEED_START}" \
-  --argjson episodes "${EPISODES}" \
-  --slurpfile lift "${OUTPUT_ROOT}/lift_barrier/rollout_summary.json" \
-  --slurpfile lpd "${OUTPUT_ROOT}/long_pipeline_delivery/rollout_summary.json" \
-  '{
-    format_version: "wam.robofactory.lpd_fixed_seed_gate/1",
-    mode: $mode,
-    experiment: $experiment,
-    config: $config,
-    checkpoint: $checkpoint,
-    seed_protocol: {
-      seed_start: $seed_start,
-      episodes_per_task: $episodes,
-      identical_across_tasks: true
-    },
-    lift_barrier: {
-      successes: $lift[0].successes,
-      success_rate: $lift[0].success_rate
-    },
-    long_pipeline_delivery: {
-      successes: $lpd[0].successes,
-      success_rate: $lpd[0].success_rate
-    }
-  }
-  | .passed = (
-      if $mode == "formal"
-      then (
-        .lift_barrier.success_rate >= 0.90 and
-        .long_pipeline_delivery.success_rate >= 0.90
-      )
-      else (
-        .lift_barrier.successes >= 1 and
-        .long_pipeline_delivery.successes >= 1
-      )
-      end
-    )
-  ' >"${SUMMARY}"
-
-jq . "${SUMMARY}"
+(
+  cd "${FE_ROOT}"
+  uv run --frozen python scripts/build_lpd_gate_summary.py \
+    --mode "${LPD_GATE_MODE}" \
+    --experiment "${LPD_EXPERIMENT_SLUG}" \
+    --policy-kind "${LPD_POLICY_KIND}" \
+    --config "${LPD_CONFIG}" \
+    --checkpoint "${LPD_CHECKPOINT}" \
+    --source-commit "${SOURCE_COMMIT}" \
+    --seed-start "${SEED_START}" \
+    --episodes "${EPISODES}" \
+    --lift-summary "${OUTPUT_ROOT}/lift_barrier/rollout_summary.json" \
+    --lpd-summary "${OUTPUT_ROOT}/long_pipeline_delivery/rollout_summary.json" \
+    --output "${SUMMARY}"
+)
 printf 'Fixed-seed %s complete: %s\n' "${LPD_GATE_MODE}" "${OUTPUT_ROOT}"

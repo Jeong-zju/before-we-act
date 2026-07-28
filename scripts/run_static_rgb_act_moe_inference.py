@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
 from models.static_rgb_act import (  # noqa: E402
     StaticRGBMoEACT,
     StaticRGBMoEACTConfig,
-    TemporalChunkEnsembler,
+    build_chunk_aggregator,
 )
 from models.wam import AffineActionCodec, AffineActionCodecConfig  # noqa: E402
 from models.wam_multimodal import (  # noqa: E402
@@ -57,26 +57,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("static RGB ACT inference requires exactly one visible GPU")
     device = torch.device(args.device)
     checkpoint_path = args.checkpoint.expanduser().resolve(strict=True)
+    config_path = args.config.expanduser().resolve(strict=True)
     saved = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if saved.get("format_version") != (
         "wam.robofactory.static_rgb_act_moe.checkpoint/1"
     ):
         raise ValueError("checkpoint is not static RGB ACT+MoE")
-    model = StaticRGBMoEACT(
-        StaticRGBMoEACTConfig.from_dict(_mapping(saved, "model_config"))
-    ).to(device)
+    model_config = StaticRGBMoEACTConfig.from_dict(
+        _mapping(saved, "model_config")
+    )
+    model = StaticRGBMoEACT(model_config).to(device)
     model.load_state_dict(saved["model"], strict=True)
     model.eval()
-    raw_config = _load_yaml(args.config.expanduser().resolve(strict=True))
+    raw_config = _load_yaml(config_path)
+    configured_model = StaticRGBMoEACTConfig.from_dict(
+        _mapping(raw_config, "model")
+    )
+    if configured_model != model_config:
+        raise ValueError("runtime config model does not match checkpoint model")
     vision = _vision(raw_config).to(device).eval()
     runtime = {
         str(value["task_id"]): dict(value)
         for value in saved["task_runtime"]
     }
     inference = _mapping(raw_config, "inference")
-    ensemble = TemporalChunkEnsembler(
+    aggregator = build_chunk_aggregator(
+        mode=str(inference.get("chunk_aggregation", "temporal_ensemble")),
         horizon=model.config.horizon,
         decay=float(inference.get("temporal_ensemble_decay", 0.01)),
+    )
+    action_source = (
+        "static_rgb_dino_act_moe"
+        if model.config.decoder_kind == "sparse_moe"
+        else "static_rgb_dino_act_dense"
     )
     connection: socket.socket | None = None
     try:
@@ -117,14 +130,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             "checkpoint": str(checkpoint_path),
             "checkpoint_sha256": _sha256(checkpoint_path),
             "checkpoint_format": saved["format_version"],
+            "config": str(config_path),
+            "config_sha256": _sha256(config_path),
             "task_vocabulary": list(runtime),
+            "train_seed": int(_mapping(saved, "training")["seed"]),
+            "source": dict(_mapping(saved, "source")),
             "future_path": False,
             "device": str(device),
             "policy": {
-                "action_source": "static_rgb_dino_act_moe",
+                "action_source": action_source,
                 "horizon": model.config.horizon,
-                "experts": model.config.experts,
-                "temporal_ensemble_decay": ensemble.decay,
+                "decoder_kind": model.config.decoder_kind,
+                "experts": (
+                    model.config.experts
+                    if model.config.decoder_kind == "sparse_moe"
+                    else None
+                ),
+                "dense_ffn_dim": (
+                    model.config.dense_ffn_dim
+                    if model.config.decoder_kind == "dense"
+                    else None
+                ),
+                "chunk_aggregation": aggregator.mode,
+                "temporal_ensemble_decay": aggregator.decay,
                 "camera_protocol": (
                     "existing world-fixed per-agent RGB; no wrist; no depth"
                 ),
@@ -149,7 +177,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if episode != expected_episode or step != expected_step:
                     raise RuntimeError("static RGB ACT observation schedule drifted")
                 if bool(message.get("reset")):
-                    ensemble.reset()
+                    aggregator.reset()
                 started = time.perf_counter()
                 state = torch.as_tensor(
                     values["proprioception"], device=device, dtype=torch.float32
@@ -174,8 +202,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                             vision_tokens,
                             normalized_state,
                         )[0]
-                ensemble.push(chunks.float())
-                normalized_action = ensemble.current().flatten()
+                aggregator.push(chunks.float())
+                normalized_action = aggregator.current().flatten()
                 canonical = (
                     normalized_action * action_std[: normalized_action.numel()]
                     + action_mean[: normalized_action.numel()]
@@ -186,7 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 action = (
                     raw_action.float().cpu().numpy().astype(np.float32, copy=False)
                 )
-                ensemble.advance()
+                aggregator.advance()
                 send_message(
                     connection,
                     {
@@ -199,11 +227,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         )
                         * 1000.0,
                         "diagnostics": {
-                            "action_source": "static_rgb_dino_act_moe",
+                            "action_source": action_source,
                             "fallback_used": False,
                             "direct_model_action": True,
                             "task_id": task_id,
                             "horizon": model.config.horizon,
+                            "decoder_kind": model.config.decoder_kind,
+                            "chunk_aggregation": aggregator.mode,
                             "wrist_camera": False,
                             "depth": False,
                         },

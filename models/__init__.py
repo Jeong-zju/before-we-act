@@ -33,15 +33,21 @@ __all__ = [
 ]
 
 from models.static_rgb_act import (
+    DenseFeedForward,
+    LatestChunkSelector,
     StaticRGBMoEACT,
     StaticRGBMoEACTConfig,
     TemporalChunkEnsembler,
     Top2SparseMoE,
+    build_chunk_aggregator,
 )
 
 __all__ += [
+    "DenseFeedForward",
+    "LatestChunkSelector",
     "StaticRGBMoEACT",
     "StaticRGBMoEACTConfig",
     "TemporalChunkEnsembler",
     "Top2SparseMoE",
+    "build_chunk_aggregator",
 ]

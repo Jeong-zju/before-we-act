@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
+import hashlib
 import math
 from pathlib import Path
 import socket
@@ -57,16 +58,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("--port must be in [1,65535]")
     if args.connect_timeout <= 0.0 or args.socket_timeout <= 0.0:
         raise ValueError("M2 inference timeouts must be positive")
-    config = _load_yaml(args.config.expanduser().resolve(strict=True))
+    config_path = args.config.expanduser().resolve(strict=True)
+    checkpoint_path = args.checkpoint.expanduser().resolve(strict=True)
+    config = _load_yaml(config_path)
     device = _device(args.device)
     precision = _precision(args.precision, device=device)
     if device.type == "cuda":
         torch.set_float32_matmul_precision("high")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-    model, runtime, schema = load_m2_checkpoint(
-        args.checkpoint.expanduser().resolve(strict=True), device=device
-    )
+    model, runtime, schema = load_m2_checkpoint(checkpoint_path, device=device)
     vision = _build_vision(config, schema=schema).to(device).eval()
     connection: socket.socket | None = None
     active_request: Mapping[str, Any] | None = None
@@ -111,9 +112,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             device=device,
         )
         client = {
-            "checkpoint": str(args.checkpoint.expanduser().resolve()),
-            "checkpoint_tree_sha256": m2_checkpoint_tree_sha256(args.checkpoint),
+            "checkpoint": str(checkpoint_path),
+            "checkpoint_tree_sha256": m2_checkpoint_tree_sha256(checkpoint_path),
             "checkpoint_format": schema["format_version"],
+            "config": str(config_path),
+            "config_sha256": _sha256(config_path),
             "task_vocabulary": list(schema["task_vocabulary"]),
             "trainable_parameters": int(schema["trainable_parameters"]),
             "vision_identity": dict(schema["vision_identity"]),
@@ -448,6 +451,14 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("M2 config root must be an object")
     return value
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _mapping(value: Mapping[str, Any], key: str) -> Mapping[str, Any]:

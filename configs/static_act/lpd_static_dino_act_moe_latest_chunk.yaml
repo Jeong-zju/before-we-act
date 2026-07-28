@@ -1,4 +1,4 @@
-name: wam.robofactory/lpd-static-dino-act-moe
+name: wam.robofactory/lpd-static-dino-act-moe-latest-chunk
 format_version: wam.robofactory.static_rgb_act_moe.config/1
 
 data:
@@ -55,7 +55,8 @@ training:
   save_interval: 1000
 
 inference:
-  chunk_aggregation: temporal_ensemble
+  # Reuse the full MoE checkpoint and select action zero from each new chunk.
+  chunk_aggregation: latest_chunk
   temporal_ensemble_decay: 0.01
   normalized_action_clip: 10.0
 

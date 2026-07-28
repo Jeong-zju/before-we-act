@@ -1,4 +1,4 @@
-"""Shared-agent ACT with sparse-MoE decoding for existing static RGB data."""
+"""Shared-agent ACT decoders and chunk aggregation for existing static RGB data."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ class StaticRGBMoEACTConfig:
     latent_dim: int = 32
     experts: int = 4
     dropout: float = 0.1
+    decoder_kind: str = "sparse_moe"
+    dense_ffn_dim: int = 3072
 
     def __post_init__(self) -> None:
         integer_fields = (
@@ -38,12 +40,15 @@ class StaticRGBMoEACTConfig:
             "ffn_dim",
             "latent_dim",
             "experts",
+            "dense_ffn_dim",
         )
         if any(int(getattr(self, name)) <= 0 for name in integer_fields):
             raise ValueError("Static RGB ACT dimensions must be positive")
         if self.d_model % self.heads:
             raise ValueError("d_model must be divisible by heads")
-        if self.experts < 2:
+        if self.decoder_kind not in {"sparse_moe", "dense"}:
+            raise ValueError("decoder_kind must be sparse_moe or dense")
+        if self.decoder_kind == "sparse_moe" and self.experts < 2:
             raise ValueError("top-2 MoE requires at least two experts")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0,1)")
@@ -107,6 +112,24 @@ class Top2SparseMoE(nn.Module):
         return output.reshape(shape), balance
 
 
+class DenseFeedForward(nn.Module):
+    """Dense decoder FFN with the same auxiliary-loss interface as sparse MoE."""
+
+    def __init__(self, config: StaticRGBMoEACTConfig) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(config.d_model, config.dense_ffn_dim),
+            nn.GELU(),
+            nn.Dropout(config.dropout),
+            nn.Linear(config.dense_ffn_dim, config.d_model),
+            nn.Dropout(config.dropout),
+        )
+
+    def forward(self, value: Tensor) -> tuple[Tensor, Tensor]:
+        # One is the neutral value of the existing ``router_aux - 1`` loss.
+        return self.net(value), value.new_ones(())
+
+
 class _MoEDecoderLayer(nn.Module):
     def __init__(self, config: StaticRGBMoEACTConfig) -> None:
         super().__init__()
@@ -126,7 +149,11 @@ class _MoEDecoderLayer(nn.Module):
         self.norm2 = nn.LayerNorm(config.d_model)
         self.norm3 = nn.LayerNorm(config.d_model)
         self.dropout = nn.Dropout(config.dropout)
-        self.moe = Top2SparseMoE(config)
+        self.moe: Top2SparseMoE | DenseFeedForward
+        if config.decoder_kind == "sparse_moe":
+            self.moe = Top2SparseMoE(config)
+        else:
+            self.moe = DenseFeedForward(config)
 
     def forward(self, query: Tensor, memory: Tensor) -> tuple[Tensor, Tensor]:
         normalized = self.norm1(query)
@@ -258,6 +285,7 @@ class TemporalChunkEnsembler:
             raise ValueError("horizon/decay must be positive")
         self.horizon = int(horizon)
         self.decay = float(decay)
+        self.mode = "temporal_ensemble"
         self.step = 0
         self._chunks: list[tuple[int, Tensor]] = []
 
@@ -298,9 +326,56 @@ class TemporalChunkEnsembler:
         self.step += 1
 
 
+class LatestChunkSelector:
+    """Use action zero from the newest chunk when the policy replans every step."""
+
+    def __init__(self, *, horizon: int) -> None:
+        if horizon <= 0:
+            raise ValueError("horizon must be positive")
+        self.horizon = int(horizon)
+        self.decay = None
+        self.mode = "latest_chunk"
+        self._latest: Tensor | None = None
+
+    def reset(self) -> None:
+        self._latest = None
+
+    def push(self, chunk: Tensor) -> None:
+        if chunk.ndim != 3 or chunk.shape[1] != self.horizon:
+            raise ValueError("chunk must be [agents,horizon,action_dim]")
+        self._latest = chunk.detach().clone()
+
+    def current(self) -> Tensor:
+        if self._latest is None:
+            raise RuntimeError("latest chunk selector has no prediction")
+        return self._latest[:, 0]
+
+    def advance(self) -> None:
+        # Inference pushes a freshly replanned chunk before every ``current`` call.
+        return None
+
+
+def build_chunk_aggregator(
+    *,
+    mode: str,
+    horizon: int,
+    decay: float = 0.01,
+) -> TemporalChunkEnsembler | LatestChunkSelector:
+    """Build the explicit inference ablation selected by the YAML config."""
+
+    if mode == "temporal_ensemble":
+        return TemporalChunkEnsembler(horizon=horizon, decay=decay)
+    if mode == "latest_chunk":
+        return LatestChunkSelector(horizon=horizon)
+    raise ValueError("chunk aggregation must be temporal_ensemble or latest_chunk")
+
+
 __all__ = [
+    "DenseFeedForward",
+    "LatestChunkSelector",
     "StaticRGBMoEACT",
     "StaticRGBMoEACTConfig",
     "TemporalChunkEnsembler",
     "Top2SparseMoE",
+    "build_chunk_aggregator",
 ]

@@ -22,6 +22,10 @@
 - [Phase M0 数据集卡](reports/20260721_FE_PC_WAM_PHASE_M0_DATASET_CARD_V1.0_ZH.md)
 - [M2 双任务多视角模型闭环失败记录](reports/20260727_M2_MULTIVIEW_CLOSED_LOOP_FAILURE_ZH.md)
 
+## 实验与消融（`experiments/`）
+
+- [LPD static-RGB DINO+ACT+MoE 候选基线与最小消融](experiments/lpd-static-dino-act-moe.md)
+
 ## 历史归档（`archive/`）
 
 - [Proprioceptive WAM 技术计划](archive/20260718_PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md)

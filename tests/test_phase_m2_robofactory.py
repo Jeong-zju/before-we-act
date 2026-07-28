@@ -22,6 +22,7 @@ from robofactory_rpc import (
 from scripts.serve_robofactory_m2_rollout import (
     TASK_MAX_EPISODE_STEPS,
     TASKS,
+    _validate_client as _validate_m2_rollout_client,
     _validate_args as _validate_m2_rollout_args,
 )
 from scripts.run_robofactory_m2_inference import _validate_contract
@@ -619,6 +620,29 @@ def test_m2_rollout_uses_native_task_episode_limits() -> None:
     ):
         _validate_m2_rollout_args(
             _m2_rollout_args("LongPipelineDelivery-rf", max_steps=1501)
+        )
+
+
+def test_m2_rollout_accepts_dense_act_and_rejects_format_source_mismatch() -> None:
+    contract = {"task_id": "lift_barrier", "future_path": False}
+    dense_client = {
+        "checkpoint_format": "wam.robofactory.static_rgb_act_moe.checkpoint/1",
+        "task_vocabulary": ["lift_barrier", "long_pipeline_delivery"],
+        "future_path": False,
+        "policy": {"action_source": "static_rgb_dino_act_dense"},
+    }
+
+    assert _validate_m2_rollout_client(
+        dense_client,
+        contract=contract,
+    ) == dense_client
+    with pytest.raises(RuntimeError, match="supported direct action source"):
+        _validate_m2_rollout_client(
+            {
+                **dense_client,
+                "checkpoint_format": "wam.robofactory.m2.checkpoint/5",
+            },
+            contract=contract,
         )
 
 
