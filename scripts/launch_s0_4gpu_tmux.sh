@@ -203,15 +203,41 @@ prompt_hf_token() {
 }
 
 fetch_candidate_branches() {
-  local refspecs=()
+  local configured=()
+  local desired
+  local existing
+  local found
+  local fetches_all_branches=0
   local branch
-  for branch in "${BRANCHES[@]}"; do
-    refspecs+=(
-      "+refs/heads/${branch}:refs/remotes/origin/${branch}"
-    )
+  mapfile -t configured < <(
+    git -C "${FE_ROOT}" config --get-all remote.origin.fetch || true
+  )
+  for existing in "${configured[@]}"; do
+    if [[ "${existing#+}" == \
+      'refs/heads/*:refs/remotes/origin/*' ]]; then
+      fetches_all_branches=1
+      break
+    fi
   done
+  if (( fetches_all_branches == 0 )); then
+    for branch in "${BRANCHES[@]}"; do
+      desired="+refs/heads/${branch}:refs/remotes/origin/${branch}"
+      found=0
+      for existing in "${configured[@]}"; do
+        if [[ "${existing}" == "${desired}" || \
+          "${existing}" == "${desired#+}" ]]; then
+          found=1
+          break
+        fi
+      done
+      if (( found == 0 )); then
+        git -C "${FE_ROOT}" config --add remote.origin.fetch "${desired}"
+        configured+=("${desired}")
+      fi
+    done
+  fi
   printf 'Fetching the four immutable S0 candidate branches from origin.\n'
-  git -C "${FE_ROOT}" fetch --no-tags origin "${refspecs[@]}"
+  git -C "${FE_ROOT}" fetch --no-tags origin
   for branch in "${BRANCHES[@]}"; do
     git -C "${FE_ROOT}" show-ref \
       --verify --quiet "refs/remotes/origin/${branch}"
