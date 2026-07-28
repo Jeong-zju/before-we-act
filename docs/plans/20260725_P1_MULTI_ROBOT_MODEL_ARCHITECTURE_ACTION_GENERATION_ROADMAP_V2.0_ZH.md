@@ -304,8 +304,8 @@ cd /workspace/fe-pc-wam
 # 7. 校验代码至少包含已验证的一键启动、B2 路由和安全终止能力。
 git rev-parse --short HEAD
 
-git merge-base --is-ancestor 8d39651 HEAD || {
-  echo "错误：远程代码早于最低安全版本 8d39651"
+git merge-base --is-ancestor 2de5656 HEAD || {
+  echo "错误：远程代码早于最低安全版本 2de5656"
   exit 1
 }
 
@@ -357,8 +357,8 @@ cd /workspace/fe-pc-wam
 git switch feat/model-improvements
 git pull --ff-only
 
-git merge-base --is-ancestor 8d39651 HEAD || {
-  echo "错误：代码不包含安全终止器 8d39651"
+git merge-base --is-ancestor 2de5656 HEAD || {
+  echo "错误：代码不包含安全终止器 2de5656"
   exit 1
 }
 

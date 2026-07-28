@@ -218,6 +218,7 @@ def test_p1_documents_complete_zero_start_and_scoped_stop_commands() -> None:
     assert "--run-id s0-round1" in document
     assert "当前 S0 run 一键终止与窗口关闭" in document
     assert "stop_s0_4gpu_tmux.sh \\" in document
+    assert "git merge-base --is-ancestor 2de5656 HEAD" in document
     assert "--dry-run" in document
     assert "tmux kill-session" in document
     assert "不会删除数据集" in document
