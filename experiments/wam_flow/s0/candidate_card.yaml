@@ -1,0 +1,25 @@
+format_version: wam.robofactory.wam_flow.candidate_card/1
+round_id: s0-reference-20260728
+candidate_id: B0
+branch: round/s0-b0-legacy-moe-ensemble
+source_parent_commit: 07fd136fadd8831d6c111a7be5e9908056b6743d
+hypothesis: >-
+  The current sparse top-2 MoE legacy chunk policy with temporal ensemble is a
+  reproducible behavior reference under uniform per-agent loss.
+changed_axis: reference_coordinate
+unchanged_axes:
+  - shared_data_manifest
+  - frozen_dinov3
+  - action_normalization
+  - optimizer_updates_80000
+  - training_seed_101
+  - gate20_seed_900
+rollback:
+  commit: 07fd136
+  flag: none_reference_candidate
+runtime:
+  policy_kind: static_act
+  config: configs/wam_flow/s0_candidate.yaml
+  train_mode: train
+  checkpoint: checkpoints/s0_b0_legacy_moe_ensemble/checkpoint_080000.pt
+  gpu_index: 0
