@@ -16,6 +16,13 @@ current WAM, so no collection, conversion or upload is required.
 
 Run `./scripts/run_lpd_single_5090.sh full`.
 
+## Result snapshot
+
+| Commit | LongPipelineDelivery (LPD) | LiftBarrier |
+|---|---:|---:|
+| `4dae9e79bbfdd2d36a0381da2179a97390766d83` | 全部失败 | 仅少数成功 |
+| `c79ff1ed515a8284cf6dd7d6979f43b245c90487` | 15/20 | 17/20 |
+
 ## Preliminary closed-loop result
 
 The operator reported the following result from commit `34cd6e7` using the
