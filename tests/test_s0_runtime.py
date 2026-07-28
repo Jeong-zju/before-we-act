@@ -155,3 +155,7 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     assert "tmux attach -t" not in runbook
     assert "tmux new-window" in launcher
     assert "resolve_existing_tmux_session" in launcher
+    assert "Resuming partially created S0 windows" in launcher
+    assert "Preserving existing candidate window" in launcher
+    assert 'unlink "${HF_TOKEN_FIFO}" 2>/dev/null || true' in launcher
+    assert 'unlink "${S0_HF_TOKEN_FIFO}" 2>/dev/null || true' in prepare

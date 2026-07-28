@@ -8,6 +8,7 @@ RUN_ID="${S0_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 FOCUS_MONITOR=auto
 DRY_RUN=0
 HF_TOKEN_INPUT=""
+RESUME_LAUNCH=0
 
 # S0 owns these defaults. A fresh clone therefore needs no path exports.
 SHARED_DATA_ROOT="${FE_ROOT}/datasets/robofactory_multitask"
@@ -130,23 +131,63 @@ resolve_existing_tmux_session() {
 }
 
 assert_s0_windows_absent() {
-  local existing=()
   local desired
-  local observed
-  mapfile -t existing < <(tmux list-windows -t "${SESSION}" -F '#W')
   for desired in \
     "${PREPARE_WINDOW}" \
     "${CANDIDATE_WINDOWS[@]}" \
     "${MONITOR_WINDOW}"; do
-    for observed in "${existing[@]}"; do
-      if [[ "${observed}" == "${desired}" ]]; then
-        printf >&2 \
-          'Tmux window already exists in session %s: %s\n' \
-          "${SESSION}" "${desired}"
-        exit 3
-      fi
-    done
+    if tmux_window_id "${desired}" >/dev/null; then
+      printf >&2 \
+        'Tmux window already exists in session %s: %s\n' \
+        "${SESSION}" "${desired}"
+      exit 3
+    fi
   done
+}
+
+tmux_window_id() {
+  local desired="$1"
+  local observed
+  local window_id
+  while IFS='|' read -r observed window_id; do
+    if [[ "${observed}" == "${desired}" ]]; then
+      printf '%s' "${window_id}"
+      return 0
+    fi
+  done < <(
+    tmux list-windows \
+      -t "${SESSION}" \
+      -F '#{window_name}|#{window_id}'
+  )
+  return 1
+}
+
+validate_resume_manifest() {
+  local manifest="${RUN_ROOT}/run_manifest.json"
+  if [[ ! -f "${manifest}" ]]; then
+    printf >&2 \
+      'Run root exists without a resumable manifest: %s\n' \
+      "${RUN_ROOT}"
+    exit 3
+  fi
+  if ! jq -e \
+    --arg run_id "${RUN_ID}" \
+    --arg session "${SESSION}" \
+    --arg prefix "${WINDOW_PREFIX}" \
+    '
+      .run_id == $run_id and
+      .tmux_session == $session and
+      .tmux_window_prefix == $prefix
+    ' \
+    "${manifest}" \
+    >/dev/null; then
+    printf >&2 \
+      'Existing run manifest does not match this run/session/window prefix: %s\n' \
+      "${manifest}"
+    exit 3
+  fi
+  RESUME_LAUNCH=1
+  printf 'Resuming partially created S0 windows for run %s.\n' "${RUN_ID}"
 }
 
 create_persistent_window() {
@@ -247,10 +288,15 @@ fetch_candidate_branches() {
     fi
     if [[ "$(git -C "${FE_ROOT}" rev-parse "${branch}")" != \
       "$(git -C "${FE_ROOT}" rev-parse "origin/${branch}")" ]]; then
-      printf >&2 \
-        'Local branch %s differs from origin/%s; refusing an ambiguous run.\n' \
+      if ! git -C "${FE_ROOT}" merge-base \
+        --is-ancestor "${branch}" "origin/${branch}"; then
+        printf >&2 \
+          'Local branch %s has diverged from origin/%s; refusing an ambiguous run.\n' \
+          "${branch}" "${branch}"
+        exit 3
+      fi
+      printf 'Candidate branch %s will be fast-forwarded to origin/%s.\n' \
         "${branch}" "${branch}"
-      exit 3
     fi
   done
 }
@@ -327,7 +373,11 @@ fi
 
 require_commands
 resolve_existing_tmux_session
-assert_s0_windows_absent
+if [[ -e "${RUN_ROOT}" ]]; then
+  validate_resume_manifest
+else
+  assert_s0_windows_absent
+fi
 print_plan
 if [[ "$(git -C "${FE_ROOT}" branch --show-current)" != "feat/model-improvements" ]]; then
   printf >&2 'Launch S0 from the feat/model-improvements worktree.\n'
@@ -342,11 +392,6 @@ if (( GPU_COUNT < 4 )); then
   printf >&2 'S0 requires at least four visible GPUs; found %d.\n' "${GPU_COUNT}"
   exit 3
 fi
-if [[ -e "${RUN_ROOT}" ]]; then
-  printf >&2 'Run root already exists: %s\n' "${RUN_ROOT}"
-  exit 3
-fi
-
 fetch_candidate_branches
 ensure_uv
 
@@ -366,79 +411,129 @@ for index in "${!CANDIDATES[@]}"; do
   else
     git -C "${FE_ROOT}" worktree add "${path}" "${branch}"
   fi
+  if [[ "$(git -C "${path}" rev-parse HEAD)" != \
+    "$(git -C "${FE_ROOT}" rev-parse "origin/${branch}")" ]]; then
+    if [[ -n "$(git -C "${path}" status --porcelain --untracked-files=no)" ]]; then
+      printf >&2 \
+        'Refusing to fast-forward candidate worktree with tracked changes: %s\n' \
+        "${path}"
+      exit 3
+    fi
+    git -C "${path}" merge --ff-only "origin/${branch}"
+  fi
   test -f "${path}/experiments/wam_flow/s0/candidate.env"
   test -f "${path}/experiments/wam_flow/s0/candidate_card.yaml"
   WORKTREES+=("${path}")
 done
 
-prompt_hf_token
-init_arguments=(
-  "${FE_ROOT}/scripts/s0_runtime.py" init
-  --run-root "${RUN_ROOT}"
-  --run-id "${RUN_ID}"
-  --session "${SESSION}"
-  --window-prefix "${WINDOW_PREFIX}"
-  --monitor-window "${MONITOR_WINDOW}"
-  --base-repo "${FE_ROOT}"
-)
-for index in "${!CANDIDATES[@]}"; do
-  init_arguments+=(--worktree "${CANDIDATES[index]}=${WORKTREES[index]}")
-done
-python3 "${init_arguments[@]}"
-
-mkfifo "${HF_TOKEN_FIFO}"
-chmod 600 "${HF_TOKEN_FIFO}"
 cleanup_secret() {
   HF_TOKEN_INPUT=""
   unset HF_TOKEN_INPUT
-  if [[ -p "${HF_TOKEN_FIFO}" ]]; then
-    unlink "${HF_TOKEN_FIFO}"
-  fi
+  unlink "${HF_TOKEN_FIFO}" 2>/dev/null || true
 }
-trap cleanup_secret EXIT
 
-prepare_command="$(shell_join \
-  env \
-  -u HF_TOKEN \
-  "PATH=${PATH}" \
-  GPU_INDEX=0 \
-  "S0_RUN_ROOT=${RUN_ROOT}" \
-  "S0_READY_FILE=${READY_FILE}" \
-  "S0_FAILED_FILE=${FAILED_FILE}" \
-  "S0_HF_TOKEN_FIFO=${HF_TOKEN_FIFO}" \
-  "UV_CACHE_DIR=${SHARED_UV_CACHE}" \
-  "UV_PROJECT_ENVIRONMENT=${SHARED_UV_ENV}" \
-  "ROBOFACTORY_ROOT=${ROBOFACTORY_ROOT}" \
-  "RF_PYTHON=${RF_PYTHON}" \
-  bash scripts/prepare_s0_shared.sh
-)"
-create_persistent_window \
-  "${PREPARE_WINDOW}" \
-  "${FE_ROOT}" \
-  "${prepare_command}" \
-  >/dev/null
+START_PREPARE=0
+if (( RESUME_LAUNCH )); then
+  if [[ -f "${FAILED_FILE}" ]]; then
+    printf >&2 \
+      'Shared preparation already failed; inspect window %s and use a new run id after fixing it.\n' \
+      "${PREPARE_WINDOW}"
+    exit 4
+  elif [[ -f "${READY_FILE}" ]]; then
+    printf 'Shared preparation is already complete; reusing it.\n'
+  elif PREPARE_WINDOW_ID="$(tmux_window_id "${PREPARE_WINDOW}")"; then
+    if [[ "$(tmux display-message -p -t "${PREPARE_WINDOW_ID}" '#{pane_dead}')" \
+      == "1" ]]; then
+      printf >&2 \
+        'Prepare window exited without ready/failed evidence: %s\n' \
+        "${PREPARE_WINDOW}"
+      exit 4
+    fi
+    printf 'Shared preparation is still running in window %s; preserving it.\n' \
+      "${PREPARE_WINDOW}"
+  else
+    printf 'Prepare window is missing; recreating it for this run.\n'
+    START_PREPARE=1
+  fi
+else
+  prompt_hf_token
+  init_arguments=(
+    "${FE_ROOT}/scripts/s0_runtime.py" init
+    --run-root "${RUN_ROOT}"
+    --run-id "${RUN_ID}"
+    --session "${SESSION}"
+    --window-prefix "${WINDOW_PREFIX}"
+    --monitor-window "${MONITOR_WINDOW}"
+    --base-repo "${FE_ROOT}"
+  )
+  for index in "${!CANDIDATES[@]}"; do
+    init_arguments+=(--worktree "${CANDIDATES[index]}=${WORKTREES[index]}")
+  done
+  python3 "${init_arguments[@]}"
+  START_PREPARE=1
+fi
 
-# The secret crosses into the prepare window through a mode-0600 FIFO. It is
-# never exported by the launcher and never appears in a tmux command or argv.
-printf '%s\n' "${HF_TOKEN_INPUT}" >"${HF_TOKEN_FIFO}"
-cleanup_secret
-trap - EXIT
+if (( START_PREPARE )); then
+  if (( RESUME_LAUNCH )); then
+    prompt_hf_token
+  fi
+  cleanup_secret
+  mkfifo "${HF_TOKEN_FIFO}"
+  chmod 600 "${HF_TOKEN_FIFO}"
+  trap cleanup_secret EXIT
+
+  prepare_command="$(shell_join \
+    env \
+    -u HF_TOKEN \
+    "PATH=${PATH}" \
+    GPU_INDEX=0 \
+    "S0_RUN_ROOT=${RUN_ROOT}" \
+    "S0_READY_FILE=${READY_FILE}" \
+    "S0_FAILED_FILE=${FAILED_FILE}" \
+    "S0_HF_TOKEN_FIFO=${HF_TOKEN_FIFO}" \
+    "UV_CACHE_DIR=${SHARED_UV_CACHE}" \
+    "UV_PROJECT_ENVIRONMENT=${SHARED_UV_ENV}" \
+    "ROBOFACTORY_ROOT=${ROBOFACTORY_ROOT}" \
+    "RF_PYTHON=${RF_PYTHON}" \
+    bash scripts/prepare_s0_shared.sh
+  )"
+  create_persistent_window \
+    "${PREPARE_WINDOW}" \
+    "${FE_ROOT}" \
+    "${prepare_command}" \
+    >/dev/null
+
+  # The secret crosses into the prepare window through a mode-0600 FIFO. It is
+  # never exported by the launcher and never appears in a tmux command or argv.
+  printf '%s\n' "${HF_TOKEN_INPUT}" >"${HF_TOKEN_FIFO}"
+  cleanup_secret
+  trap - EXIT
+fi
 
 for index in "${!CANDIDATES[@]}"; do
-  create_persistent_window \
-    "${CANDIDATE_WINDOWS[index]}" \
-    "${WORKTREES[index]}" \
-    "$(candidate_command "${index}")" \
-    >/dev/null
+  if tmux_window_id "${CANDIDATE_WINDOWS[index]}" >/dev/null; then
+    printf 'Preserving existing candidate window %s.\n' \
+      "${CANDIDATE_WINDOWS[index]}"
+  else
+    create_persistent_window \
+      "${CANDIDATE_WINDOWS[index]}" \
+      "${WORKTREES[index]}" \
+      "$(candidate_command "${index}")" \
+      >/dev/null
+  fi
 done
 monitor_command="$(shell_join \
   python3 scripts/s0_runtime.py monitor \
   --run-root "${RUN_ROOT}" \
   --interval 5
 )"
-MONITOR_WINDOW_ID="$(
-  create_persistent_window "${MONITOR_WINDOW}" "${FE_ROOT}" "${monitor_command}"
-)"
+if MONITOR_WINDOW_ID="$(tmux_window_id "${MONITOR_WINDOW}")"; then
+  printf 'Preserving existing monitor window %s.\n' "${MONITOR_WINDOW}"
+else
+  MONITOR_WINDOW_ID="$(
+    create_persistent_window "${MONITOR_WINDOW}" "${FE_ROOT}" "${monitor_command}"
+  )"
+fi
 
 printf '\nS0 windows are running in the existing permanent tmux session %s.\n' \
   "${SESSION}"
