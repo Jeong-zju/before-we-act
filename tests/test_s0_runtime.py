@@ -139,6 +139,9 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     token_fifo = (ROOT / "scripts/s0_hf_token_fifo.sh").read_text(
         encoding="utf-8"
     )
+    candidate_runner = (ROOT / "scripts/run_s0_candidate.sh").read_text(
+        encoding="utf-8"
+    )
     runner = (ROOT / "scripts/run_lpd_single_5090.sh").read_text(
         encoding="utf-8"
     )
@@ -174,6 +177,8 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     assert "export HF_TOKEN" not in launcher
     assert "export HF_TOKEN" not in prepare
     assert "export HF_TOKEN='hf_...'" not in runbook
+    assert "export LPD_POLICY_KIND" in candidate_runner
+    assert "LPD_POLICY_KIND=wam" not in candidate_runner
     assert "HfApi().whoami(token=os.environ[\"HF_TOKEN\"])" in runner
     assert runner.count('HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download') == 4
     assert (
