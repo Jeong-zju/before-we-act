@@ -190,6 +190,16 @@ train() {
           --progress-log "${LPD_PROGRESS_LOG}"
       )
       ;;
+    agent_flow)
+      (
+        cd "${FE_ROOT}"
+        PYTHONUNBUFFERED=1 uv run --frozen python \
+          scripts/train_agent_factorized_flow_wam.py \
+          --config "${LPD_CONFIG}" \
+          --device cuda:0 \
+          --progress-log "${LPD_PROGRESS_LOG}"
+      )
+      ;;
     wam)
       (
         cd "${FE_ROOT}"
