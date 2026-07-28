@@ -13,14 +13,14 @@ __pycache__/
 .uv-python/
 
 # Reproducible evaluation and diagnostic outputs
-outputs/
-logs/
-checkpoints/
+/outputs
+/logs
+/checkpoints
 wandb/
 runs/
 
 # data
-datasets/
+/datasets
 *.hdf5
 *.h5
 *.zarr
@@ -32,7 +32,7 @@ datasets/
 .idea/
 backups/
 /archive/
-artifacts/
+/artifacts
 
 # refs
 refs/
