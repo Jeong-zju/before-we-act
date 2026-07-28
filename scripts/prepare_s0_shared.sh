@@ -10,6 +10,7 @@ FE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${UV_PROJECT_ENVIRONMENT:?set UV_PROJECT_ENVIRONMENT}"
 : "${ROBOFACTORY_ROOT:?set ROBOFACTORY_ROOT}"
 : "${RF_PYTHON:?set RF_PYTHON}"
+S0_SHARED_PREPARE_LOCK="${S0_SHARED_PREPARE_LOCK:-${FE_ROOT}/outputs/s0_runs/.shared_prepare.lock}"
 
 if [[ ! -p "${S0_HF_TOKEN_FIFO}" ]]; then
   printf >&2 'Missing protected Hugging Face token FIFO: %s\n' \
@@ -40,6 +41,13 @@ on_exit() {
 }
 trap on_exit EXIT
 
+mkdir -p "$(dirname "${S0_SHARED_PREPARE_LOCK}")"
+exec {S0_PREPARE_LOCK_FD}>"${S0_SHARED_PREPARE_LOCK}"
+printf 'Waiting for the cross-run S0 shared preparation lock: %s\n' \
+  "${S0_SHARED_PREPARE_LOCK}"
+flock -x "${S0_PREPARE_LOCK_FD}"
+printf 'Acquired the cross-run S0 shared preparation lock.\n'
+
 printf 'Preparing the shared S0 environment from %s\n' "${FE_ROOT}"
 unset \
   M2_DATA_ROOT \
@@ -67,6 +75,7 @@ sha256sum \
   "${FE_ROOT}/datasets/robofactory_multitask/long_pipeline_delivery/training_manifest.json" \
   "${FE_ROOT}/artifacts/vision/dinov3_vitl16_lvd/config.json" \
   "${FE_ROOT}/artifacts/vision/dinov3_vitl16_lvd/model.safetensors" \
+  "${ROBOFACTORY_ROOT}/robofactory/assets/scenes/table/table.glb" \
   | tee "${S0_RUN_ROOT}/shared_artifact_sha256.txt"
 touch "${S0_READY_FILE}"
 printf 'S0 shared environment is ready. Candidates may start.\n'
