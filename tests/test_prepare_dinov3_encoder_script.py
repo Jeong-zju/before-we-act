@@ -251,6 +251,7 @@ def test_download_preflight_heads_both_files_before_pinned_transfer(
             "allow_patterns": list(prepare.DOWNLOAD_PATTERNS),
             "local_dir": tmp_path,
             "token": token,
+            "max_workers": 1,
         }
     ]
 

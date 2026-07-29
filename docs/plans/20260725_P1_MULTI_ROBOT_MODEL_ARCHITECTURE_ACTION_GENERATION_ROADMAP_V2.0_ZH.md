@@ -511,6 +511,11 @@ test -x ./scripts/stop_s1_r1_2gpu_tmux.sh
 
 正式启动时在隐藏提示中粘贴同时具备 DINOv3 gated 模型、两个训练数据集和 `RoboFactory_asset` 读取权限的 HF token。启动后 launcher 默认切到 `s1-r1-round1-monitor`；可随时从永久 session 的任意非目标 window 执行以下只读监测指令：
 
+共享准备只调用官方基础下载命令 `hf download`：固定关闭 Xet，并用
+`--max-workers 1` 串行走普通 HTTP，以避免云主机共享出口请求
+`xet-read-token` 时出现 `429 Too Many Requests`。脚本不包含并发下载或重试
+封装；下载失败后，以新 run-id 重新启动会原地复用已完成文件并续传。
+
 ```bash
 cd /workspace/fe-pc-wam
 
@@ -553,6 +558,24 @@ nvidia-smi \
 ```
 
 一键退出完成后，Vast.ai 的永久 tmux session 必须仍存在；若之后要恢复训练，保留的 `resume.pt` 会被各候选训练器读取，但为避免复用已经关闭的 window/run manifest，应使用新的 `--run-id` 启动并按需把对应 resume/checkpoint 放入新 run 的候选隔离目录。
+
+若 `s1-r1-round1` 在共享下载阶段失败且尚未执行上述退出指令，应先切到永久
+session 中任意非 S1-R1 基础 window，再执行：
+
+```bash
+cd /workspace/fe-pc-wam
+
+./scripts/stop_s1_r1_2gpu_tmux.sh --run-id s1-r1-round1
+
+git switch feat/model-improvements
+git pull --ff-only
+
+./scripts/launch_s1_r1_2gpu_tmux.sh --run-id s1-r1-round2
+```
+
+该流程只关闭 round1 的四个 window，不删除 `/workspace/fe-pc-wam/datasets`、
+`/workspace/fe-pc-wam/artifacts`、`/workspace/RoboFactory`、Hub 下载缓存或
+round1 日志；round2 会继续使用这些已有内容。
 
 ### 6.2 R2a/R2b：两个可选单变量微轮次（可四卡并行）
 
