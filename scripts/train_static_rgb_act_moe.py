@@ -63,6 +63,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _emit_stage(stage: str, detail: str) -> None:
+    payload = {
+        "event": "startup_stage",
+        "stage": stage,
+        "detail": detail,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    print(json.dumps(payload, sort_keys=True), flush=True)
+    stage_log = os.environ.get("LPD_STAGE_LOG")
+    if stage_log:
+        path = Path(stage_log).expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _append_jsonl(path, payload)
+
+
 class _TaskBalancedBatchSampler(Sampler[list[int]]):
     """Resume-stable task-balanced batches keyed by optimizer update."""
 
@@ -112,9 +127,11 @@ class _TaskBalancedBatchSampler(Sampler[list[int]]):
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config_path = args.config.expanduser().resolve(strict=True)
+    _emit_stage("config", f"loading {config_path}")
     raw = _load_yaml(config_path)
     training = _mapping(raw, "training")
     device = torch.device(args.device)
+    _emit_stage("cuda_preflight", f"checking {device}")
     if device.type != "cuda" or not torch.cuda.is_available():
         raise RuntimeError("formal static RGB ACT training requires one CUDA GPU")
     if torch.cuda.device_count() != 1:
@@ -130,7 +147,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     seed = int(training.get("seed", 20260727))
     _seed_everything(seed)
 
+    _emit_stage(
+        "dataset_validation",
+        "verifying manifests, HDF5 identities and normalization statistics",
+    )
     dataset = _dataset(raw)
+    _emit_stage(
+        "dataset_ready",
+        f"{len(dataset)} train windows across {len(dataset.contracts)} tasks",
+    )
     batch_size = int(args.batch_size or training.get("batch_size", 4))
     updates = int(args.updates or training.get("updates", 80000))
     if batch_size <= 0 or updates <= 0:
@@ -138,7 +163,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     model_config = StaticRGBMoEACTConfig.from_dict(_mapping(raw, "model"))
     if model_config.horizon != dataset.action_horizon:
         raise ValueError("model and dataset ACT horizons differ")
+    _emit_stage("dinov3_load", "loading and verifying frozen DINOv3 weights")
     vision = _vision(raw).to(device).eval()
+    _emit_stage("model_build", "allocating the legacy CVAE policy and optimizer")
     model = StaticRGBMoEACT(model_config).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -173,12 +200,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         progress_log.parent.mkdir(parents=True, exist_ok=True)
     start = 0
     if not args.no_resume and resume.is_file():
+        _emit_stage("resume_load", f"loading {resume}")
         saved = torch.load(resume, map_location=device, weights_only=False)
         model.load_state_dict(saved["model"], strict=True)
         optimizer.load_state_dict(saved["optimizer"])
         scheduler.load_state_dict(saved["scheduler"])
         start = int(saved["update"])
         _restore_rng(_mapping(saved, "rng"))
+    else:
+        _emit_stage("resume_load", "no resume checkpoint; starting from update 0")
     if output.exists():
         raise FileExistsError(f"refusing to overwrite completed checkpoint {output}")
 
@@ -187,6 +217,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     beta = float(training.get("kl_weight", 1e-3))
     router_weight = float(training.get("router_aux_weight", 1e-2))
     workers = int(training.get("num_workers", 4))
+    _emit_stage(
+        "dataloader_start",
+        f"starting {workers} workers; waiting for the first HDF5 batch",
+    )
     loader = DataLoader(
         dataset,
         batch_sampler=_TaskBalancedBatchSampler(
@@ -203,8 +237,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     iterator = iter(loader)
     model.train()
+    first_update = start + 1
     for update in range(start + 1, updates + 1):
         batch = _local_batch(next(iterator))
+        if update == first_update:
+            _emit_stage(
+                "optimizer_training",
+                f"first batch ready; updates {first_update}..{updates}",
+            )
         images = batch["images"].to(device, non_blocking=True)
         state = batch["state"].to(device, non_blocking=True)
         actions = batch["actions"].to(device, non_blocking=True)
