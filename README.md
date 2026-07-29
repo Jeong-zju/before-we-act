@@ -338,6 +338,7 @@ jq '{
 ```bash
 uv sync --frozen
 uv run hf auth login
+HF_HUB_DISABLE_XET=1 HF_XET_HIGH_PERFORMANCE=0 \
 uv run python scripts/prepare_dinov3_encoder.py \
   --encoder dinov3_vitl16_lvd \
   --output-dir artifacts/vision/dinov3_vitl16_lvd
@@ -352,7 +353,7 @@ uv run hf download facebook/dinov3-vitl16-pretrain-lvd1689m \
   --dry-run
 ```
 
-准备入口会下载并校验固定 revision 的 `config.json` 与 `model.safetensors`。训练、评测和 rollout 只读取已校验的本地文件，不会在运行中自动联网，也不会静默回退到随机或其他视觉权重。准备完成后启动正式 GPU 训练：
+准备入口只使用 `hf download --max-workers 1 --local-dir artifacts/vision/dinov3_vitl16_lvd`，关闭 Xet 并直接写最终目录；传输中断后重复同一命令会原地续传，不创建第二份 snapshot 或临时安装副本。入口随后校验固定 revision 的 `config.json` 与 `model.safetensors`。训练、评测和 rollout 只读取已校验的本地文件，不会在运行中自动联网，也不会静默回退到随机或其他视觉权重。准备完成后启动正式 GPU 训练：
 
 ```bash
 MUJOCO_GL=egl CUDA_VISIBLE_DEVICES=0 \

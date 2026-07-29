@@ -112,7 +112,7 @@ def test_prepare_existing_verified_artifact_is_idempotent_and_offline(
         download_calls += 1
         raise AssertionError("verified artifact must not call the Hub")
 
-    monkeypatch.setattr(prepare, "_download_snapshot", fail_if_downloaded)
+    monkeypatch.setattr(prepare, "_direct_download", fail_if_downloaded)
 
     assert prepare.main(["--output-dir", str(verified_default_artifact)]) == 0
     first = json.loads(capsys.readouterr().out)
@@ -160,7 +160,7 @@ def test_prepare_existing_tampered_or_extra_artifact_fails_closed_without_networ
         download_calls += 1
         raise AssertionError("invalid existing artifact must fail before the Hub")
 
-    monkeypatch.setattr(prepare, "_download_snapshot", fail_if_downloaded)
+    monkeypatch.setattr(prepare, "_direct_download", fail_if_downloaded)
 
     with pytest.raises(SystemExit, match="refusing to overwrite"):
         prepare.main(["--output-dir", str(verified_default_artifact)])
@@ -192,10 +192,10 @@ def test_download_preflight_reports_gated_approval_before_transfer(
         raise AssertionError("gated preflight must stop before snapshot transfer")
 
     monkeypatch.setattr(huggingface_hub, "get_hf_file_metadata", deny_metadata)
-    monkeypatch.setattr(huggingface_hub, "snapshot_download", fail_if_transferred)
+    monkeypatch.setattr(prepare.subprocess, "run", fail_if_transferred)
 
     with pytest.raises(RuntimeError) as caught:
-        prepare._download_snapshot(
+        prepare._direct_download(
             tmp_path,
             model_id=DEFAULT_DINOV3_MODEL_ID,
             revision=DEFAULT_DINOV3_REVISION,
@@ -211,25 +211,26 @@ def test_download_preflight_reports_gated_approval_before_transfer(
     assert transfer_calls == 0
 
 
-def test_download_preflight_heads_both_files_before_pinned_transfer(
+def test_download_preflight_then_uses_hardened_direct_in_place_transfer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = "hf_unit_test_secret"
     metadata_calls: list[tuple[str, dict[str, object]]] = []
-    transfer_calls: list[dict[str, object]] = []
+    transfer_calls: list[tuple[list[str], dict[str, object]]] = []
 
     def metadata(url: str, **kwargs: object) -> object:
         metadata_calls.append((url, kwargs))
         return object()
 
-    def transfer(**kwargs: object) -> None:
-        transfer_calls.append(kwargs)
+    def transfer(command: list[str], **kwargs: object) -> None:
+        transfer_calls.append((command, kwargs))
 
     monkeypatch.setattr(huggingface_hub, "get_hf_file_metadata", metadata)
-    monkeypatch.setattr(huggingface_hub, "snapshot_download", transfer)
+    monkeypatch.setattr(prepare.shutil, "which", lambda _name: "/usr/bin/hf")
+    monkeypatch.setattr(prepare.subprocess, "run", transfer)
 
-    prepare._download_snapshot(
+    prepare._direct_download(
         tmp_path,
         model_id=DEFAULT_DINOV3_MODEL_ID,
         revision=DEFAULT_DINOV3_REVISION,
@@ -243,17 +244,28 @@ def test_download_preflight_heads_both_files_before_pinned_transfer(
     ]
     assert all(call[1]["token"] == token for call in metadata_calls)
     assert all(call[1]["timeout"] == 30.0 for call in metadata_calls)
-    assert transfer_calls == [
-        {
-            "repo_id": DEFAULT_DINOV3_MODEL_ID,
-            "repo_type": "model",
-            "revision": DEFAULT_DINOV3_REVISION,
-            "allow_patterns": list(prepare.DOWNLOAD_PATTERNS),
-            "local_dir": tmp_path,
-            "token": token,
-            "max_workers": 1,
-        }
+    assert len(transfer_calls) == 1
+    command, kwargs = transfer_calls[0]
+    assert command == [
+        "/usr/bin/hf",
+        "download",
+        DEFAULT_DINOV3_MODEL_ID,
+        prepare.CONFIG_FILENAME,
+        prepare.WEIGHTS_FILENAME,
+        "--revision",
+        DEFAULT_DINOV3_REVISION,
+        "--local-dir",
+        str(tmp_path),
+        "--max-workers",
+        "1",
     ]
+    assert token not in command
+    assert kwargs["check"] is True
+    environment = kwargs["env"]
+    assert isinstance(environment, dict)
+    assert environment["HF_TOKEN"] == token
+    assert environment["HF_HUB_DISABLE_XET"] == "1"
+    assert environment["HF_XET_HIGH_PERFORMANCE"] == "0"
 
 
 def test_required_hf_token_uses_only_the_explicit_environment_value(

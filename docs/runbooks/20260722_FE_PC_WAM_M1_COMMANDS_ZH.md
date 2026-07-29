@@ -37,10 +37,13 @@ printf '%s  %s\n' \
 ```bash
 cd /home/jeong/zeno/wam/fe_pc_wam
 
+HF_HUB_DISABLE_XET=1 HF_XET_HIGH_PERFORMANCE=0 \
 uv run --frozen python scripts/prepare_dinov3_encoder.py \
   --encoder dinov3_vitl16_lvd \
   --output-dir artifacts/vision/dinov3_vitl16_lvd
 ```
+
+该入口固定调用 `hf download --max-workers 1 --local-dir <上述最终目录>`，只走关闭 Xet 的单 worker 普通 HTTP 直传；中断后重复同一命令会原地续传，不创建临时 snapshot 或第二份权重副本。
 
 ---
 

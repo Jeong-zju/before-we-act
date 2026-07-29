@@ -1,10 +1,9 @@
-"""Download and verify one pinned DINOv3 visual-teacher artifact.
+"""Direct-download and verify one pinned DINOv3 visual-teacher artifact.
 
-Training and evaluation deliberately never call Hugging Face Hub.  This
-explicit preparation command is the only supported network boundary: it
-downloads an immutable revision into a temporary directory, verifies the
-artifact and architecture identities, and only then installs the two files
-consumed by Phase M1.
+Training and evaluation deliberately never call Hugging Face Hub. This
+preparation boundary disables Xet and invokes ``hf download`` with one worker
+against the final local directory, so an interrupted transfer resumes in place
+without a second snapshot or temporary install copy.
 """
 
 from __future__ import annotations
@@ -15,8 +14,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
-import tempfile
 from typing import Any
 
 
@@ -229,13 +228,17 @@ def _existing_install_is_valid(
     if not entries:
         return None
     unexpected = sorted(
-        entry.name for entry in entries if entry.name not in DOWNLOAD_PATTERNS
+        entry.name
+        for entry in entries
+        if entry.name not in {*DOWNLOAD_PATTERNS, ".cache"}
     )
     if unexpected:
         raise ValueError(
             f"refusing to overwrite non-empty DINOv3 directory with unexpected "
             f"entries: {unexpected}"
         )
+    if not all((output_dir / name).is_file() for name in DOWNLOAD_PATTERNS):
+        return None
     try:
         return _validate_artifact_directory(
             output_dir,
@@ -249,7 +252,7 @@ def _existing_install_is_valid(
         ) from exc
 
 
-def _download_snapshot(
+def _direct_download(
     destination: Path,
     *,
     model_id: str,
@@ -260,7 +263,6 @@ def _download_snapshot(
         from huggingface_hub import (
             get_hf_file_metadata,
             hf_hub_url,
-            snapshot_download,
         )
         from huggingface_hub.utils import (
             EntryNotFoundError,
@@ -276,7 +278,7 @@ def _download_snapshot(
 
     model_page = DINOV3_MODEL_PAGE.format(model_id=model_id)
     try:
-        # HEAD both pinned files before creating a 1.2 GB transfer. This turns
+        # HEAD both pinned files before creating a multi-GB transfer. This turns
         # the Hub's otherwise opaque LocalEntryNotFoundError into an actionable
         # gated/revision/file/network error without downloading file contents.
         for filename in DOWNLOAD_PATTERNS:
@@ -289,7 +291,7 @@ def _download_snapshot(
                 ),
                 token=token,
                 timeout=30.0,
-                retry_on_errors=True,
+                retry_on_errors=False,
             )
     except GatedRepoError as exc:
         raise RuntimeError(
@@ -328,21 +330,35 @@ def _download_snapshot(
             f"check proxy/TLS connectivity and retry (`{type(exc).__name__}: {exc}`)"
         ) from exc
 
+    hf = shutil.which("hf")
+    if hf is None:
+        raise RuntimeError("the `hf` CLI is required for direct DINOv3 download")
+    destination.mkdir(parents=True, exist_ok=True)
+    environment = {
+        **os.environ,
+        "HF_TOKEN": token,
+        "HF_HUB_DISABLE_XET": "1",
+        "HF_XET_HIGH_PERFORMANCE": "0",
+    }
+    command = [
+        hf,
+        "download",
+        model_id,
+        *DOWNLOAD_PATTERNS,
+        "--revision",
+        revision,
+        "--local-dir",
+        str(destination),
+        "--max-workers",
+        "1",
+    ]
     try:
-        snapshot_download(
-            repo_id=model_id,
-            repo_type="model",
-            revision=revision,
-            allow_patterns=list(DOWNLOAD_PATTERNS),
-            local_dir=destination,
-            token=token,
-            max_workers=1,
-        )
-    except Exception as exc:  # noqa: BLE001 - normalize Hub/network failures
+        subprocess.run(command, check=True, env=environment)
+    except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError(
-            f"metadata access succeeded, but the pinned DINOv3 transfer failed "
+            f"metadata access succeeded, but the direct DINOv3 transfer failed "
             f"for {model_id}@{revision} (`{type(exc).__name__}: {exc}`). "
-            "Rerun the same command to resume the single-worker HTTP transfer."
+            "Rerun the same command to resume in the same local directory."
         ) from exc
 
 
@@ -354,28 +370,6 @@ def _required_hf_token() -> str:
             "access token before downloading DINOv3"
         )
     return token
-
-
-def _install_verified_snapshot(snapshot_dir: Path, output_dir: Path) -> None:
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
-    install_dir = Path(
-        tempfile.mkdtemp(prefix=f".{output_dir.name}.install-", dir=output_dir.parent)
-    )
-    try:
-        for filename in DOWNLOAD_PATTERNS:
-            shutil.copyfile(snapshot_dir / filename, install_dir / filename)
-        if output_dir.exists():
-            if output_dir.is_symlink() or not output_dir.is_dir():
-                raise ValueError(f"refusing to replace path: {output_dir}")
-            if any(output_dir.iterdir()):
-                raise ValueError(
-                    f"refusing to replace non-empty directory: {output_dir}"
-                )
-            output_dir.rmdir()
-        os.replace(install_dir, output_dir)
-    finally:
-        if install_dir.exists():
-            shutil.rmtree(install_dir)
 
 
 def _result(
@@ -436,35 +430,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         token = _required_hf_token()
-        output_dir.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=f".{args.encoder}.download-",
-            dir=output_dir.parent,
-        ) as temporary:
-            snapshot_dir = Path(temporary)
-            _download_snapshot(
-                snapshot_dir,
-                model_id=spec.model_id,
-                revision=revision,
-                token=token,
-            )
-            downloaded = _validate_artifact_directory(
-                snapshot_dir,
-                spec=spec,
-                expected_weights_sha256=weights_sha256,
-                expected_config_sha256=config_sha256,
-            )
-            _install_verified_snapshot(snapshot_dir, output_dir)
+        _direct_download(
+            output_dir,
+            model_id=spec.model_id,
+            revision=revision,
+            token=token,
+        )
         installed = _validate_artifact_directory(
             output_dir,
             spec=spec,
             expected_weights_sha256=weights_sha256,
             expected_config_sha256=config_sha256,
         )
-        if installed != downloaded:
-            raise RuntimeError(
-                "installed DINOv3 artifact differs from verified download"
-            )
         print(
             json.dumps(
                 _result(

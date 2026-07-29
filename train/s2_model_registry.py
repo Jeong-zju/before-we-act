@@ -1,0 +1,35 @@
+"""Explicit S2-R3 model-kind allowlist used by train/evaluate/accept paths."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+
+S2_R3_MODEL_KINDS: dict[str, bool] = {
+    "s2_r3_local_action_independent": False,
+    "s2_r3_local_action_conditioned": True,
+}
+
+
+def validate_s2_candidate(value: Mapping[str, Any]) -> tuple[str, str, bool]:
+    candidate_id = str(value.get("candidate_id", ""))
+    model_kind = str(value.get("model_kind", ""))
+    configured = value.get("action_conditioning")
+    if candidate_id not in {"W0", "W1"}:
+        raise ValueError("S2-R3 candidate_id must be W0 or W1")
+    if model_kind not in S2_R3_MODEL_KINDS:
+        raise ValueError(
+            "S2-R3 model kind is not in the train/evaluation allowlist"
+        )
+    if not isinstance(configured, bool):
+        raise ValueError("round.action_conditioning must be boolean")
+    expected = S2_R3_MODEL_KINDS[model_kind]
+    if configured is not expected:
+        raise ValueError("model kind and action_conditioning disagree")
+    if (candidate_id == "W1") is not configured:
+        raise ValueError("W0 must be action-independent and W1 action-conditioned")
+    return candidate_id, model_kind, configured
+
+
+__all__ = ["S2_R3_MODEL_KINDS", "validate_s2_candidate"]

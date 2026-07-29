@@ -1,0 +1,50 @@
+format_version: wam.robofactory.wam_flow.round_manifest/1
+round_id: s2-r3
+hypothesis: >-
+  A local future predictor that receives its own complete executed action
+  chunk learns action-dependent consequences that an otherwise identical
+  action-independent predictor cannot explain.
+parent:
+  branch: feat/model-improvements
+  action_generator: rectified_flow_cold
+  checkpoint: artifacts/s1_r1_f1/checkpoint_080000.pt
+  flow_frozen: true
+  dinov3_frozen: true
+data:
+  shared_read_only_root: datasets/robofactory_multitask
+  split_unit: episode_seed
+  tasks:
+    - lift_barrier
+    - long_pipeline_delivery
+    - take_photo
+    - three_robots_stack_cube
+    - camera_alignment
+  future_horizons: [1, 25, 50, 100]
+representation:
+  state_delta: normalized_proprioceptive_delta
+  visual_delta: dinov3_2x2_patch_grid_pca_1024_to_256
+  pca_fit_split: train
+  pca_statistics: artifacts/s2_r3/dino_pca_statistics.pt
+training:
+  seed: 303
+  optimizer_updates: 10000
+  batch_size: 1
+  matched_budget: true
+  gpu_assignment:
+    W0: 0
+    W1: 1
+validation:
+  split: validation
+  windows_per_episode: 4
+  paired_action_shuffle: true
+  bootstrap_unit: episode
+  bootstrap_samples: 10000
+candidates:
+  W0:
+    branch: s2/r3-w0-action-independent
+    model_kind: s2_r3_local_action_independent
+    action_conditioning: false
+  W1:
+    branch: s2/r3-w1-action-conditioned
+    model_kind: s2_r3_local_action_conditioned
+    action_conditioning: true

@@ -167,7 +167,6 @@ fi
 : "${HF_DATASET_REPO:=}"
 : "${HF_DATASET_REVISION:=main}"
 : "${HF_DATASET_DIR:=datasets/robofactory_lift_barrier_m1_v1}"
-: "${HF_DOWNLOAD_WORKERS:=8}"
 : "${HF_UPLOAD_REPO:=${HF_DATASET_REPO}}"
 : "${HF_UPLOAD_DIR:=${HF_DATASET_DIR}}"
 : "${HF_UPLOAD_REVISION:=main}"
@@ -475,6 +474,8 @@ action_assets() {
 wam_uv() {
   ensure_uv
   run_in "${FE_ROOT}" env \
+    "HF_HUB_DISABLE_XET=1" \
+    "HF_XET_HIGH_PERFORMANCE=0" \
     "UV_CACHE_DIR=${FE_ROOT}/.uv-cache" \
     "${UV_BIN}" run --frozen "$@"
 }
@@ -503,7 +504,7 @@ action_hf_download() {
     --type dataset \
     --revision "${HF_DATASET_REVISION}" \
     --local-dir "${destination}" \
-    --max-workers "${HF_DOWNLOAD_WORKERS}"
+    --max-workers 1
 }
 
 action_hf_upload() {

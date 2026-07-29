@@ -685,6 +685,132 @@ W0/W1 必须从相同初始化开始，使用相同网络、target、horizon、w
 
 若 action shuffle 不能稳定增大误差，结论是 predictor 没有利用候选动作；停止进入 R4，优先检查 action normalization、temporal alignment 与 adapter，再只允许一次修复重跑。不能用闭环持平把 W1 判为通过。
 
+#### 7.4.1 S2-R3 两分支、五任务和两卡运行契约（2026-07-30）
+
+S2.0 公共基础设施先落在 `feat/model-improvements`，再从同一个公共父提交创建 `s2/r3-w0-action-independent` 和 `s2/r3-w1-action-conditioned`。W0/W1 使用同一个 `LocalActionConditionedFuturePredictor` 类、相同参数量、seed `303`、10,000 updates、batch size `1`、optimizer、五任务 train/validation split、DINOv3/PCA 工件和 S1-R1 F1 checkpoint；分支配对检查器会删除候选 identity 与隔离输出路径后逐字段比较配置，除 `action_conditioning=false/true` 外存在任何差异都会拒绝启动。训练与验收白名单显式加入 `s2_r3_local_action_independent` 和 `s2_r3_local_action_conditioned`，未知 model kind fail closed。
+
+五任务联合训练、联合 held-out 验证固定使用以下不可变 Hugging Face dataset revision，并通过同一个基础仓库下的 `datasets/robofactory_multitask/` 只读共享给两个 worktree：
+
+| 任务 | Hugging Face dataset | revision | 本地目录 |
+|---|---|---|---|
+| LiftBarrier | `zeno-ai/robofactory-lift-barrier-multiview` | `6ab620091677e69370412f08cd7adecacc28c146` | `lift_barrier/` |
+| LongPipelineDelivery | `zeno-ai/robofactory-long-pipeline-delivery-multiview` | `fee628311ff52a3ae0ddfddf82379c63d28f7533` | `long_pipeline_delivery/` |
+| TakePhoto | `zeno-ai/robofactory-take-photo-multiview` | `df3a98acde2453ca17e3121594faf150f3c33023` | `take_photo/` |
+| ThreeRobotsStackCube | `zeno-ai/robofactory-three-robots-stack-cube-multiview` | `e3f07c9625ac0047d680794fdbd6bd9124f3a54b` | `three_robots_stack_cube/` |
+| CameraAlignment | `zeno-ai/robofactory-camera-alignment-multiview` | `f56fe728e24f9074aa7db318705bd13455b1da73` | `camera_alignment/` |
+
+五仓库当前合计约 470 GiB，launcher 在缺数据时要求至少 550 GiB 可用空间。S2-R3 共享准备对所有 Hugging Face 数据和 DINOv3 只保留一种传输：`HF_HUB_DISABLE_XET=1`、`HF_XET_HIGH_PERFORMANCE=0`、`hf download --max-workers 1 --local-dir <最终目录>`。不调用 `snapshot_download`，不创建第二份 snapshot，不并发下载，也不包裹自动重试；网络中断后以新 run-id 重启，官方 CLI 在同一 `--local-dir` 原地续传。
+
+grouped adapter 保留 current state `[B,4,18]`、candidate chunk `[B,4,100,8]`、agent RGB `[B,4,...]`、独立 global RGB `[B,...]`、valid-agent mask `[B,4]` 和 `k={1,25,50,100}` future mask。DINOv3 patch feature 固定池化到 `2×2` 网格，再用只读取 train split 的 PCA 从 1024 维压到 256 维；PCA basis、projected std、state/DINO delta normalization、五个 manifest hash 和 DINO hash 保存在 `artifacts/s2_r3/dino_pca_statistics.pt`，并完整嵌入候选 checkpoint。future state/RGB 只用于 target builder，不进入 predictor input。
+
+R3 验收器不运行无区分力的成对闭环。它在每个 validation episode 固定选择 4 个时间窗，分别输出 normal 与 own-action-shuffle composite future loss，再按 episode 聚合并运行 10,000 次 paired bootstrap。`acceptance.json` 只有在五个任务上同时满足 W1 loss 不高于 W0、至少一个任务严格改善、W1 `L_shuffled-L_normal>0` 且 bootstrap 95% 下界大于 0时才通过；同时还要求 predictor-disabled F1 action output 逐元素相等、Flow/DINO 文件 hash 前后不变、predictor checkpoint 不含 Flow/DINO state。monitor 直接读取这套特殊规则，不把闭环成功率或 W0 的零 shuffle delta 误当作 R3 通过条件。
+
+#### 7.4.2 两张 RTX 5090 一键部署、训练、验证与 monitor
+
+以下命令假设服务器已经自动进入唯一的永久 tmux session，恰好暴露两张 RTX 5090，并有至少 550 GiB 空闲磁盘。S2 严格复用已经晋升的 S1-R1 F1 `checkpoint_080000.pt`，不重新训练 Flow；同一持久盘上 launcher 会自动搜索 `outputs/s1_r1_runs/*/candidates/f1/checkpoints/s1_r1_f1_flow_cold/checkpoint_080000.pt`。若是全新租用机器，必须先把该 checkpoint 放到持久盘，并通过 `S2_R3_FLOW_CHECKPOINT` 指向它：
+
+```bash
+cd /workspace
+
+for s2_cmd in git tmux jq python3 nvidia-smi flock df sha256sum find sort grep; do
+  command -v "${s2_cmd}" >/dev/null || {
+    echo "缺少服务器命令：${s2_cmd}"
+    exit 1
+  }
+done
+
+test -n "${TMUX:-}" || {
+  echo "错误：当前终端不在永久 tmux session 中"
+  exit 1
+}
+
+test "$(tmux list-sessions -F '#S' | wc -l)" -eq 1 || {
+  echo "错误：服务器必须有且仅有一个 tmux session"
+  tmux list-sessions
+  exit 1
+}
+
+test "$(nvidia-smi -L | wc -l)" -eq 2 || {
+  echo "错误：S2-R3 必须恰好暴露两张 GPU"
+  nvidia-smi -L
+  exit 1
+}
+
+df -h /workspace
+
+test ! -e /workspace/fe-pc-wam || {
+  echo "错误：/workspace/fe-pc-wam 已存在，请不要覆盖"
+  exit 1
+}
+
+git clone \
+  --branch feat/model-improvements \
+  --single-branch \
+  https://github.com/Jeong-zju/fe-pc-wam.git \
+  /workspace/fe-pc-wam
+
+cd /workspace/fe-pc-wam
+git rev-parse --short HEAD
+
+# 全新机器必须修改为已上传/挂载的 R1-F1 checkpoint 绝对路径。
+# 若同一持久盘保留 round2 outputs，可删除这一行让 launcher 自动发现。
+export S2_R3_FLOW_CHECKPOINT=/workspace/checkpoints/s1_r1_f1_flow_cold/checkpoint_080000.pt
+test -f "${S2_R3_FLOW_CHECKPOINT}"
+
+test -x ./scripts/launch_s2_r3_2gpu_tmux.sh
+test -x ./scripts/stop_s2_r3_2gpu_tmux.sh
+
+./scripts/launch_s2_r3_2gpu_tmux.sh \
+  --run-id s2-r3-round1 \
+  --dry-run
+
+./scripts/launch_s2_r3_2gpu_tmux.sh \
+  --run-id s2-r3-round1
+```
+
+正式启动时只在隐藏提示中输入一次 HF token；token 通过 mode-0600 FIFO 交给 prepare window，不写入 shell export、tmux command、argv、manifest 或日志。launcher 复用当前唯一永久 session，只创建 `s2-r3-round1-prepare`、`s2-r3-round1-w0`、`s2-r3-round1-w1`、`s2-r3-round1-monitor` 四个 window，并全部设置 `remain-on-exit=on`；不会创建、attach、kill 或退出 tmux session。prepare 使用 GPU0 完成 PCA/statistics 后释放 GPU，两候选才开始分别占用 GPU0/GPU1。
+
+monitor 每 5 秒显示 shared prepare 当前程序/阶段、W0/W1 当前程序、phase、20 秒心跳及其 age、update/total/loss、当前验证 task/batch/shuffle delta、两卡利用率/显存和 GPU process PID。两个 evaluation 都完成后还会逐任务显示 W0/W1 held-out loss、`W0-W1`、W1 shuffle delta、bootstrap 95% lower bound，以及每条特殊 gate 的 PASS/FAIL，明确给出 `PASS -> enter R4` 或 `FAIL -> stop before R4`。可随时从永久 session 的任意 window 执行只读查询：
+
+```bash
+cd /workspace/fe-pc-wam
+
+python3 scripts/s2_r3_runtime.py monitor \
+  --once \
+  --run-root outputs/s2_r3_runs/s2-r3-round1
+
+tmux select-window \
+  -t "$(tmux display-message -p '#S'):s2-r3-round1-monitor"
+```
+
+所有 run 产物位于 `outputs/s2_r3_runs/s2-r3-round1/`：`prepare.log`、`prepare_progress.jsonl`、`shared_artifact_sha256.txt`、`candidates/<w0|w1>/train/{stages,progress}.jsonl`、candidate checkpoint/resume、`candidates/<w0|w1>/validation/{progress.jsonl,evaluation.json}` 和最终 `acceptance.json`。心跳超过 75 秒会显示 `STALE`；这表示当前程序没有健康回报，应先看对应 candidate/prepare log 和 GPU process，而不是把最后一个 loss 当作仍在运行。
+
+#### 7.4.3 一键退出但永久 tmux 和全部数据/结果必须保留
+
+从永久 session 中不属于本轮四个目标 window 的基础 `bash` window 执行：
+
+```bash
+cd /workspace/fe-pc-wam
+
+test -f ./outputs/s2_r3_runs/s2-r3-round1/run_manifest.json
+
+./scripts/stop_s2_r3_2gpu_tmux.sh \
+  --run-id s2-r3-round1 \
+  --dry-run
+
+./scripts/stop_s2_r3_2gpu_tmux.sh \
+  --run-id s2-r3-round1
+
+tmux list-windows \
+  -F '#{window_index}: #{window_name} pane_dead=#{pane_dead}'
+
+nvidia-smi \
+  --query-compute-apps=pid,process_name,used_memory \
+  --format=csv,noheader
+```
+
+退出脚本只定位进程环境中绝对匹配 `S2_R3_RUN_ROOT` 的本轮进程，依次发送 Ctrl-C、SIGTERM、必要时 SIGKILL，再关闭本轮四个 window；禁止调用 `tmux kill-session`，也不删除共享五任务数据、Hub 原地下载缓存、DINO/PCA/Flow、worktree、checkpoint、resume、日志或验证 JSON。中断后使用新的 `--run-id` 重启；candidate trainer 会读取该新 run 隔离目录中的 resume，因此如需续训，应先把保留的 `resume.pt` 放入新 run 对应 candidate checkpoint 目录，禁止复用已关闭 run 的 manifest/window 名。
+
 ### 7.5 R4：Team + shared future capability（必做，两卡）
 
 当前两个闭环任务都是双机器人，因此 `bounded_peers` 与 `all valid peers` 在现有数据上等价；S2 不再拆成 R4a/R4b，也不为不可辨识的 scope 差异消耗四卡。R4 从通过的 R3-W1 local checkpoint 建立一对同预算候选：

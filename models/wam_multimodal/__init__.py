@@ -23,6 +23,10 @@ from models.wam_multimodal.latent_world_head import (
     CANONICAL_FUTURE_HORIZONS,
     FutureLatentHeadConfig,
 )
+from models.wam_multimodal.local_future_predictor import (
+    LocalActionConditionedFuturePredictor,
+    LocalFuturePredictorConfig,
+)
 from models.wam_multimodal.token_resampler import (
     PerceiverResampler,
     PerceiverResamplerConfig,
@@ -82,6 +86,8 @@ __all__ = [
     "LatentWAMConfig",
     "LatentWAMEncoding",
     "LatentWAMOutput",
+    "LocalActionConditionedFuturePredictor",
+    "LocalFuturePredictorConfig",
     "OFFICIAL_RESNET18_FILENAME",
     "OFFICIAL_RESNET18_SHA256",
     "PerceiverResampler",
