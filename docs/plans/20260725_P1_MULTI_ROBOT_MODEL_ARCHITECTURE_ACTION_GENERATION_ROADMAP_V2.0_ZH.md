@@ -583,6 +583,24 @@ git pull --ff-only
 `/workspace/fe-pc-wam/artifacts`、`/workspace/RoboFactory`、Hub 下载缓存或
 round1 日志；round2 会继续使用这些已有内容。
 
+若 F1 已完成 80,000 updates、仅在闭环握手或 rollout 阶段失败，不得重新训练。
+应进入 F1 worktree，明确切换并更新 `s1/r1-f1-flow-cold`，然后用新的 retry-id
+复用 round2 checkpoint，只重跑 F1 Gate20：
+
+```bash
+cd /workspace/worktrees/s1-r1-f1-flow-cold
+git switch s1/r1-f1-flow-cold
+git pull --ff-only origin s1/r1-f1-flow-cold
+
+./scripts/retry_s1_r1_f1_gate.sh \
+  --run-id s1-r1-round2 \
+  --retry-id retry1
+```
+
+retry 输出写入 round2 的 `candidates/f1/validation/gate_s1-r1-round2_retry1/`，
+日志写入 `candidates/f1/logs/gate_s1-r1-round2_retry1.log`；已有 checkpoint、
+训练进度和首次失败的验证目录全部保留。
+
 ### 6.2 R2a/R2b：两个可选单变量微轮次（可四卡并行）
 
 R1-F1 通过后冻结为父提交 `P_flow`。以下两对候选可以同时租用四张卡：

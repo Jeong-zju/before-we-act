@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+# Failed S1-R1 F1 validations can reuse the completed checkpoint through
+# scripts/retry_s1_r1_f1_gate.sh; no 80k retraining is required.
 
 FE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE="$(cd "${FE_ROOT}/.." && pwd)"

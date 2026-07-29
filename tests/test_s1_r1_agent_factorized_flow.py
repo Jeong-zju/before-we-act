@@ -9,6 +9,7 @@ import yaml
 from models.static_rgb_act import StaticRGBMoEACTConfig
 from models.wam_multimodal import AgentFactorizedFlowWAM
 from scripts.run_agent_factorized_flow_inference import _validated_generation
+from scripts.serve_robofactory_m2_rollout import _validate_client
 from train.agent_factorized_flow_training import (
     make_flow_matching_batch,
     uniform_masked_flow_mse,
@@ -167,6 +168,30 @@ def test_generation_contract_rejects_warm_or_nondefault_solver():
         )
 
 
+def test_rollout_server_accepts_only_the_frozen_f1_checkpoint_source_pair():
+    contract = {"task_id": "lift_barrier", "future_path": False}
+    client = {
+        "checkpoint_format": (
+            "wam.robofactory.agent_factorized_flow.checkpoint/1"
+        ),
+        "task_vocabulary": ["lift_barrier", "long_pipeline_delivery"],
+        "future_path": False,
+        "policy": {
+            "action_source": "agent_factorized_rectified_flow_cold",
+        },
+    }
+
+    assert _validate_client(client, contract=contract) == client
+    with pytest.raises(RuntimeError, match="supported direct action source"):
+        _validate_client(
+            {
+                **client,
+                "policy": {"action_source": "static_rgb_dino_act_moe"},
+            },
+            contract=contract,
+        )
+
+
 def test_f1_runtime_routes_training_and_inference_to_agent_flow():
     env = (
         ROOT / "experiments/wam_flow/s1_r1/candidate.env"
@@ -178,11 +203,18 @@ def test_f1_runtime_routes_training_and_inference_to_agent_flow():
     gate = (ROOT / "scripts/run_lpd_fixed_seed_gate.sh").read_text(
         encoding="utf-8"
     )
+    retry = (ROOT / "scripts/retry_s1_r1_f1_gate.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert "S1_R1_CANDIDATE_ID=F1" in env
     assert "LPD_POLICY_KIND=agent_flow" in env
     assert "train_agent_factorized_flow_wam.py" in runner
     assert "run_agent_factorized_flow_inference.py" in gate
+    assert 's1/r1-f1-flow-cold' in retry
+    assert 'LPD_POLICY_KIND=agent_flow' in retry
+    assert '"${FE_ROOT}/scripts/run_lpd_single_5090.sh" gate' in retry
+    assert 'test -f "${CHECKPOINT}"' in retry
     assert card["runtime"]["gpu_index"] == 1
     assert card["runtime"]["future_path"] is False
     assert card["runtime"]["warm_start"] is False
