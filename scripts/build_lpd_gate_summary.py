@@ -22,6 +22,8 @@ from train.m2_checkpointing import m2_checkpoint_tree_sha256  # noqa: E402
 
 FORMAT_VERSION = "wam.robofactory.lpd_fixed_seed_gate/2"
 TASKS = ("lift_barrier", "long_pipeline_delivery")
+POLICY_KINDS = {"wam", "static_act", "agent_flow"}
+FILE_CHECKPOINT_POLICY_KINDS = {"static_act", "agent_flow"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,8 +82,8 @@ def build_gate_summary(
         raise ValueError("mode must be gate or formal")
     if not experiment:
         raise ValueError("experiment must be non-empty")
-    if policy_kind not in {"wam", "static_act"}:
-        raise ValueError("policy kind must be wam or static_act")
+    if policy_kind not in POLICY_KINDS:
+        raise ValueError("policy kind must be wam, static_act or agent_flow")
     if episodes <= 0 or seed_start < 0:
         raise ValueError("seed protocol is invalid")
     if len(source_commit) != 40 or any(
@@ -229,9 +231,9 @@ def _checkpoint_digest(client: Mapping[str, Any]) -> str:
 
 
 def _checkpoint_path_digest(path: Path, *, policy_kind: str) -> str:
-    if policy_kind == "static_act":
+    if policy_kind in FILE_CHECKPOINT_POLICY_KINDS:
         if not path.is_file():
-            raise ValueError("static ACT checkpoint must be a file")
+            raise ValueError(f"{policy_kind} checkpoint must be a file")
         return _sha256(path)
     if not path.is_dir():
         raise ValueError("WAM checkpoint must be a directory")

@@ -16,7 +16,11 @@ from scripts.summarize_lpd_experiment_matrix import (
 )
 
 
-def test_gate_summary_binds_checkpoint_config_and_episode_records(tmp_path):
+@pytest.mark.parametrize("policy_kind", ["static_act", "agent_flow"])
+def test_gate_summary_binds_file_checkpoint_config_and_episode_records(
+    tmp_path,
+    policy_kind,
+):
     config = tmp_path / "config.yaml"
     checkpoint = tmp_path / "checkpoint.pt"
     config.write_text("name: fixture\n", encoding="utf-8")
@@ -32,7 +36,7 @@ def test_gate_summary_binds_checkpoint_config_and_episode_records(tmp_path):
     summary = build_gate_summary(
         mode="formal",
         experiment="fixture",
-        policy_kind="static_act",
+        policy_kind=policy_kind,
         config=config,
         checkpoint=checkpoint,
         source_commit="0" * 40,
@@ -48,6 +52,7 @@ def test_gate_summary_binds_checkpoint_config_and_episode_records(tmp_path):
     assert summary["candidate"]["checkpoint_sha256"] == hashlib.sha256(
         b"checkpoint"
     ).hexdigest()
+    assert summary["candidate"]["policy_kind"] == policy_kind
     assert summary["candidate"]["config_sha256"]
     assert summary["lift_barrier"]["successes"] == 3
     assert summary["long_pipeline_delivery"]["successes"] == 3

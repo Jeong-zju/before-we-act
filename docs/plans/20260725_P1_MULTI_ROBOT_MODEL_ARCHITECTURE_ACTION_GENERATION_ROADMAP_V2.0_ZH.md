@@ -1,9 +1,9 @@
 # P1 多机器人 World-Action Flow Matching 技术路线 V2.7（ICRA Fast Track）
 
-> 文档更新：2026-07-28
+> 文档更新：2026-07-29
 > 工程起点：当前 `feat/model-improvements` 分支
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：M0、M1 已完成；S0 已决定因训练耗时终止 B2，并以 B0 进入 R1；S1-R1 的 F0/F1 分支与两卡运行基础设施已就绪，待远程完整训练和 Gate20
+> 当前状态：M0、M1、S0、S1-R1 已完成；R1 选择 `rectified_flow_cold` F1 并合入 `feat/model-improvements`，下一步进入可选 R2a/R2b 微轮次
 > 评测原则：候选只要各任务闭环成功率不低于父方案即可继续，持平也算通过
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -449,6 +449,17 @@ S1-R1 从 `feat/model-improvements` 的同一公共基础设施提交创建两�
 
 截至 2026-07-28，本轮公共父提交为 `65ad9de`，F0 实现提交为 `f0043ff`，F1 实现提交为 `00a29c6`。这三个提交只表示代码与运行契约已冻结，不表示 F1 已通过：只有远程训练结束后 F1 在 LiftBarrier 与 LongPipelineDelivery 的 Gate20 成功率都不低于 F0，R1 才能选择 Flow。
 
+##### S1-R1 Round 2 结果与决策（2026-07-29）
+
+`s1-r1-round2` 的 F0/F1 都完成 `80,000/80,000` updates；monitor 舍入后的末端 loss 分别为 `0.003` 和 `0.012`。相同 Gate20 协议下，F0 在 LiftBarrier/LongPipelineDelivery 分别为 `11/20`、`20/20`，F1 分别为 `13/20`、`20/20`。F1 在 LiftBarrier 提高 `2/20`（10 个百分点），在 LongPipelineDelivery 持平，因此满足“每个任务均不低于 F0”的 R1 推进规则，选择 F1 并将 `s1/r1-f1-flow-cold` 合入 `feat/model-improvements`。
+
+| 候选 | 训练 | 末端 loss（monitor） | LiftBarrier | LongPipelineDelivery | R1 决策 |
+|---|---:|---:|---:|---:|---|
+| F0 legacy CVAE | 80,000/80,000 | 0.003 | 11/20（55%） | 20/20（100%） | 控制组 |
+| F1 Rectified Flow cold | 80,000/80,000 | 0.012 | 13/20（65%） | 20/20（100%） | 通过并晋升 |
+
+F1 monitor 的 `failed` 不是闭环失败：两个任务的 40 个 rollout 均已完成，退出码来自 `build_lpd_gate_summary.py` 只接受 `wam/static_act`、不接受 F1 的 `agent_flow` policy kind。合入后的汇总器已把 `agent_flow` 纳入文件型 checkpoint 路径；同步远程原始 rollout 后只需重建 `gate_summary.json`，不需要重新训练或重跑 40 个回合。在汇总 JSON、checkpoint 哈希与 episode-level 记录同步前，本节数字仍按 operator-reported Gate20 结果使用，不外推为正式 100 回合验收或统计显著性结论。
+
 launcher 复用服务器已经存在的唯一永久 tmux session，只创建 `<run-id>-prepare`、`<run-id>-f0`、`<run-id>-f1` 和 `<run-id>-monitor` 四个 window，并为每个 window 设置 `remain-on-exit=on`；它不会创建、attach 或退出 tmux session。monitor 同时显示两条训练的 update/loss、两个闭环任务的成功数、候选 phase 和两张 GPU 的利用率/显存。训练或验证进程退出后 window 仍保留，便于查看日志。
 
 #### 6.1.2 Vast.ai 两卡从零一键部署、训练、验证与监控
@@ -511,10 +522,7 @@ test -x ./scripts/stop_s1_r1_2gpu_tmux.sh
 
 正式启动时在隐藏提示中粘贴同时具备 DINOv3 gated 模型、两个训练数据集和 `RoboFactory_asset` 读取权限的 HF token。启动后 launcher 默认切到 `s1-r1-round1-monitor`；可随时从永久 session 的任意非目标 window 执行以下只读监测指令：
 
-共享准备只调用官方基础下载命令 `hf download`：固定关闭 Xet，并用
-`--max-workers 1` 串行走普通 HTTP，以避免云主机共享出口请求
-`xet-read-token` 时出现 `429 Too Many Requests`。脚本不包含并发下载或重试
-封装；下载失败后，以新 run-id 重新启动会原地复用已完成文件并续传。
+共享准备只调用官方基础下载命令 `hf download`：固定关闭 Xet，并用 `--max-workers 1` 串行走普通 HTTP，以避免云主机共享出口请求 `xet-read-token` 时出现 `429 Too Many Requests`。脚本不包含并发下载或重试封装；下载失败后，以新 run-id 重新启动会原地复用已完成文件并续传。
 
 ```bash
 cd /workspace/fe-pc-wam
@@ -529,13 +537,7 @@ tmux select-window \
 
 所有运行产物位于 `/workspace/fe-pc-wam/outputs/s1_r1_runs/s1-r1-round1/`。共享准备日志和哈希分别为 `prepare.log`、`shared_artifact_sha256.txt`；F0/F1 的训练进度、checkpoint、验证 JSON、视频和完整候选日志分别位于 `candidates/f0/` 与 `candidates/f1/`。monitor 中 Gate20 的 `lift=x/20`、`lpd=y/20` 是本轮唯一推进依据：只有 F1 两个任务都不低于 F0 才进入 R2。
 
-共享准备完成后，两个候选还要分别完成数据 manifest/HDF5 身份校验、DINOv3
-权重装载、模型与 optimizer 构建、resume 检查、DataLoader worker 启动和首批
-数据读取。两张 RTX 5090 的常见冷启动时间为 3–15 分钟；云盘较慢时可能达到
-20–30 分钟。候选 window 在等待共享准备时每 30 秒打印一次心跳；训练器把
-上述子阶段写入 `candidates/<f0|f1>/train/stages.jsonl`。monitor 每 5 秒显示
-当前 startup 子阶段、该阶段持续时间以及 GPU 利用率，产生第一个 optimizer
-step 后自动切换为 `training` 并显示 update/loss。
+共享准备完成后，两个候选还要分别完成数据 manifest/HDF5 身份校验、DINOv3 权重装载、模型与 optimizer 构建、resume 检查、DataLoader worker 启动和首批数据读取。两张 RTX 5090 的常见冷启动时间为 3–15 分钟；云盘较慢时可能达到 20–30 分钟。候选 window 在等待共享准备时每 30 秒打印一次心跳；训练器把上述子阶段写入 `candidates/<f0|f1>/train/stages.jsonl`。monitor 每 5 秒显示当前 startup 子阶段、该阶段持续时间以及 GPU 利用率，产生第一个 optimizer step 后自动切换为 `training` 并显示 update/loss。
 
 #### 6.1.3 S1-R1 一键退出但保留永久 tmux 与全部产物
 
@@ -567,8 +569,7 @@ nvidia-smi \
 
 一键退出完成后，Vast.ai 的永久 tmux session 必须仍存在；若之后要恢复训练，保留的 `resume.pt` 会被各候选训练器读取，但为避免复用已经关闭的 window/run manifest，应使用新的 `--run-id` 启动并按需把对应 resume/checkpoint 放入新 run 的候选隔离目录。
 
-若 `s1-r1-round1` 在共享下载阶段失败且尚未执行上述退出指令，应先切到永久
-session 中任意非 S1-R1 基础 window，再执行：
+若 `s1-r1-round1` 在共享下载阶段失败且尚未执行上述退出指令，应先切到永久 session 中任意非 S1-R1 基础 window，再执行：
 
 ```bash
 cd /workspace/fe-pc-wam
@@ -581,13 +582,9 @@ git pull --ff-only
 ./scripts/launch_s1_r1_2gpu_tmux.sh --run-id s1-r1-round2
 ```
 
-该流程只关闭 round1 的四个 window，不删除 `/workspace/fe-pc-wam/datasets`、
-`/workspace/fe-pc-wam/artifacts`、`/workspace/RoboFactory`、Hub 下载缓存或
-round1 日志；round2 会继续使用这些已有内容。
+该流程只关闭 round1 的四个 window，不删除 `/workspace/fe-pc-wam/datasets`、`/workspace/fe-pc-wam/artifacts`、`/workspace/RoboFactory`、Hub 下载缓存或 round1 日志；round2 会继续使用这些已有内容。
 
-若 F1 已完成 80,000 updates、仅在闭环握手或 rollout 阶段失败，不得重新训练。
-应进入 F1 worktree，明确切换并更新 `s1/r1-f1-flow-cold`，然后用新的 retry-id
-复用 round2 checkpoint，只重跑 F1 Gate20：
+若 F1 已完成 80,000 updates、仅在闭环握手、rollout 或汇总阶段失败，不得重新训练。应进入 F1 worktree，明确切换并更新 `s1/r1-f1-flow-cold`，然后用新的 retry-id 复用 round2 checkpoint，只重跑 F1 Gate20：
 
 ```bash
 cd /workspace/worktrees/s1-r1-f1-flow-cold
@@ -599,13 +596,11 @@ git pull --ff-only origin s1/r1-f1-flow-cold
   --retry-id retry1
 ```
 
-retry 输出写入 round2 的 `candidates/f1/validation/gate_s1-r1-round2_retry1/`，
-日志写入 `candidates/f1/logs/gate_s1-r1-round2_retry1.log`；已有 checkpoint、
-训练进度和首次失败的验证目录全部保留。
+retry 输出写入 round2 的 `candidates/f1/validation/gate_s1-r1-round2_retry1/`，日志写入 `candidates/f1/logs/gate_s1-r1-round2_retry1.log`；已有 checkpoint、训练进度和首次失败的验证目录全部保留。
 
 ### 6.2 R2a/R2b：两个可选单变量微轮次（可四卡并行）
 
-R1-F1 通过后冻结为父提交 `P_flow`。以下两对候选可以同时租用四张卡：
+R1-F1 已通过并随合并提交 `ae7dc95` 进入 `feat/model-improvements`，冻结为后续阶段的 Flow 工程父方案 `P_flow`。以下两对候选可以同时租用四张卡：
 
 | 微轮次 | P0 控制 | P1 单步改进 | 唯一变量 |
 |---|---|---|---|
@@ -922,8 +917,8 @@ configs/wam_flow/
 
 ## 14. 从现在开始的执行清单
 
-1. 结束 B2，使用 B0 作为 R1 父方案。
-2. 建立 R1-F0/F1，完成训练并运行相同闭环任务。
-3. F1 各任务成功率不低于 F0 就继续使用 F1，否则继续使用 F0。
-4. 后续 R2–R7 重复同一规则，不再等待额外审计。
-5. 每轮记录候选、父方案和各任务成功率即可。
+1. **已完成：** 结束 B2，使用 B0 作为 R1 父方案。
+2. **已完成：** 建立 R1-F0/F1，完成训练并运行相同闭环任务。
+3. **已完成：** F1 在两个任务上均不低于 F0，已晋升为 `P_flow`。
+4. **下一步：** 按时间预算并行运行可选 R2a/R2b；若跳过则直接进入 S2-R3。
+5. 后续 R2–R7 重复同一规则，每轮记录候选、父方案和各任务成功率，不等待额外审计。

@@ -133,6 +133,39 @@ release acceptance:
 B2 completion is no longer a prerequisite for R1. Any later B2 reproduction
 must use a new run ID and is separate from this closed S0 decision.
 
+## S1 R1 decision (2026-07-29)
+
+The operator reported the following aggregates from the `s1-r1-round2`
+monitor at `2026-07-29T15:50:04.767111+00:00`. Both candidates completed
+80,000 optimizer updates and used the matched Gate20 schedule with seeds
+900–919.
+
+| Candidate | Action generator | Terminal loss (monitor) | LiftBarrier | LongPipelineDelivery | R1 decision |
+|---|---|---:|---:|---:|---|
+| F0 | legacy CVAE | 0.003 | 11/20 (55%) | 20/20 (100%) | control |
+| F1 | cold-start Rectified Flow | 0.012 | 13/20 (65%) | 20/20 (100%) | promote |
+
+F1 improves LiftBarrier by 2/20 episodes (10 percentage points) and ties F0
+on LongPipelineDelivery. It therefore satisfies the frozen R1 rule that the
+candidate must be no worse on either task. F1 is selected as the engineering
+parent for the optional R2 rounds and was merged into
+`feat/model-improvements` by merge commit `ae7dc95`.
+
+The F1 monitor phase says `failed`, but this is not a rollout or model failure.
+All 40 F1 episodes completed; the subsequent `build_lpd_gate_summary.py` call
+raised `ValueError: policy kind must be wam or static_act` because F1 uses
+`agent_flow`. The merged summary builder now accepts `agent_flow` and hashes
+its file checkpoint in the same way as the static ACT checkpoint. The remote
+raw summaries can therefore be finalized without retraining or rerunning the
+episodes.
+
+These are operator-reported Gate20 aggregates until the remote checkpoint,
+the two raw rollout summaries, episode records, and rebuilt `gate_summary.json`
+are synchronized. They support the fast-track engineering promotion rule, not
+a formal 100-episode acceptance or a statistical-significance claim. The
+higher terminal training loss does not reverse the decision because R1 is
+selected solely by matched closed-loop success rates.
+
 ## Candidate baseline integration
 
 The experiment history was merged into `feat/model-improvements` by merge
