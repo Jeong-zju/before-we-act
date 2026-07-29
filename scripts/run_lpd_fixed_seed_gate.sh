@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+# Failed S1-R1 F1 validations can reuse the completed checkpoint through
+# scripts/retry_s1_r1_f1_gate.sh; no 80k retraining is required.
 
 FE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE="$(cd "${FE_ROOT}/.." && pwd)"
@@ -7,7 +9,7 @@ ROBOFACTORY_ROOT="${ROBOFACTORY_ROOT:-${WORKSPACE}/RoboFactory}"
 RF_PYTHON="${RF_PYTHON:-${ROBOFACTORY_ROOT}/.venv/bin/python}"
 LPD_CONFIG="${LPD_CONFIG:?set LPD_CONFIG}"
 LPD_CHECKPOINT="${LPD_CHECKPOINT:?set LPD_CHECKPOINT}"
-LPD_POLICY_KIND="${LPD_POLICY_KIND:?set LPD_POLICY_KIND to wam or static_act}"
+LPD_POLICY_KIND="${LPD_POLICY_KIND:?set LPD_POLICY_KIND to wam, static_act or agent_flow}"
 LPD_GATE_MODE="${LPD_GATE_MODE:-gate}"
 LPD_PORT="${LPD_PORT:-8872}"
 LPD_RUN_ID="${LPD_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
@@ -97,6 +99,17 @@ run_case() {
       (
         cd "${FE_ROOT}"
         uv run --frozen python scripts/run_static_rgb_act_moe_inference.py \
+          --checkpoint "${LPD_CHECKPOINT}" \
+          --config "${LPD_CONFIG}" \
+          --device cuda:0 \
+          --host 127.0.0.1 \
+          --port "${LPD_PORT}"
+      )
+      ;;
+    agent_flow)
+      (
+        cd "${FE_ROOT}"
+        uv run --frozen python scripts/run_agent_factorized_flow_inference.py \
           --checkpoint "${LPD_CHECKPOINT}" \
           --config "${LPD_CONFIG}" \
           --device cuda:0 \

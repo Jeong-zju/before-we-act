@@ -1,5 +1,8 @@
 """Visual-conditioned latent WAM modules for multimodal phases M1 and M2."""
 
+from models.wam_multimodal.agent_factorized_flow_wam import (
+    AgentFactorizedFlowWAM,
+)
 from models.wam_multimodal.block_causal_transformer import (
     BlockCausalWAM,
     BlockCausalWAMConfig,
@@ -53,6 +56,7 @@ from models.wam_multimodal.vision_encoder import (
 
 __all__ = [
     "ActionConditionedFutureLatentHead",
+    "AgentFactorizedFlowWAM",
     "BlockCausalWAM",
     "BlockCausalWAMConfig",
     "BlockCausalWAMOutput",

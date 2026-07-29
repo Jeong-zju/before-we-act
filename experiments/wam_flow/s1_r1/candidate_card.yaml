@@ -1,0 +1,34 @@
+format_version: wam.robofactory.wam_flow.candidate_card/1
+round_id: s1-r1
+candidate_id: F1
+branch: s1/r1-f1-flow-cold
+source_parent_commit: 65ad9dec0feccf55397cb2915c2841c3774238a9
+hypothesis: >-
+  Replacing only the legacy CVAE generator with standard-normal cold-start
+  Rectified Flow preserves or improves both paired closed-loop success rates.
+changed_axis: action_generator
+unchanged_axes:
+  - shared_data_manifest
+  - frozen_dinov3
+  - existing_per_agent_local_context
+  - sparse_top2_moe_decoder
+  - action_horizon_100
+  - temporal_ensemble
+  - optimizer_updates_80000
+  - training_seed_101
+  - gate20_seeds_900_919
+  - uniform_agent_loss
+rollback:
+  commit: 65ad9dec0feccf55397cb2915c2841c3774238a9
+  flag: action_generator=legacy_cvae
+runtime:
+  policy_kind: agent_flow
+  action_generator: rectified_flow_cold
+  source_distribution: standard_normal
+  solver: euler
+  solver_steps: 4
+  future_path: false
+  warm_start: false
+  config: configs/wam_flow/s1_r1_f1_flow_cold.yaml
+  checkpoint: checkpoints/s1_r1_f1_flow_cold/checkpoint_080000.pt
+  gpu_index: 1
