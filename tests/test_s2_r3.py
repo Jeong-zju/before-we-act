@@ -173,6 +173,11 @@ def _evaluation(candidate_id: str, conditioned: bool) -> dict:
     return {
         "format_version": "wam.robofactory.s2_r3.action_shuffle_evaluation/1",
         "candidate_id": candidate_id,
+        "model_kind": (
+            "s2_r3_local_action_conditioned"
+            if conditioned
+            else "s2_r3_local_action_independent"
+        ),
         "action_conditioning": conditioned,
         "comparison_contract": {"same": True},
         "per_task": per_task,
@@ -206,6 +211,18 @@ def test_model_allowlist_contains_both_s2_candidates():
         "s2_r3_local_action_independent": False,
         "s2_r3_local_action_conditioned": True,
     }
+
+
+def test_s2_acceptance_rejects_model_outside_allowlist():
+    candidate = _evaluation("W1", True)
+    candidate["model_kind"] = "unregistered_future_predictor"
+
+    try:
+        build_acceptance(_evaluation("W0", False), candidate)
+    except ValueError as error:
+        assert "allowlist" in str(error)
+    else:
+        raise AssertionError("acceptance must fail closed for unknown model kinds")
 
 
 def test_s2_runtime_monitor_reports_program_heartbeat_and_special_gate(

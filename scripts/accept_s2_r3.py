@@ -8,7 +8,15 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import sys
 from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from train.s2_model_registry import validate_s2_candidate  # noqa: E402
 
 
 FORMAT_VERSION = "wam.robofactory.s2_r3.acceptance/1"
@@ -147,9 +155,10 @@ def _validate_evaluation(
 ) -> None:
     if value.get("format_version") != EVALUATION_FORMAT:
         raise ValueError("input is not an S2-R3 action-shuffle evaluation")
-    if value.get("candidate_id") != candidate_id:
+    observed_id, _, observed_conditioning = validate_s2_candidate(value)
+    if observed_id != candidate_id:
         raise ValueError(f"expected {candidate_id} evaluation")
-    if value.get("action_conditioning") is not action_conditioning:
+    if observed_conditioning is not action_conditioning:
         raise ValueError(f"{candidate_id} action-conditioning identity drifted")
 
 
