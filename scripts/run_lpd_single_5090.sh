@@ -21,6 +21,10 @@ LIFT_DATASET_REVISION="${LIFT_DATASET_REVISION:-6ab620091677e69370412f08cd7adeca
 LPD_DATASET_REPO="${LPD_DATASET_REPO:-zeno-ai/robofactory-long-pipeline-delivery-multiview}"
 LPD_DATASET_REVISION="${LPD_DATASET_REVISION:-fee628311ff52a3ae0ddfddf82379c63d28f7533}"
 
+announce_stage() {
+  printf '\n[%s] %s\n' "$(date -Is)" "$1"
+}
+
 doctor() {
   command -v uv >/dev/null
   command -v git >/dev/null
@@ -165,15 +169,21 @@ prepare_robofactory() {
 }
 
 prepare() {
+  announce_stage "prepare 1/5: synchronize the pinned Python environment"
   (
     cd "${FE_ROOT}"
     uv sync --frozen
   )
+  announce_stage "prepare 2/5: validate the hidden Hugging Face token locally"
   require_hf_token
   # Preserve the tested one-click preparation order from c79ff1e and 859cecd.
+  announce_stage "prepare 3/5: verify or resume the two shared datasets"
   prepare_data
+  announce_stage "prepare 4/5: verify or download the pinned DINOv3 encoder"
   prepare_vision
+  announce_stage "prepare 5/5: verify RoboFactory checkout, environment and assets"
   prepare_robofactory
+  announce_stage "prepare complete: run the final CUDA/environment doctor"
   doctor
 }
 

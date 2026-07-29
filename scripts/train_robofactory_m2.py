@@ -104,14 +104,35 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _emit_stage(stage: str, detail: str, *, primary: bool = True) -> None:
+    if not primary:
+        return
+    payload = {
+        "event": "startup_stage",
+        "stage": stage,
+        "detail": detail,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    print(json.dumps(payload, sort_keys=True), flush=True)
+    stage_log = os.environ.get("LPD_STAGE_LOG")
+    if stage_log:
+        _append_progress_event(Path(stage_log).expanduser().resolve(), payload)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.torch_threads <= 0:
         raise ValueError("--torch-threads must be positive")
     config_path = args.config.expanduser().resolve(strict=True)
+    _emit_stage("config", f"loading {config_path}")
     config = _load_yaml(config_path)
     distributed = _distributed_context()
     device = _select_device(args.device, distributed)
+    _emit_stage(
+        "cuda_preflight",
+        f"checking {device} with world_size={distributed.world_size}",
+        primary=distributed.primary,
+    )
     _configure_compute(config, args.torch_threads, device=device)
     training = _mapping(config, "training")
     action_generation = _action_generation(config, training=training)
@@ -131,10 +152,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if not args.smoke and len(manifests) < int(data_config.get("minimum_tasks", 2)):
         raise ValueError("formal M2 training requires the configured RoboFactory task count")
+    _emit_stage(
+        "dataset_validation",
+        "verifying manifests, HDF5 identities and normalization statistics",
+        primary=distributed.primary,
+    )
     dataset = _build_dataset(
         manifests,
         data_config=data_config,
         smoke=args.smoke,
+    )
+    _emit_stage(
+        "dataset_ready",
+        f"{len(dataset)} train windows across {len(dataset.contracts)} tasks",
+        primary=distributed.primary,
     )
     incompatible_horizons = {
         contract.task_id: contract.action_horizon
@@ -151,10 +182,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         num_tasks=len(dataset.contracts),
         smoke=args.smoke,
     )
+    _emit_stage(
+        "dinov3_load",
+        "loading and verifying frozen DINOv3 weights",
+        primary=distributed.primary,
+    )
     vision, vision_identity = _build_vision(config, model_config=model_config, smoke=args.smoke)
     vision = vision.to(device).eval()
     for parameter in vision.parameters():
         parameter.requires_grad_(False)
+    _emit_stage(
+        "model_build",
+        "allocating the rectified-flow policy and optimizer",
+        primary=distributed.primary,
+    )
     model = BlockCausalWAM(model_config).to(device)
     stages = _stages(training, smoke=args.smoke)
     if not args.smoke:
@@ -241,6 +282,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     loader_generator = torch.Generator().manual_seed(
         train_seed + distributed.rank + 100_000
     )
+    _emit_stage(
+        "dataloader_build",
+        f"configuring {_loader_workers(training, smoke=args.smoke)} workers",
+        primary=distributed.primary,
+    )
     loader = _build_loader(
         dataset,
         sampler=sampler,
@@ -291,6 +337,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_identity=resume_identity,
             device=device,
         )
+    )
+    _emit_stage(
+        "resume_ready",
+        (
+            "no resume checkpoint; starting from update 0"
+            if resume_state is None
+            else f"resuming from global_step={resume_state['global_step']}"
+        ),
+        primary=distributed.primary,
     )
     total_stages = len(stages) + 2
     history: list[dict[str, Any]] = (
@@ -390,6 +445,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "M2 shared-RAM preload exceeds /dev/shm per-rank budget: "
                         f"estimate={estimate}, budget={shared_budget}"
                     )
+            _emit_stage(
+                "ram_preload",
+                f"loading {estimate} bytes from the train split before update 1",
+                primary=distributed.primary,
+            )
             phase = progress.add_phase(
                 "preload RoboFactory train split to RAM",
                 sum(len(value.records) for value in dataset.datasets),
@@ -408,6 +468,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 progress_callback=update,
             )
             phase.finish(f"{preload_report['bytes']} bytes")
+            _emit_stage(
+                "ram_preload_ready",
+                f"loaded {preload_report['bytes']} bytes",
+                primary=distributed.primary,
+            )
         else:
             phase = progress.add_phase("RAM preload policy", 1, show_loss_chart=False)
             preload_report = {
@@ -417,11 +482,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             phase.advance({"batch": 1})
             phase.finish(preload_report["reason"])
 
+        _emit_stage(
+            "dataloader_start",
+            "starting workers and waiting for the first HDF5 batch",
+            primary=distributed.primary,
+        )
         sampler.set_epoch(
             epoch,
             start_offset=samples_consumed_in_epoch,
         )
         iterator = DevicePrefetcher(iter(loader), device)
+        first_batch_announced = False
         for stage_index, stage in enumerate(stages):
             if stage_index < resume_stage_index:
                 continue
@@ -471,6 +542,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     batch = iterator.next()
                     if batch is None:
                         raise RuntimeError("M2 DataLoader yielded no batches")
+                if not first_batch_announced:
+                    _emit_stage(
+                        "optimizer_training",
+                        f"first batch ready; entering stage {stage['name']}",
+                        primary=distributed.primary,
+                    )
+                    first_batch_announced = True
                 samples_consumed_in_epoch += int(batch["dataset_index"].shape[0])
                 coverage_seen[
                     batch["dataset_index"].detach().to("cpu", dtype=torch.long)

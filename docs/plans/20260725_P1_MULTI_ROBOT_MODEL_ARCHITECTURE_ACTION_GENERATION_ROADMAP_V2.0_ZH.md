@@ -529,6 +529,14 @@ tmux select-window \
 
 所有运行产物位于 `/workspace/fe-pc-wam/outputs/s1_r1_runs/s1-r1-round1/`。共享准备日志和哈希分别为 `prepare.log`、`shared_artifact_sha256.txt`；F0/F1 的训练进度、checkpoint、验证 JSON、视频和完整候选日志分别位于 `candidates/f0/` 与 `candidates/f1/`。monitor 中 Gate20 的 `lift=x/20`、`lpd=y/20` 是本轮唯一推进依据：只有 F1 两个任务都不低于 F0 才进入 R2。
 
+共享准备完成后，两个候选还要分别完成数据 manifest/HDF5 身份校验、DINOv3
+权重装载、模型与 optimizer 构建、resume 检查、DataLoader worker 启动和首批
+数据读取。两张 RTX 5090 的常见冷启动时间为 3–15 分钟；云盘较慢时可能达到
+20–30 分钟。候选 window 在等待共享准备时每 30 秒打印一次心跳；训练器把
+上述子阶段写入 `candidates/<f0|f1>/train/stages.jsonl`。monitor 每 5 秒显示
+当前 startup 子阶段、该阶段持续时间以及 GPU 利用率，产生第一个 optimizer
+step 后自动切换为 `training` 并显示 update/loss。
+
 #### 6.1.3 S1-R1 一键退出但保留永久 tmux 与全部产物
 
 退出脚本必须从永久 session 中不属于 `s1-r1-round1-prepare/f0/f1/monitor` 的基础 `bash` window 执行。它只根据 run manifest 和进程环境中的绝对 `S1_R1_RUN_ROOT` 定位本轮进程，依次发送 Ctrl-C、SIGTERM、必要时 SIGKILL，再关闭本轮四个 window；不会调用 `tmux kill-session`，不会删除共享数据、DINO/RoboFactory 权重、worktree、checkpoint、resume、日志、视频或验证结果：

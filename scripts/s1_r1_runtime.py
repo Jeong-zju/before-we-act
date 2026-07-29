@@ -224,16 +224,33 @@ def collect_candidate(run_root: Path, candidate: str) -> dict[str, str]:
     status_path = candidate_root / "status.json"
     status = _load_json(status_path) if status_path.exists() else {}
     progress = read_latest_jsonl(candidate_root / "train" / "progress.jsonl")
+    startup = read_latest_jsonl(candidate_root / "train" / "stages.jsonl")
     completed = _progress_value(progress)
     total = _integer(status.get("total_updates")) or _progress_total(progress)
-    if completed is None:
+    has_optimizer_step = _has_optimizer_step(progress)
+    phase = str(status.get("phase", "pending"))
+    detail = " ".join(str(status.get("detail", "")).split())
+    training = "not started"
+    if startup is not None and phase in {"setup", "startup", "training"}:
+        stage = " ".join(str(startup.get("stage", "startup")).split())
+        stage_detail = " ".join(str(startup.get("detail", "")).split())
+        age = _age_text(startup.get("created_at"))
+        if not has_optimizer_step:
+            phase = "startup"
+            training = f"{stage} ({age})"
+            detail = f"{stage_detail}; stage alive for {age}"
+        elif completed is None:
+            training = f"optimizer active ({age})"
+    elif completed is None:
         training = "not started"
-    elif total:
+    if completed is not None and has_optimizer_step:
+        phase = "training" if phase == "startup" else phase
+    if completed is not None and total and has_optimizer_step:
         percent = min(max(100.0 * completed / total, 0.0), 100.0)
         loss = _number(progress.get("loss")) if progress else None
         suffix = f" loss={loss:.4g}" if loss is not None else ""
         training = f"{completed}/{total} {percent:5.1f}%{suffix}"
-    else:
+    elif completed is not None and has_optimizer_step:
         training = f"step={completed}"
 
     validation_parts = []
@@ -255,10 +272,10 @@ def collect_candidate(run_root: Path, candidate: str) -> dict[str, str]:
         validation_parts.append(f"gate={'pass' if gate.get('passed') else 'done'}")
     return {
         "gpu": str(status.get("gpu_index", "-")),
-        "phase": str(status.get("phase", "pending"))[:11],
+        "phase": phase[:11],
         "training": " ".join(training.split())[:29],
         "validation": " ".join(validation_parts)[:34],
-        "detail": " ".join(str(status.get("detail", "")).split())[:60],
+        "detail": detail[:60],
     }
 
 
@@ -310,6 +327,40 @@ def _progress_total(value: Mapping[str, Any] | None) -> int | None:
         if parsed is not None:
             return parsed
     return None
+
+
+def _has_optimizer_step(value: Mapping[str, Any] | None) -> bool:
+    if value is None:
+        return False
+    if value.get("event") == "optimizer_step":
+        return True
+    return _integer(value.get("update")) is not None or (
+        (_integer(value.get("global_step")) or 0) > 0
+    )
+
+
+def _age_text(value: Any) -> str:
+    try:
+        started = datetime.fromisoformat(str(value))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        seconds = max(
+            int(
+                (
+                    datetime.now(timezone.utc) - started.astimezone(timezone.utc)
+                ).total_seconds()
+            ),
+            0,
+        )
+    except (TypeError, ValueError):
+        return "unknown"
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{seconds:02d}s"
+    return f"{seconds}s"
 
 
 def _gpu_lines() -> list[str]:

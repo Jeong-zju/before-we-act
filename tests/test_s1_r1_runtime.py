@@ -80,6 +80,49 @@ def test_s1_r1_runtime_tracks_both_candidates_and_shared_data(tmp_path: Path):
     assert "tmux attach" not in rendered
 
 
+def test_s1_r1_monitor_reports_startup_stage_and_live_age(tmp_path: Path):
+    run_root = tmp_path / "run"
+    initialize_run(
+        run_root,
+        run_id="fixture",
+        session="permanent",
+        base_repo=ROOT,
+        worktrees=[f"F0={tmp_path / 'f0'}", f"F1={tmp_path / 'f1'}"],
+        window_prefix="fixture",
+        monitor_window="fixture-monitor",
+    )
+    update_status(
+        run_root,
+        candidate="F0",
+        phase="startup",
+        detail="trainer launched",
+        gpu_index=0,
+        total_updates=80000,
+        exit_code=None,
+    )
+    stages = run_root / "candidates/f0/train/stages.jsonl"
+    stages.parent.mkdir(parents=True)
+    stages.write_text(
+        json.dumps(
+            {
+                "event": "startup_stage",
+                "stage": "dataset_validation",
+                "detail": "verifying manifests and HDF5 identities",
+                "created_at": "2026-07-29T00:00:00+00:00",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    value = collect_candidate(run_root, "F0")
+
+    assert value["phase"] == "startup"
+    assert "dataset_validation" in value["training"]
+    assert "verifying manifests" in value["detail"]
+    assert "stage alive for" in value["detail"]
+
+
 def test_s1_r1_launcher_dry_run_assigns_two_gpus_without_mutation(
     tmp_path: Path,
 ):
@@ -110,6 +153,28 @@ def test_s1_r1_launcher_dry_run_assigns_two_gpus_without_mutation(
     assert "never kills it" in result.stdout
     assert "mode-0600 FIFO" in result.stdout
     assert not run_root.exists()
+
+
+def test_s1_r1_candidate_emits_wait_heartbeats_and_training_stages():
+    runner = (ROOT / "scripts/run_s1_r1_candidate.sh").read_text(
+        encoding="utf-8"
+    )
+    static_trainer = (ROOT / "scripts/train_static_rgb_act_moe.py").read_text(
+        encoding="utf-8"
+    )
+    flow_trainer = (ROOT / "scripts/train_robofactory_m2.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "S1_R1_WAIT_HEARTBEAT_SECONDS:-30" in runner
+    assert "elapsed=${WAIT_ELAPSED}s" in runner
+    assert 'export LPD_STAGE_LOG="${CANDIDATE_ROOT}/train/stages.jsonl"' in runner
+    assert 'status startup "loading data, DINO, model and DataLoader' in runner
+    for source in (static_trainer, flow_trainer):
+        assert '"dataset_validation"' in source
+        assert '"dinov3_load"' in source
+        assert '"dataloader_start"' in source
+        assert '"optimizer_training"' in source
 
 
 def _fake_stop_commands(tmp_path: Path) -> tuple[Path, Path]:
