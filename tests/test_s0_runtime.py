@@ -179,10 +179,14 @@ def test_s0_launcher_prompts_for_secret_without_exporting_it():
     assert "export HF_TOKEN='hf_...'" not in runbook
     assert "export LPD_POLICY_KIND" in candidate_runner
     assert "LPD_POLICY_KIND=wam" not in candidate_runner
-    assert "HfApi().whoami(token=os.environ[\"HF_TOKEN\"])" in runner
-    assert runner.count('HF_TOKEN="${HF_TOKEN}" uv run --frozen hf download') == 4
+    assert "HfApi().whoami" not in runner
+    assert "require_hf_token" in runner
+    assert runner.count("uv run --frozen hf download") == 4
+    assert runner.count("HF_HUB_DISABLE_XET=1") == 5
+    assert runner.count("--max-workers 1") == 4
     assert (
-        'HF_TOKEN="${HF_TOKEN}" uv run --frozen python '
+        'HF_HUB_DISABLE_XET=1 HF_TOKEN="${HF_TOKEN}" \\\n'
+        "      uv run --frozen python "
         "scripts/prepare_dinov3_encoder.py"
     ) in runner
     assert "c79ff1e and 859cecd" in runner

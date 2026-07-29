@@ -336,13 +336,13 @@ def _download_snapshot(
             allow_patterns=list(DOWNLOAD_PATTERNS),
             local_dir=destination,
             token=token,
+            max_workers=1,
         )
     except Exception as exc:  # noqa: BLE001 - normalize Hub/network failures
         raise RuntimeError(
             f"metadata access succeeded, but the pinned DINOv3 transfer failed "
-            f"for {model_id}@{revision} (`{type(exc).__name__}: {exc}`). Retry "
-            "the command; if only the large Xet transfer fails, retry once with "
-            "HF_HUB_DISABLE_XET=1."
+            f"for {model_id}@{revision} (`{type(exc).__name__}: {exc}`). "
+            "Rerun the same command to resume the single-worker HTTP transfer."
         ) from exc
 
 
