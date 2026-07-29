@@ -1,0 +1,82 @@
+name: wam.robofactory/s2-r3-w1-local-future
+format_version: wam.robofactory.s2_r3.local_future_predictor.config/1
+
+round:
+  round_id: s2-r3
+  candidate_id: W1
+  model_kind: s2_r3_local_action_conditioned
+  action_conditioning: true
+
+parent:
+  flow_checkpoint: artifacts/s1_r1_f1/checkpoint_080000.pt
+
+data:
+  manifests:
+    - datasets/robofactory_multitask/lift_barrier/training_manifest.json
+    - datasets/robofactory_multitask/long_pipeline_delivery/training_manifest.json
+    - datasets/robofactory_multitask/take_photo/training_manifest.json
+    - datasets/robofactory_multitask/three_robots_stack_cube/training_manifest.json
+    - datasets/robofactory_multitask/camera_alignment/training_manifest.json
+  stride: 1
+  validation_stride: 1
+  hdf5_cache_size: 4
+
+vision:
+  encoder_name: dinov3_vitl16_lvd
+  model_id: facebook/dinov3-vitl16-pretrain-lvd1689m
+  revision: dd0a398fa8e84f2a37179332f6c561d20276300b
+  config_path: artifacts/vision/dinov3_vitl16_lvd/config.json
+  weights_path: artifacts/vision/dinov3_vitl16_lvd/model.safetensors
+  expected_config_sha256: ce962b0c8ca4f2deb48c6fdfd6035257e3769f1d4d9154c92aba51991e46e290
+  expected_weights_sha256: dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179
+  preprocess_id: dinov3_imagenet_rgb_resize_rectangular_antialias_v2
+  input_height: 480
+  input_width: 640
+  inference_batch_size: 2
+
+pca:
+  grid_height: 2
+  grid_width: 2
+  windows_per_task: 16
+
+model:
+  max_agents: 4
+  state_dim: 18
+  action_dim: 8
+  action_horizon: 100
+  future_horizons: [1, 25, 50, 100]
+  visual_grid_tokens: 4
+  visual_latent_dim: 256
+  d_model: 384
+  ffn_dim: 1536
+  layers: 3
+  heads: 8
+  dropout: 0.1
+
+training:
+  seed: 303
+  batch_size: 1
+  num_workers: 4
+  updates: 10000
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  gradient_clip_norm: 1.0
+  save_interval: 500
+  log_interval: 20
+
+evaluation:
+  windows_per_episode: 4
+  batch_size: 4
+  num_workers: 2
+  bootstrap_samples: 10000
+  bootstrap_seed: 30303
+
+artifacts:
+  pca_statistics: artifacts/s2_r3/dino_pca_statistics.pt
+
+checkpoint:
+  output: checkpoints/s2_r3_w1_local_future/predictor.pt
+  resume: checkpoints/s2_r3_w1_local_future/resume.pt
+  progress_log: outputs/s2_r3_w1_local_future/train_progress.jsonl
+  evaluation: outputs/s2_r3_w1_local_future/evaluation.json
+  evaluation_progress: outputs/s2_r3_w1_local_future/evaluation_progress.jsonl

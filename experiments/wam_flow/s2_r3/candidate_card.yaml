@@ -1,0 +1,32 @@
+format_version: wam.robofactory.wam_flow.candidate_card/1
+round_id: s2-r3
+candidate_id: W1
+branch: s2/r3-w1-action-conditioned
+source_parent_commit: 16749c6fa5dcc2fbddea30abf90c038b8c7e64a1
+hypothesis: >-
+  Adding the complete normalized own executed action chunk lets the otherwise
+  identical local predictor learn action-dependent future consequences.
+changed_axis: action_conditioning
+unchanged_axes:
+  - five_task_shared_manifest_set
+  - frozen_s1_r1_f1_flow
+  - frozen_dinov3
+  - train_only_pca_and_target_statistics
+  - local_context_and_own_future_targets
+  - predictor_architecture_and_parameter_count
+  - future_horizons_1_25_50_100
+  - optimizer_updates_10000
+  - training_seed_303
+  - fixed_validation_windows
+  - paired_episode_bootstrap
+rollback:
+  commit: 16749c6fa5dcc2fbddea30abf90c038b8c7e64a1
+  flag: action_conditioning=false
+runtime:
+  model_kind: s2_r3_local_action_conditioned
+  action_conditioning: true
+  action_adapter: complete_own_executed_chunk
+  predictor_path: strictly_off_path
+  config: configs/wam_flow/s2_r3_local_future.yaml
+  checkpoint: checkpoints/s2_r3_w1_local_future/predictor.pt
+  gpu_index: 1
