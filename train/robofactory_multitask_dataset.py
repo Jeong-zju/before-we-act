@@ -277,13 +277,12 @@ class RoboFactoryMultitaskDataset(Dataset[dict[str, Tensor]]):
             action_agents = index.action_dim // 8
             if state_agents != action_agents or state_agents > max_agents:
                 raise ValueError(f"task {task_id!r} has inconsistent agent slots")
-            task_cameras = camera_slots[: state_agents + 1]
-            if tuple(index.camera_order) != task_cameras:
-                raise ValueError(
-                    f"task {task_id!r} must retain global plus all agent cameras "
-                    f"in canonical order {list(task_cameras)}; got "
-                    f"{list(index.camera_order)}"
-                )
+            task_cameras = self._available_task_cameras(
+                index.camera_order,
+                state_agents=state_agents,
+                camera_slots=camera_slots,
+                task_id=task_id,
+            )
             source_conversion_sha256 = self._validate_native_source(
                 index,
                 task_id,
@@ -386,6 +385,23 @@ class RoboFactoryMultitaskDataset(Dataset[dict[str, Tensor]]):
             self._offsets.append(self._offsets[-1] + len(dataset))
 
     @staticmethod
+    def _available_task_cameras(
+        camera_order: Sequence[str],
+        *,
+        state_agents: int,
+        camera_slots: Sequence[str],
+        task_id: str,
+    ) -> tuple[str, ...]:
+        available = tuple(map(str, camera_order))
+        maximum = tuple(camera_slots[: state_agents + 1])
+        if not available or available != maximum[: len(available)]:
+            raise ValueError(
+                f"task {task_id!r} cameras must be a non-empty canonical "
+                f"prefix of {list(maximum)}; got {list(available)}"
+            )
+        return available
+
+    @staticmethod
     def _validate_manifest(index: GenericM1ManifestIndex) -> None:
         if (
             index.schema_profile != ROBOFACTORY_M1_PROFILE
@@ -481,14 +497,14 @@ class RoboFactoryMultitaskDataset(Dataset[dict[str, Tensor]]):
         semantics = conversion.get("data_semantics")
         vision = semantics.get("vision") if isinstance(semantics, Mapping) else None
         if not isinstance(vision, Mapping):
-            raise ValueError("M2 requires native multi-camera RGB semantics")
+            raise ValueError("M2 requires native RGB camera semantics")
         target_order = list(expected_camera_order)
         source_order = vision.get("source_camera_order")
         if vision.get("camera_order") != target_order or not isinstance(
             source_order, list
         ):
             raise ValueError(
-                "M2 requires canonical global-plus-agent camera order"
+                "M2 source camera order differs from the declared canonical prefix"
             )
         expected_sources = [
             {"head_camera", "head_camera_global"},
@@ -502,7 +518,7 @@ class RoboFactoryMultitaskDataset(Dataset[dict[str, Tensor]]):
             for source, allowed in zip(source_order, expected_sources, strict=True)
         ):
             raise ValueError(
-                "M2 source does not retain the native global and every agent camera"
+                "M2 source cameras do not match the declared canonical prefix"
             )
         return actual_sha256
 

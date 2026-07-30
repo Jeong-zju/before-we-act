@@ -691,19 +691,19 @@ S2.0 公共基础设施先落在 `feat/model-improvements`，再从同一个公�
 
 五任务联合训练、联合 held-out 验证固定使用以下不可变 Hugging Face dataset revision，并通过同一个基础仓库下的 `datasets/robofactory_multitask/` 只读共享给两个 worktree：
 
-| 任务 | Hugging Face dataset | revision | 本地目录 |
-|---|---|---|---|
-| LiftBarrier | `zeno-ai/robofactory-lift-barrier-multiview` | `6ab620091677e69370412f08cd7adecacc28c146` | `lift_barrier/` |
-| LongPipelineDelivery | `zeno-ai/robofactory-long-pipeline-delivery-multiview` | `fee628311ff52a3ae0ddfddf82379c63d28f7533` | `long_pipeline_delivery/` |
-| TakePhoto | `zeno-ai/robofactory-take-photo-multiview` | `df3a98acde2453ca17e3121594faf150f3c33023` | `take_photo/` |
-| ThreeRobotsStackCube | `zeno-ai/robofactory-three-robots-stack-cube-multiview` | `e3f07c9625ac0047d680794fdbd6bd9124f3a54b` | `three_robots_stack_cube/` |
-| CameraAlignment | `zeno-ai/robofactory-camera-alignment-multiview` | `f56fe728e24f9074aa7db318705bd13455b1da73` | `camera_alignment/` |
+| 任务 | Hugging Face dataset | revision | 本地目录 | 实际 RGB 相机 |
+|---|---|---|---|---|
+| LiftBarrier | `zeno-ai/robofactory-lift-barrier-multiview` | `6ab620091677e69370412f08cd7adecacc28c146` | `lift_barrier/` | `global, agent_0, agent_1` |
+| LongPipelineDelivery | `zeno-ai/robofactory-long-pipeline-delivery-multiview` | `fee628311ff52a3ae0ddfddf82379c63d28f7533` | `long_pipeline_delivery/` | `global, agent_0..3` |
+| TakePhoto | `zeno-ai/robofactory-take-photo-multiview` | `df3a98acde2453ca17e3121594faf150f3c33023` | `take_photo/` | `global` |
+| ThreeRobotsStackCube | `zeno-ai/robofactory-three-robots-stack-cube-multiview` | `e3f07c9625ac0047d680794fdbd6bd9124f3a54b` | `three_robots_stack_cube/` | `global` |
+| CameraAlignment | `zeno-ai/robofactory-camera-alignment-multiview` | `f56fe728e24f9074aa7db318705bd13455b1da73` | `camera_alignment/` | `global` |
 
 五仓库当前合计约 470 GiB，launcher 在缺数据时要求至少 550 GiB 可用空间。2026-07-30 的服务器实测确认，关闭 Xet 且单 worker 时普通 HTTP 单连接只有约 `4.6 MiB/s`，而 LongPipelineDelivery 单个 HDF5 平均约 `2.37 GiB`；因此五个大型训练集恢复 S0 `9bf88ff` 的已验证传输策略：官方 `hf download` 保持 Xet 开启、不传 `--max-workers`（当前锁定 CLI 的默认值为 8）、失败后最多 5 次指数退避。DINOv3 仍关闭 Xet并固定 `--max-workers 1`。两类下载都固定不可变 revision、`HF_HUB_DOWNLOAD_TIMEOUT=600`、`HF_HUB_ETAG_TIMEOUT=60` 和最终 `--local-dir`，不调用 `snapshot_download`，也不创建第二份 snapshot。
 
 网络抖动时官方客户端在同一本地 cache/`--local-dir` 恢复；只有 prepare 变为 `failed` 才是本轮失败。脚本每 15 秒把当前任务已完成的 episode 数写入 shared status。重启时不能只凭已经先行下载的 `training_manifest.json` 判定完成：快速完整性检查会确认该任务全部 150 个 HDF5、normalization 和 conversion manifest 均已落盘，否则继续复用已完成文件和本地 cache。S0 模式可能重新获取由普通 HTTP 留下但尚未完成的单文件 `.incomplete`，不得手工删除 cache 或已经完成的 HDF5。
 
-grouped adapter 保留 current state `[B,4,18]`、candidate chunk `[B,4,100,8]`、agent RGB `[B,4,...]`、独立 global RGB `[B,...]`、valid-agent mask `[B,4]` 和 `k={1,25,50,100}` future mask。DINOv3 patch feature 固定池化到 `2×2` 网格，再用只读取 train split 的 PCA 从 1024 维压到 256 维；PCA basis、projected std、state/DINO delta normalization、五个 manifest hash 和 DINO hash 保存在 `artifacts/s2_r3/dino_pca_statistics.pt`，并完整嵌入候选 checkpoint。future state/RGB 只用于 target builder，不进入 predictor input。
+grouped adapter 保留 current state `[B,4,18]`、candidate chunk `[B,4,100,8]`、五个固定相机槽位、独立 global RGB `[B,...]`、valid-agent mask `[B,4]` 和 `k={1,25,50,100}` future mask。每个来源任务只需声明实际存在的 canonical 相机前缀，loader 再显式 pad 到固定槽位；不能把缺失的 agent 相机伪造为真实 target。对只有 `global` 的三个新任务，当前 global RGB 作为每个有效 agent 的只读视觉 context fallback，local future RGB mask 保持 false，因此它们参与 per-agent state/action future loss 和 action-shuffle 验收，但不产生虚构的 local visual loss；LiftBarrier/LongPipelineDelivery 仍使用真实 agent 相机并同时训练 state/visual target。DINOv3 patch feature 固定池化到 `2×2` 网格，再用只读取 train split 的 PCA 从 1024 维压到 256 维；PCA basis、projected std、state/DINO delta normalization、五个 manifest hash、每任务实际相机契约和 DINO hash 保存在 `artifacts/s2_r3/dino_pca_statistics.pt`，并完整嵌入候选 checkpoint。future state/RGB 只用于 target builder，不进入 predictor input。
 
 R3 验收器不运行无区分力的成对闭环。它在每个 validation episode 固定选择 4 个时间窗，分别输出 normal 与 own-action-shuffle composite future loss，再按 episode 聚合并运行 10,000 次 paired bootstrap。`acceptance.json` 只有在五个任务上同时满足 W1 loss 不高于 W0、至少一个任务严格改善、W1 `L_shuffled-L_normal>0` 且 bootstrap 95% 下界大于 0时才通过；同时还要求 predictor-disabled F1 action output 逐元素相等、Flow/DINO 文件 hash 前后不变、predictor checkpoint 不含 Flow/DINO state。monitor 直接读取这套特殊规则，不把闭环成功率或 W0 的零 shuffle delta 误当作 R3 通过条件。
 
