@@ -25,6 +25,7 @@ from scripts.train_static_rgb_act_moe import (  # noqa: E402
     _atomic_torch_save,
     _capture_rng,
     _dataset,
+    _emit_stage,
     _frozen_vision_tokens,
     _git_commit,
     _load_yaml,
@@ -62,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config_path = args.config.expanduser().resolve(strict=True)
+    _emit_stage("config", f"loading {config_path}")
     raw = _load_yaml(config_path)
     training = _mapping(raw, "training")
     generation = _mapping(raw, "generation")
@@ -72,6 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         raise ValueError("S1-R1 F1 training requires cold Gaussian 4-step Euler")
     device = torch.device(args.device)
+    _emit_stage("cuda_preflight", f"checking {device}")
     if device.type != "cuda" or not torch.cuda.is_available():
         raise RuntimeError("formal S1-R1 Flow training requires one CUDA GPU")
     if torch.cuda.device_count() != 1:
@@ -87,7 +90,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     seed = int(training.get("seed", 101))
     _seed_everything(seed)
 
+    _emit_stage(
+        "dataset_validation",
+        "verifying the two promoted S1-R1 manifests and local HDF5 identities",
+    )
     dataset = _dataset(raw)
+    _emit_stage(
+        "dataset_ready",
+        f"{len(dataset)} train windows across {len(dataset.contracts)} tasks",
+    )
     batch_size = int(args.batch_size or training.get("batch_size", 4))
     updates = int(args.updates or training.get("updates", 80000))
     if batch_size <= 0 or updates <= 0:
@@ -95,7 +106,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     model_config = StaticRGBMoEACTConfig.from_dict(_mapping(raw, "model"))
     if model_config.horizon != dataset.action_horizon:
         raise ValueError("model and dataset action horizons differ")
+    _emit_stage("dinov3_load", "loading and verifying frozen DINOv3 weights")
     vision = _vision(raw).to(device).eval()
+    _emit_stage(
+        "model_build",
+        "allocating the S1-R1 cold Rectified Flow policy and optimizer",
+    )
     model = AgentFactorizedFlowWAM(model_config).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -130,6 +146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         progress_log.parent.mkdir(parents=True, exist_ok=True)
     start = 0
     if not args.no_resume and resume.is_file():
+        _emit_stage("resume_load", f"loading {resume}")
         saved = torch.load(resume, map_location=device, weights_only=False)
         if saved.get("format_version") != (
             "wam.robofactory.agent_factorized_flow.resume/1"
@@ -140,12 +157,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         scheduler.load_state_dict(saved["scheduler"])
         start = int(saved["update"])
         _restore_rng(_mapping(saved, "rng"))
+    else:
+        _emit_stage("resume_load", "no resume checkpoint; starting from update 0")
     if output.exists():
         raise FileExistsError(f"refusing to overwrite completed checkpoint {output}")
 
     save_interval = int(training.get("save_interval", 1000))
     router_weight = float(training.get("router_aux_weight", 1e-2))
     workers = int(training.get("num_workers", 4))
+    _emit_stage(
+        "dataloader_start",
+        f"starting {workers} workers; first update={start + 1}",
+    )
     loader = DataLoader(
         dataset,
         batch_sampler=_TaskBalancedBatchSampler(
@@ -161,6 +184,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         generator=torch.Generator().manual_seed(seed + 10_000_000),
     )
     iterator = iter(loader)
+    _emit_stage("first_batch", "waiting for the first decoded training batch")
     model.train()
     for update in range(start + 1, updates + 1):
         batch = _local_batch(next(iterator))
@@ -191,6 +215,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         optimizer.step()
         scheduler.step()
+        if update == start + 1:
+            _emit_stage("optimizer_step", f"completed update {update}/{updates}")
         if update % 100 == 0 or update == 1:
             progress = {
                 "update": update,

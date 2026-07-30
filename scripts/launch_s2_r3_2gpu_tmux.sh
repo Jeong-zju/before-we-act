@@ -280,6 +280,7 @@ if (( DRY_RUN )); then
   printf 'Data: one five-task copy; both branches link the same datasets/artifacts.\n'
   printf 'HF datasets: S0 mode (Xet enabled, default 8 workers, five bounded attempts).\n'
   printf 'HF DINO: Xet disabled, one worker; all downloads reuse the final local-dir.\n'
+  printf 'Flow: reuse a verified S1-R1 F1 checkpoint or auto-retrain 80k on GPU0 with persistent resume.\n'
   printf 'HF token: hidden input delivered through a mode-0600 FIFO.\n'
   printf 'Monitor: program, status, heartbeat, train/validation progress, GPU, R3 gate.\n'
   exit 0

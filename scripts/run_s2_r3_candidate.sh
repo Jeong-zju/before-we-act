@@ -93,7 +93,7 @@ while [[ ! -f "${S2_R3_READY_FILE}" ]]; do
   elapsed="$((SECONDS - WAIT_STARTED))"
   if (( elapsed >= NEXT_WAIT_NOTICE )); then
     status waiting run_s2_r3_candidate.sh \
-      "waiting for five datasets, DINO, PCA and Flow; elapsed=${elapsed}s"
+      "waiting for five datasets, DINO, PCA and reused/recovered Flow; elapsed=${elapsed}s"
     NEXT_WAIT_NOTICE="$((elapsed + WAIT_HEARTBEAT_SECONDS))"
   fi
   sleep 5

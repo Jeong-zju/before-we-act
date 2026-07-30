@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import subprocess
 
+import pytest
 import torch
+import yaml
 
 from models.wam_multimodal import (
     LocalActionConditionedFuturePredictor,
@@ -16,6 +19,7 @@ from scripts.s2_r3_runtime import (
     render_monitor,
     update_status,
 )
+from scripts.verify_s1_r1_f1_checkpoint import verify_checkpoint
 from scripts.verify_s2_r3_dataset_local import quick_validate_dataset
 from train.s2_future_prediction import masked_future_prediction_losses
 from train.s2_grouped_trajectory import grouped_s2_batch
@@ -254,12 +258,16 @@ def test_s2_runtime_monitor_reports_program_heartbeat_and_special_gate(
     progress.write_text(
         json.dumps({"update": 500, "updates": 10000, "loss": 0.25}) + "\n"
     )
+    (run_root / "flow_recovery_progress.jsonl").write_text(
+        json.dumps({"update": 1200, "updates": 80000, "loss": 0.125}) + "\n"
+    )
 
     rendered = render_monitor(run_root)
 
     assert "WAM S2-R3 monitor" in rendered
     assert "train_s2_r3_future_predictor.py" in rendered
     assert "500/10000" in rendered
+    assert "S1-R1 F1 recovery 1200/80000" in rendered
     assert "heartbeat=missing" in rendered
     assert "S2-R3 special acceptance: pending" in rendered
     assert "Permanent tmux stays alive" in rendered
@@ -267,6 +275,7 @@ def test_s2_runtime_monitor_reports_program_heartbeat_and_special_gate(
 
 def test_s2_shell_scripts_are_syntax_valid_and_hf_download_is_hardened():
     for name in (
+        "recover_s1_r1_f1_checkpoint.sh",
         "prepare_s2_r3_shared.sh",
         "run_s2_r3_candidate.sh",
         "launch_s2_r3_2gpu_tmux.sh",
@@ -295,12 +304,71 @@ def test_s2_shell_scripts_are_syntax_valid_and_hf_download_is_hardened():
     assert "--max-workers" not in dataset_function
     assert "S0 mode Xet=on workers=8" in dataset_function
     assert "verify_s2_r3_dataset_local.py" in prepare
+    assert "recover_s1_r1_f1_checkpoint.sh" in prepare
+    assert "train_agent_factorized_flow_wam.py" in prepare
+    assert "verify_s1_r1_f1_checkpoint.py" in prepare
     assert "snapshot_download" not in prepare
     assert "hf_hub_download" not in prepare
     dino = (ROOT / "scripts/prepare_dinov3_encoder.py").read_text()
     assert "snapshot_download" not in dino
     assert '"--max-workers",' in dino
     assert '"HF_HUB_DISABLE_XET": "1"' in dino
+
+
+def test_s1_r1_f1_recovery_verifier_is_fail_closed(tmp_path: Path):
+    raw = yaml.safe_load(
+        (ROOT / "configs/wam_flow/s1_r1_f1_flow_cold.yaml").read_text()
+    )
+    manifests = []
+    observed = []
+    for task_id in ("lift_barrier", "long_pipeline_delivery"):
+        relative = Path("datasets") / task_id / "training_manifest.json"
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"episodes": [{"task_id": task_id}]}))
+        manifests.append(str(relative))
+        observed.append(
+            {
+                "task_id": task_id,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    raw["data"]["manifests"] = manifests
+    config = tmp_path / "f1.yaml"
+    config.write_text(yaml.safe_dump(raw, sort_keys=False))
+    payload = {
+        "format_version": (
+            "wam.robofactory.agent_factorized_flow.checkpoint/1"
+        ),
+        "update": 80000,
+        "method": {
+            "round_id": "s1-r1",
+            "candidate_id": "F1",
+            "action_generator": "rectified_flow_cold",
+            "future_path": False,
+            "active_agent_loss_weighting": False,
+        },
+        "model_config": raw["model"],
+        "model": {"weight": torch.ones(1)},
+        "generation": raw["generation"],
+        "training": raw["training"],
+        "vision": raw["vision"],
+        "data": {"manifests": observed},
+        "source": {
+            "config_sha256": hashlib.sha256(config.read_bytes()).hexdigest()
+        },
+    }
+    checkpoint = tmp_path / "checkpoint.pt"
+    torch.save(payload, checkpoint)
+
+    result = verify_checkpoint(checkpoint, config, repo_root=tmp_path)
+
+    assert result["update"] == 80000
+    assert result["method"]["candidate_id"] == "F1"
+    payload["method"]["future_path"] = True
+    torch.save(payload, checkpoint)
+    with pytest.raises(ValueError, match="method.future_path"):
+        verify_checkpoint(checkpoint, config, repo_root=tmp_path)
 
 
 def test_s2_s0_retry_mode_enables_xet_and_recovers(tmp_path: Path):
@@ -421,5 +489,6 @@ def test_s2_launcher_dry_run_describes_two_gpus_and_permanent_tmux(tmp_path: Pat
     assert "never kills/exits it" in result.stdout
     assert "S0 mode (Xet enabled, default 8 workers" in result.stdout
     assert "HF DINO: Xet disabled, one worker" in result.stdout
+    assert "auto-retrain 80k on GPU0 with persistent resume" in result.stdout
     assert "program, status, heartbeat" in result.stdout
     assert not (tmp_path / "run").exists()
