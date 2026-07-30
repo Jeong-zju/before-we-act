@@ -94,11 +94,11 @@ status environment 'uv sync --frozen' "synchronizing pinned Python environment"
 
 DATA_ROOT="${FE_ROOT}/datasets/robofactory_multitask"
 DATASET_SPECS=(
-  "lift_barrier|zeno-ai/robofactory-lift-barrier-multiview|6ab620091677e69370412f08cd7adecacc28c146|2"
-  "long_pipeline_delivery|zeno-ai/robofactory-long-pipeline-delivery-multiview|fee628311ff52a3ae0ddfddf82379c63d28f7533|4"
-  "take_photo|zeno-ai/robofactory-take-photo-multiview|df3a98acde2453ca17e3121594faf150f3c33023|4"
-  "three_robots_stack_cube|zeno-ai/robofactory-three-robots-stack-cube-multiview|e3f07c9625ac0047d680794fdbd6bd9124f3a54b|3"
-  "camera_alignment|zeno-ai/robofactory-camera-alignment-multiview|f56fe728e24f9074aa7db318705bd13455b1da73|3"
+  "lift_barrier|zeno-ai/robofactory-lift-barrier-multiview|6ab620091677e69370412f08cd7adecacc28c146|2|36216038270"
+  "long_pipeline_delivery|zeno-ai/robofactory-long-pipeline-delivery-multiview|fee628311ff52a3ae0ddfddf82379c63d28f7533|4|381222318154"
+  "take_photo|zeno-ai/robofactory-take-photo-multiview|3966385a4c688a5610d4b6cde044150f6b73d320|4|140081439177"
+  "three_robots_stack_cube|zeno-ai/robofactory-three-robots-stack-cube-multiview|d0ae346bf2ce63ec801af1f036c08a4a91faf366|3|220968602723"
+  "camera_alignment|zeno-ai/robofactory-camera-alignment-multiview|e204af13f7191dfd86dab3da529316a51558f479|3|63550797663"
 )
 
 verify_dataset() {
@@ -154,22 +154,45 @@ download_dataset() {
 
 MISSING_DATA=0
 for spec in "${DATASET_SPECS[@]}"; do
-  IFS='|' read -r slug _repo _revision expected_agent_count <<<"${spec}"
+  IFS='|' read -r \
+    slug _repo _revision expected_agent_count _expected_bytes <<<"${spec}"
   verify_dataset "${slug}" "${expected_agent_count}" >/dev/null 2>&1 \
     || MISSING_DATA=1
 done
 if (( MISSING_DATA )); then
-  AVAILABLE_GIB="$(df --output=avail -BG "${FE_ROOT}" | tail -1 | tr -dc '0-9')"
-  if (( AVAILABLE_GIB < 550 )); then
+  REQUIRED_GROWTH_BYTES=0
+  for spec in "${DATASET_SPECS[@]}"; do
+    IFS='|' read -r \
+      slug _repo _revision _expected_agent_count expected_bytes <<<"${spec}"
+    destination="${DATA_ROOT}/${slug}"
+    current_bytes=0
+    if [[ -d "${destination}" ]]; then
+      current_bytes="$(du -sb "${destination}" | cut -f1)"
+    fi
+    if (( expected_bytes > current_bytes )); then
+      REQUIRED_GROWTH_BYTES=$((
+        REQUIRED_GROWTH_BYTES + expected_bytes - current_bytes
+      ))
+    fi
+  done
+  DOWNLOAD_HEADROOM_BYTES=$((32 * 1024 * 1024 * 1024))
+  REQUIRED_BYTES=$((REQUIRED_GROWTH_BYTES + DOWNLOAD_HEADROOM_BYTES))
+  AVAILABLE_BYTES="$(
+    df --output=avail -B1 "${FE_ROOT}" | tail -1 | tr -dc '0-9'
+  )"
+  if (( AVAILABLE_BYTES < REQUIRED_BYTES )); then
     printf >&2 \
-      'Five-task corpus needs about 470 GiB; require at least 550 GiB free, found %s GiB.\n' \
-      "${AVAILABLE_GIB}"
+      'Five-task update needs %s bytes of net growth plus 32 GiB replacement headroom; only %s bytes are free.\n' \
+      "${REQUIRED_GROWTH_BYTES}" "${AVAILABLE_BYTES}"
     exit 3
   fi
+  status dataset prepare_s2_r3_shared.sh \
+    "disk preflight passed: net growth=${REQUIRED_GROWTH_BYTES} bytes; free=${AVAILABLE_BYTES} bytes; headroom=32 GiB"
 fi
 
 for spec in "${DATASET_SPECS[@]}"; do
-  IFS='|' read -r slug repo revision expected_agent_count <<<"${spec}"
+  IFS='|' read -r \
+    slug repo revision expected_agent_count _expected_bytes <<<"${spec}"
   manifest="${DATA_ROOT}/${slug}/training_manifest.json"
   if verify_dataset "${slug}" "${expected_agent_count}" >/dev/null 2>&1; then
     status dataset prepare_s2_r3_shared.sh \
