@@ -64,10 +64,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         else None
     )
     if output.is_file():
-        load_s2_artifact(output, device=torch.device("cpu"))
-        _stage(progress_log, "artifact_reuse", f"verified existing {output}")
-        print(json.dumps({"artifact": str(output), "sha256": file_sha256(output)}))
-        return 0
+        existing = load_s2_artifact(output, device=torch.device("cpu"))
+        expected_manifests = _configured_manifest_identities(raw)
+        if _artifact_manifest_identities(existing) == expected_manifests:
+            _stage(progress_log, "artifact_reuse", f"verified existing {output}")
+            print(
+                json.dumps(
+                    {"artifact": str(output), "sha256": file_sha256(output)}
+                )
+            )
+            return 0
+        _stage(
+            progress_log,
+            "artifact_stale",
+            "dataset manifest identities changed; rebuilding PCA/statistics",
+        )
 
     device = torch.device(args.device)
     if (
@@ -84,6 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     _stage(progress_log, "dataset_validation", "opening five train manifests")
     dataset = _dataset(raw, split="train")
+    _validate_complete_agent_cameras(dataset)
     pca_config = _mapping(raw, "pca")
     windows_per_task = int(pca_config.get("windows_per_task", 16))
     if windows_per_task <= 0:
@@ -100,14 +112,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw_features: list[torch.Tensor] = []
     for position, index in enumerate(indices, start=1):
         grouped = grouped_s2_batch(default_collate([dataset[index]]))
-        valid = grouped["valid_agent_mask"][0]
-        images = grouped["agent_observations"][0, valid].to(device)
-        encoded = vision.forward_spatial_grid(
-            images,
+        valid = grouped["agent_camera_valid_mask"][0]
+        encoded = _encode_valid_spatial_grid(
+            vision,
+            grouped["agent_observations"][0].to(device),
+            valid.to(device),
             grid_height=grid_height,
             grid_width=grid_width,
-        ).spatial_tokens
-        raw_features.append(encoded.float().reshape(-1, 1024).cpu())
+        )
+        if encoded.numel():
+            raw_features.append(encoded.reshape(-1, 1024).cpu())
         if position == 1 or position % 10 == 0 or position == len(indices):
             _progress(
                 progress_log,
@@ -115,6 +129,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 completed=position,
                 total=len(indices),
             )
+    if not raw_features:
+        raise RuntimeError(
+            "S2 PCA fitting found no valid current agent RGB frames"
+        )
     feature_matrix = torch.cat(raw_features, dim=0).to(device)
     if feature_matrix.shape[0] < 256:
         raise RuntimeError("S2 PCA fitting produced fewer than 256 patch samples")
@@ -148,7 +166,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
     for position, index in enumerate(indices, start=1):
         grouped = grouped_s2_batch(default_collate([dataset[index]]))
-        valid_agents = grouped["valid_agent_mask"].to(device)
+        current_valid = grouped["agent_camera_valid_mask"].to(device)
         future_valid = grouped["future_agent_visual_valid_mask"].to(device)
         current_images = grouped["agent_observations"].to(device)
         future_images = grouped["future_agent_observations"].to(device)
@@ -159,14 +177,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             256,
             device=device,
         )
-        current[valid_agents] = project_dino_grid(
-            vision.forward_spatial_grid(
-                current_images[valid_agents],
-                grid_height=grid_height,
-                grid_width=grid_width,
-            ).spatial_tokens.float(),
-            temporary_artifact,
+        current_features = _encode_valid_spatial_grid(
+            vision,
+            current_images,
+            current_valid,
+            grid_height=grid_height,
+            grid_width=grid_width,
         )
+        if current_features.numel():
+            current[current_valid] = project_dino_grid(
+                current_features,
+                temporary_artifact,
+            )
         future = torch.zeros(
             1,
             4,
@@ -175,14 +197,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             256,
             device=device,
         )
-        future[future_valid] = project_dino_grid(
-            vision.forward_spatial_grid(
-                future_images[future_valid],
-                grid_height=grid_height,
-                grid_width=grid_width,
-            ).spatial_tokens.float(),
-            temporary_artifact,
+        future_features = _encode_valid_spatial_grid(
+            vision,
+            future_images,
+            future_valid,
+            grid_height=grid_height,
+            grid_width=grid_width,
         )
+        if future_features.numel():
+            future[future_valid] = project_dino_grid(
+                future_features,
+                temporary_artifact,
+            )
         visual_delta = future - current[:, :, None]
         state_delta = grouped["future_state_delta"]
         state_valid = grouped["future_state_valid_mask"]
@@ -287,6 +313,119 @@ def _fit_indices(
             ]
         result.extend(indices.start + offset for offset in offsets)
     return result
+
+
+def _validate_complete_agent_cameras(
+    dataset: S2GroupedTrajectoryDataset,
+) -> None:
+    for contract in dataset.contracts:
+        expected = ("global",) + tuple(
+            f"agent_{index}" for index in range(contract.agent_count)
+        )
+        if tuple(contract.camera_order) != expected:
+            raise ValueError(
+                "formal five-task S2-R3 artifacts require global plus every "
+                f"physical agent camera for task {contract.task_id!r}; "
+                f"expected {list(expected)}, got {list(contract.camera_order)}"
+            )
+
+
+def _configured_manifest_identities(
+    config: Mapping[str, object],
+) -> list[dict[str, str]]:
+    identities: list[dict[str, str]] = []
+    for value in _mapping(config, "data")["manifests"]:  # type: ignore[index]
+        path = (ROOT / str(value)).resolve(strict=True)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"training manifest root must be an object: {path}")
+        episodes = raw.get("episodes")
+        if not isinstance(episodes, list):
+            raise ValueError(f"training manifest episodes must be a list: {path}")
+        task_ids = {
+            str(episode.get("task_id"))
+            for episode in episodes
+            if isinstance(episode, Mapping)
+        }
+        if len(task_ids) != 1:
+            raise ValueError(
+                f"training manifest must contain exactly one task id: {path}"
+            )
+        state = raw.get("state")
+        vision = raw.get("vision")
+        if not isinstance(state, Mapping) or not isinstance(vision, Mapping):
+            raise ValueError(
+                f"training manifest must declare state and vision contracts: {path}"
+            )
+        state_dimension = int(state.get("dimension", 0))
+        if state_dimension <= 0 or state_dimension % 18:
+            raise ValueError(
+                f"training manifest has an invalid Panda state dimension: {path}"
+            )
+        expected_cameras = ["global"] + [
+            f"agent_{index}" for index in range(state_dimension // 18)
+        ]
+        observed_cameras = vision.get("camera_order")
+        if observed_cameras != expected_cameras:
+            raise ValueError(
+                "formal five-task S2-R3 artifacts require global plus every "
+                f"physical agent camera in {path}; expected {expected_cameras}, "
+                f"got {observed_cameras}"
+            )
+        identities.append(
+            {
+                "task_id": next(iter(task_ids)),
+                "sha256": file_sha256(path),
+            }
+        )
+    return identities
+
+
+def _artifact_manifest_identities(
+    artifact: Mapping[str, object],
+) -> list[dict[str, str]]:
+    data = artifact.get("data")
+    manifests = data.get("manifests") if isinstance(data, Mapping) else None
+    if not isinstance(manifests, list):
+        return []
+    return [
+        {
+            "task_id": str(value.get("task_id")),
+            "sha256": str(value.get("sha256")),
+        }
+        for value in manifests
+        if isinstance(value, Mapping)
+    ]
+
+
+def _encode_valid_spatial_grid(
+    vision: torch.nn.Module,
+    images: torch.Tensor,
+    valid: torch.Tensor,
+    *,
+    grid_height: int,
+    grid_width: int,
+) -> torch.Tensor:
+    """Encode only valid RGB frames without calling DINO on an empty batch."""
+
+    if valid.dtype != torch.bool:
+        raise TypeError("S2 RGB validity mask must be boolean")
+    if tuple(images.shape[: valid.ndim]) != tuple(valid.shape):
+        raise ValueError("S2 RGB validity mask does not match image axes")
+    selected = images[valid]
+    if selected.shape[0] == 0:
+        return torch.empty(
+            0,
+            grid_height * grid_width,
+            1024,
+            dtype=torch.float32,
+            device=images.device,
+        )
+    return vision.forward_spatial_grid(
+        selected,
+        grid_height=grid_height,
+        grid_width=grid_width,
+    ).spatial_tokens.float()
 
 
 def _statistics(

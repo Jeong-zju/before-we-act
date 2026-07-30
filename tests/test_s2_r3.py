@@ -14,6 +14,11 @@ from models.wam_multimodal import (
     LocalFuturePredictorConfig,
 )
 from scripts.accept_s2_r3 import REQUIRED_TASKS, build_acceptance
+from scripts.prepare_s2_r3_artifacts import (
+    _artifact_manifest_identities,
+    _encode_valid_spatial_grid,
+    _validate_complete_agent_cameras,
+)
 from scripts.s2_r3_runtime import (
     initialize_run,
     render_monitor,
@@ -503,6 +508,9 @@ def test_s2_quick_local_dataset_check_rejects_partial_download(tmp_path: Path):
     manifest = {
         "format_version": "wam.multimodal.trajectory.training_manifest/1",
         "dataset_protocol": "generic_multimodal_trajectory",
+        "vision": {
+            "camera_order": ["global", "agent_0", "agent_1"],
+        },
         "episodes": [
             {
                 "task_id": "lift_barrier",
@@ -519,6 +527,7 @@ def test_s2_quick_local_dataset_check_rejects_partial_download(tmp_path: Path):
         manifest_path,
         expected_task="lift_barrier",
         expected_episodes=1,
+        expected_agent_count=2,
     )
     assert complete["complete"] is True
     assert complete["episodes"] == 1
@@ -531,11 +540,106 @@ def test_s2_quick_local_dataset_check_rejects_partial_download(tmp_path: Path):
             partial_path,
             expected_task="lift_barrier",
             expected_episodes=1,
+            expected_agent_count=2,
         )
     except ValueError as error:
         assert "missing locally" in str(error)
     else:
         raise AssertionError("partial local dataset must not be accepted")
+
+
+def test_s2_quick_local_dataset_check_requires_every_agent_camera(
+    tmp_path: Path,
+):
+    root = tmp_path / "task"
+    (root / "hdf5").mkdir(parents=True)
+    (root / "hdf5/episode_000000.hdf5").write_bytes(b"hdf5")
+    (root / "normalization.npz").write_bytes(b"normalization")
+    (root / "conversion_manifest.json").write_text("{}")
+    manifest = {
+        "format_version": "wam.multimodal.trajectory.training_manifest/1",
+        "dataset_protocol": "generic_multimodal_trajectory",
+        "vision": {"camera_order": ["global"]},
+        "episodes": [
+            {
+                "task_id": "take_photo",
+                "hdf5_path": "hdf5/episode_000000.hdf5",
+            }
+        ],
+        "normalization": {"path": "normalization.npz"},
+        "source": {"conversion_manifest_path": "conversion_manifest.json"},
+    }
+    manifest_path = root / "training_manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="every physical agent camera"):
+        quick_validate_dataset(
+            manifest_path,
+            expected_task="take_photo",
+            expected_episodes=1,
+            expected_agent_count=4,
+        )
+
+
+def test_s2_artifact_preparation_skips_empty_rgb_batches():
+    class VisionThatMustNotRun(torch.nn.Module):
+        def forward_spatial_grid(self, *args, **kwargs):
+            raise AssertionError("DINO must not receive an empty RGB batch")
+
+    encoded = _encode_valid_spatial_grid(
+        VisionThatMustNotRun(),
+        torch.zeros(1, 4, 3, 8, 8, dtype=torch.uint8),
+        torch.zeros(1, 4, dtype=torch.bool),
+        grid_height=2,
+        grid_width=2,
+    )
+
+    assert encoded.shape == (0, 4, 1024)
+    assert encoded.dtype == torch.float32
+
+
+def test_s2_artifact_preparation_requires_complete_agent_cameras():
+    complete = type(
+        "Dataset",
+        (),
+        {
+            "contracts": [
+                type(
+                    "Contract",
+                    (),
+                    {
+                        "task_id": "lift_barrier",
+                        "agent_count": 2,
+                        "camera_order": ("global", "agent_0", "agent_1"),
+                    },
+                )()
+            ]
+        },
+    )()
+    _validate_complete_agent_cameras(complete)
+
+    complete.contracts[0].camera_order = ("global",)
+    with pytest.raises(ValueError, match="every physical agent camera"):
+        _validate_complete_agent_cameras(complete)
+
+
+def test_s2_stale_artifact_manifest_identity_is_not_reused():
+    artifact = {
+        "data": {
+            "manifests": [
+                {
+                    "task_id": "take_photo",
+                    "path": "/old/training_manifest.json",
+                    "sha256": "old",
+                }
+            ]
+        }
+    }
+
+    assert _artifact_manifest_identities(artifact) == [
+        {"task_id": "take_photo", "sha256": "old"}
+    ]
+    assert _artifact_manifest_identities({}) == []
 
 
 def test_s2_launcher_dry_run_describes_two_gpus_and_permanent_tmux(tmp_path: Path):

@@ -94,25 +94,28 @@ status environment 'uv sync --frozen' "synchronizing pinned Python environment"
 
 DATA_ROOT="${FE_ROOT}/datasets/robofactory_multitask"
 DATASET_SPECS=(
-  "lift_barrier|zeno-ai/robofactory-lift-barrier-multiview|6ab620091677e69370412f08cd7adecacc28c146"
-  "long_pipeline_delivery|zeno-ai/robofactory-long-pipeline-delivery-multiview|fee628311ff52a3ae0ddfddf82379c63d28f7533"
-  "take_photo|zeno-ai/robofactory-take-photo-multiview|df3a98acde2453ca17e3121594faf150f3c33023"
-  "three_robots_stack_cube|zeno-ai/robofactory-three-robots-stack-cube-multiview|e3f07c9625ac0047d680794fdbd6bd9124f3a54b"
-  "camera_alignment|zeno-ai/robofactory-camera-alignment-multiview|f56fe728e24f9074aa7db318705bd13455b1da73"
+  "lift_barrier|zeno-ai/robofactory-lift-barrier-multiview|6ab620091677e69370412f08cd7adecacc28c146|2"
+  "long_pipeline_delivery|zeno-ai/robofactory-long-pipeline-delivery-multiview|fee628311ff52a3ae0ddfddf82379c63d28f7533|4"
+  "take_photo|zeno-ai/robofactory-take-photo-multiview|df3a98acde2453ca17e3121594faf150f3c33023|4"
+  "three_robots_stack_cube|zeno-ai/robofactory-three-robots-stack-cube-multiview|e3f07c9625ac0047d680794fdbd6bd9124f3a54b|3"
+  "camera_alignment|zeno-ai/robofactory-camera-alignment-multiview|f56fe728e24f9074aa7db318705bd13455b1da73|3"
 )
 
 verify_dataset() {
   local slug="$1"
+  local expected_agent_count="$2"
   python3 "${FE_ROOT}/scripts/verify_s2_r3_dataset_local.py" \
     --manifest "${DATA_ROOT}/${slug}/training_manifest.json" \
     --expected-task "${slug}" \
-    --expected-episodes 150
+    --expected-episodes 150 \
+    --expected-agent-count "${expected_agent_count}"
 }
 
 download_dataset() {
   local slug="$1"
   local repo="$2"
   local revision="$3"
+  local expected_agent_count="$4"
   local destination="${DATA_ROOT}/${slug}"
   local download_pid
   local completed
@@ -146,13 +149,14 @@ download_dataset() {
     sleep 15
   done
   wait "${download_pid}"
-  verify_dataset "${slug}"
+  verify_dataset "${slug}" "${expected_agent_count}"
 }
 
 MISSING_DATA=0
 for spec in "${DATASET_SPECS[@]}"; do
-  IFS='|' read -r slug _ _ <<<"${spec}"
-  verify_dataset "${slug}" >/dev/null 2>&1 || MISSING_DATA=1
+  IFS='|' read -r slug _repo _revision expected_agent_count <<<"${spec}"
+  verify_dataset "${slug}" "${expected_agent_count}" >/dev/null 2>&1 \
+    || MISSING_DATA=1
 done
 if (( MISSING_DATA )); then
   AVAILABLE_GIB="$(df --output=avail -BG "${FE_ROOT}" | tail -1 | tr -dc '0-9')"
@@ -165,11 +169,11 @@ if (( MISSING_DATA )); then
 fi
 
 for spec in "${DATASET_SPECS[@]}"; do
-  IFS='|' read -r slug repo revision <<<"${spec}"
+  IFS='|' read -r slug repo revision expected_agent_count <<<"${spec}"
   manifest="${DATA_ROOT}/${slug}/training_manifest.json"
-  if verify_dataset "${slug}" >/dev/null 2>&1; then
+  if verify_dataset "${slug}" "${expected_agent_count}" >/dev/null 2>&1; then
     status dataset prepare_s2_r3_shared.sh \
-      "verified all 150 local ${slug} episodes plus metadata"
+      "verified all 150 local ${slug} episodes plus complete agent cameras"
     continue
   fi
   if [[ -f "${manifest}" ]]; then
@@ -178,7 +182,8 @@ for spec in "${DATASET_SPECS[@]}"; do
   fi
   status dataset 'hf download' \
     "S0 Xet/default-8-worker in-place download/resume: ${repo}@${revision}"
-  download_dataset "${slug}" "${repo}" "${revision}"
+  download_dataset \
+    "${slug}" "${repo}" "${revision}" "${expected_agent_count}"
 done
 
 DINO_ROOT="${FE_ROOT}/artifacts/vision/dinov3_vitl16_lvd"
