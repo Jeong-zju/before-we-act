@@ -20,6 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--expected-task", required=True)
     parser.add_argument("--expected-episodes", type=int, default=150)
+    parser.add_argument("--expected-agent-count", type=int)
     return parser
 
 
@@ -28,11 +29,14 @@ def quick_validate_dataset(
     *,
     expected_task: str,
     expected_episodes: int,
+    expected_agent_count: int | None = None,
 ) -> dict[str, Any]:
     if not expected_task:
         raise ValueError("expected task cannot be empty")
     if expected_episodes <= 0:
         raise ValueError("expected episodes must be positive")
+    if expected_agent_count is not None and expected_agent_count <= 0:
+        raise ValueError("expected agent count must be positive")
     manifest = Path(manifest_path).expanduser().resolve(strict=True)
     if not manifest.is_file():
         raise ValueError(f"manifest is not a file: {manifest}")
@@ -46,6 +50,23 @@ def quick_validate_dataset(
         raise ValueError("unexpected training manifest format")
     if raw.get("dataset_protocol") != DATASET_PROTOCOL:
         raise ValueError("unexpected dataset protocol")
+    vision = _mapping(raw, "vision")
+    camera_order = vision.get("camera_order")
+    if not isinstance(camera_order, list) or not all(
+        isinstance(value, str) and value for value in camera_order
+    ):
+        raise ValueError("vision.camera_order must be a non-empty string list")
+    expected_cameras = (
+        None
+        if expected_agent_count is None
+        else ["global"]
+        + [f"agent_{index}" for index in range(expected_agent_count)]
+    )
+    if expected_cameras is not None and camera_order != expected_cameras:
+        raise ValueError(
+            "dataset must contain global plus every physical agent camera in "
+            f"canonical order; expected {expected_cameras}, got {camera_order}"
+        )
 
     episodes = raw.get("episodes")
     if not isinstance(episodes, list) or len(episodes) != expected_episodes:
@@ -87,6 +108,7 @@ def quick_validate_dataset(
         "task_id": expected_task,
         "episodes": len(episode_paths),
         "episode_bytes": episode_bytes,
+        "camera_order": camera_order,
         "manifest": str(manifest),
         "normalization": str(normalization_path),
         "conversion_manifest": str(conversion_path),
@@ -125,6 +147,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.manifest,
             expected_task=args.expected_task,
             expected_episodes=args.expected_episodes,
+            expected_agent_count=args.expected_agent_count,
         )
     except (OSError, ValueError) as exc:
         print(
