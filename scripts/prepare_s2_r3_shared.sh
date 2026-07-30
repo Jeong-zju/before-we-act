@@ -14,6 +14,18 @@ STATUS_TOOL="${FE_ROOT}/scripts/s2_r3_runtime.py"
 LOG_PATH="${S2_R3_RUN_ROOT}/prepare.log"
 STAGES_LOG="${S2_R3_RUN_ROOT}/prepare_stages.jsonl"
 PROGRESS_LOG="${S2_R3_RUN_ROOT}/prepare_progress.jsonl"
+HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-600}"
+HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-60}"
+if [[ ! "${HF_HUB_DOWNLOAD_TIMEOUT}" =~ ^[1-9][0-9]*$ || \
+      ! "${HF_HUB_ETAG_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
+  printf >&2 'HF Hub timeout values must be positive integer seconds.\n'
+  exit 3
+fi
+export \
+  HF_HUB_DISABLE_XET=1 \
+  HF_XET_HIGH_PERFORMANCE=0 \
+  HF_HUB_DOWNLOAD_TIMEOUT \
+  HF_HUB_ETAG_TIMEOUT
 
 mkdir -p "${S2_R3_RUN_ROOT}"
 exec > >(tee -a "${LOG_PATH}") 2>&1
@@ -87,10 +99,58 @@ DATASET_SPECS=(
   "three_robots_stack_cube|zeno-ai/robofactory-three-robots-stack-cube-multiview|e3f07c9625ac0047d680794fdbd6bd9124f3a54b"
   "camera_alignment|zeno-ai/robofactory-camera-alignment-multiview|f56fe728e24f9074aa7db318705bd13455b1da73"
 )
+
+verify_dataset() {
+  local slug="$1"
+  python3 "${FE_ROOT}/scripts/verify_s2_r3_dataset_local.py" \
+    --manifest "${DATA_ROOT}/${slug}/training_manifest.json" \
+    --expected-task "${slug}" \
+    --expected-episodes 150
+}
+
+download_dataset() {
+  local slug="$1"
+  local repo="$2"
+  local revision="$3"
+  local destination="${DATA_ROOT}/${slug}"
+  local download_pid
+  local completed
+  status dataset 'hf download' \
+    "starting ${repo}@${revision}; episodes=0/150; HTTP read timeout=${HF_HUB_DOWNLOAD_TIMEOUT}s"
+  (
+    cd "${FE_ROOT}"
+    HF_TOKEN="${HF_TOKEN_INPUT}" \
+      uv run --frozen hf download "${repo}" \
+        --repo-type dataset \
+        --revision "${revision}" \
+        --local-dir "datasets/robofactory_multitask/${slug}" \
+        --max-workers 1
+  ) &
+  download_pid=$!
+  while kill -0 "${download_pid}" 2>/dev/null; do
+    completed=0
+    if [[ -d "${destination}/hdf5" ]]; then
+      completed="$(
+        find "${destination}/hdf5" \
+          -maxdepth 1 \
+          -type f \
+          -name 'episode_*.hdf5' \
+          | wc -l
+      )"
+      completed="${completed//[[:space:]]/}"
+    fi
+    status dataset 'hf download' \
+      "${repo}@${revision}; complete episodes=${completed}/150; official Range resume active; timeout=${HF_HUB_DOWNLOAD_TIMEOUT}s"
+    sleep 15
+  done
+  wait "${download_pid}"
+  verify_dataset "${slug}"
+}
+
 MISSING_DATA=0
 for spec in "${DATASET_SPECS[@]}"; do
   IFS='|' read -r slug _ _ <<<"${spec}"
-  [[ -f "${DATA_ROOT}/${slug}/training_manifest.json" ]] || MISSING_DATA=1
+  verify_dataset "${slug}" >/dev/null 2>&1 || MISSING_DATA=1
 done
 if (( MISSING_DATA )); then
   AVAILABLE_GIB="$(df --output=avail -BG "${FE_ROOT}" | tail -1 | tr -dc '0-9')"
@@ -105,25 +165,18 @@ fi
 for spec in "${DATASET_SPECS[@]}"; do
   IFS='|' read -r slug repo revision <<<"${spec}"
   manifest="${DATA_ROOT}/${slug}/training_manifest.json"
-  if [[ -f "${manifest}" ]]; then
+  if verify_dataset "${slug}" >/dev/null 2>&1; then
     status dataset prepare_s2_r3_shared.sh \
-      "verified existing ${slug}/training_manifest.json"
+      "verified all 150 local ${slug} episodes plus metadata"
     continue
   fi
+  if [[ -f "${manifest}" ]]; then
+    status dataset prepare_s2_r3_shared.sh \
+      "${slug} manifest exists but local files are incomplete; resuming in place"
+  fi
   status dataset 'hf download' \
-    "direct single-worker in-place download: ${repo}@${revision}"
-  (
-    cd "${FE_ROOT}"
-    HF_HUB_DISABLE_XET=1 \
-    HF_XET_HIGH_PERFORMANCE=0 \
-    HF_TOKEN="${HF_TOKEN_INPUT}" \
-      uv run --frozen hf download "${repo}" \
-        --repo-type dataset \
-        --revision "${revision}" \
-        --local-dir "datasets/robofactory_multitask/${slug}" \
-        --max-workers 1
-  )
-  test -f "${manifest}"
+    "direct single-worker in-place download/resume: ${repo}@${revision}"
+  download_dataset "${slug}" "${repo}" "${revision}"
 done
 
 DINO_ROOT="${FE_ROOT}/artifacts/vision/dinov3_vitl16_lvd"
@@ -134,8 +187,6 @@ if [[ ! -f "${DINO_ROOT}/config.json" || \
     "direct single-worker in-place DINOv3 download with Xet disabled"
   (
     cd "${FE_ROOT}"
-    HF_HUB_DISABLE_XET=1 \
-    HF_XET_HIGH_PERFORMANCE=0 \
     HF_TOKEN="${HF_TOKEN_INPUT}" \
       uv run --frozen hf download \
         facebook/dinov3-vitl16-pretrain-lvd1689m \
