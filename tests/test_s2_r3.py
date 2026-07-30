@@ -384,6 +384,13 @@ def test_s2_shell_scripts_are_syntax_valid_and_hf_download_is_hardened():
     assert "--max-workers" not in dataset_function
     assert "S0 mode Xet=on workers=8" in dataset_function
     assert "verify_s2_r3_dataset_local.py" in prepare
+    assert "3966385a4c688a5610d4b6cde044150f6b73d320" in prepare
+    assert "d0ae346bf2ce63ec801af1f036c08a4a91faf366" in prepare
+    assert "e204af13f7191dfd86dab3da529316a51558f479" in prepare
+    assert "REQUIRED_GROWTH_BYTES" in prepare
+    assert "DOWNLOAD_HEADROOM_BYTES" in prepare
+    assert "32 * 1024 * 1024 * 1024" in prepare
+    assert "550 GiB" not in prepare
     assert "recover_s1_r1_f1_checkpoint.sh" in prepare
     assert "train_agent_factorized_flow_wam.py" in prepare
     assert "verify_s1_r1_f1_checkpoint.py" in prepare
