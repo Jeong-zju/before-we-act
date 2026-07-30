@@ -249,8 +249,32 @@ def render_monitor(run_root: Path) -> str:
 
 
 def _shared_progress_line(run_root: Path) -> str:
+    prepare = read_latest_jsonl(run_root / "prepare_progress.jsonl")
     recovery = read_latest_jsonl(run_root / "flow_recovery_progress.jsonl")
     stages = read_latest_jsonl(run_root / "flow_recovery_stages.jsonl")
+    recovery_event = _newer_event(recovery, stages)
+    if prepare and (
+        recovery_event is None
+        or str(prepare.get("created_at", ""))
+        >= str(recovery_event.get("created_at", ""))
+    ):
+        if prepare.get("event") == "prepare_progress":
+            phase = str(prepare.get("phase", "prepare"))
+            completed = _integer(prepare.get("completed"))
+            total = _integer(prepare.get("total"))
+            if completed is not None and total:
+                return (
+                    f"shared progress | {phase} {completed}/{total} "
+                    f"{100.0 * completed / total:5.1f}%"
+                )
+        if prepare.get("event") == "startup_stage":
+            stage = str(prepare.get("stage", "?"))
+            detail = _compact(prepare.get("detail", ""), 80)
+            suffix = f" detail={detail}" if detail else ""
+            return (
+                f"shared progress | prepare {stage}{suffix} "
+                f"({_age_text(prepare.get('created_at'))})"
+            )
     if recovery:
         update = _integer(recovery.get("update"))
         total = _integer(recovery.get("updates"))
@@ -270,6 +294,16 @@ def _shared_progress_line(run_root: Path) -> str:
             f"({_age_text(stages.get('created_at'))})"
         )
     return "shared progress | no Flow recovery needed or not started"
+
+
+def _newer_event(
+    first: Mapping[str, Any] | None,
+    second: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    values = [value for value in (first, second) if value]
+    if not values:
+        return None
+    return max(values, key=lambda value: str(value.get("created_at", "")))
 
 
 def collect_candidate(run_root: Path, candidate: str) -> dict[str, str]:
