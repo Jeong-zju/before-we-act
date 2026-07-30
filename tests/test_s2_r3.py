@@ -353,6 +353,35 @@ def test_s2_runtime_monitor_reports_program_heartbeat_and_special_gate(
     assert "Permanent tmux stays alive" in rendered
 
 
+def test_s2_runtime_monitor_reports_shared_prepare_progress(tmp_path: Path):
+    run_root = tmp_path / "run"
+    initialize_run(
+        run_root,
+        run_id="fixture",
+        session="permanent",
+        base_repo=ROOT,
+        worktrees=[f"W0={tmp_path / 'w0'}", f"W1={tmp_path / 'w1'}"],
+        window_prefix="fixture",
+        monitor_window="fixture-monitor",
+    )
+    (run_root / "prepare_progress.jsonl").write_text(
+        json.dumps(
+            {
+                "created_at": "2026-07-30T16:35:55+00:00",
+                "event": "prepare_progress",
+                "phase": "pca_samples",
+                "completed": 30,
+                "total": 80,
+            }
+        )
+        + "\n"
+    )
+
+    rendered = render_monitor(run_root)
+
+    assert "shared progress | pca_samples 30/80  37.5%" in rendered
+
+
 def test_s2_shell_scripts_are_syntax_valid_and_hf_download_is_hardened():
     for name in (
         "recover_s1_r1_f1_checkpoint.sh",
