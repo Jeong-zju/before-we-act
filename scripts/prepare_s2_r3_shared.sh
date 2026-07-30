@@ -14,6 +14,7 @@ STATUS_TOOL="${FE_ROOT}/scripts/s2_r3_runtime.py"
 LOG_PATH="${S2_R3_RUN_ROOT}/prepare.log"
 STAGES_LOG="${S2_R3_RUN_ROOT}/prepare_stages.jsonl"
 PROGRESS_LOG="${S2_R3_RUN_ROOT}/prepare_progress.jsonl"
+source "${FE_ROOT}/scripts/hf_download_retry.sh"
 HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-600}"
 HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-60}"
 if [[ ! "${HF_HUB_DOWNLOAD_TIMEOUT}" =~ ^[1-9][0-9]*$ || \
@@ -116,15 +117,16 @@ download_dataset() {
   local download_pid
   local completed
   status dataset 'hf download' \
-    "starting ${repo}@${revision}; episodes=0/150; HTTP read timeout=${HF_HUB_DOWNLOAD_TIMEOUT}s"
+    "S0 transfer mode: ${repo}@${revision}; Xet enabled; workers=8; episodes=0/150"
   (
     cd "${FE_ROOT}"
-    HF_TOKEN="${HF_TOKEN_INPUT}" \
-      uv run --frozen hf download "${repo}" \
+    HF_TOKEN="${HF_TOKEN_INPUT}" hf_download_with_retry \
+      "${slug} training dataset" \
+      0 \
+      "${repo}" \
         --repo-type dataset \
         --revision "${revision}" \
-        --local-dir "datasets/robofactory_multitask/${slug}" \
-        --max-workers 1
+        --local-dir "datasets/robofactory_multitask/${slug}"
   ) &
   download_pid=$!
   while kill -0 "${download_pid}" 2>/dev/null; do
@@ -140,7 +142,7 @@ download_dataset() {
       completed="${completed//[[:space:]]/}"
     fi
     status dataset 'hf download' \
-      "${repo}@${revision}; complete episodes=${completed}/150; official Range resume active; timeout=${HF_HUB_DOWNLOAD_TIMEOUT}s"
+      "${repo}@${revision}; S0 mode Xet=on workers=8; complete episodes=${completed}/150; attempt max=5"
     sleep 15
   done
   wait "${download_pid}"

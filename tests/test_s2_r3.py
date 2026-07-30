@@ -283,6 +283,17 @@ def test_s2_shell_scripts_are_syntax_valid_and_hf_download_is_hardened():
     assert 'HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-60}"' in prepare
     assert "--max-workers 1" in prepare
     assert "--local-dir" in prepare
+    assert 'source "${FE_ROOT}/scripts/hf_download_retry.sh"' in prepare
+    assert "hf_download_with_retry" in prepare
+    assert '"${slug} training dataset"' in prepare
+    assert "\n      0 \\\n      \"${repo}\"" in prepare
+    dataset_function = prepare[
+        prepare.index("download_dataset() {") : prepare.index(
+            "\nMISSING_DATA=0"
+        )
+    ]
+    assert "--max-workers" not in dataset_function
+    assert "S0 mode Xet=on workers=8" in dataset_function
     assert "verify_s2_r3_dataset_local.py" in prepare
     assert "snapshot_download" not in prepare
     assert "hf_hub_download" not in prepare
@@ -290,6 +301,54 @@ def test_s2_shell_scripts_are_syntax_valid_and_hf_download_is_hardened():
     assert "snapshot_download" not in dino
     assert '"--max-workers",' in dino
     assert '"HF_HUB_DISABLE_XET": "1"' in dino
+
+
+def test_s2_s0_retry_mode_enables_xet_and_recovers(tmp_path: Path):
+    command = tmp_path / "fake-hf-command"
+    calls = tmp_path / "calls"
+    command.write_text(
+        """#!/usr/bin/env bash
+set -eu
+printf '%s|%s\\n' "${HF_TOKEN}" "${HF_HUB_DISABLE_XET}" >>"${CALL_LOG}"
+count="$(wc -l <"${CALL_LOG}")"
+if (( count < 3 )); then
+  exit 29
+fi
+"""
+    )
+    command.chmod(0o755)
+    token = "hf_unit_test_secret"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; hf_with_retry "S2 fixture" 0 "$2"',
+            "bash",
+            str(ROOT / "scripts/hf_download_retry.sh"),
+            str(command),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HF_TOKEN": token,
+            "HF_DOWNLOAD_ATTEMPTS": "4",
+            "HF_DOWNLOAD_INITIAL_BACKOFF_SECONDS": "0",
+            "CALL_LOG": str(calls),
+        },
+    )
+
+    assert calls.read_text().splitlines() == [
+        f"{token}|0",
+        f"{token}|0",
+        f"{token}|0",
+    ]
+    assert "attempt 1/4 (Xet enabled)" in result.stdout
+    assert "attempt 3/4 (Xet enabled)" in result.stdout
+    assert result.stderr.count("retrying in 0 seconds") == 2
+    assert token not in result.stdout
+    assert token not in result.stderr
 
 
 def test_s2_quick_local_dataset_check_rejects_partial_download(tmp_path: Path):
@@ -360,6 +419,7 @@ def test_s2_launcher_dry_run_describes_two_gpus_and_permanent_tmux(tmp_path: Pat
     assert "s2/r3-w0-action-independent" in result.stdout
     assert "s2/r3-w1-action-conditioned" in result.stdout
     assert "never kills/exits it" in result.stdout
-    assert "600s default read timeout" in result.stdout
+    assert "S0 mode (Xet enabled, default 8 workers" in result.stdout
+    assert "HF DINO: Xet disabled, one worker" in result.stdout
     assert "program, status, heartbeat" in result.stdout
     assert not (tmp_path / "run").exists()
