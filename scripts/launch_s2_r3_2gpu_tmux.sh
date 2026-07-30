@@ -278,7 +278,7 @@ if (( DRY_RUN )); then
   printf '\nDry run: no files, worktrees, tmux windows or GPU jobs were changed.\n'
   printf 'Tmux: reuses the permanent session and never kills/exits it.\n'
   printf 'Data: one five-task copy; both branches link the same datasets/artifacts.\n'
-  printf 'HF: Xet disabled, one worker, direct local-dir resume only.\n'
+  printf 'HF: Xet disabled, one worker, 600s default read timeout, direct local-dir resume only.\n'
   printf 'HF token: hidden input delivered through a mode-0600 FIFO.\n'
   printf 'Monitor: program, status, heartbeat, train/validation progress, GPU, R3 gate.\n'
   exit 0

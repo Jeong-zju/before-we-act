@@ -16,6 +16,7 @@ from scripts.s2_r3_runtime import (
     render_monitor,
     update_status,
 )
+from scripts.verify_s2_r3_dataset_local import quick_validate_dataset
 from train.s2_future_prediction import masked_future_prediction_losses
 from train.s2_grouped_trajectory import grouped_s2_batch
 from train.s2_model_registry import S2_R3_MODEL_KINDS
@@ -278,14 +279,61 @@ def test_s2_shell_scripts_are_syntax_valid_and_hf_download_is_hardened():
         )
     prepare = (ROOT / "scripts/prepare_s2_r3_shared.sh").read_text()
     assert "HF_HUB_DISABLE_XET=1" in prepare
+    assert 'HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-600}"' in prepare
+    assert 'HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-60}"' in prepare
     assert "--max-workers 1" in prepare
     assert "--local-dir" in prepare
+    assert "verify_s2_r3_dataset_local.py" in prepare
     assert "snapshot_download" not in prepare
     assert "hf_hub_download" not in prepare
     dino = (ROOT / "scripts/prepare_dinov3_encoder.py").read_text()
     assert "snapshot_download" not in dino
     assert '"--max-workers",' in dino
     assert '"HF_HUB_DISABLE_XET": "1"' in dino
+
+
+def test_s2_quick_local_dataset_check_rejects_partial_download(tmp_path: Path):
+    root = tmp_path / "task"
+    (root / "hdf5").mkdir(parents=True)
+    (root / "hdf5/episode_000000.hdf5").write_bytes(b"hdf5")
+    (root / "normalization.npz").write_bytes(b"normalization")
+    (root / "conversion_manifest.json").write_text("{}")
+    manifest = {
+        "format_version": "wam.multimodal.trajectory.training_manifest/1",
+        "dataset_protocol": "generic_multimodal_trajectory",
+        "episodes": [
+            {
+                "task_id": "lift_barrier",
+                "hdf5_path": "hdf5/episode_000000.hdf5",
+            }
+        ],
+        "normalization": {"path": "normalization.npz"},
+        "source": {"conversion_manifest_path": "conversion_manifest.json"},
+    }
+    manifest_path = root / "training_manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+
+    complete = quick_validate_dataset(
+        manifest_path,
+        expected_task="lift_barrier",
+        expected_episodes=1,
+    )
+    assert complete["complete"] is True
+    assert complete["episodes"] == 1
+
+    manifest["episodes"][0]["hdf5_path"] = "hdf5/episode_000001.hdf5"
+    partial_path = root / "partial_manifest.json"
+    partial_path.write_text(json.dumps(manifest))
+    try:
+        quick_validate_dataset(
+            partial_path,
+            expected_task="lift_barrier",
+            expected_episodes=1,
+        )
+    except ValueError as error:
+        assert "missing locally" in str(error)
+    else:
+        raise AssertionError("partial local dataset must not be accepted")
 
 
 def test_s2_launcher_dry_run_describes_two_gpus_and_permanent_tmux(tmp_path: Path):
@@ -312,5 +360,6 @@ def test_s2_launcher_dry_run_describes_two_gpus_and_permanent_tmux(tmp_path: Pat
     assert "s2/r3-w0-action-independent" in result.stdout
     assert "s2/r3-w1-action-conditioned" in result.stdout
     assert "never kills/exits it" in result.stdout
+    assert "600s default read timeout" in result.stdout
     assert "program, status, heartbeat" in result.stdout
     assert not (tmp_path / "run").exists()

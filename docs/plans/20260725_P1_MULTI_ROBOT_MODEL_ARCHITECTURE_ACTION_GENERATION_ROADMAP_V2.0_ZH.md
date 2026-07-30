@@ -699,7 +699,7 @@ S2.0 公共基础设施先落在 `feat/model-improvements`，再从同一个公�
 | ThreeRobotsStackCube | `zeno-ai/robofactory-three-robots-stack-cube-multiview` | `e3f07c9625ac0047d680794fdbd6bd9124f3a54b` | `three_robots_stack_cube/` |
 | CameraAlignment | `zeno-ai/robofactory-camera-alignment-multiview` | `f56fe728e24f9074aa7db318705bd13455b1da73` | `camera_alignment/` |
 
-五仓库当前合计约 470 GiB，launcher 在缺数据时要求至少 550 GiB 可用空间。S2-R3 共享准备对所有 Hugging Face 数据和 DINOv3 只保留一种传输：`HF_HUB_DISABLE_XET=1`、`HF_XET_HIGH_PERFORMANCE=0`、`hf download --max-workers 1 --local-dir <最终目录>`。不调用 `snapshot_download`，不创建第二份 snapshot，不并发下载，也不包裹自动重试；网络中断后以新 run-id 重启，官方 CLI 在同一 `--local-dir` 原地续传。
+五仓库当前合计约 470 GiB，launcher 在缺数据时要求至少 550 GiB 可用空间。S2-R3 共享准备对所有 Hugging Face 数据和 DINOv3 只保留一种传输：`HF_HUB_DISABLE_XET=1`、`HF_XET_HIGH_PERFORMANCE=0`、`HF_HUB_DOWNLOAD_TIMEOUT=600`、`HF_HUB_ETAG_TIMEOUT=60`、`hf download --max-workers 1 --local-dir <最终目录>`。不调用 `snapshot_download`，不创建第二份 snapshot，也不并发下载；网络抖动时由官方 CLI 使用 HTTP Range 在同一 `.incomplete`/`--local-dir` 原地续传，日志中的 `Trying to resume download...` 是可恢复状态，只有 prepare 变为 `failed` 才是本轮失败。脚本每 15 秒把当前任务已完成的 episode 数写入 shared status。重启时不能只凭已经先行下载的 `training_manifest.json` 判定完成：快速完整性检查会确认该任务全部 150 个 HDF5、normalization 和 conversion manifest 均已落盘，否则继续原地续传。
 
 grouped adapter 保留 current state `[B,4,18]`、candidate chunk `[B,4,100,8]`、agent RGB `[B,4,...]`、独立 global RGB `[B,...]`、valid-agent mask `[B,4]` 和 `k={1,25,50,100}` future mask。DINOv3 patch feature 固定池化到 `2×2` 网格，再用只读取 train split 的 PCA 从 1024 维压到 256 维；PCA basis、projected std、state/DINO delta normalization、五个 manifest hash 和 DINO hash 保存在 `artifacts/s2_r3/dino_pca_statistics.pt`，并完整嵌入候选 checkpoint。future state/RGB 只用于 target builder，不进入 predictor input。
 
@@ -781,6 +781,23 @@ python3 scripts/s2_r3_runtime.py monitor \
 
 tmux select-window \
   -t "$(tmux display-message -p '#S'):s2-r3-round1-monitor"
+```
+
+若旧版本 prepare 日志反复出现 10 秒 read timeout、单个 episode 的预计时间持续升高，先从本轮四个 window 之外的基础 window 安全停止旧 run，再拉取修复并使用新 run-id。不得删除 `datasets/robofactory_multitask/*/.cache/huggingface/`、任何 `.incomplete` 或已经完成的 HDF5；新 run 会从已有字节原地续传：
+
+```bash
+cd /workspace/fe-pc-wam
+
+./scripts/stop_s2_r3_2gpu_tmux.sh \
+  --run-id s2-r3-round1
+
+git switch feat/model-improvements
+git pull --ff-only origin feat/model-improvements
+
+export S2_R3_FLOW_CHECKPOINT=/workspace/checkpoints/s1_r1_f1_flow_cold/checkpoint_080000.pt
+
+./scripts/launch_s2_r3_2gpu_tmux.sh \
+  --run-id s2-r3-round1-resume1
 ```
 
 所有 run 产物位于 `outputs/s2_r3_runs/s2-r3-round1/`：`prepare.log`、`prepare_progress.jsonl`、`shared_artifact_sha256.txt`、`candidates/<w0|w1>/train/{stages,progress}.jsonl`、candidate checkpoint/resume、`candidates/<w0|w1>/validation/{progress.jsonl,evaluation.json}` 和最终 `acceptance.json`。心跳超过 75 秒会显示 `STALE`；这表示当前程序没有健康回报，应先看对应 candidate/prepare log 和 GPU process，而不是把最后一个 loss 当作仍在运行。
