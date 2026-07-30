@@ -181,8 +181,16 @@ def masked_future_prediction_losses(
         eps=1e-6,
     )
     visual_values = visual_values.mean(dim=-1)
-    state_per = _masked_per_trajectory(state_values, state_valid)
-    visual_per = _masked_per_trajectory(visual_values, visual_valid)
+    state_per = _masked_per_trajectory(
+        state_values,
+        state_valid,
+        allow_empty=False,
+    )
+    visual_per = _masked_per_trajectory(
+        visual_values,
+        visual_valid,
+        allow_empty=True,
+    )
     composite_per = state_per + visual_per
     return {
         "loss": composite_per.mean(),
@@ -214,14 +222,19 @@ def file_sha256(path: str | Path) -> str:
     return digest.hexdigest()
 
 
-def _masked_per_trajectory(values: Tensor, valid: Tensor) -> Tensor:
+def _masked_per_trajectory(
+    values: Tensor,
+    valid: Tensor,
+    *,
+    allow_empty: bool,
+) -> Tensor:
     if values.shape != valid.shape or values.ndim != 3:
         raise ValueError("masked trajectory values must share [B,A,F]")
     weights = valid.to(values)
     denominator = weights.sum(dim=(1, 2))
-    if not bool(denominator.gt(0).all()):
+    if not allow_empty and not bool(denominator.gt(0).all()):
         raise ValueError("every trajectory needs at least one valid future target")
-    return (values * weights).sum(dim=(1, 2)) / denominator
+    return (values * weights).sum(dim=(1, 2)) / denominator.clamp_min(1.0)
 
 
 __all__ = [

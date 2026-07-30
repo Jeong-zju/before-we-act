@@ -163,7 +163,21 @@ def grouped_s2_batch(batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
         < agent_count[:, None]
     )
     current_image_valid = batch["image_valid_mask"][:, -1]
-    agent_valid = slot_valid & current_image_valid[:, 1:5]
+    physical_agent_camera_valid = slot_valid & current_image_valid[:, 1:5]
+    global_fallback_valid = (
+        slot_valid
+        & ~physical_agent_camera_valid
+        & current_image_valid[:, 0, None]
+    )
+    agent_valid = physical_agent_camera_valid | global_fallback_valid
+    agent_observations = images[:, -1, 1:5].clone()
+    if bool(global_fallback_valid.any()):
+        global_observations = images[:, -1, 0, None].expand(
+            -1, S2_MAX_AGENTS, -1, -1, -1
+        )
+        agent_observations[global_fallback_valid] = global_observations[
+            global_fallback_valid
+        ]
 
     future_indices = torch.tensor(
         [value - 1 for value in S2_FUTURE_HORIZONS],
@@ -185,7 +199,7 @@ def grouped_s2_batch(batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
     )
     future_visual_valid = batch["future_visual_valid_mask"].bool()
     agent_future_visual_valid = (
-        agent_valid[:, :, None]
+        physical_agent_camera_valid[:, :, None]
         & future_visual_valid[:, :, 1:5].permute(0, 2, 1)
     )
     shared_future_visual_valid = future_visual_valid[:, :, 0]
@@ -198,9 +212,11 @@ def grouped_s2_batch(batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
         "decision_t": batch["decision_t"],
         "current_state": current_state,
         "candidate_actions": candidate_actions,
-        "agent_observations": images[:, -1, 1:5],
+        "agent_observations": agent_observations,
         "shared_observation": images[:, -1, 0],
         "valid_agent_mask": agent_valid,
+        "agent_camera_valid_mask": physical_agent_camera_valid,
+        "agent_global_fallback_mask": global_fallback_valid,
         "future_state_delta": future_state_delta,
         "future_state_valid_mask": future_state_valid,
         "future_agent_observations": future_images[:, :, 1:5].permute(
@@ -231,6 +247,8 @@ def validate_grouped_s2_contract(batch: Mapping[str, Tensor]) -> None:
             S2_ACTION_DIM,
         ),
         "valid_agent_mask": (batch_size, S2_MAX_AGENTS),
+        "agent_camera_valid_mask": (batch_size, S2_MAX_AGENTS),
+        "agent_global_fallback_mask": (batch_size, S2_MAX_AGENTS),
         "future_state_delta": (
             batch_size,
             S2_MAX_AGENTS,

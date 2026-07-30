@@ -21,6 +21,7 @@ from scripts.s2_r3_runtime import (
 )
 from scripts.verify_s1_r1_f1_checkpoint import verify_checkpoint
 from scripts.verify_s2_r3_dataset_local import quick_validate_dataset
+from train.robofactory_multitask_dataset import RoboFactoryMultitaskDataset
 from train.s2_future_prediction import masked_future_prediction_losses
 from train.s2_grouped_trajectory import grouped_s2_batch
 from train.s2_model_registry import S2_R3_MODEL_KINDS
@@ -97,6 +98,58 @@ def test_grouped_adapter_preserves_agent_global_and_future_masks():
     assert not bool(grouped["future_state_valid_mask"][:, 3].any())
 
 
+def test_grouped_adapter_uses_global_context_without_faking_local_targets():
+    raw = _raw_grouped_batch()
+    raw = {
+        key: value[:1].clone() if isinstance(value, torch.Tensor) else value
+        for key, value in raw.items()
+    }
+    raw["embodiment_index"] = torch.tensor([2])
+    raw["images"].zero_()
+    raw["images"][:, :, 0].fill_(17)
+    raw["image_valid_mask"][:] = False
+    raw["image_valid_mask"][:, :, 0] = True
+    raw["future_images"].zero_()
+    raw["future_images"][:, :, 0].fill_(23)
+    raw["future_visual_valid_mask"][:] = False
+    raw["future_visual_valid_mask"][:, :, 0] = True
+
+    grouped = grouped_s2_batch(raw)
+
+    assert grouped["valid_agent_mask"].tolist() == [[True, True, True, False]]
+    assert grouped["agent_camera_valid_mask"].tolist() == [
+        [False, False, False, False]
+    ]
+    assert grouped["agent_global_fallback_mask"].tolist() == [
+        [True, True, True, False]
+    ]
+    for agent in range(3):
+        torch.testing.assert_close(
+            grouped["agent_observations"][0, agent],
+            grouped["shared_observation"][0],
+        )
+    assert not bool(grouped["future_agent_visual_valid_mask"].any())
+    assert bool(grouped["future_state_valid_mask"][0, :3].any())
+
+
+def test_multitask_camera_contract_accepts_global_only_canonical_prefix():
+    slots = ("global", "agent_0", "agent_1", "agent_2", "agent_3")
+
+    assert RoboFactoryMultitaskDataset._available_task_cameras(
+        ("global",),
+        state_agents=4,
+        camera_slots=slots,
+        task_id="take_photo",
+    ) == ("global",)
+    with pytest.raises(ValueError, match="canonical prefix"):
+        RoboFactoryMultitaskDataset._available_task_cameras(
+            ("global", "agent_1"),
+            state_agents=4,
+            camera_slots=slots,
+            task_id="broken",
+        )
+
+
 def test_local_predictor_has_matched_parameters_and_w0_masks_actions():
     config = LocalFuturePredictorConfig(
         action_horizon=6,
@@ -159,6 +212,28 @@ def test_invalid_agent_slots_contribute_zero_to_s2_loss():
     )
 
     torch.testing.assert_close(baseline["loss"], perturbed["loss"])
+
+
+def test_state_only_task_allows_missing_local_visual_targets():
+    predicted_state = torch.ones(1, 3, 2, 18)
+    target_state = torch.zeros_like(predicted_state)
+    state_valid = torch.ones(1, 3, 2, dtype=torch.bool)
+    predicted_visual = torch.randn(1, 3, 2, 4, 8)
+    target_visual = torch.randn_like(predicted_visual)
+    visual_valid = torch.zeros(1, 3, 2, dtype=torch.bool)
+
+    losses = masked_future_prediction_losses(
+        predicted_state,
+        target_state,
+        state_valid,
+        predicted_visual,
+        target_visual,
+        visual_valid,
+    )
+
+    assert torch.isfinite(losses["loss"])
+    torch.testing.assert_close(losses["visual"], torch.tensor(0.0))
+    torch.testing.assert_close(losses["loss"], losses["state"])
 
 
 def _evaluation(candidate_id: str, conditioned: bool) -> dict:
