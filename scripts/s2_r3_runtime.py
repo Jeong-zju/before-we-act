@@ -210,8 +210,12 @@ def monitor_run(run_root: Path, *, interval: float, once: bool) -> None:
 def render_monitor(run_root: Path) -> str:
     manifest = _maybe_json(run_root / "run_manifest.json")
     shared = _maybe_json(run_root / "shared_status.json")
-    shared_hb = _heartbeat_text(
-        _maybe_json(run_root / "shared_heartbeat.json").get("updated_at")
+    shared_hb = (
+        "complete"
+        if shared.get("phase") == "complete"
+        else _heartbeat_text(
+            _maybe_json(run_root / "shared_heartbeat.json").get("updated_at")
+        )
     )
     lines = [
         (

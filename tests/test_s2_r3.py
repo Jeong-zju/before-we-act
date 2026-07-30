@@ -376,10 +376,20 @@ def test_s2_runtime_monitor_reports_shared_prepare_progress(tmp_path: Path):
         )
         + "\n"
     )
+    (run_root / "shared_status.json").write_text(
+        json.dumps(
+            {
+                "phase": "complete",
+                "program": "prepare_s2_r3_shared.sh",
+                "detail": "five-task artifacts ready",
+            }
+        )
+    )
 
     rendered = render_monitor(run_root)
 
     assert "shared progress | pca_samples 30/80  37.5%" in rendered
+    assert "shared prepare | status=complete heartbeat=complete" in rendered
 
 
 def test_s2_shell_scripts_are_syntax_valid_and_hf_download_is_hardened():
