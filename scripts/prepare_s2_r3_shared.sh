@@ -177,7 +177,7 @@ for spec in "${DATASET_SPECS[@]}"; do
       "${slug} manifest exists but local files are incomplete; resuming in place"
   fi
   status dataset 'hf download' \
-    "direct single-worker in-place download/resume: ${repo}@${revision}"
+    "S0 Xet/default-8-worker in-place download/resume: ${repo}@${revision}"
   download_dataset "${slug}" "${repo}" "${revision}"
 done
 
@@ -210,6 +210,11 @@ status dinov3 prepare_dinov3_encoder.py \
 
 FLOW_TARGET="${FE_ROOT}/artifacts/s1_r1_f1/checkpoint_080000.pt"
 FLOW_SOURCE="${S2_R3_FLOW_CHECKPOINT:-}"
+if [[ -n "${FLOW_SOURCE}" && ! -f "${FLOW_SOURCE}" ]]; then
+  status flow_recovery recover_s1_r1_f1_checkpoint.sh \
+    "configured Flow checkpoint is missing; falling back to automatic reconstruction"
+  FLOW_SOURCE=""
+fi
 if [[ -z "${FLOW_SOURCE}" && -f "${FLOW_TARGET}" ]]; then
   FLOW_SOURCE="${FLOW_TARGET}"
 fi
@@ -224,12 +229,22 @@ if [[ -z "${FLOW_SOURCE}" ]]; then
   )
 fi
 if [[ -z "${FLOW_SOURCE}" || ! -f "${FLOW_SOURCE}" ]]; then
-  printf >&2 \
-    'Missing promoted S1-R1 F1 checkpoint. Set S2_R3_FLOW_CHECKPOINT to checkpoint_080000.pt.\n'
-  exit 3
+  status flow_recovery train_agent_factorized_flow_wam.py \
+    "S1-R1 F1 checkpoint absent; auto-retraining 0/80000 on GPU0 with persistent resume"
+  (
+    cd "${FE_ROOT}"
+    S2_R3_RUN_ROOT="${S2_R3_RUN_ROOT}" \
+    UV_CACHE_DIR="${UV_CACHE_DIR}" \
+    UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT}" \
+      bash scripts/recover_s1_r1_f1_checkpoint.sh
+  )
+  FLOW_SOURCE="${FLOW_TARGET}"
 fi
 FLOW_SOURCE="$(realpath "${FLOW_SOURCE}")"
 mkdir -p "$(dirname "${FLOW_TARGET}")"
+if [[ -L "${FLOW_TARGET}" && ! -e "${FLOW_TARGET}" ]]; then
+  unlink "${FLOW_TARGET}"
+fi
 if [[ ! -e "${FLOW_TARGET}" ]]; then
   ln -s "${FLOW_SOURCE}" "${FLOW_TARGET}"
 elif [[ "$(realpath "${FLOW_TARGET}")" != "${FLOW_SOURCE}" ]]; then
@@ -238,20 +253,12 @@ elif [[ "$(realpath "${FLOW_TARGET}")" != "${FLOW_SOURCE}" ]]; then
   exit 3
 fi
 status flow_checkpoint python \
-  "verifying promoted S1-R1 F1 checkpoint format and method"
+  "verifying frozen S1-R1 F1 recipe, config and two manifest identities"
 (
   cd "${FE_ROOT}"
-  uv run --frozen python - "${FLOW_TARGET}" <<'PY'
-from pathlib import Path
-import sys
-import torch
-path = Path(sys.argv[1]).resolve(strict=True)
-value = torch.load(path, map_location="cpu", weights_only=False)
-assert value["format_version"] == "wam.robofactory.agent_factorized_flow.checkpoint/1"
-assert value["method"]["action_generator"] == "rectified_flow_cold"
-assert value["method"]["future_path"] is False
-print({"flow_checkpoint": str(path), "update": value["update"]})
-PY
+  uv run --frozen python scripts/verify_s1_r1_f1_checkpoint.py \
+    "${FLOW_TARGET}" \
+    --config configs/wam_flow/s1_r1_f1_flow_cold.yaml
 )
 
 PCA_PATH="${FE_ROOT}/artifacts/s2_r3/dino_pca_statistics.pt"

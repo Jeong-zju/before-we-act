@@ -613,7 +613,7 @@ R2a 不改变 source prior；R2b 不改变 decoder。每个 P1 只要各任务�
 
 ### 6.3 进入 S2
 
-S2 固定从当前 `feat/model-improvements` 上的 F1 `rectified_flow_cold` 父方案进入；模型修改父提交为 `caa5ed3`，Flow checkpoint 仍采用已经完成 Gate20 的 R1-F1 checkpoint。S2 不再等待 R2a/R2b，也不在进入 S2 前增加新的 Flow 训练。
+S2 固定从当前 `feat/model-improvements` 上的 F1 `rectified_flow_cold` 父方案进入；模型修改父提交为 `caa5ed3`，Flow checkpoint 优先采用已经完成 Gate20 的 R1-F1 checkpoint。S2 不再等待 R2a/R2b。正常情况下不增加 Flow 训练；若租用的新实例和持久盘都已经没有该 checkpoint，则 S2 launcher 会按已经晋升的冻结 F1 配方自动重建，而不是因缺文件永久阻塞。
 
 ## 7. S2：Agent-Factorized Action-Conditioned World Model（07-30 至 08-10）
 
@@ -709,7 +709,9 @@ R3 验收器不运行无区分力的成对闭环。它在每个 validation episo
 
 #### 7.4.2 两张 RTX 5090 一键部署、训练、验证与 monitor
 
-以下命令假设服务器已经自动进入唯一的永久 tmux session，恰好暴露两张 RTX 5090，并有至少 550 GiB 空闲磁盘。S2 严格复用已经晋升的 S1-R1 F1 `checkpoint_080000.pt`，不重新训练 Flow；同一持久盘上 launcher 会自动搜索 `outputs/s1_r1_runs/*/candidates/f1/checkpoints/s1_r1_f1_flow_cold/checkpoint_080000.pt`。若是全新租用机器，必须先把该 checkpoint 放到持久盘，并通过 `S2_R3_FLOW_CHECKPOINT` 指向它：
+以下命令假设服务器已经自动进入唯一的永久 tmux session，恰好暴露两张 RTX 5090，并有至少 550 GiB 空闲磁盘。S2 按以下顺序获取父 Flow：先使用有效的 `S2_R3_FLOW_CHECKPOINT`，再复用 `artifacts/s1_r1_f1/checkpoint_080000.pt`，然后搜索 `outputs/s1_r1_runs/*/candidates/f1/checkpoints/s1_r1_f1_flow_cold/checkpoint_080000.pt`；三处都不存在时，在五任务数据和 DINO 准备完成后自动用 GPU0 重训冻结的 S1-R1 F1 配方。恢复训练固定 seed `101`、batch size `4`、80,000 updates、标准高斯 cold source 和 4-step Euler；W0/W1 此时持续报告等待心跳，重训和验证完成后才分别占用 GPU0/GPU1。
+
+自动恢复的完成 checkpoint 固定写到 `artifacts/s1_r1_f1/checkpoint_080000.pt`，每 1,000 updates 写入可跨 S2 run-id 复用的 `artifacts/s1_r1_f1/recovery/resume.pt`。中断后以新 run-id 启动会自动从该 resume 续训；训练完成后 resume 自动删除，并生成 `artifacts/s1_r1_f1/recovery/recovery_receipt.json`。receipt/验证器会 fail closed 地核对 checkpoint format、80k update、F1 method、模型/训练/DINO/generation 配置、config SHA256 以及原两任务 manifest SHA256。这里重建的是路线中已经完成 F0/F1 Gate20 并晋升的冻结 F1 配方，不重新开启 R1 模型选择，也不要求已经丢失的 F0 checkpoint。
 
 ```bash
 cd /workspace
@@ -754,11 +756,6 @@ git clone \
 cd /workspace/fe-pc-wam
 git rev-parse --short HEAD
 
-# 全新机器必须修改为已上传/挂载的 R1-F1 checkpoint 绝对路径。
-# 若同一持久盘保留 round2 outputs，可删除这一行让 launcher 自动发现。
-export S2_R3_FLOW_CHECKPOINT=/workspace/checkpoints/s1_r1_f1_flow_cold/checkpoint_080000.pt
-test -f "${S2_R3_FLOW_CHECKPOINT}"
-
 test -x ./scripts/launch_s2_r3_2gpu_tmux.sh
 test -x ./scripts/stop_s2_r3_2gpu_tmux.sh
 
@@ -770,9 +767,9 @@ test -x ./scripts/stop_s2_r3_2gpu_tmux.sh
   --run-id s2-r3-round1
 ```
 
-正式启动时只在隐藏提示中输入一次 HF token；token 通过 mode-0600 FIFO 交给 prepare window，不写入 shell export、tmux command、argv、manifest 或日志。launcher 复用当前唯一永久 session，只创建 `s2-r3-round1-prepare`、`s2-r3-round1-w0`、`s2-r3-round1-w1`、`s2-r3-round1-monitor` 四个 window，并全部设置 `remain-on-exit=on`；不会创建、attach、kill 或退出 tmux session。prepare 使用 GPU0 完成 PCA/statistics 后释放 GPU，两候选才开始分别占用 GPU0/GPU1。
+正式启动时只在隐藏提示中输入一次 HF token；token 通过 mode-0600 FIFO 交给 prepare window，不写入 shell export、tmux command、argv、manifest 或日志。launcher 复用当前唯一永久 session，只创建 `s2-r3-round1-prepare`、`s2-r3-round1-w0`、`s2-r3-round1-w1`、`s2-r3-round1-monitor` 四个 window，并全部设置 `remain-on-exit=on`；不会创建、attach、kill 或退出 tmux session。prepare 在需要时先使用 GPU0 恢复 S1-R1 F1，再使用 GPU0 完成 PCA/statistics；共享 ready 文件产生后两候选才开始分别占用 GPU0/GPU1。若操作员另有有效 checkpoint，仍可在启动前设置 `S2_R3_FLOW_CHECKPOINT=/absolute/path/checkpoint_080000.pt`，但它不是全新实例的一键启动前置条件。
 
-monitor 每 5 秒显示 shared prepare 当前程序/阶段、W0/W1 当前程序、phase、20 秒心跳及其 age、update/total/loss、当前验证 task/batch/shuffle delta、两卡利用率/显存和 GPU process PID。两个 evaluation 都完成后还会逐任务显示 W0/W1 held-out loss、`W0-W1`、W1 shuffle delta、bootstrap 95% lower bound，以及每条特殊 gate 的 PASS/FAIL，明确给出 `PASS -> enter R4` 或 `FAIL -> stop before R4`。可随时从永久 session 的任意 window 执行只读查询：
+monitor 每 5 秒显示 shared prepare 当前程序/阶段、20 秒共享心跳及其 age；触发 Flow 自动恢复时额外显示 startup 子阶段或 `S1-R1 F1 recovery update/80000、百分比、loss`。它还显示 W0/W1 当前程序、phase、各自心跳、update/total/loss、当前验证 task/batch/shuffle delta、两卡利用率/显存和 GPU process PID。两个 evaluation 都完成后还会逐任务显示 W0/W1 held-out loss、`W0-W1`、W1 shuffle delta、bootstrap 95% lower bound，以及每条特殊 gate 的 PASS/FAIL，明确给出 `PASS -> enter R4` 或 `FAIL -> stop before R4`。可随时从永久 session 的任意 window 执行只读查询：
 
 ```bash
 cd /workspace/fe-pc-wam
@@ -796,13 +793,11 @@ cd /workspace/fe-pc-wam
 git switch feat/model-improvements
 git pull --ff-only origin feat/model-improvements
 
-export S2_R3_FLOW_CHECKPOINT=/workspace/checkpoints/s1_r1_f1_flow_cold/checkpoint_080000.pt
-
 ./scripts/launch_s2_r3_2gpu_tmux.sh \
   --run-id s2-r3-round1-resume1
 ```
 
-所有 run 产物位于 `outputs/s2_r3_runs/s2-r3-round1/`：`prepare.log`、`prepare_progress.jsonl`、`shared_artifact_sha256.txt`、`candidates/<w0|w1>/train/{stages,progress}.jsonl`、candidate checkpoint/resume、`candidates/<w0|w1>/validation/{progress.jsonl,evaluation.json}` 和最终 `acceptance.json`。心跳超过 75 秒会显示 `STALE`；这表示当前程序没有健康回报，应先看对应 candidate/prepare log 和 GPU process，而不是把最后一个 loss 当作仍在运行。
+所有 run 产物位于 `outputs/s2_r3_runs/s2-r3-round1/`：`prepare.log`、`prepare_progress.jsonl`、自动恢复触发时的 `flow_recovery_{stages,progress}.jsonl`、`shared_artifact_sha256.txt`、`candidates/<w0|w1>/train/{stages,progress}.jsonl`、candidate checkpoint/resume、`candidates/<w0|w1>/validation/{progress.jsonl,evaluation.json}` 和最终 `acceptance.json`。跨 run 保留的 Flow checkpoint/resume/receipt 位于 `artifacts/s1_r1_f1/`。心跳超过 75 秒会显示 `STALE`；这表示当前程序没有健康回报，应先看对应 candidate/prepare log 和 GPU process，而不是把最后一个 loss 当作仍在运行。
 
 #### 7.4.3 一键退出但永久 tmux 和全部数据/结果必须保留
 
@@ -828,7 +823,7 @@ nvidia-smi \
   --format=csv,noheader
 ```
 
-退出脚本只定位进程环境中绝对匹配 `S2_R3_RUN_ROOT` 的本轮进程，依次发送 Ctrl-C、SIGTERM、必要时 SIGKILL，再关闭本轮四个 window；禁止调用 `tmux kill-session`，也不删除共享五任务数据、Hub 原地下载缓存、DINO/PCA/Flow、worktree、checkpoint、resume、日志或验证 JSON。中断后使用新的 `--run-id` 重启；candidate trainer 会读取该新 run 隔离目录中的 resume，因此如需续训，应先把保留的 `resume.pt` 放入新 run 对应 candidate checkpoint 目录，禁止复用已关闭 run 的 manifest/window 名。
+退出脚本只定位进程环境中绝对匹配 `S2_R3_RUN_ROOT` 的本轮进程，依次发送 Ctrl-C、SIGTERM、必要时 SIGKILL，再关闭本轮四个 window；禁止调用 `tmux kill-session`，也不删除共享五任务数据、Hub 原地下载缓存、DINO/PCA/Flow、worktree、checkpoint、resume、日志或验证 JSON。中断后使用新的 `--run-id` 重启；Flow 自动恢复会直接读取共享 `artifacts/s1_r1_f1/recovery/resume.pt`。W0/W1 candidate trainer 的 resume 仍属于 run 隔离目录，如需续训，应先把保留的 candidate `resume.pt` 放入新 run 对应 candidate checkpoint 目录，禁止复用已关闭 run 的 manifest/window 名。
 
 ### 7.5 R4：Team + shared future capability（必做，两卡）
 

@@ -225,6 +225,7 @@ def render_monitor(run_root: Path) -> str:
             f"program={shared.get('program', '-')} "
             f"detail={_compact(shared.get('detail', ''), 90)}"
         ),
+        _shared_progress_line(run_root),
         "",
         "ID GPU STATUS      HEARTBEAT  PROGRAM                               TRAIN/VALIDATE",
         "-- --- ----------- ---------- ------------------------------------- ----------------------------------------------",
@@ -245,6 +246,30 @@ def render_monitor(run_root: Path) -> str:
         f"{manifest.get('tmux_monitor_window', '<window>')}"
     )
     return "\n".join(lines)
+
+
+def _shared_progress_line(run_root: Path) -> str:
+    recovery = read_latest_jsonl(run_root / "flow_recovery_progress.jsonl")
+    stages = read_latest_jsonl(run_root / "flow_recovery_stages.jsonl")
+    if recovery:
+        update = _integer(recovery.get("update"))
+        total = _integer(recovery.get("updates"))
+        loss = _number(recovery.get("loss"))
+        if update is not None and total:
+            suffix = (
+                f" loss={loss:.5g}" if loss is not None else ""
+            )
+            return (
+                "shared progress | S1-R1 F1 recovery "
+                f"{update}/{total} {100.0 * update / total:5.1f}%{suffix}"
+            )
+    if stages:
+        return (
+            "shared progress | S1-R1 F1 recovery startup "
+            f"{stages.get('stage', '?')} "
+            f"({_age_text(stages.get('created_at'))})"
+        )
+    return "shared progress | no Flow recovery needed or not started"
 
 
 def collect_candidate(run_root: Path, candidate: str) -> dict[str, str]:
