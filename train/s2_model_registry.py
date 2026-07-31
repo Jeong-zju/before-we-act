@@ -20,6 +20,11 @@ S2_R4_HYBRID_MODEL_KINDS = frozenset(
     {"s2_r4_protected_hybrid_diagnostic"}
 )
 
+S2_R5_MODEL_KINDS: dict[str, str] = {
+    "s2_r5_protected_shared_team": "shared",
+    "s2_r5_protected_role_mot_team": "role_mot",
+}
+
 
 def validate_s2_candidate(value: Mapping[str, Any]) -> tuple[str, str, bool]:
     candidate_id = str(value.get("candidate_id", ""))
@@ -93,12 +98,38 @@ def require_trainable_s2_r4_model_kind(model_kind: str) -> None:
         raise ValueError("S2-R4 model kind is not in the training allowlist")
 
 
+def validate_s2_r5_candidate(
+    value: Mapping[str, Any],
+) -> tuple[str, str, str]:
+    """Fail closed for the paired protected-team R5 candidates."""
+
+    candidate_id = str(value.get("candidate_id", ""))
+    model_kind = str(value.get("model_kind", ""))
+    mixer = str(value.get("team_mixer", ""))
+    if candidate_id not in {"P0", "P1"}:
+        raise ValueError("S2-R5 candidate_id must be P0 or P1")
+    if model_kind not in S2_R5_MODEL_KINDS:
+        raise ValueError(
+            "S2-R5 model kind is not in the train/evaluation allowlist"
+        )
+    if S2_R5_MODEL_KINDS[model_kind] != mixer:
+        raise ValueError("S2-R5 model kind and team_mixer disagree")
+    expected_id = "P0" if mixer == "shared" else "P1"
+    if candidate_id != expected_id:
+        raise ValueError("S2-R5 P0 is shared and P1 is role_mot")
+    if value.get("protected_own") is not True:
+        raise ValueError("S2-R5 must protect the P0 own path")
+    return candidate_id, model_kind, mixer
+
+
 __all__ = [
     "S2_R3_MODEL_KINDS",
     "S2_R4_HYBRID_MODEL_KINDS",
     "S2_R4_MODEL_KINDS",
+    "S2_R5_MODEL_KINDS",
     "require_trainable_s2_r4_model_kind",
     "validate_s2_candidate",
     "validate_s2_r4_candidate",
     "validate_s2_r4_hybrid_diagnostic",
+    "validate_s2_r5_candidate",
 ]

@@ -32,6 +32,10 @@ from models.wam_multimodal.protected_hybrid_future_predictor import (
     ProtectedHybridFuturePredictor,
     exact_own_difference,
 )
+from models.wam_multimodal.protected_team_future_predictor import (
+    ProtectedTeamFuturePredictor,
+    ProtectedTeamFuturePredictorConfig,
+)
 from models.wam_multimodal.token_resampler import (
     PerceiverResampler,
     PerceiverResamplerConfig,
@@ -104,6 +108,8 @@ __all__ = [
     "PerceiverResamplerConfig",
     "ProtectedHybridFuturePrediction",
     "ProtectedHybridFuturePredictor",
+    "ProtectedTeamFuturePredictor",
+    "ProtectedTeamFuturePredictorConfig",
     "SpatialVisualTokenAdapter",
     "TeamSharedFuturePrediction",
     "TeamSharedFuturePredictor",
