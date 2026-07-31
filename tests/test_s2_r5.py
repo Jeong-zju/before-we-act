@@ -54,7 +54,13 @@ def test_s2_r5_model_allowlist_is_fail_closed() -> None:
 @pytest.mark.parametrize("mixer", ["shared", "role_mot"])
 def test_protected_team_model_keeps_own_exact_and_optimizer_excluded(
     mixer: str,
+    request: pytest.FixtureRequest,
 ) -> None:
+    # Exact comparison across two separately allocated CPU modules requires a
+    # deterministic reduction order; restore the suite's setting afterwards.
+    previous_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    request.addfinalizer(lambda: torch.set_num_threads(previous_threads))
     local_config = LocalFuturePredictorConfig(
         max_agents=3,
         state_dim=5,
