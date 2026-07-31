@@ -23,7 +23,6 @@ R3_STAGES="${S2_R4_RUN_ROOT}/r3_recovery_stages.jsonl"
 HEARTBEAT_PID=""
 
 mkdir -p "${S2_R4_RUN_ROOT}"
-exec > >(tee -a "${LOG_PATH}") 2>&1
 
 status() {
   python3 "${STATUS_TOOL}" shared-status \
@@ -74,6 +73,7 @@ UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT}" \
 
 test -f "${R3_READY_FILE}"
 test ! -f "${R3_FAILED_FILE}"
+exec > >(tee -a "${LOG_PATH}") 2>&1
 
 if [[ -n "${R3_PARENT_SOURCE}" && ! -f "${R3_PARENT_SOURCE}" ]]; then
   status r3_parent verify_s2_r3_w1_checkpoint.py \
