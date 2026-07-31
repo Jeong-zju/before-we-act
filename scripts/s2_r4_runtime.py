@@ -376,10 +376,15 @@ def collect_candidate(run_root: Path, candidate: str) -> dict[str, str]:
             "peer_shuffle_delta",
             validation.get("shuffle_delta"),
         )
+        delta_label = (
+            "peer-delta"
+            if candidate == "P1"
+            else "own-diagnostic-delta"
+        )
         progress = (
             f"validate task={validation.get('task_id', '?')} "
             f"batch={validation.get('batch', '?')}/{validation.get('batches', '?')} "
-            f"peer-delta={_number_text(delta)}"
+            f"{delta_label}={_number_text(delta)}"
         )
     if evaluation:
         per_task = evaluation.get("per_task", {})
