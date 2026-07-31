@@ -343,13 +343,17 @@ def _newer_event(
 def collect_candidate(run_root: Path, candidate: str) -> dict[str, str]:
     root = run_root / "candidates" / candidate.lower()
     status = _maybe_json(root / "status.json")
+    phase = str(status.get("phase", "pending"))
     heartbeat_value = _maybe_json(root / "heartbeat.json")
-    heartbeat = _heartbeat_text(heartbeat_value.get("updated_at"))
+    heartbeat = (
+        "finished"
+        if phase == "complete"
+        else _heartbeat_text(heartbeat_value.get("updated_at"))
+    )
     train = read_latest_jsonl(root / "train" / "progress.jsonl")
     stages = read_latest_jsonl(root / "train" / "stages.jsonl")
     validation = read_latest_jsonl(root / "validation" / "progress.jsonl")
     evaluation = _maybe_json(root / "validation" / "evaluation.json")
-    phase = str(status.get("phase", "pending"))
     program = str(status.get("program", "-"))
     detail = _compact(status.get("detail", ""), 110)
     if heartbeat.startswith("STALE"):

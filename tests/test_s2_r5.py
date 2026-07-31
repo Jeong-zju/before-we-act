@@ -217,6 +217,17 @@ def test_s2_r5_monitor_reports_heartbeat_program_progress_and_gates(
     assert "train_s2_r5_protected_team.py" in rendered
     assert "HEARTBEAT" in rendered
     assert "special acceptance: pending" in rendered
+    update_status(
+        tmp_path,
+        candidate="P0",
+        phase="complete",
+        program="run_s2_r5_candidate.sh",
+        detail="done",
+        gpu_index=0,
+        total_updates=10000,
+        exit_code=0,
+    )
+    assert "finished" in render_monitor(tmp_path)
 
 
 def test_s2_r5_shell_contracts_and_s0_download_delegation() -> None:
