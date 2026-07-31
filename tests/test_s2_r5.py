@@ -95,7 +95,12 @@ def test_protected_team_model_keeps_own_exact_and_optimizer_excluded(
     shared = torch.randn(batch, 2, 6)
     actions = torch.randn(batch, 3, 4, 2)
     valid = torch.ones(batch, 3, dtype=torch.bool)
-    reference = source(state, visual, actions, valid, valid)
+    # Match the protected tower's inference path.  PyTorch may dispatch the
+    # eval Transformer through a different kernel when autograd is enabled,
+    # which is not the production/acceptance contract and can differ in the
+    # last floating-point bit.
+    with torch.no_grad():
+        reference = source(state, visual, actions, valid, valid)
     prediction = model(state, visual, shared, actions, valid)
     assert torch.equal(reference[0], prediction.own_state)
     assert torch.equal(reference[1], prediction.own_visual)
