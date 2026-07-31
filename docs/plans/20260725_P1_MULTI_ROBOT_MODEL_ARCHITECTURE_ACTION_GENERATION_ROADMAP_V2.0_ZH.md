@@ -1,9 +1,9 @@
-# P1 多机器人 World-Action Flow Matching 技术路线 V2.8（ICRA Fast Track）
+# P1 多机器人 World-Action Flow Matching 技术路线 V2.9（ICRA Fast Track）
 
-> 文档更新：2026-07-30
+> 文档更新：2026-07-31
 > 工程起点：当前 `feat/model-improvements` 分支
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：M0、M1、S0、S1-R1 已完成；R1 选择 `rectified_flow_cold` F1 并合入 `feat/model-improvements`；R2a 跳过、R2b 延后，当前直接进入 S2
+> 当前状态：M0、M1、S0、S1-R1、S2-R3 已完成；R1 选择 `rectified_flow_cold` F1，R3 选择 own-action-conditioned W1；R2a 跳过、R2b 延后，下一步进入 S2-R4
 > 评测原则：进入动作路径的候选按闭环成功率推进；S2 predictor 严格 off-path，因此按预测能力与因果干预门槛推进
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -709,7 +709,50 @@ grouped adapter 保留 current state `[B,4,18]`、candidate chunk `[B,4,100,8]`�
 
 R3 验收器不运行无区分力的成对闭环。它在每个 validation episode 固定选择 4 个时间窗，分别输出 normal 与 own-action-shuffle composite future loss，再按 episode 聚合并运行 10,000 次 paired bootstrap。`acceptance.json` 只有在五个任务上同时满足 W1 loss 不高于 W0、至少一个任务严格改善、W1 `L_shuffled-L_normal>0` 且 bootstrap 95% 下界大于 0时才通过；同时还要求 predictor-disabled F1 action output 逐元素相等、Flow/DINO 文件 hash 前后不变、predictor checkpoint 不含 Flow/DINO state。monitor 直接读取这套特殊规则，不把闭环成功率或 W0 的零 shuffle delta 误当作 R3 通过条件。
 
-#### 7.4.2 两张 RTX 5090 一键部署、训练、验证与 monitor
+#### 7.4.2 S2-R3 正式验收结论（2026-07-31）
+
+正式 run `s2-r3-round1-full-cameras` 已在两张 RTX 5090 上完成 W0/W1 各 10,000 updates、五任务 held-out 验证和成对 own-action shuffle 验收。两个训练进程退出码均为 0，501 个训练记录点中的 total/state/visual loss 与 gradient norm 均为有限值，无 NaN、OOM 或 Traceback。训练前 1,000 步与最后 1,000 步的均值如下：
+
+| 候选 | 前 1,000 步 loss | 最后 1,000 步 loss | 最后 1,000 步 state loss | 最后 1,000 步 visual loss |
+|---|---:|---:|---:|---:|
+| R3-W0 | 1.092161 | 0.729984 | 0.146621 | 0.583363 |
+| R3-W1 | 1.087506 | 0.721665 | 0.140173 | 0.581492 |
+
+正式 `acceptance.json` 的五任务结果如下。`W1 改善` 为 `(W0-W1)/W0`；shuffle 指标为 W1 的 `L_shuffled-L_normal`，置信区间使用 15 个 episode、每 episode 4 个固定窗口和 10,000 次 episode-level paired bootstrap：
+
+| 任务 | W0 held-out loss | W1 held-out loss | W1 改善 | W1 action-shuffle Δ | bootstrap 95% 下界 |
+|---|---:|---:|---:|---:|---:|
+| CameraAlignment | 0.776281 | 0.768086 | 1.06% | 0.005730 | 0.004727 |
+| LiftBarrier | 1.019633 | 1.013257 | 0.63% | 0.004874 | 0.002807 |
+| LongPipelineDelivery | 0.571899 | 0.565914 | 1.05% | 0.064856 | 0.060579 |
+| TakePhoto | 0.749629 | 0.739450 | 1.36% | 0.033809 | 0.030487 |
+| ThreeRobotsStackCube | 0.693697 | 0.683910 | 1.41% | 0.025696 | 0.023503 |
+| **五任务宏平均** | **0.762228** | **0.754123** | **1.06%** | — | — |
+
+正式验收的七项检查全部通过：
+
+1. 任务集合严格等于预注册的五任务；
+2. Flow 与 DINOv3 在训练/验证前后保持冻结且文件 hash 不变；
+3. predictor disabled 时 F1 动作输出逐元素相等，最大绝对差为 `0.0`；
+4. W0/W1 的初始化、模型预算、训练和验证选择契约相同，唯一研究变量是 `action_conditioning=false/true`；
+5. 五任务 W1 action-shuffle 均值和 bootstrap 95% 下界全部大于 0；
+6. 五任务 W1 held-out loss 均不高于 W0；
+7. 至少一个任务严格改善；本次实际为五个任务全部严格改善。
+
+额外的非门槛配对复核中，W1 held-out loss 优于 W0 的 episode 数分别为 CameraAlignment `14/15`、LiftBarrier `12/15`、LongPipelineDelivery `15/15`、TakePhoto `15/15`、ThreeRobotsStackCube `13/15`；对 W0-W1 episode 差重新 bootstrap 后，五任务探索性 95% 区间也均位于 0 以上。LiftBarrier 有 2/15 个 episode 的 action-shuffle delta 为负，但正式的任务聚合均值与预注册 episode-bootstrap 下界仍明确为正，因此不触发回退。
+
+**正式结论：S2-R3 PASS，选择 R3-W1 作为 R4 local parent，允许进入 R4。** 该结论证明 local predictor 确实读取 own candidate action，并在同预算 held-out future prediction 上一致优于 action-independent W0；它不声称 off-path predictor 已提高闭环成功率，world-to-action 收益仍留到 S3 检验。当前证据来自固定 seed `303` 的一轮训练，后续可以补多 seed 作为论文稳健性分析，但不阻塞已预注册的 R3→R4 推进。
+
+正式产物：
+
+- pair-level 验收：`outputs/s2_r3_runs/s2-r3-round1-full-cameras/acceptance.json`，decision=`pass_enter_r4`；
+- W1 checkpoint：`outputs/s2_r3_runs/s2-r3-round1-full-cameras/candidates/w1/checkpoints/predictor.pt`；
+- W1 checkpoint SHA256：`1a7fab018777b37803e4457406ed8893556e029fd331549a9f9ed51ffac524aa`；
+- 五任务 PCA/statistics SHA256：`692abb2d5476091549a40c00e8653903089a3a4231da71aebe8472c833211e5e`。
+
+candidate status 中 W0 的 detail 显示 `PASS: enter R4`、W1 显示 `pending peer evaluation` 仅由 W0 最后完成并负责写入 pair-level `acceptance.json` 导致，不表示 W0 获胜；最终选择以 `acceptance.json` 和本节的成对结果为准。
+
+#### 7.4.3 两张 RTX 5090 一键部署、训练、验证与 monitor
 
 以下命令假设服务器已经自动进入唯一的永久 tmux session，恰好暴露两张 RTX 5090，并能通过上述“缺失数据净增长 + 32 GiB”动态磁盘检查。S2 按以下顺序获取父 Flow：先使用有效的 `S2_R3_FLOW_CHECKPOINT`，再复用 `artifacts/s1_r1_f1/checkpoint_080000.pt`，然后搜索 `outputs/s1_r1_runs/*/candidates/f1/checkpoints/s1_r1_f1_flow_cold/checkpoint_080000.pt`；三处都不存在时，在五任务数据和 DINO 准备完成后自动用 GPU0 重训冻结的 S1-R1 F1 配方。恢复训练固定 seed `101`、batch size `4`、80,000 updates、标准高斯 cold source 和 4-step Euler；W0/W1 此时持续报告等待心跳，重训和验证完成后才分别占用 GPU0/GPU1。
 
@@ -801,7 +844,7 @@ git pull --ff-only origin feat/model-improvements
 
 所有 run 产物位于 `outputs/s2_r3_runs/s2-r3-round1/`：`prepare.log`、`prepare_progress.jsonl`、自动恢复触发时的 `flow_recovery_{stages,progress}.jsonl`、`shared_artifact_sha256.txt`、`candidates/<w0|w1>/train/{stages,progress}.jsonl`、candidate checkpoint/resume、`candidates/<w0|w1>/validation/{progress.jsonl,evaluation.json}` 和最终 `acceptance.json`。跨 run 保留的 Flow checkpoint/resume/receipt 位于 `artifacts/s1_r1_f1/`。心跳超过 75 秒会显示 `STALE`；这表示当前程序没有健康回报，应先看对应 candidate/prepare log 和 GPU process，而不是把最后一个 loss 当作仍在运行。
 
-#### 7.4.3 一键退出但永久 tmux 和全部数据/结果必须保留
+#### 7.4.4 一键退出但永久 tmux 和全部数据/结果必须保留
 
 从永久 session 中不属于本轮四个目标 window 的基础 `bash` window 执行：
 
@@ -1138,5 +1181,6 @@ configs/wam_flow/
 2. **已完成：** 建立 R1-F0/F1，完成训练并运行相同闭环任务。
 3. **已完成：** F1 在两个任务上均不低于 F0，已晋升为 `P_flow`。
 4. **已决策：** 跳过 R2a，将 R2b 延后为非阻塞 sidecar；S2 固定使用 `caa5ed3` 与 R1-F1 checkpoint。
-5. **下一步：** 先实现 S2.0 grouped adapter、future target builder 与四类 contract tests；通过后再启动 R3-W0/W1。
-6. R3 用 own-action shuffle 验证 action dependence；R4 用 peer-action shuffle 验证 cross-agent consequence；两者通过后才进入 S3。
+5. **已完成：** 实现 S2.0 grouped adapter、future target builder 与四类 contract tests，完成五任务 PCA/statistics。
+6. **已完成：** R3 用 own-action shuffle 验证 action dependence，五任务 gate 全部通过并选择 W1。
+7. **下一步：** R4 从 R3-W1 local checkpoint 建立 Local/Team+shared 同预算候选，用 peer-action shuffle 验证 cross-agent consequence；R4 通过后进入 S3。
