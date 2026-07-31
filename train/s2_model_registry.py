@@ -11,6 +11,11 @@ S2_R3_MODEL_KINDS: dict[str, bool] = {
     "s2_r3_local_action_conditioned": True,
 }
 
+S2_R4_MODEL_KINDS: dict[str, bool] = {
+    "s2_r4_local_action_conditioned": False,
+    "s2_r4_team_shared_action_conditioned": True,
+}
+
 
 def validate_s2_candidate(value: Mapping[str, Any]) -> tuple[str, str, bool]:
     candidate_id = str(value.get("candidate_id", ""))
@@ -32,4 +37,33 @@ def validate_s2_candidate(value: Mapping[str, Any]) -> tuple[str, str, bool]:
     return candidate_id, model_kind, configured
 
 
-__all__ = ["S2_R3_MODEL_KINDS", "validate_s2_candidate"]
+def validate_s2_r4_candidate(
+    value: Mapping[str, Any],
+) -> tuple[str, str, bool]:
+    """Fail closed for the two pre-registered R4 future-scope candidates."""
+
+    candidate_id = str(value.get("candidate_id", ""))
+    model_kind = str(value.get("model_kind", ""))
+    configured = value.get("team_shared")
+    if candidate_id not in {"P0", "P1"}:
+        raise ValueError("S2-R4 candidate_id must be P0 or P1")
+    if model_kind not in S2_R4_MODEL_KINDS:
+        raise ValueError(
+            "S2-R4 model kind is not in the train/evaluation allowlist"
+        )
+    if not isinstance(configured, bool):
+        raise ValueError("round.team_shared must be boolean")
+    expected = S2_R4_MODEL_KINDS[model_kind]
+    if configured is not expected:
+        raise ValueError("model kind and team_shared disagree")
+    if (candidate_id == "P1") is not configured:
+        raise ValueError("P0 must be local and P1 must enable team/shared slots")
+    return candidate_id, model_kind, configured
+
+
+__all__ = [
+    "S2_R3_MODEL_KINDS",
+    "S2_R4_MODEL_KINDS",
+    "validate_s2_candidate",
+    "validate_s2_r4_candidate",
+]

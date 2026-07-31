@@ -214,6 +214,7 @@ def grouped_s2_batch(batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
         "candidate_actions": candidate_actions,
         "agent_observations": agent_observations,
         "shared_observation": images[:, -1, 0],
+        "shared_observation_valid_mask": current_image_valid[:, 0],
         "valid_agent_mask": agent_valid,
         "agent_camera_valid_mask": physical_agent_camera_valid,
         "agent_global_fallback_mask": global_fallback_valid,
@@ -269,6 +270,7 @@ def validate_grouped_s2_contract(batch: Mapping[str, Tensor]) -> None:
             batch_size,
             len(S2_FUTURE_HORIZONS),
         ),
+        "shared_observation_valid_mask": (batch_size,),
     }
     for name, shape in expected.items():
         if tuple(batch[name].shape) != shape:

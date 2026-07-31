@@ -1,0 +1,53 @@
+format_version: wam.robofactory.wam_flow.round_manifest/1
+round_id: s2-r4
+hypothesis: >-
+  A team/shared predictor that sees all valid agent contexts/actions and the
+  global slot predicts cross-agent consequences beyond a continued local-only
+  R3-W1 control.
+parent:
+  branch: feat/model-improvements
+  action_generator: rectified_flow_cold
+  flow_checkpoint: artifacts/s1_r1_f1/checkpoint_080000.pt
+  predictor_checkpoint: artifacts/s2_r3_w1/predictor.pt
+  accepted_checkpoint_sha256: 1a7fab018777b37803e4457406ed8893556e029fd331549a9f9ed51ffac524aa
+  flow_frozen: true
+  dinov3_frozen: true
+data:
+  shared_read_only_root: datasets/robofactory_multitask
+  split_unit: episode_seed
+  tasks:
+    - lift_barrier
+    - long_pipeline_delivery
+    - take_photo
+    - three_robots_stack_cube
+    - camera_alignment
+  future_horizons: [1, 25, 50, 100]
+representation:
+  state_delta: normalized_proprioceptive_delta
+  visual_delta: dinov3_2x2_patch_grid_pca_1024_to_256
+  pca_fit_split: train
+  pca_statistics: artifacts/s2_r3/dino_pca_statistics.pt
+training:
+  seed: 404
+  optimizer_updates: 10000
+  batch_size: 1
+  matched_budget: true
+  gpu_assignment:
+    P0: 0
+    P1: 1
+validation:
+  split: validation
+  windows_per_episode: 4
+  peer_action_shuffle_keeps_own_action: true
+  persistence_baseline: true
+  bootstrap_unit: episode
+  bootstrap_samples: 10000
+candidates:
+  P0:
+    branch: s2/r4-p0-local
+    model_kind: s2_r4_local_action_conditioned
+    team_shared: false
+  P1:
+    branch: s2/r4-p1-team-shared
+    model_kind: s2_r4_team_shared_action_conditioned
+    team_shared: true

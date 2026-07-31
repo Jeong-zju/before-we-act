@@ -133,6 +133,25 @@ class LocalActionConditionedFuturePredictor(nn.Module):
         valid_agent_mask: Tensor,
         action_condition_mask: Tensor,
     ) -> tuple[Tensor, Tensor]:
+        context = self.encode_context(
+            current_state,
+            current_visual_latent,
+            candidate_actions,
+            valid_agent_mask,
+            action_condition_mask,
+        )
+        return self.decode_future(context, valid_agent_mask)
+
+    def encode_context(
+        self,
+        current_state: Tensor,
+        current_visual_latent: Tensor,
+        candidate_actions: Tensor,
+        valid_agent_mask: Tensor,
+        action_condition_mask: Tensor,
+    ) -> Tensor:
+        """Encode one context token per agent without crossing agent slots."""
+
         config = self.config
         if current_state.ndim != 3 or current_state.shape[1:] != (
             config.max_agents,
@@ -185,8 +204,23 @@ class LocalActionConditionedFuturePredictor(nn.Module):
         context = encoded.mean(dim=1).reshape(
             batch_size, config.max_agents, config.d_model
         )
-        context = context * valid_agent_mask[..., None]
+        return context * valid_agent_mask[..., None]
 
+    def decode_future(
+        self,
+        context: Tensor,
+        valid_agent_mask: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        """Decode normalized local state/view deltas from agent contexts."""
+
+        config = self.config
+        if context.ndim != 3 or context.shape[1:] != (
+            config.max_agents,
+            config.d_model,
+        ):
+            raise ValueError("context must be [B,A,d_model]")
+        if valid_agent_mask.shape != context.shape[:2]:
+            raise ValueError("valid_agent_mask must be [B,A]")
         future = context[:, :, None] + self.future_position
         state_delta = self.state_head(future)
         visual_query = future[:, :, :, None] + self.grid_position

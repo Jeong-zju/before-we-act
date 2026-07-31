@@ -128,6 +128,85 @@ def encode_local_visual_targets(
     return current, normalized
 
 
+def encode_shared_visual_targets(
+    vision: nn.Module,
+    grouped: Mapping[str, Tensor],
+    artifact: Mapping[str, Any],
+    *,
+    device: torch.device,
+    grid_height: int,
+    grid_width: int,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Encode the global slot and its normalized future/persistence targets."""
+
+    current_valid = grouped["shared_observation_valid_mask"].to(
+        device=device, dtype=torch.bool
+    )
+    future_valid = grouped["future_shared_visual_valid_mask"].to(
+        device=device, dtype=torch.bool
+    )
+    batch_size = current_valid.shape[0]
+    futures = future_valid.shape[1]
+    grid_tokens = grid_height * grid_width
+    latent_dim = int(artifact["pca_components"].shape[1])
+    current = torch.zeros(
+        batch_size,
+        grid_tokens,
+        latent_dim,
+        device=device,
+        dtype=torch.float32,
+    )
+    future = torch.zeros(
+        batch_size,
+        futures,
+        grid_tokens,
+        latent_dim,
+        device=device,
+        dtype=torch.float32,
+    )
+    current_images = grouped["shared_observation"].to(
+        device=device, non_blocking=True
+    )
+    future_images = grouped["future_shared_observations"].to(
+        device=device, non_blocking=True
+    )
+    if bool(current_valid.any()):
+        output = vision.forward_spatial_grid(
+            current_images[current_valid],
+            grid_height=grid_height,
+            grid_width=grid_width,
+        )
+        current[current_valid] = project_dino_grid(
+            output.spatial_tokens.float(), artifact
+        )
+    if bool(future_valid.any()):
+        output = vision.forward_spatial_grid(
+            future_images[future_valid],
+            grid_height=grid_height,
+            grid_width=grid_width,
+        )
+        future[future_valid] = project_dino_grid(
+            output.spatial_tokens.float(), artifact
+        )
+    delta = future - current[:, None]
+    mean = artifact["visual_delta_mean"].to(delta)
+    std = artifact["visual_delta_std"].to(delta)
+    normalized = (delta - mean[None, :, None]) / std[None, :, None]
+    normalized = normalized.masked_fill(
+        ~future_valid[:, :, None, None], 0.0
+    )
+    persistence = ((-mean) / std)[None, :, None].expand(
+        batch_size,
+        -1,
+        grid_tokens,
+        -1,
+    )
+    persistence = persistence.masked_fill(
+        ~future_valid[:, :, None, None], 0.0
+    )
+    return current, normalized, persistence
+
+
 def normalized_state_delta(
     grouped: Mapping[str, Tensor],
     artifact: Mapping[str, Any],
@@ -144,6 +223,46 @@ def normalized_state_delta(
     std = artifact["state_delta_std"].to(delta)
     normalized = (delta - mean[None, None]) / std[None, None]
     return normalized.masked_fill(~valid[..., None], 0.0)
+
+
+def normalized_persistence_state(
+    artifact: Mapping[str, Any],
+    *,
+    batch_size: int,
+    agents: int,
+    device: torch.device,
+) -> Tensor:
+    """Return the normalized zero-delta persistence baseline."""
+
+    mean = artifact["state_delta_mean"].to(device=device)
+    std = artifact["state_delta_std"].to(device=device)
+    return ((-mean) / std)[None, None].expand(
+        batch_size,
+        agents,
+        -1,
+        -1,
+    )
+
+
+def normalized_persistence_visual(
+    artifact: Mapping[str, Any],
+    *,
+    batch_size: int,
+    agents: int,
+    grid_tokens: int,
+    device: torch.device,
+) -> Tensor:
+    """Return normalized unchanged-view targets for every agent slot."""
+
+    mean = artifact["visual_delta_mean"].to(device=device)
+    std = artifact["visual_delta_std"].to(device=device)
+    return ((-mean) / std)[None, None, :, None].expand(
+        batch_size,
+        agents,
+        -1,
+        grid_tokens,
+        -1,
+    )
 
 
 def masked_future_prediction_losses(
@@ -240,9 +359,12 @@ def _masked_per_trajectory(
 __all__ = [
     "S2_ARTIFACT_FORMAT",
     "encode_local_visual_targets",
+    "encode_shared_visual_targets",
     "file_sha256",
     "load_s2_artifact",
     "masked_future_prediction_losses",
+    "normalized_persistence_state",
+    "normalized_persistence_visual",
     "normalized_state_delta",
     "project_dino_grid",
     "state_dict_sha256",
