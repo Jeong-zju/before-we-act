@@ -1,0 +1,27 @@
+format_version: wam.robofactory.wam_flow.candidate_card/1
+round_id: s2-r5
+candidate_id: P0
+branch: s2/r5-p0-protected-shared
+source_parent_commit: f2b8da1
+hypothesis: >-
+  Retraining shared peer/global modules from immutable R4-P0 features restores
+  causal peer-action use without changing any protected own output.
+changed_axis: protected_shared_team_retraining
+unchanged_axes:
+  - immutable_r4_p0_own_path
+  - five_task_shared_manifest_set
+  - frozen_s1_r1_f1_flow
+  - frozen_dinov3
+  - shared_train_only_pca_and_target_statistics
+  - future_horizons_1_25_50_100
+  - optimizer_updates_10000
+  - training_seed_505
+  - fixed_validation_windows
+  - paired_episode_bootstrap
+runtime:
+  model_kind: s2_r5_protected_shared_team
+  team_mixer: shared
+  protected_own: true
+  predictor_path: strictly_off_path
+  config: configs/wam_flow/s2_r5_protected_team.yaml
+  gpu_index: 0
