@@ -25,8 +25,9 @@ if str(ROOT) not in sys.path:
 from models.static_rgb_act import StaticRGBMoEACTConfig  # noqa: E402
 from models.wam_multimodal import (  # noqa: E402
     AgentFactorizedFlowWAM,
-    LocalActionConditionedFuturePredictor,
     LocalFuturePredictorConfig,
+    TeamSharedFuturePredictor,
+    TeamSharedFuturePredictorConfig,
 )
 from scripts.train_s2_r4_future_predictor import (  # noqa: E402
     CHECKPOINT_FORMAT,
@@ -40,9 +41,12 @@ from scripts.train_static_rgb_act_moe import (  # noqa: E402
 )
 from train.s2_future_prediction import (  # noqa: E402
     encode_local_visual_targets,
+    encode_shared_visual_targets,
     file_sha256,
     load_s2_artifact,
     masked_future_prediction_losses,
+    normalized_persistence_state,
+    normalized_persistence_visual,
     normalized_state_delta,
 )
 from train.s2_grouped_trajectory import (  # noqa: E402
@@ -50,6 +54,11 @@ from train.s2_grouped_trajectory import (  # noqa: E402
     grouped_s2_batch,
 )
 from train.s2_model_registry import validate_s2_r4_candidate  # noqa: E402
+from train.s2_r4_future_prediction import (  # noqa: E402
+    masked_peer_future_prediction_losses,
+    masked_shared_future_prediction_losses,
+    peer_actions_shuffled_by_focal,
+)
 
 
 EVALUATION_FORMAT = "wam.robofactory.s2_r4.future_scope_evaluation/1"
@@ -72,8 +81,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     candidate_id, model_kind, team_shared = validate_s2_r4_candidate(
         _mapping(raw, "round")
     )
-    if team_shared:
-        raise ValueError("P1 team/shared evaluation is only available on its branch")
+    if not team_shared:
+        raise ValueError("this branch evaluates only the P1 team/shared candidate")
     checkpoint_config = _mapping(raw, "checkpoint")
     checkpoint_path = (
         args.checkpoint.expanduser().resolve(strict=True)
@@ -104,7 +113,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError("S2-R4 evaluation requires exactly one visible GPU")
     saved = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if saved.get("format_version") != CHECKPOINT_FORMAT:
-        raise ValueError("checkpoint is not an S2-R4 local predictor")
+        raise ValueError("checkpoint is not an S2-R4 future predictor")
     method = _mapping(saved, "method")
     if (
         method.get("candidate_id") != candidate_id
@@ -122,7 +131,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if configured_model != model_config:
         raise ValueError("S2-R4 checkpoint/config model mismatch")
-    model = LocalActionConditionedFuturePredictor(model_config).to(device)
+    team_model_config = TeamSharedFuturePredictorConfig.from_dict(
+        dict(_mapping(saved, "team_model_config"))
+    )
+    configured_team_model = TeamSharedFuturePredictorConfig.from_dict(
+        dict(_mapping(raw, "team_model"))
+    )
+    if configured_team_model != team_model_config:
+        raise ValueError("S2-R4 team checkpoint/config model mismatch")
+    model = TeamSharedFuturePredictor(
+        model_config,
+        team_model_config,
+    ).to(device)
     model.load_state_dict(saved["model"], strict=True)
     model.eval()
 
@@ -180,6 +200,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     grid_height=int(pca["grid_height"]),
                     grid_width=int(pca["grid_width"]),
                 )
+                (
+                    current_shared,
+                    target_shared,
+                    persistence_shared,
+                ) = encode_shared_visual_targets(
+                    vision,
+                    grouped,
+                    artifact,
+                    device=device,
+                    grid_height=int(pca["grid_height"]),
+                    grid_width=int(pca["grid_width"]),
+                )
                 current_state = grouped["current_state"].to(
                     device=device, dtype=torch.float32, non_blocking=True
                 )
@@ -195,45 +227,132 @@ def main(argv: Sequence[str] | None = None) -> int:
                 visual_valid = grouped[
                     "future_agent_visual_valid_mask"
                 ].to(device=device, dtype=torch.bool)
+                shared_valid = grouped[
+                    "future_shared_visual_valid_mask"
+                ].to(device=device, dtype=torch.bool)
                 target_state = normalized_state_delta(
                     grouped, artifact, device=device
                 )
-                normal_actions = actions
-                shuffled_actions = actions.roll(1, dims=0)
-                action_mask = valid_agents
-                predicted_state, predicted_visual = model(
+                normal_prediction = model(
                     current_state,
                     current_visual,
-                    normal_actions,
+                    current_shared,
+                    actions,
                     valid_agents,
-                    action_mask,
                 )
-                normal = masked_future_prediction_losses(
-                    predicted_state,
+                own = masked_future_prediction_losses(
+                    normal_prediction.own_state,
                     target_state,
                     state_valid,
-                    predicted_visual,
+                    normal_prediction.own_visual,
                     target_visual,
                     visual_valid,
                 )
-                shuffled_state, shuffled_visual = model(
-                    current_state,
-                    current_visual,
-                    shuffled_actions,
-                    valid_agents,
-                    action_mask,
-                )
-                shuffled = masked_future_prediction_losses(
-                    shuffled_state,
+                normal_peer = masked_peer_future_prediction_losses(
+                    normal_prediction.peer_state,
                     target_state,
                     state_valid,
-                    shuffled_visual,
+                    normal_prediction.peer_visual,
                     target_visual,
                     visual_valid,
+                    valid_agents,
+                )
+                normal_shared = masked_shared_future_prediction_losses(
+                    normal_prediction.shared_visual,
+                    target_shared,
+                    shared_valid,
+                    valid_agents,
+                )
+                shuffled_prediction = model(
+                    current_state,
+                    current_visual,
+                    current_shared,
+                    actions,
+                    valid_agents,
+                    actions_by_focal=peer_actions_shuffled_by_focal(
+                        actions,
+                        valid_agents,
+                    ),
+                )
+                shuffled_peer = masked_peer_future_prediction_losses(
+                    shuffled_prediction.peer_state,
+                    target_state,
+                    state_valid,
+                    shuffled_prediction.peer_visual,
+                    target_visual,
+                    visual_valid,
+                    valid_agents,
+                )
+                shuffled_shared = masked_shared_future_prediction_losses(
+                    shuffled_prediction.shared_visual,
+                    target_shared,
+                    shared_valid,
+                    valid_agents,
+                )
+                persistence_state = normalized_persistence_state(
+                    artifact,
+                    batch_size=actions.shape[0],
+                    agents=actions.shape[1],
+                    device=device,
+                )
+                persistence_visual = normalized_persistence_visual(
+                    artifact,
+                    batch_size=actions.shape[0],
+                    agents=actions.shape[1],
+                    grid_tokens=model_config.visual_grid_tokens,
+                    device=device,
+                )
+                persistence_peer = masked_peer_future_prediction_losses(
+                    persistence_state[:, None].expand(
+                        -1,
+                        actions.shape[1],
+                        -1,
+                        -1,
+                        -1,
+                    ),
+                    target_state,
+                    state_valid,
+                    persistence_visual[:, None].expand(
+                        -1,
+                        actions.shape[1],
+                        -1,
+                        -1,
+                        -1,
+                        -1,
+                    ),
+                    target_visual,
+                    visual_valid,
+                    valid_agents,
+                )
+                persistence_shared_loss = (
+                    masked_shared_future_prediction_losses(
+                        persistence_shared[:, None].expand(
+                            -1,
+                            actions.shape[1],
+                            -1,
+                            -1,
+                            -1,
+                        ),
+                        target_shared,
+                        shared_valid,
+                        valid_agents,
+                    )
+                )
+                normal_per = (
+                    normal_peer["per_trajectory"]
+                    + normal_shared["per_trajectory"]
+                )
+                shuffled_per = (
+                    shuffled_peer["per_trajectory"]
+                    + shuffled_shared["per_trajectory"]
+                )
+                persistence_per = (
+                    persistence_peer["per_trajectory"]
+                    + persistence_shared_loss["per_trajectory"]
                 )
                 for row in range(grouped["episode_index"].shape[0]):
-                    normal_loss = float(normal["per_trajectory"][row])
-                    shuffled_loss = float(shuffled["per_trajectory"][row])
+                    normal_loss = float(normal_per[row])
+                    shuffled_loss = float(shuffled_per[row])
                     task_records.append(
                         {
                             "episode_index": int(
@@ -241,9 +360,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                             ),
                             "episode_seed": int(grouped["episode_seed"][row]),
                             "decision_t": int(grouped["decision_t"][row]),
-                            "normal_loss": normal_loss,
-                            "shuffled_loss": shuffled_loss,
-                            "shuffle_delta": shuffled_loss - normal_loss,
+                            "own_normal_loss": float(
+                                own["per_trajectory"][row]
+                            ),
+                            "peer_shared_normal_loss": normal_loss,
+                            "peer_shared_shuffled_loss": shuffled_loss,
+                            "peer_shared_persistence_loss": float(
+                                persistence_per[row]
+                            ),
+                            "peer_shuffle_delta": shuffled_loss - normal_loss,
                         }
                     )
                 progress = {
@@ -254,9 +379,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "batch": batch_index,
                     "batches": len(batches),
                     "samples": len(task_records),
-                    "normal_loss": float(normal["loss"]),
-                    "shuffle_delta": float(
-                        shuffled["loss"] - normal["loss"]
+                    "own_loss": float(own["loss"]),
+                    "peer_shared_loss": float(normal_per.mean()),
+                    "peer_shuffle_delta": float(
+                        shuffled_per.mean() - normal_per.mean()
                     ),
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
@@ -310,8 +436,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "comparison_contract": comparison_contract,
         "statistics": {
             "unit": "episode",
-            "paired_action_shuffle": False,
-            "note": "P0 own-action shuffle is diagnostic only; R4 gate uses P1 peer-action shuffle.",
+            "paired_peer_action_shuffle": True,
+            "own_action_preserved_during_peer_shuffle": True,
+            "persistence_baseline": True,
             "bootstrap_samples": bootstrap_samples,
             "bootstrap_seed": bootstrap_seed,
             "confidence_level": 0.95,
@@ -435,21 +562,46 @@ def _task_metrics(
     episode_rows = []
     for episode_index in sorted(episodes):
         values = episodes[episode_index]
-        normal = float(np.mean([float(item["normal_loss"]) for item in values]))
+        own = float(
+            np.mean([float(item["own_normal_loss"]) for item in values])
+        )
+        normal = float(
+            np.mean(
+                [
+                    float(item["peer_shared_normal_loss"])
+                    for item in values
+                ]
+            )
+        )
         shuffled = float(
-            np.mean([float(item["shuffled_loss"]) for item in values])
+            np.mean(
+                [
+                    float(item["peer_shared_shuffled_loss"])
+                    for item in values
+                ]
+            )
+        )
+        persistence = float(
+            np.mean(
+                [
+                    float(item["peer_shared_persistence_loss"])
+                    for item in values
+                ]
+            )
         )
         episode_rows.append(
             {
                 "episode_index": episode_index,
                 "windows": len(values),
-                "normal_loss": normal,
-                "shuffled_loss": shuffled,
-                "shuffle_delta": shuffled - normal,
+                "own_normal_loss": own,
+                "peer_shared_normal_loss": normal,
+                "peer_shared_shuffled_loss": shuffled,
+                "peer_shared_persistence_loss": persistence,
+                "peer_shuffle_delta": shuffled - normal,
             }
         )
     deltas = np.asarray(
-        [float(value["shuffle_delta"]) for value in episode_rows],
+        [float(value["peer_shuffle_delta"]) for value in episode_rows],
         dtype=np.float64,
     )
     if bootstrap_samples <= 0:
@@ -461,23 +613,47 @@ def _task_metrics(
         size=(bootstrap_samples, len(deltas)),
     )
     means = deltas[draws].mean(axis=1)
+    own_loss = float(
+        np.mean([float(value["own_normal_loss"]) for value in episode_rows])
+    )
     normal_loss = float(
-        np.mean([float(value["normal_loss"]) for value in episode_rows])
+        np.mean(
+            [float(value["peer_shared_normal_loss"]) for value in episode_rows]
+        )
     )
     shuffled_loss = float(
-        np.mean([float(value["shuffled_loss"]) for value in episode_rows])
+        np.mean(
+            [
+                float(value["peer_shared_shuffled_loss"])
+                for value in episode_rows
+            ]
+        )
+    )
+    persistence_loss = float(
+        np.mean(
+            [
+                float(value["peer_shared_persistence_loss"])
+                for value in episode_rows
+            ]
+        )
     )
     return {
         "episodes": len(episode_rows),
         "windows": len(records),
-        "normal_composite_future_loss": normal_loss,
-        "shuffled_composite_future_loss": shuffled_loss,
-        "shuffle_delta": shuffled_loss - normal_loss,
-        "shuffle_delta_bootstrap_95": {
-            "lower": float(np.quantile(means, 0.025)),
-            "upper": float(np.quantile(means, 0.975)),
-            "samples": bootstrap_samples,
-            "seed": bootstrap_seed,
+        "own": {
+            "normal_composite_future_loss": own_loss,
+        },
+        "peer_shared": {
+            "normal_composite_future_loss": normal_loss,
+            "shuffled_composite_future_loss": shuffled_loss,
+            "persistence_composite_future_loss": persistence_loss,
+            "shuffle_delta": shuffled_loss - normal_loss,
+            "shuffle_delta_bootstrap_95": {
+                "lower": float(np.quantile(means, 0.025)),
+                "upper": float(np.quantile(means, 0.975)),
+                "samples": bootstrap_samples,
+                "seed": bootstrap_seed,
+            },
         },
         "episode_rows": episode_rows,
     }

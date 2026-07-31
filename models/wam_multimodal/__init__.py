@@ -33,6 +33,11 @@ from models.wam_multimodal.token_resampler import (
     SpatialVisualTokenAdapter,
     VisualAdapterOutput,
 )
+from models.wam_multimodal.team_shared_future_predictor import (
+    TeamSharedFuturePrediction,
+    TeamSharedFuturePredictor,
+    TeamSharedFuturePredictorConfig,
+)
 from models.wam_multimodal.vision_encoder import (
     DEFAULT_DINOV3_ENCODER,
     DEFAULT_DINOV3_CONFIG_SHA256,
@@ -93,6 +98,9 @@ __all__ = [
     "PerceiverResampler",
     "PerceiverResamplerConfig",
     "SpatialVisualTokenAdapter",
+    "TeamSharedFuturePrediction",
+    "TeamSharedFuturePredictor",
+    "TeamSharedFuturePredictorConfig",
     "UTF8TaskEncoder",
     "VisualAdapterOutput",
     "VisionEncoderOutput",

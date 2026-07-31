@@ -22,6 +22,8 @@ if str(ROOT) not in sys.path:
 from models.wam_multimodal import (  # noqa: E402
     LocalActionConditionedFuturePredictor,
     LocalFuturePredictorConfig,
+    TeamSharedFuturePredictor,
+    TeamSharedFuturePredictorConfig,
 )
 from scripts.train_static_rgb_act_moe import (  # noqa: E402
     _TaskBalancedBatchSampler,
@@ -39,11 +41,16 @@ from scripts.train_static_rgb_act_moe import (  # noqa: E402
 )
 from train.s2_future_prediction import (  # noqa: E402
     encode_local_visual_targets,
+    encode_shared_visual_targets,
     file_sha256,
     load_s2_artifact,
     masked_future_prediction_losses,
     normalized_state_delta,
     state_dict_sha256,
+)
+from train.s2_r4_future_prediction import (  # noqa: E402
+    masked_peer_future_prediction_losses,
+    masked_shared_future_prediction_losses,
 )
 from train.s2_grouped_trajectory import (  # noqa: E402
     S2GroupedTrajectoryDataset,
@@ -80,8 +87,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     candidate_id, model_kind, team_shared = validate_s2_r4_candidate(
         _mapping(raw, "round")
     )
-    if team_shared:
-        raise ValueError("P1 team/shared training is only available on its branch")
     training = _mapping(raw, "training")
     device = torch.device(args.device)
     _emit_stage("cuda_preflight", f"checking {device}")
@@ -165,8 +170,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         != int(pca["grid_height"]) * int(pca["grid_width"])
     ):
         raise ValueError("model visual_grid_tokens disagrees with PCA grid")
-    model = LocalActionConditionedFuturePredictor(model_config).to(device)
-    model.load_state_dict(r3_parent["model"], strict=True)
+    team_model_config = None
+    if team_shared:
+        team_model_config = TeamSharedFuturePredictorConfig.from_dict(
+            dict(_mapping(raw, "team_model"))
+        )
+        model = TeamSharedFuturePredictor(
+            model_config,
+            team_model_config,
+        ).to(device)
+        model.local_predictor.load_state_dict(r3_parent["model"], strict=True)
+        r3_parent_model_sha256 = state_dict_sha256(model.local_predictor)
+    else:
+        model = LocalActionConditionedFuturePredictor(model_config).to(device)
+        model.load_state_dict(r3_parent["model"], strict=True)
+        r3_parent_model_sha256 = state_dict_sha256(model)
     initial_model_sha256 = state_dict_sha256(model)
     del r3_parent
     optimizer = torch.optim.AdamW(
@@ -261,6 +279,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             grid_height=int(pca["grid_height"]),
             grid_width=int(pca["grid_width"]),
         )
+        current_shared, target_shared, _ = encode_shared_visual_targets(
+            vision,
+            grouped,
+            artifact,
+            device=device,
+            grid_height=int(pca["grid_height"]),
+            grid_width=int(pca["grid_width"]),
+        )
         current_state = grouped["current_state"].to(
             device=device, dtype=torch.float32, non_blocking=True
         )
@@ -276,28 +302,70 @@ def main(argv: Sequence[str] | None = None) -> int:
         visual_valid = grouped["future_agent_visual_valid_mask"].to(
             device=device, dtype=torch.bool
         )
+        shared_valid = grouped["future_shared_visual_valid_mask"].to(
+            device=device, dtype=torch.bool
+        )
         target_state = normalized_state_delta(
             grouped, artifact, device=device
         )
-        action_mask = valid_agents
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            predicted_state, predicted_visual = model(
-                current_state,
-                current_visual,
-                actions,
-                valid_agents,
-                action_mask,
-            )
-            losses = masked_future_prediction_losses(
-                predicted_state,
-                target_state,
-                state_valid,
-                predicted_visual,
-                target_visual,
-                visual_valid,
-            )
-        losses["loss"].backward()
+            if team_shared:
+                prediction = model(
+                    current_state,
+                    current_visual,
+                    current_shared,
+                    actions,
+                    valid_agents,
+                )
+                own_losses = masked_future_prediction_losses(
+                    prediction.own_state,
+                    target_state,
+                    state_valid,
+                    prediction.own_visual,
+                    target_visual,
+                    visual_valid,
+                )
+                peer_losses = masked_peer_future_prediction_losses(
+                    prediction.peer_state,
+                    target_state,
+                    state_valid,
+                    prediction.peer_visual,
+                    target_visual,
+                    visual_valid,
+                    valid_agents,
+                )
+                shared_losses = masked_shared_future_prediction_losses(
+                    prediction.shared_visual,
+                    target_shared,
+                    shared_valid,
+                    valid_agents,
+                )
+                loss = (
+                    own_losses["loss"]
+                    + peer_losses["loss"]
+                    + shared_losses["loss"]
+                )
+            else:
+                predicted_state, predicted_visual = model(
+                    current_state,
+                    current_visual,
+                    actions,
+                    valid_agents,
+                    valid_agents,
+                )
+                own_losses = masked_future_prediction_losses(
+                    predicted_state,
+                    target_state,
+                    state_valid,
+                    predicted_visual,
+                    target_visual,
+                    visual_valid,
+                )
+                peer_losses = {"loss": own_losses["loss"].new_zeros(())}
+                shared_losses = {"loss": own_losses["loss"].new_zeros(())}
+                loss = own_losses["loss"]
+        loss.backward()
         gradient_norm = torch.nn.utils.clip_grad_norm_(
             model.parameters(),
             float(training.get("gradient_clip_norm", 1.0)),
@@ -312,9 +380,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "program": "train_s2_r4_future_predictor.py",
                 "update": update,
                 "updates": updates,
-                "loss": float(losses["loss"].detach()),
-                "state_loss": float(losses["state"].detach()),
-                "visual_loss": float(losses["visual"].detach()),
+                "loss": float(loss.detach()),
+                "own_loss": float(own_losses["loss"].detach()),
+                "own_state_loss": float(own_losses["state"].detach()),
+                "own_visual_loss": float(own_losses["visual"].detach()),
+                "peer_loss": float(peer_losses["loss"].detach()),
+                "shared_loss": float(shared_losses["loss"].detach()),
                 "gradient_norm": float(gradient_norm),
                 "updates_per_second": (update - start) / elapsed,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -348,7 +419,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "round_id": "s2-r4",
             "candidate_id": candidate_id,
             "model_kind": model_kind,
-            "future_scope": "local",
+            "future_scope": "team_shared" if team_shared else "local",
             "action_conditioning": True,
             "team_shared": team_shared,
             "action_generator": "rectified_flow_cold",
@@ -356,12 +427,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             "future_target_input": False,
         },
         "model_config": model_config.to_dict(),
+        "team_model_config": (
+            team_model_config.to_dict()
+            if team_model_config is not None
+            else None
+        ),
         "model": model.state_dict(),
         "initial_model_sha256": initial_model_sha256,
         "initialization_parent": {
             "r3_w1_checkpoint": str(r3_parent_path),
             "r3_w1_checkpoint_sha256": r3_parent_sha256,
-            "r3_w1_model_sha256": initial_model_sha256,
+            "r3_w1_model_sha256": r3_parent_model_sha256,
         },
         "training": dict(training),
         "data": {
