@@ -156,7 +156,8 @@ for index in "${!CANDIDATES[@]}"; do
     if [[ "$(git -C "${path}" branch --show-current)" != "${branch}" ]]; then exit 3; fi
   else
     if ! git -C "${FE_ROOT}" show-ref --verify --quiet "refs/heads/${branch}"; then
-      git -C "${FE_ROOT}" branch --track "${branch}" "origin/${branch}" || exit $?
+      git -C "${FE_ROOT}" branch "${branch}" \
+        "refs/remotes/origin/${branch}" || exit $?
     fi
     git -C "${FE_ROOT}" worktree add "${path}" "${branch}" || exit $?
   fi
