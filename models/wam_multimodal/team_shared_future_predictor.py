@@ -212,22 +212,36 @@ class TeamSharedFuturePredictor(nn.Module):
             config.max_agents,
             -1,
         )
-        encoded = self.team_encoder(
-            tokens.reshape(
-                batch_size * config.max_agents,
+        rng_devices: list[int] = []
+        if current_state.device.type == "cuda":
+            device_index = current_state.device.index
+            rng_devices.append(
+                torch.cuda.current_device()
+                if device_index is None
+                else device_index
+            )
+        # Team dropout stays stochastic, but it cannot consume the inherited
+        # local predictor's paired RNG stream.
+        with torch.random.fork_rng(
+            devices=rng_devices,
+            enabled=self.training,
+        ):
+            encoded = self.team_encoder(
+                tokens.reshape(
+                    batch_size * config.max_agents,
+                    config.max_agents + 1,
+                    config.d_model,
+                ),
+                src_key_padding_mask=padding.reshape(
+                    batch_size * config.max_agents,
+                    config.max_agents + 1,
+                ),
+            ).reshape(
+                batch_size,
+                config.max_agents,
                 config.max_agents + 1,
                 config.d_model,
-            ),
-            src_key_padding_mask=padding.reshape(
-                batch_size * config.max_agents,
-                config.max_agents + 1,
-            ),
-        ).reshape(
-            batch_size,
-            config.max_agents,
-            config.max_agents + 1,
-            config.d_model,
-        )
+            )
         encoded_shared = encoded[:, :, 0]
         encoded_agents = encoded[:, :, 1:]
         focal_index = torch.arange(

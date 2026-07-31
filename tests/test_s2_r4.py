@@ -176,6 +176,54 @@ def test_team_shared_predictor_keeps_local_path_and_exposes_pairwise_slots():
     assert normal.shared_visual[:, 3].count_nonzero().item() == 0
 
 
+def test_team_dropout_does_not_advance_local_predictor_rng_stream():
+    torch.manual_seed(17)
+    model = TeamSharedFuturePredictor(
+        LocalFuturePredictorConfig(
+            action_horizon=6,
+            future_horizons=(1, 2),
+            visual_grid_tokens=2,
+            visual_latent_dim=8,
+            d_model=16,
+            ffn_dim=32,
+            layers=1,
+            heads=4,
+            dropout=0.2,
+        ),
+        TeamSharedFuturePredictorConfig(
+            layers=1,
+            heads=4,
+            ffn_dim=32,
+            dropout=0.3,
+            own_residual_max=0.1,
+        ),
+    ).train()
+    state = torch.randn(2, 4, 18)
+    visual = torch.randn(2, 4, 2, 8)
+    shared = torch.randn(2, 2, 8)
+    actions = torch.randn(2, 4, 6, 8)
+    valid = torch.tensor(
+        [[True, True, False, False], [True, True, True, False]]
+    )
+    torch.manual_seed(20260731)
+    initial_rng = torch.get_rng_state()
+    expected_state, expected_visual = model.local_predictor(
+        state, visual, actions, valid, valid
+    )
+    expected_rng = torch.get_rng_state()
+    torch.set_rng_state(initial_rng)
+    prediction = model(state, visual, shared, actions, valid)
+    torch.testing.assert_close(
+        prediction.own_state, expected_state, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        prediction.own_visual, expected_visual, rtol=0, atol=0
+    )
+    assert torch.equal(torch.get_rng_state(), expected_rng)
+    next_prediction = model(state, visual, shared, actions, valid)
+    assert not torch.equal(prediction.peer_state, next_prediction.peer_state)
+
+
 def test_s2_r4_clips_local_and_team_shared_gradients_independently():
     model = _small_team_model()
     local_parameters = tuple(model.local_predictor.parameters())

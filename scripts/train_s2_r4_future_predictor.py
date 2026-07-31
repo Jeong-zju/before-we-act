@@ -211,6 +211,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "scope": gradient_clip_scope,
         "max_norm": gradient_clip_max_norm,
     }
+    rng_isolation = {
+        "scope": (
+            "team_encoder_fork_rng_preserve_local_stream"
+            if team_shared
+            else "local_only"
+        ),
+        "preserves_local_dropout_stream": True,
+    }
     optimizer = torch.optim.AdamW(
         all_parameters,
         lr=float(training.get("learning_rate", 2e-4)),
@@ -253,6 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             or saved.get("r3_parent_sha256") != r3_parent_sha256
             or saved.get("initial_model_sha256") != initial_model_sha256
             or saved.get("gradient_clipping") != gradient_clipping
+            or saved.get("rng_isolation") != rng_isolation
         ):
             raise ValueError("S2-R4 resume identity differs from this run")
         model.load_state_dict(saved["model"], strict=True)
@@ -418,6 +427,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "shared_loss": float(shared_losses["loss"].detach()),
                 **gradient_norms,
                 "gradient_clip_scope": gradient_clip_scope,
+                "rng_isolation_scope": rng_isolation["scope"],
                 "updates_per_second": (update - start) / elapsed,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -439,6 +449,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "r3_parent_sha256": r3_parent_sha256,
                     "initial_model_sha256": initial_model_sha256,
                     "gradient_clipping": gradient_clipping,
+                    "rng_isolation": rng_isolation,
                 },
                 resume,
             )
@@ -474,6 +485,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "training": dict(training),
         "optimization": {
             "gradient_clipping": gradient_clipping,
+            "rng_isolation": rng_isolation,
         },
         "data": {
             "summary": dataset.summary(),
