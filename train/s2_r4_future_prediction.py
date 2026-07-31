@@ -2,9 +2,45 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
+
 import torch
 from torch import Tensor
+from torch import nn
 from torch.nn import functional as F
+
+
+def clip_s2_r4_gradient_groups(
+    local_parameters: Sequence[nn.Parameter],
+    team_shared_parameters: Sequence[nn.Parameter],
+    *,
+    max_norm: float,
+) -> dict[str, float]:
+    """Clip the paired local path independently from added team/shared modules."""
+
+    if not math.isfinite(max_norm) or max_norm <= 0.0:
+        raise ValueError("gradient clip max_norm must be positive")
+    local = tuple(local_parameters)
+    team_shared = tuple(team_shared_parameters)
+    if not local:
+        raise ValueError("local gradient group must not be empty")
+    local_ids = {id(parameter) for parameter in local}
+    team_shared_ids = {id(parameter) for parameter in team_shared}
+    if local_ids & team_shared_ids:
+        raise ValueError("local and team/shared gradient groups must be disjoint")
+
+    local_norm = float(torch.nn.utils.clip_grad_norm_(local, max_norm))
+    team_shared_norm = (
+        float(torch.nn.utils.clip_grad_norm_(team_shared, max_norm))
+        if team_shared
+        else 0.0
+    )
+    return {
+        "gradient_norm": math.hypot(local_norm, team_shared_norm),
+        "local_gradient_norm": local_norm,
+        "team_shared_gradient_norm": team_shared_norm,
+    }
 
 
 def masked_peer_future_prediction_losses(
@@ -170,6 +206,7 @@ def _masked_per_sample(
 
 
 __all__ = [
+    "clip_s2_r4_gradient_groups",
     "masked_peer_future_prediction_losses",
     "masked_shared_future_prediction_losses",
     "peer_actions_shuffled_by_focal",

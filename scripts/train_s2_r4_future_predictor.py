@@ -49,6 +49,7 @@ from train.s2_future_prediction import (  # noqa: E402
     state_dict_sha256,
 )
 from train.s2_r4_future_prediction import (  # noqa: E402
+    clip_s2_r4_gradient_groups,
     masked_peer_future_prediction_losses,
     masked_shared_future_prediction_losses,
 )
@@ -187,8 +188,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         r3_parent_model_sha256 = state_dict_sha256(model)
     initial_model_sha256 = state_dict_sha256(model)
     del r3_parent
+    all_parameters = tuple(model.parameters())
+    if team_shared:
+        if not isinstance(model, TeamSharedFuturePredictor):
+            raise TypeError("team/shared candidate requires its registered model")
+        local_parameters = tuple(model.local_predictor.parameters())
+        local_parameter_ids = {id(parameter) for parameter in local_parameters}
+        team_shared_parameters = tuple(
+            parameter
+            for parameter in all_parameters
+            if id(parameter) not in local_parameter_ids
+        )
+        if not team_shared_parameters:
+            raise RuntimeError("team/shared gradient group must not be empty")
+        gradient_clip_scope = "separate_local_team_shared"
+    else:
+        local_parameters = all_parameters
+        team_shared_parameters = ()
+        gradient_clip_scope = "local_only"
+    gradient_clip_max_norm = float(training.get("gradient_clip_norm", 1.0))
+    gradient_clipping = {
+        "scope": gradient_clip_scope,
+        "max_norm": gradient_clip_max_norm,
+    }
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        all_parameters,
         lr=float(training.get("learning_rate", 2e-4)),
         weight_decay=float(training.get("weight_decay", 1e-4)),
     )
@@ -228,6 +252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             or saved.get("base_flow_sha256") != base_flow_sha256
             or saved.get("r3_parent_sha256") != r3_parent_sha256
             or saved.get("initial_model_sha256") != initial_model_sha256
+            or saved.get("gradient_clipping") != gradient_clipping
         ):
             raise ValueError("S2-R4 resume identity differs from this run")
         model.load_state_dict(saved["model"], strict=True)
@@ -370,9 +395,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 shared_losses = {"loss": own_losses["loss"].new_zeros(())}
                 loss = own_losses["loss"]
         loss.backward()
-        gradient_norm = torch.nn.utils.clip_grad_norm_(
-            model.parameters(),
-            float(training.get("gradient_clip_norm", 1.0)),
+        gradient_norms = clip_s2_r4_gradient_groups(
+            local_parameters,
+            team_shared_parameters,
+            max_norm=gradient_clip_max_norm,
         )
         optimizer.step()
         scheduler.step()
@@ -390,7 +416,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "own_visual_loss": float(own_losses["visual"].detach()),
                 "peer_loss": float(peer_losses["loss"].detach()),
                 "shared_loss": float(shared_losses["loss"].detach()),
-                "gradient_norm": float(gradient_norm),
+                **gradient_norms,
+                "gradient_clip_scope": gradient_clip_scope,
                 "updates_per_second": (update - start) / elapsed,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -411,6 +438,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "base_flow_sha256": base_flow_sha256,
                     "r3_parent_sha256": r3_parent_sha256,
                     "initial_model_sha256": initial_model_sha256,
+                    "gradient_clipping": gradient_clipping,
                 },
                 resume,
             )
@@ -444,6 +472,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "r3_w1_model_sha256": r3_parent_model_sha256,
         },
         "training": dict(training),
+        "optimization": {
+            "gradient_clipping": gradient_clipping,
+        },
         "data": {
             "summary": dataset.summary(),
             "manifests": [

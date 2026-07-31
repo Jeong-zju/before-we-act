@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
 import torch
 import yaml
 
@@ -19,6 +20,7 @@ from train.s2_model_registry import (
     validate_s2_r4_candidate,
 )
 from train.s2_r4_future_prediction import (
+    clip_s2_r4_gradient_groups,
     masked_peer_future_prediction_losses,
     masked_shared_future_prediction_losses,
     peer_actions_shuffled_by_focal,
@@ -172,6 +174,57 @@ def test_team_shared_predictor_keeps_local_path_and_exposes_pairwise_slots():
     assert not torch.equal(normal.peer_state, shuffled.peer_state)
     assert normal.peer_state[:, 3].count_nonzero().item() == 0
     assert normal.shared_visual[:, 3].count_nonzero().item() == 0
+
+
+def test_s2_r4_clips_local_and_team_shared_gradients_independently():
+    model = _small_team_model()
+    local_parameters = tuple(model.local_predictor.parameters())
+    local_ids = {id(parameter) for parameter in local_parameters}
+    team_shared_parameters = tuple(
+        parameter
+        for parameter in model.parameters()
+        if id(parameter) not in local_ids
+    )
+    for parameter in local_parameters:
+        parameter.grad = torch.ones_like(parameter)
+    for parameter in team_shared_parameters:
+        parameter.grad = torch.full_like(parameter, 100.0)
+
+    expected_local_norm = torch.linalg.vector_norm(
+        torch.stack(
+            [parameter.grad.norm() for parameter in local_parameters]
+        )
+    ).item()
+    expected_team_shared_norm = torch.linalg.vector_norm(
+        torch.stack(
+            [parameter.grad.norm() for parameter in team_shared_parameters]
+        )
+    ).item()
+    norms = clip_s2_r4_gradient_groups(
+        local_parameters,
+        team_shared_parameters,
+        max_norm=1.0,
+    )
+    clipped_local_norm = torch.linalg.vector_norm(
+        torch.stack(
+            [parameter.grad.norm() for parameter in local_parameters]
+        )
+    ).item()
+    clipped_team_shared_norm = torch.linalg.vector_norm(
+        torch.stack(
+            [parameter.grad.norm() for parameter in team_shared_parameters]
+        )
+    ).item()
+
+    assert norms["local_gradient_norm"] == pytest.approx(expected_local_norm)
+    assert norms["team_shared_gradient_norm"] == pytest.approx(
+        expected_team_shared_norm
+    )
+    assert norms["gradient_norm"] == pytest.approx(
+        (expected_local_norm**2 + expected_team_shared_norm**2) ** 0.5
+    )
+    assert clipped_local_norm == pytest.approx(1.0, abs=1e-5)
+    assert clipped_team_shared_norm == pytest.approx(1.0, abs=1e-5)
 
 
 def test_peer_action_shuffle_preserves_each_focal_diagonal():
