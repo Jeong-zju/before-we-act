@@ -406,7 +406,9 @@ def test_s2_r4_shell_scripts_are_valid_and_reuse_s0_download_path():
             cwd=ROOT,
         )
     prepare = (ROOT / "scripts/prepare_s2_r4_shared.sh").read_text()
+    assert (ROOT / "scripts/prepare_s2_r4_artifacts.py").is_file()
     assert "prepare_s2_r3_shared.sh" in prepare
+    assert "prepare_s2_r4_artifacts.py" in prepare
     assert "train_s2_r3_future_predictor.py" in prepare
     assert "verify_s2_r3_w1_checkpoint.py" in prepare
     inherited = (ROOT / "scripts/prepare_s2_r3_shared.sh").read_text()

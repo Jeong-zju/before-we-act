@@ -189,8 +189,14 @@ def encode_shared_visual_targets(
             output.spatial_tokens.float(), artifact
         )
     delta = future - current[:, None]
-    mean = artifact["visual_delta_mean"].to(delta)
-    std = artifact["visual_delta_std"].to(delta)
+    shared_mean = artifact.get("shared_visual_delta_mean")
+    shared_std = artifact.get("shared_visual_delta_std")
+    if not isinstance(shared_mean, Tensor) or not isinstance(
+        shared_std, Tensor
+    ):
+        raise ValueError("S2-R4 artifact lacks shared-view target statistics")
+    mean = shared_mean.to(delta)
+    std = shared_std.to(delta)
     normalized = (delta - mean[None, :, None]) / std[None, :, None]
     normalized = normalized.masked_fill(
         ~future_valid[:, :, None, None], 0.0

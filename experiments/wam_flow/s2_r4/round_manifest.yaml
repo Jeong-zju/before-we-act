@@ -26,7 +26,9 @@ representation:
   state_delta: normalized_proprioceptive_delta
   visual_delta: dinov3_2x2_patch_grid_pca_1024_to_256
   pca_fit_split: train
-  pca_statistics: artifacts/s2_r3/dino_pca_statistics.pt
+  pca_source: artifacts/s2_r3/dino_pca_statistics.pt
+  pca_statistics: artifacts/s2_r4/dino_pca_statistics.pt
+  shared_view_statistics_fit_split: train
 training:
   seed: 404
   optimizer_updates: 10000

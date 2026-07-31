@@ -75,6 +75,23 @@ test -f "${R3_READY_FILE}"
 test ! -f "${R3_FAILED_FILE}"
 exec > >(tee -a "${LOG_PATH}") 2>&1
 
+R4_ARTIFACT="${FE_ROOT}/artifacts/s2_r4/dino_pca_statistics.pt"
+status r4_shared_artifact prepare_s2_r4_artifacts.py \
+  "extending frozen R3 PCA with train-only global shared-view statistics"
+(
+  cd "${FE_ROOT}"
+  CUDA_VISIBLE_DEVICES=0 \
+  PYTHONUNBUFFERED=1 \
+    uv run --frozen python scripts/prepare_s2_r4_artifacts.py \
+      --config "${S2_R4_P0_CONFIG}" \
+      --source artifacts/s2_r3/dino_pca_statistics.pt \
+      --output "${R4_ARTIFACT}" \
+      --device cuda:0 \
+      --progress-log "${S2_R4_RUN_ROOT}/prepare_progress.jsonl"
+)
+sha256sum "${R4_ARTIFACT}" \
+  | tee -a "${S2_R4_RUN_ROOT}/shared_artifact_sha256.txt"
+
 if [[ -n "${R3_PARENT_SOURCE}" && ! -f "${R3_PARENT_SOURCE}" ]]; then
   status r3_parent verify_s2_r3_w1_checkpoint.py \
     "configured R3-W1 checkpoint missing; searching shared outputs"

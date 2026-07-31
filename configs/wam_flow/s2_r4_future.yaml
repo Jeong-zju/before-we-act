@@ -81,7 +81,8 @@ evaluation:
   bootstrap_seed: 40404
 
 artifacts:
-  pca_statistics: artifacts/s2_r3/dino_pca_statistics.pt
+  r3_pca_statistics: artifacts/s2_r3/dino_pca_statistics.pt
+  pca_statistics: artifacts/s2_r4/dino_pca_statistics.pt
 
 checkpoint:
   output: checkpoints/s2_r4_p1_team_shared_future/predictor.pt
