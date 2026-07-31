@@ -263,6 +263,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     save_interval = int(training.get("save_interval", 500))
     log_interval = int(training.get("log_interval", 20))
     started = time.perf_counter()
+    if start == 0:
+        # P1 creates additional team modules. Reset after construction so the
+        # paired local path sees the same dropout RNG stream on both branches.
+        _seed_everything(seed + 20_000_000)
     model.train()
     for update in range(start + 1, updates + 1):
         grouped = grouped_s2_batch(next(iterator))
