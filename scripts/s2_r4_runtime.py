@@ -399,8 +399,12 @@ def collect_candidate(run_root: Path, candidate: str) -> dict[str, str]:
                         and float(interval.get("lower", 0)) > 0
                     ):
                         positive += 1
-            scope = "peer-CI+" if candidate == "P1" else "own-loss"
-            progress = f"evaluation {completed}/5 tasks; {scope}={positive}/5"
+            if candidate == "P1":
+                progress = (
+                    f"evaluation {completed}/5 tasks; peer-CI+={positive}/5"
+                )
+            else:
+                progress = f"evaluation {completed}/5 tasks; own-loss=ready"
     return {
         "gpu": str(status.get("gpu_index", "-")),
         "phase": phase[:11],

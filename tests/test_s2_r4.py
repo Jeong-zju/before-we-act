@@ -310,6 +310,36 @@ def test_s2_r4_monitor_reports_program_heartbeat_and_special_gate(
     assert "Permanent tmux stays alive" in rendered
 
 
+def test_s2_r4_monitor_renders_every_special_gate(tmp_path: Path):
+    run_root = tmp_path / "run"
+    initialize_run(
+        run_root,
+        run_id="fixture",
+        session="permanent",
+        base_repo=ROOT,
+        worktrees=[f"P0={tmp_path / 'p0'}", f"P1={tmp_path / 'p1'}"],
+        window_prefix="fixture",
+        monitor_window="fixture-monitor",
+    )
+    acceptance = build_acceptance(
+        _evaluation("P0", team_shared=False),
+        _evaluation("P1", team_shared=True),
+    )
+    (run_root / "acceptance.json").write_text(json.dumps(acceptance))
+
+    rendered = render_monitor(run_root)
+
+    assert "S2-R4 special acceptance: PASS -> enter S3" in rendered
+    assert "p1_own_target_no_worse_on_every_task=PASS" in rendered
+    assert "p1_peer_shared_beats_persistence_on_every_task=PASS" in rendered
+    assert (
+        "p1_peer_action_shuffle_mean_and_ci_lower_positive_on_every_task=PASS"
+        in rendered
+    )
+    assert "peer/shared" in rendered
+    assert "persistence" in rendered
+
+
 def test_s2_r4_shell_scripts_are_valid_and_reuse_s0_download_path():
     for name in (
         "prepare_s2_r4_shared.sh",
