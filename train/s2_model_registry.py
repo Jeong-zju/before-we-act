@@ -16,6 +16,10 @@ S2_R4_MODEL_KINDS: dict[str, bool] = {
     "s2_r4_team_shared_action_conditioned": True,
 }
 
+S2_R4_HYBRID_MODEL_KINDS = frozenset(
+    {"s2_r4_protected_hybrid_diagnostic"}
+)
+
 
 def validate_s2_candidate(value: Mapping[str, Any]) -> tuple[str, str, bool]:
     candidate_id = str(value.get("candidate_id", ""))
@@ -61,9 +65,40 @@ def validate_s2_r4_candidate(
     return candidate_id, model_kind, configured
 
 
+def validate_s2_r4_hybrid_diagnostic(
+    value: Mapping[str, Any],
+) -> str:
+    """Accept only the pre-registered evaluate-only protected hybrid."""
+
+    model_kind = str(value.get("model_kind", ""))
+    if model_kind not in S2_R4_HYBRID_MODEL_KINDS:
+        raise ValueError(
+            "S2-R4 hybrid model kind is not in the evaluation allowlist"
+        )
+    if value.get("mode") != "evaluate_only":
+        raise ValueError("S2-R4 protected hybrid must be evaluate_only")
+    if value.get("training_allowed") is not False:
+        raise ValueError("S2-R4 protected hybrid must forbid training")
+    return model_kind
+
+
+def require_trainable_s2_r4_model_kind(model_kind: str) -> None:
+    """Fail closed when the diagnostic kind reaches any trainer."""
+
+    if model_kind in S2_R4_HYBRID_MODEL_KINDS:
+        raise ValueError(
+            "S2-R4 protected hybrid is evaluate-only and cannot be trained"
+        )
+    if model_kind not in S2_R4_MODEL_KINDS:
+        raise ValueError("S2-R4 model kind is not in the training allowlist")
+
+
 __all__ = [
     "S2_R3_MODEL_KINDS",
+    "S2_R4_HYBRID_MODEL_KINDS",
     "S2_R4_MODEL_KINDS",
+    "require_trainable_s2_r4_model_kind",
     "validate_s2_candidate",
     "validate_s2_r4_candidate",
+    "validate_s2_r4_hybrid_diagnostic",
 ]

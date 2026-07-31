@@ -1,0 +1,60 @@
+name: wam.robofactory/s2-r4-protected-hybrid-diagnostic
+format_version: wam.robofactory.s2_r4.hybrid.config/1
+
+round:
+  round_id: s2-r4-hybrid
+  candidate_id: HYBRID
+  model_kind: s2_r4_protected_hybrid_diagnostic
+  mode: evaluate_only
+  training_allowed: false
+
+sources:
+  own_model_kind: s2_r4_local_action_conditioned
+  team_model_kind: s2_r4_team_shared_action_conditioned
+  own_scope: local
+  team_scope: team_shared
+  discard_team_prefixes:
+    - local_predictor.
+    - own_state_residual.
+    - own_visual_residual.
+    - own_residual_gate
+
+parent:
+  flow_checkpoint: artifacts/s1_r1_f1/checkpoint_080000.pt
+
+data:
+  manifests:
+    - datasets/robofactory_multitask/lift_barrier/training_manifest.json
+    - datasets/robofactory_multitask/long_pipeline_delivery/training_manifest.json
+    - datasets/robofactory_multitask/take_photo/training_manifest.json
+    - datasets/robofactory_multitask/three_robots_stack_cube/training_manifest.json
+    - datasets/robofactory_multitask/camera_alignment/training_manifest.json
+  validation_stride: 1
+  hdf5_cache_size: 4
+
+vision:
+  encoder_name: dinov3_vitl16_lvd
+  model_id: facebook/dinov3-vitl16-pretrain-lvd1689m
+  revision: dd0a398fa8e84f2a37179332f6c561d20276300b
+  config_path: artifacts/vision/dinov3_vitl16_lvd/config.json
+  weights_path: artifacts/vision/dinov3_vitl16_lvd/model.safetensors
+  expected_config_sha256: ce962b0c8ca4f2deb48c6fdfd6035257e3769f1d4d9154c92aba51991e46e290
+  expected_weights_sha256: dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179
+  preprocess_id: dinov3_imagenet_rgb_resize_rectangular_antialias_v2
+  input_height: 480
+  input_width: 640
+  inference_batch_size: 2
+
+pca:
+  grid_height: 2
+  grid_width: 2
+
+evaluation:
+  windows_per_episode: 4
+  batch_size: 4
+  num_workers: 2
+  bootstrap_samples: 10000
+  bootstrap_seed: 40404
+
+artifacts:
+  pca_statistics: artifacts/s2_r4/dino_pca_statistics.pt

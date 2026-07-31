@@ -27,6 +27,11 @@ from models.wam_multimodal.local_future_predictor import (
     LocalActionConditionedFuturePredictor,
     LocalFuturePredictorConfig,
 )
+from models.wam_multimodal.protected_hybrid_future_predictor import (
+    ProtectedHybridFuturePrediction,
+    ProtectedHybridFuturePredictor,
+    exact_own_difference,
+)
 from models.wam_multimodal.token_resampler import (
     PerceiverResampler,
     PerceiverResamplerConfig,
@@ -97,6 +102,8 @@ __all__ = [
     "OFFICIAL_RESNET18_SHA256",
     "PerceiverResampler",
     "PerceiverResamplerConfig",
+    "ProtectedHybridFuturePrediction",
+    "ProtectedHybridFuturePredictor",
     "SpatialVisualTokenAdapter",
     "TeamSharedFuturePrediction",
     "TeamSharedFuturePredictor",
@@ -108,5 +115,6 @@ __all__ = [
     "build_block_causal_attention_mask",
     "canonical_json_sha256",
     "default_resnet18_weights_path",
+    "exact_own_difference",
     "sha256_file",
 ]

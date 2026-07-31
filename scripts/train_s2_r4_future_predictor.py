@@ -57,7 +57,10 @@ from train.s2_grouped_trajectory import (  # noqa: E402
     S2GroupedTrajectoryDataset,
     grouped_s2_batch,
 )
-from train.s2_model_registry import validate_s2_r4_candidate  # noqa: E402
+from train.s2_model_registry import (  # noqa: E402
+    require_trainable_s2_r4_model_kind,
+    validate_s2_r4_candidate,
+)
 
 
 CHECKPOINT_FORMAT = "wam.robofactory.s2_r4.future_predictor.checkpoint/1"
@@ -85,9 +88,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config_path = args.config.expanduser().resolve(strict=True)
     raw = _load_yaml(config_path)
-    candidate_id, model_kind, team_shared = validate_s2_r4_candidate(
-        _mapping(raw, "round")
-    )
+    round_config = _mapping(raw, "round")
+    require_trainable_s2_r4_model_kind(str(round_config.get("model_kind", "")))
+    candidate_id, model_kind, team_shared = validate_s2_r4_candidate(round_config)
     training = _mapping(raw, "training")
     device = torch.device(args.device)
     _emit_stage("cuda_preflight", f"checking {device}")
