@@ -1167,10 +1167,10 @@ S3-R6 公共基础设施已先在本地写入 `feat/model-improvements` 提交 `
 
 | 执行批次 | GPU | 分支 | 候选身份提交 / 当前 head | model kind | 训练 |
 |---|---:|---|---|---|---|
-| 1 | 0 | `s3/r6l-p0-protected-local-aux` | `b61ee77` / 待本次提交 | `s3_r6l_protected_local_aux` | fresh 五任务 Flow 80,000；off-path 控制 |
-| 1 | 1 | `s3/r6l-p1-protected-local-gated` | `1479aa3` / 待本次提交 | `s3_r6l_protected_local_gated` | fresh 五任务 Flow 80,000 + adapter/gate 10,000 |
-| 2 | 0 | `s3/r6j-p0-protected-team-offpath` | `21e36fa` / 待本次提交 | `s3_r6j_protected_team_offpath` | fresh 五任务 Flow 80,000；off-path 控制 |
-| 2 | 1 | `s3/r6j-p1-protected-team-gated` | `84db555` / 待本次提交 | `s3_r6j_protected_team_gated` | fresh 五任务 Flow 80,000 + adapter/gate 10,000 |
+| 1 | 0 | `s3/r6l-p0-protected-local-aux` | `b61ee77` / `001c141` | `s3_r6l_protected_local_aux` | fresh 五任务 Flow 80,000；off-path 控制 |
+| 1 | 1 | `s3/r6l-p1-protected-local-gated` | `1479aa3` / `46067ad` | `s3_r6l_protected_local_gated` | fresh 五任务 Flow 80,000 + adapter/gate 10,000 |
+| 2 | 0 | `s3/r6j-p0-protected-team-offpath` | `21e36fa` / `b159f3d` | `s3_r6j_protected_team_offpath` | fresh 五任务 Flow 80,000；off-path 控制 |
+| 2 | 1 | `s3/r6j-p1-protected-team-gated` | `84db555` / `9992518` | `s3_r6j_protected_team_gated` | fresh 五任务 Flow 80,000 + adapter/gate 10,000 |
 
 训练、checkpoint loader、闭环服务端和验收器的 fail-closed 白名单只增加上表四个 kind；未知 kind、kind 与 `micro_round/candidate_id/future_scope/injection` 不一致、R6J 不是 accepted R5-P0 Shared team parent、protected-own/R5-P0 hash 漂移时均在创建有效结果前失败。四个候选都使用 `s3_r6_flow_five_task.yaml` 的相同五任务 manifest、seed `606`、80,000 updates、optimizer、标准高斯 cold source 和 4-step Euler，从 update 0 独立训练 Flow；S3 模式强制 deterministic algorithms，pair 内完成 Flow 的 model-state SHA256 必须精确相同，否则结构验收失败。P1 随后使用 adapter seed `60606` 训练 10,000 updates，P0 只形成同一 fresh Flow 上的 off-path 控制。accepted protected-own/R5-P0 与 PCA 继续只读共享，因为它们本身已在 S2 用五任务训练并且是本阶段需要保护的固定研究变量。
 
