@@ -1161,6 +1161,62 @@ $$
 
 P1 只训练 adapter 与 velocity gate。两组使用相同 adapter 宽度、初始化、优化器、训练更新、solver 和闭环协议，因此 `R6J-P1 vs R6L-P1` 只反映 future scope，`P1 vs P0` 只反映 injection。R6J 中的 own latent 必须来自 protected P0 路径，peer/shared latent 来自 R5 team tower；不得恢复旧 P1 own head 或 team-to-own residual。
 
+#### 8.1.1 四分支实现、双卡两两排程与白名单（2026-08-01）
+
+S3-R6 公共基础设施已先在本地写入 `feat/model-improvements` 提交 `50d64bd`、完成相关回归测试并推送。公共提交包含 `CrossAgentWorldConditionedFlow`、同构 local/team residual adapter、有界 `max_gate*tanh(alpha)` velocity gate、adapter/gate-only trainer、闭环 inference、四分支矩阵校验器、S3 特殊验收器、常驻 monitor、S0 下载复用、双卡两两 launcher 和保留产物的 stop 脚本；不包含候选身份配置。随后四个分支全部直接从同一个 `50d64bd` 创建，不从彼此派生：
+
+| 执行批次 | GPU | 分支 | 提交 | model kind | 训练 |
+|---|---:|---|---|---|---|
+| 1 | 0 | `s3/r6l-p0-protected-local-aux` | `b61ee77` | `s3_r6l_protected_local_aux` | 0 update，off-path 控制 |
+| 1 | 1 | `s3/r6l-p1-protected-local-gated` | `1479aa3` | `s3_r6l_protected_local_gated` | 10,000 update，仅 adapter/gate |
+| 2 | 0 | `s3/r6j-p0-protected-team-offpath` | `21e36fa` | `s3_r6j_protected_team_offpath` | 0 update，off-path 控制 |
+| 2 | 1 | `s3/r6j-p1-protected-team-gated` | `84db555` | `s3_r6j_protected_team_gated` | 10,000 update，仅 adapter/gate |
+
+训练、checkpoint loader、闭环服务端和验收器的 fail-closed 白名单只增加上表四个 kind；未知 kind、kind 与 `micro_round/candidate_id/future_scope/injection` 不一致、R6J 不是 accepted R5-P0 Shared team parent、protected-own/R5-P0 hash 漂移时均在创建有效结果前失败。四个 config 使用相同五任务数据、Flow、protected-own、R5-P0、PCA、adapter shape、adapter seed `60606`、训练 seed `606`、optimizer、P1 10,000 updates、4-step Euler、Gate20 seed `900` 与 temporal ensemble；矩阵校验器只允许 R6L/R6J future scope、P0/P1 injection 和隔离输出路径不同。
+
+实现按每次 velocity evaluation 计算 `clean_action = x_tau + (1-tau)*v_base`，以 stop-gradient clean action 调用冻结 future predictor；Euler 的每一步都重新预测，Heun 若以后启用则 predictor/corrector 两次 evaluation 都重新预测。`injection=false` 完全不执行 future predictor；`injection=true` 时只 adapter 与 gate 进入 optimizer、gradient clipping、resume 和 S3 checkpoint，Flow、DINO、protected-own 与 team predictor 参数不写入 S3 trainable state。gate 精确为零时动作与 base Flow 逐元素相等会记录为诊断，但按 8.2 不被错误提升为额外候选门槛。
+
+双卡 launcher 会在永久 tmux 中创建 `<run-id>-prepare`、四个 candidate 和 `<run-id>-monitor` 六个 `remain-on-exit` window。R6L-P0/P1 先分别占用 GPU0/GPU1；R6J 两个 window 在不占 GPU 的 queued 状态持续报告 20 秒心跳，拿到完整 R6L pair acceptance 后才自动分别使用 GPU0/GPU1。数据集、Hub cache、DINO/PCA/Flow/R4-P0/R5-P0 只在基础仓库保存一份并由四个 worktree 共享，checkpoint、resume、日志、闭环视频和结果按 candidate 隔离。
+
+已有双 5090 服务器从零检查、更新和一键启动如下；正式 launcher 会自动发现现有约 784 GiB 五任务数据及最新 accepted R4-P0/R5-P0，只补齐缺失 worktree、parent link、run、resume、window 或 monitor：
+
+```bash
+cd /workspace/fe-pc-wam
+git fetch --no-tags origin \
+  +refs/heads/feat/model-improvements:refs/remotes/origin/feat/model-improvements
+git switch feat/model-improvements
+git merge --ff-only origin/feat/model-improvements
+
+bash scripts/launch_s3_r6_2gpu_tmux.sh \
+  --run-id s3-r6-round1 --dry-run
+bash scripts/launch_s3_r6_existing_server.sh \
+  --run-id s3-r6-round1 --no-focus-monitor
+```
+
+若服务器缺少 HF 数据或 DINO，最后一条追加 `--prepare-from-s0`。下载继续严格复用 S0：token 只通过 mode-0600 FIFO 交给 prepare window，不进入 export、argv、tmux command、manifest 或日志；dataset 使用固定 revision、官方 `hf download`、Xet 开启与默认并发，DINOv3 使用 Xet 关闭和单 worker，中断后原位复用 Hub cache 与 `.incomplete`。accepted S2 parent checkpoint 不是 HF 数据，缺失时必须显式提供 `--protected-own PATH --protected-team PATH`，不能静默重训或换 parent。
+
+monitor 每 5 秒显示 shared prepare 与四个 candidate 的当前程序、queued/waiting/startup/training/validating/accepting/complete 状态、20 秒心跳及 age、update/10,000、loss、gate、当前闭环 task/episode/success、两卡利用率/显存和 GPU process PID。75 秒没有新心跳标记 `STALE`，同时显示最后程序和 candidate log；最后一个 loss 绝不被当作仍在运行。R6L/R6J 结果产生后，monitor 只按本阶段特殊规则逐任务显示 `P0 success、P1 success、delta、P1>=P0 PASS/FAIL`，并单列 protected-own 结构不变量；zero/noise/shuffle/fallback 和 gate-zero 诊断不会变成额外准入 gate。只读查看：
+
+```bash
+cd /workspace/fe-pc-wam
+python3 scripts/s3_r6_runtime.py monitor --once \
+  --run-root /workspace/fe-pc-wam/outputs/s3_r6_runs/s3-r6-round1
+tmux select-window -t "$(tmux display-message -p '#S'):s3-r6-round1-monitor"
+```
+
+需要停止本轮时只能从永久 session 的非本轮窗口执行：
+
+```bash
+cd /workspace/fe-pc-wam
+bash scripts/stop_s3_r6_2gpu_tmux.sh s3-r6-round1
+```
+
+stop 只终止本 run 的进程并关闭上述六个 window；禁止 `tmux kill-session`，不会删除共享数据、Hub cache、父 checkpoint、candidate checkpoint/resume、日志、视频、Gate summary 或 acceptance JSON。永久 tmux session 始终保留。
+
+#### 8.1.2 正式远程结果（运行后回写）
+
+正式 run、四分支训练/闭环成功数、特殊验收结论、checkpoint/acceptance hash 和失败分析在远程两批实验完成后回写本节；在完整结果产生前不得把 training loss、gate 非零或单任务改善表述为 R6 通过。
+
 每个 solver step 必须重新执行：
 
 1. 用冻结 base Flow 从当前 $\mathbf x_\tau^{1:N}$ 计算 base velocity 与 provisional clean action $\hat{\mathbf a}_1^{1:N}$；
@@ -1436,4 +1492,4 @@ configs/wam_flow/
 7. **已完成但未晋级：** 旧 R4-P1 通过五任务 peer/shared persistence 与 peer-action-shuffle 门槛，但 own no-regression 失败；gate 置零、分组梯度裁剪、team dropout RNG 隔离三项诊断均未改变结论。
 8. **已完成但未通过：** 新 R4 零训练 hybrid 在五任务保持 protected-own 精确等价、team loss 优于 persistence、source/action-equivalence 不变；仅 LiftBarrier peer-action-shuffle bootstrap 95% 下界为 `-0.002375`，按特殊规则判定旧 team tower 与 protected P0 表示不兼容。
 9. **已完成并通过：** R5 从共同 protected P0 parent 建立 `s2/r5-p0-protected-shared` 与 `s2/r5-p1-protected-role-mot`；两者 own 精确等价、五任务 persistence/shuffle CI、action-equivalence 与 frozen-parent gate 全部通过，按 macro peer/shared loss `1.406178 < 1.412414` 选择 P0。
-10. **下一步：** 进入 S3-R6 world-to-Flow gated residual injection；固定 R5-P0 和 protected own，gate 从零初始化并首先验证 `gate=0` 动作逐元素等价。
+10. **进行中：** S3-R6 world-to-Flow gated residual injection 已完成四分支实现、白名单、双卡两两 launcher、常驻 monitor 与特殊闭环验收器；下一步在远程完成 R6L/R6J 两批正式训练和 Gate20，按逐任务 P1 不退步规则决定是否进入 R7。
