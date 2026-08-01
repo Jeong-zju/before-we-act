@@ -331,3 +331,4 @@ def test_s3_monitor_reports_live_rollout_task_episode_step(tmp_path: Path) -> No
     )
     rendered = render_monitor(root)
     assert "task=lift_barrier episode=2/20 step=125/500 success=1" in rendered
+    assert "stage=rollout" in rendered

@@ -299,7 +299,7 @@ def collect_candidate(root: Path, candidate: str) -> dict[str, str]:
         "phase": phase[:11],
         "heartbeat": heartbeat[:10],
         "program": _compact(status.get("program", "-"), 36),
-        "progress": _compact(progress, 74),
+        "progress": _compact(progress, 104),
         "detail": detail,
     }
 
