@@ -1193,7 +1193,7 @@ bash scripts/launch_s3_r6_existing_server.sh \
   --run-id s3-r6-round1 --no-focus-monitor
 ```
 
-若服务器缺少 HF 数据或 DINO，最后一条追加 `--prepare-from-s0`。下载继续严格复用 S0：token 只通过 mode-0600 FIFO 交给 prepare window，不进入 export、argv、tmux command、manifest 或日志；dataset 使用固定 revision、官方 `hf download`、Xet 开启与默认并发，DINOv3 使用 Xet 关闭和单 worker，中断后原位复用 Hub cache 与 `.incomplete`。accepted S2 parent checkpoint 不是 HF 数据，缺失时必须显式提供 `--protected-own PATH --protected-team PATH`，不能静默重训或换 parent。
+`launch_s3_r6_existing_server.sh` 会同时检查五任务数据、DINO 与 `/workspace/RoboFactory` 的 Python/scene asset；RoboFactory 缺失时自动追加 `--prepare-from-s0` 并在当前终端做一次隐藏 token 提示，手动调用底层 launcher 时也可显式追加该参数。提交 `ea93741` 将 RoboFactory 纳入 shared-ready 条件，并让同一次隐藏输入在进程内依次经两个 mode-0600 FIFO 复用 S0 环境准备和必要的五任务/PCA 补齐；token 不进入 export、argv、tmux command、manifest、普通文件或日志。dataset 仍使用固定 revision、官方 `hf download`、Xet 开启与默认并发，DINOv3/RoboFactory asset 使用 Xet 关闭和单 worker，中断后原位复用 Hub cache 与 `.incomplete`；已有完整五任务/PCA 时不重算也不复制。accepted S2 parent checkpoint 不是 HF 数据，缺失时必须显式提供 `--protected-own PATH --protected-team PATH`，不能静默重训或换 parent。
 
 monitor 每 5 秒显示 shared prepare 与四个 candidate 的当前程序、queued/waiting/startup/training/validating/accepting/complete 状态、20 秒心跳及 age、update/10,000、loss、gate、当前闭环 task/episode/success、两卡利用率/显存和 GPU process PID。75 秒没有新心跳标记 `STALE`，同时显示最后程序和 candidate log；最后一个 loss 绝不被当作仍在运行。R6L/R6J 结果产生后，monitor 只按本阶段特殊规则逐任务显示 `P0 success、P1 success、delta、P1>=P0 PASS/FAIL`，并单列 protected-own 结构不变量；zero/noise/shuffle/fallback 和 gate-zero 诊断不会变成额外准入 gate。只读查看：
 
