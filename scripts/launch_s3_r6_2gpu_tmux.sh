@@ -197,16 +197,31 @@ fi
 UV_CACHE="${FE_ROOT}/.uv-cache"; UV_ENV="${FE_ROOT}/.venv"
 ROBOFACTORY_ROOT="${WORKSPACE_ROOT}/RoboFactory"
 RF_PYTHON="${ROBOFACTORY_ROOT}/.venv/bin/python"
+ROBOFACTORY_SENTINEL="${ROBOFACTORY_ROOT}/robofactory/assets/scenes/table/table.glb"
+if [[ ( ! -x "${RF_PYTHON}" || ! -s "${ROBOFACTORY_SENTINEL}" ) && \
+      "${PREPARE_FROM_S0}" != "1" ]]; then
+  printf >&2 'RoboFactory environment/assets are missing under %s. Rerun with --prepare-from-s0.\n' \
+    "${ROBOFACTORY_ROOT}"
+  exit 3
+fi
 prepare_command="$(shell_join env -u HF_TOKEN \
   "S3_R6_RUN_ROOT=${RUN_ROOT}" "S3_R6_READY_FILE=${READY_FILE}" \
   "S3_R6_FAILED_FILE=${FAILED_FILE}" "S3_R6_USE_S0_PREP=${PREPARE_FROM_S0}" \
   "S3_R6_HF_TOKEN_FIFO=${HF_TOKEN_FIFO}" "S3_R6_FLOW_SOURCE=${FLOW_SOURCE}" \
   "S3_R6_PROTECTED_OWN_SOURCE=${PROTECTED_SOURCE}" \
   "S3_R6_PROTECTED_TEAM_SOURCE=${TEAM_SOURCE}" \
+  "S3_R6_ROBOFACTORY_ROOT=${ROBOFACTORY_ROOT}" "S3_R6_RF_PYTHON=${RF_PYTHON}" \
   "UV_CACHE_DIR=${UV_CACHE}" "UV_PROJECT_ENVIRONMENT=${UV_ENV}" \
   bash scripts/prepare_s3_r6_shared.sh)"
-if [[ ! -f "${READY_FILE}" ]]; then
-  if (( PREPARE_FROM_S0 )) && ! window_exists "${PREPARE_WINDOW}"; then
+if [[ ! -f "${READY_FILE}" || ! -x "${RF_PYTHON}" || \
+      ! -s "${ROBOFACTORY_SENTINEL}" ]]; then
+  PREPARE_NEEDS_START=0
+  if ! window_exists "${PREPARE_WINDOW}"; then
+    PREPARE_NEEDS_START=1
+  elif [[ "$(tmux display-message -p -t "${SESSION}:${PREPARE_WINDOW}" '#{pane_dead}')" == "1" ]]; then
+    PREPARE_NEEDS_START=1
+  fi
+  if (( PREPARE_FROM_S0 )) && (( PREPARE_NEEDS_START )); then
     prompt_hf_token
     s0_prepare_hf_token_fifo
     trap s0_cleanup_hf_secret EXIT

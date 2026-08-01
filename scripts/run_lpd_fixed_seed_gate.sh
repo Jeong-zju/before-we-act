@@ -41,9 +41,19 @@ cleanup_server() {
 }
 trap cleanup_server EXIT INT TERM
 
-test -x "${RF_PYTHON}"
-test -f "${LPD_CONFIG}"
-test -e "${LPD_CHECKPOINT}"
+if [[ ! -x "${RF_PYTHON}" ]]; then
+  printf >&2 'Missing RoboFactory Python: %s; run the one-click S0 preparation path.\n' \
+    "${RF_PYTHON}"
+  exit 3
+fi
+if [[ ! -f "${LPD_CONFIG}" ]]; then
+  printf >&2 'Missing rollout config: %s\n' "${LPD_CONFIG}"
+  exit 3
+fi
+if [[ ! -e "${LPD_CHECKPOINT}" ]]; then
+  printf >&2 'Missing rollout checkpoint: %s\n' "${LPD_CHECKPOINT}"
+  exit 3
+fi
 if [[ ! -s "${ROBOFACTORY_ASSET_SENTINEL}" ]]; then
   printf >&2 \
     'Missing RoboFactory closed-loop asset %s; run the one-click prepare stage first.\n' \
