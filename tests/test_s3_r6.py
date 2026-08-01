@@ -287,3 +287,16 @@ def test_s3_monitor_names_program_heartbeat_progress_and_special_rule(tmp_path: 
     assert "HEARTBEAT" in rendered
     assert "P1>=P0" in rendered
     assert "phase1 GPU0=R6L-P0" in rendered
+
+
+def test_s3_s0_preparation_covers_robofactory_with_protected_fifos() -> None:
+    root = Path(__file__).resolve().parents[1]
+    wrapper = (root / "scripts/prepare_s3_r6_from_s0.sh").read_text()
+    prepare = (root / "scripts/prepare_s3_r6_shared.sh").read_text()
+    launcher = (root / "scripts/launch_s3_r6_2gpu_tmux.sh").read_text()
+    assert "prepare_s0_shared.sh" in wrapper
+    assert "prepare_s2_r4_shared.sh" in wrapper
+    assert 'chmod 600 "${SECRET_FIFO}"' in wrapper
+    assert "HF_TOKEN_INPUT" in wrapper
+    assert "S3_R6_ROBOFACTORY_ROOT" in prepare
+    assert "ROBOFACTORY_SENTINEL" in launcher

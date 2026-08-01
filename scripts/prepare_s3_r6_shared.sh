@@ -39,18 +39,21 @@ status verifying prepare_s3_r6_shared.sh \
   "locating shared five-task data, DINO/PCA/Flow, protected-own and R5-P0"
 
 if [[ "${S3_R6_USE_S0_PREP:-0}" == "1" ]]; then
-  if [[ -z "${S3_R6_HF_TOKEN_FIFO:-}" ]]; then
-    printf >&2 'S0 preparation requires S3_R6_HF_TOKEN_FIFO.\n'; exit 3
-  fi
-  status s0_prepare prepare_s2_r4_shared.sh \
-    "S0 path: dataset Xet/default workers; DINO no-Xet/one worker; mode-0600 FIFO"
-  S2_R4_RUN_ROOT="${S3_R6_RUN_ROOT}" \
-  S2_R4_READY_FILE="${S3_R6_RUN_ROOT}/s0_assets.ready" \
-  S2_R4_FAILED_FILE="${S3_R6_RUN_ROOT}/s0_assets.failed" \
-  S2_R4_HF_TOKEN_FIFO="${S3_R6_HF_TOKEN_FIFO}" \
-  S2_R4_P0_CONFIG="${FE_ROOT}/configs/wam_flow/s2_r5_protected_team.yaml" \
+  for name in S3_R6_HF_TOKEN_FIFO S3_R6_ROBOFACTORY_ROOT S3_R6_RF_PYTHON; do
+    if [[ -z "${!name:-}" ]]; then
+      printf >&2 'S0 preparation requires %s.\n' "${name}"; exit 3
+    fi
+  done
+  status s0_prepare prepare_s3_r6_from_s0.sh \
+    "S0 FIFO path: datasets, DINO and RoboFactory; then five-task/PCA verification"
+  S3_R6_HF_TOKEN_FIFO="${S3_R6_HF_TOKEN_FIFO}" \
+  S3_R6_ROBOFACTORY_ROOT="${S3_R6_ROBOFACTORY_ROOT}" \
+  S3_R6_RF_PYTHON="${S3_R6_RF_PYTHON}" \
+  S3_R6_P0_CONFIG="${FE_ROOT}/configs/wam_flow/s2_r5_protected_team.yaml" \
   UV_CACHE_DIR="${UV_CACHE_DIR}" UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT}" \
-    bash "${FE_ROOT}/scripts/prepare_s2_r4_shared.sh" || exit $?
+  ROBOFACTORY_ROOT="${S3_R6_ROBOFACTORY_ROOT}" \
+  RF_PYTHON="${S3_R6_RF_PYTHON}" \
+    bash "${FE_ROOT}/scripts/prepare_s3_r6_from_s0.sh" || exit $?
 fi
 
 find_latest() {
@@ -82,6 +85,8 @@ required=(
   "${FE_ROOT}/datasets/robofactory_multitask/camera_alignment/training_manifest.json"
   "${FE_ROOT}/artifacts/vision/dinov3_vitl16_lvd/model.safetensors"
   "${FE_ROOT}/artifacts/s2_r4/dino_pca_statistics.pt"
+  "${S3_R6_ROBOFACTORY_ROOT:-}/robofactory/assets/scenes/table/table.glb"
+  "${S3_R6_RF_PYTHON:-}"
   "${FLOW_SOURCE}" "${PROTECTED_SOURCE}" "${TEAM_SOURCE}"
 )
 for path in "${required[@]}"; do
@@ -124,6 +129,6 @@ sha256sum "${parent_dir}/flow.pt" "${parent_dir}/protected_own.pt" \
   | tee "${S3_R6_RUN_ROOT}/shared_artifact_sha256.txt"
 touch "${S3_R6_READY_FILE}"
 status complete prepare_s3_r6_shared.sh \
-  "shared data/artifacts linked once; accepted S2 parents and hashes verified"
+  "shared data/artifacts/RoboFactory linked once; accepted S2 parents and hashes verified"
 COMPLETED=1
 printf 'S3-R6 shared preparation complete.\n'
