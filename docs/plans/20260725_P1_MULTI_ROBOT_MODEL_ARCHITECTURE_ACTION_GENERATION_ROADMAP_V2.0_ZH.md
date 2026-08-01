@@ -3,7 +3,7 @@
 > 文档更新：2026-08-01
 > 工程起点：当前 `feat/model-improvements` 分支
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：M0、M1、S0、S1-R1、S2 已完成；R1 选择 `rectified_flow_cold` F1，R3 选择 own-action-conditioned W1；新 R4 hybrid 因 LiftBarrier peer-action-shuffle bootstrap 95% 下界为负而按特殊规则失败；R5 Protected Shared 与 Protected Role-MoT 均通过 protected-own/team 全部门槛，按五任务 macro peer/shared loss 选择更简单的 R5-P0 Protected Shared；R2a 跳过、R2b 延后，下一步进入 S3-R6 world-to-Flow gated injection
+> 当前状态：M0、M1、S0、S1-R1、S2 已完成；R1 选择 `rectified_flow_cold` F1，R3 选择 own-action-conditioned W1；新 R4 hybrid 因 LiftBarrier peer-action-shuffle bootstrap 95% 下界为负而按特殊规则失败；R5 Protected Shared 与 Protected Role-MoT 均通过 protected-own/team 全部门槛，按五任务 macro peer/shared loss 选择更简单的 R5-P0 Protected Shared，且正式 P0 分支已合并回 `feat/model-improvements`；R2a 跳过、R2b 延后，下一步进入 S3-R6 world-to-Flow gated injection
 > 评测原则：进入动作路径的候选按闭环成功率推进；S2 predictor 严格 off-path，因此按预测能力与因果干预门槛推进
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -1118,6 +1118,8 @@ Role-MoT 增加约 3.55M 静态参数，但每角色激活参数、active depth/
 正式产物与哈希：P0 checkpoint `fcc0af76c2acd6805750f12e828a1249eb91e466e51f4aa77c118b6e9d330c67`、P0 evaluation `8a636942f7d96a9cb0365bad36555a51f471fc67fe2ea9d51412ecf1df8fd8a0`；P1 checkpoint `58f2997c6625a6421a07d8805054a66c75101b897fd15640080622dbe42ffc78`、P1 evaluation `7989444828dbcad2b0eb59ac70f964d25b351a895cead9c36993fd5828632cf1`；最终 `acceptance.json` SHA256 为 `2c7778ecfe7f0b53ff2ffb29ceebe0f62313850ff3dea54427f6b517049289e0`，结论为 `pass_select_p0_enter_s3`。monitor 最终显示两个 candidate `complete/finished`、`own-exact=yes`、`peer-CI+=5/5`、两套逐任务特殊 gate 和 `PASS -> select P0, enter S3`，GPU 进程为 none；永久 `ssh_tmux` 未退出。
 
 **正式结论：S2-R5 PASS，选择 R5-P0 Protected Shared 作为 S3 的 team parent。** 新 R4 暴露的 LiftBarrier 因果不稳定已经被“从 protected P0 重新训练 team modules”修复：LiftBarrier 的 P0 shuffle mean/CI lower 从 hybrid 的 `0.001628/-0.002375` 提升到 `0.008674/0.005269`，同时保持 own 严格不变。S2 的结论仍只证明 off-path future prediction 与跨机器人动作因果依赖，不声称闭环动作收益；下一阶段必须用 gate 初始为零、可关闭且可回退的 world-to-Flow residual 在闭环中验证价值。
+
+工程晋级已完成：正式 winner 分支 `s2/r5-p0-protected-shared` 通过 merge commit `b59cc9e` 合并回 `feat/model-improvements`，保留其独立分支历史；P0 的 config、candidate env 与 candidate card 现已成为模型改进主线的一部分。S3 必须从该主线创建分支并固定本节记录的 P0 checkpoint/hash，不允许从未入选的 P1 分支继续派生。
 
 ### 7.7 S2 产物与进入 S3 的硬门槛
 
