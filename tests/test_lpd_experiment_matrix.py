@@ -16,6 +16,15 @@ from scripts.summarize_lpd_experiment_matrix import (
 )
 
 
+S3_TASKS = (
+    "lift_barrier",
+    "long_pipeline_delivery",
+    "take_photo",
+    "three_robots_stack_cube",
+    "camera_alignment",
+)
+
+
 @pytest.mark.parametrize("policy_kind", ["static_act", "agent_flow"])
 def test_gate_summary_binds_file_checkpoint_config_and_episode_records(
     tmp_path,
@@ -57,6 +66,40 @@ def test_gate_summary_binds_file_checkpoint_config_and_episode_records(
     assert summary["lift_barrier"]["successes"] == 3
     assert summary["long_pipeline_delivery"]["successes"] == 3
     assert summary["passed"] is False
+
+
+def test_five_task_gate_reports_macro_average_and_exact_scope(tmp_path):
+    config = tmp_path / "config.yaml"
+    checkpoint = tmp_path / "checkpoint.pt"
+    config.write_text("name: fixture\n", encoding="utf-8")
+    checkpoint.write_bytes(b"checkpoint")
+    client = {
+        "checkpoint": str(checkpoint),
+        "checkpoint_format": "fixture/1",
+        "checkpoint_sha256": hashlib.sha256(b"checkpoint").hexdigest(),
+    }
+    successes = (4, 3, 2, 1, 0)
+    task_summaries = {
+        task: _rollout([index < count for index in range(4)], client=client)
+        for task, count in zip(S3_TASKS, successes)
+    }
+
+    summary = build_gate_summary(
+        mode="gate",
+        experiment="s3-fixture",
+        policy_kind="s3_flow",
+        config=config,
+        checkpoint=checkpoint,
+        source_commit="0" * 40,
+        seed_start=900,
+        episodes=4,
+        task_summaries=task_summaries,
+    )
+
+    assert summary["format_version"] == "wam.robofactory.lpd_fixed_seed_gate/3"
+    assert summary["task_order"] == list(S3_TASKS)
+    assert summary["macro_average_success_rate"] == pytest.approx(0.5)
+    assert summary["camera_alignment"]["successes"] == 0
 
 
 def test_gate_summary_rejects_cross_task_checkpoint_drift(tmp_path):

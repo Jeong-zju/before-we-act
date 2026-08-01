@@ -60,7 +60,6 @@ if [[ ! -s "${ROBOFACTORY_ASSET_SENTINEL}" ]]; then
     "${ROBOFACTORY_ASSET_SENTINEL}"
   exit 3
 fi
-test ! -e "${OUTPUT_ROOT}"
 if [[ -n "$(git -C "${FE_ROOT}" status --porcelain --untracked-files=no)" ]]; then
   printf >&2 'Refusing to evaluate with tracked source changes. Commit them first.\n'
   exit 3
@@ -73,6 +72,19 @@ run_case() {
   local slug="$2"
   local max_steps="$3"
   local output="${OUTPUT_ROOT}/${slug}"
+  local superseded
+  if [[ -f "${output}/rollout_summary.json" ]] && jq -e --argjson episodes "${EPISODES}" '
+    .completed == true and .fatal_error == null and
+    .episodes_completed == $episodes and .direct_model_action_coverage == 1
+  ' "${output}/rollout_summary.json" >/dev/null; then
+    printf 'Reusing completed fixed-seed task: %s\n' "${output}"
+    return
+  fi
+  if [[ -e "${output}" ]]; then
+    superseded="${output}.superseded_$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "${output}" "${superseded}"
+    printf 'Preserved incomplete task output: %s\n' "${superseded}"
+  fi
   (
     cd "${ROBOFACTORY_ROOT}"
     PYTHONPATH="${ROBOFACTORY_ROOT}" "${RF_PYTHON}" \
@@ -155,6 +167,9 @@ run_case() {
 
 run_case LiftBarrier-rf lift_barrier 500
 run_case LongPipelineDelivery-rf long_pipeline_delivery 1500
+run_case TakePhoto-rf take_photo 1500
+run_case ThreeRobotsStackCube-rf three_robots_stack_cube 800
+run_case CameraAlignment-rf camera_alignment 1500
 
 SUMMARY="${OUTPUT_ROOT}/gate_summary.json"
 (
@@ -168,8 +183,11 @@ SUMMARY="${OUTPUT_ROOT}/gate_summary.json"
     --source-commit "${SOURCE_COMMIT}" \
     --seed-start "${SEED_START}" \
     --episodes "${EPISODES}" \
-    --lift-summary "${OUTPUT_ROOT}/lift_barrier/rollout_summary.json" \
-    --lpd-summary "${OUTPUT_ROOT}/long_pipeline_delivery/rollout_summary.json" \
+    --task-summary "lift_barrier=${OUTPUT_ROOT}/lift_barrier/rollout_summary.json" \
+    --task-summary "long_pipeline_delivery=${OUTPUT_ROOT}/long_pipeline_delivery/rollout_summary.json" \
+    --task-summary "take_photo=${OUTPUT_ROOT}/take_photo/rollout_summary.json" \
+    --task-summary "three_robots_stack_cube=${OUTPUT_ROOT}/three_robots_stack_cube/rollout_summary.json" \
+    --task-summary "camera_alignment=${OUTPUT_ROOT}/camera_alignment/rollout_summary.json" \
     --output "${SUMMARY}"
 )
 printf 'Fixed-seed %s complete: %s\n' "${LPD_GATE_MODE}" "${OUTPUT_ROOT}"

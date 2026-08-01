@@ -121,7 +121,7 @@ export LPD_SEED_START="${S3_R6_GATE_SEED_START:-900}"
 export LPD_OUTPUT_ROOT="${CANDIDATE_ROOT}/validation/gate_${S3_R6_RUN_ID}"
 if [[ ! -f "${LPD_OUTPUT_ROOT}/gate_summary.json" ]]; then
   status validating run_lpd_fixed_seed_gate.sh \
-    "paired Gate${LPD_EPISODES}: LiftBarrier then LongPipelineDelivery"
+    "paired Gate${LPD_EPISODES}: all five tasks; macro-average acceptance"
   bash "${FE_ROOT}/scripts/run_lpd_single_5090.sh" gate || exit $?
 fi
 
@@ -138,7 +138,7 @@ P1_CHECKPOINT="${P1_ROOT}/checkpoints/policy.pt"
 PAIR_ACCEPTANCE="${S3_R6_RUN_ROOT}/pairs/${PAIR_SLUG}_acceptance.json"
 if [[ -f "${P0_GATE}" && -f "${P1_GATE}" && ! -f "${PAIR_ACCEPTANCE}" ]]; then
   status accepting accept_s3_r6.py \
-    "applying only per-task P1>=P0 rule plus protected-own structural invariant"
+    "applying five-task macro-average P1>=P0 plus protected-own structural invariant"
   ( cd "${S3_R6_BASE_REPO}" && uv run --frozen python scripts/accept_s3_r6.py pair \
     --micro-round "${MICRO_ROUND}" --p0-gate "${P0_GATE}" --p1-gate "${P1_GATE}" \
     --p0-checkpoint "${P0_CHECKPOINT}" --p1-checkpoint "${P1_CHECKPOINT}" \

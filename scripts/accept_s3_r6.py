@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply the S3-only per-task closed-loop no-regression rule."""
+"""Apply the S3 five-task macro-average closed-loop no-regression rule."""
 
 from __future__ import annotations
 
@@ -26,8 +26,14 @@ from scripts.train_s3_r6_world_action_flow import (  # noqa: E402
 from train.s3_model_registry import S3_R6_MODEL_KINDS  # noqa: E402
 
 
-FORMAT_VERSION = "wam.robofactory.s3_r6.acceptance/1"
-TASKS = ("lift_barrier", "long_pipeline_delivery")
+FORMAT_VERSION = "wam.robofactory.s3_r6.acceptance/2"
+TASKS = (
+    "lift_barrier",
+    "long_pipeline_delivery",
+    "take_photo",
+    "three_robots_stack_cube",
+    "camera_alignment",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,6 +86,8 @@ def build_pair_acceptance(
             raise ValueError("S3 acceptance requires completed fixed-seed Gate summaries")
         if _mapping(gate, "candidate").get("policy_kind") != "s3_flow":
             raise ValueError("S3 acceptance rejects non-S3 policy kinds")
+        if tuple(gate.get("task_order", ())) != TASKS:
+            raise ValueError("S3 acceptance requires the exact five-task gate")
     expected_kinds = {
         "R6L": (
             "s3_r6l_protected_local_aux",
@@ -140,17 +148,21 @@ def build_pair_acceptance(
             "p1_success_rate": float(p1["success_rate"]),
             "delta_successes": p1_successes - p0_successes,
             "passed_no_regression": p1_successes >= p0_successes,
+            "acceptance_required": False,
         }
-    closed_loop_passed = all(
-        row["passed_no_regression"] for row in tasks.values()
-    )
+    p0_macro = sum(row["p0_success_rate"] for row in tasks.values()) / len(TASKS)
+    p1_macro = sum(row["p1_success_rate"] for row in tasks.values()) / len(TASKS)
+    closed_loop_passed = p1_macro >= p0_macro
     passed = closed_loop_passed and all(structural.values())
     return {
         "format_version": FORMAT_VERSION,
         "scope": "pair",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "micro_round": micro_round,
-        "rule": "P1 successes >= P0 successes independently on every task; ties pass",
+        "rule": (
+            "P1 five-task macro-average success rate >= P0; ties pass; "
+            "per-task success rates are report-only"
+        ),
         "diagnostics_are_not_extra_gates": [
             "gate_zero_equivalence",
             "zero_or_noise_future",
@@ -160,7 +172,14 @@ def build_pair_acceptance(
         ],
         "structural_invariants": structural,
         "tasks": tasks,
-        "closed_loop_no_regression_passed": closed_loop_passed,
+        "per_task_success_rates_are_report_only": True,
+        "macro_average": {
+            "p0_success_rate": p0_macro,
+            "p1_success_rate": p1_macro,
+            "delta_success_rate": p1_macro - p0_macro,
+            "passed_no_regression": closed_loop_passed,
+        },
+        "closed_loop_macro_average_passed": closed_loop_passed,
         "passed": passed,
         "decision": (
             f"pass_{micro_round.lower()}_p1"

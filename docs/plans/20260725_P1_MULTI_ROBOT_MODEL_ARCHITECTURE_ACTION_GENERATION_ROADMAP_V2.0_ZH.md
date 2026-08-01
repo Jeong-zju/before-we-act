@@ -20,7 +20,7 @@ ICRA 截稿临近，后续不再按旧版 M3–M11 的长串行路线推进。�
 3. **每个候选只做一个单步改进。** 相对冻结父提交，只允许改变一个研究变量、回答一个假设，并能用一个 flag 或一个 commit 完整回退；禁止同时改变数据、表示、损失、模型接口和推理协议中的多个维度。
 4. **使用两卡微轮次和远程 GPU 并行验证。** 一个训练微轮次固定为 `P0=父方案复跑` 与 `P1=父方案+一个 Δ` 两个候选；两个互不依赖的微轮次可以四卡同时运行。P0/P1 使用相同训练预算与阶段对应验证：S2 比较 held-out capability，进入动作路径后比较同协议闭环成功率。新 R4 是唯一的零训练诊断例外，只组合已经完成的 checkpoint，不参与正式 winner 选择。
 5. **暂时舍弃 active-agent loss weighting。** 训练目标不再根据动作幅度、active/inactive 标签或机器人活跃比例调整权重。所有 agent 使用相同损失规则，activity 最多保留为 debugging log，不参与反向传播或候选选择。
-6. **进入动作路径后只用闭环成功率决定推进。** P1 与对应 P0/父方案跑相同任务；只要每个任务的闭环成功率都不低于父方案，P1 就通过并可进入下一阶段，持平也算通过。S2 是唯一例外：predictor 尚未进入动作路径，闭环输出理论上应与冻结 F1 完全相同，因此 S2 只用 held-out prediction 与 action/peer-action shuffle 证明其能力，并用 action-equivalence smoke 排除误接线；从 S3 起恢复闭环唯一选型规则。
+6. **进入动作路径后只用闭环成功率决定推进。** P1 与对应 P0/父方案跑相同任务。一般微轮次要求每个任务闭环成功率均不低于父方案；S3-R6 按 2026-08-01 冻结的阶段特殊规则，改为五任务宏平均成功率不低于 P0，每任务成功率只作附加报告、不单独卡验收，持平也算通过。S2 predictor 尚未进入动作路径，因此只用 held-out prediction 与 action/peer-action shuffle 证明其能力，并用 action-equivalence smoke 排除误接线。
 7. **own predictor 从软约束改为硬保护。** 旧 R4 已证明 multi-head、own residual gate、分组梯度裁剪和随机数流隔离都不能保证逐任务 own no-regression。新 R5 固定从同一个合格 P0 own checkpoint 出发，own tower 以 `eval + frozen + optimizer-excluded` 方式保持函数不变；peer/shared 只能单向读取 detached own 表示，不能反向改写 own 输出。
 
 ## 2. 论文目标与边界
@@ -1195,7 +1195,7 @@ bash scripts/launch_s3_r6_existing_server.sh \
 
 `launch_s3_r6_existing_server.sh` 会同时检查五任务数据、DINO 与 `/workspace/RoboFactory` 的 Python/scene asset；RoboFactory 缺失时自动追加 `--prepare-from-s0` 并在当前终端做一次隐藏 token 提示，手动调用底层 launcher 时也可显式追加该参数。提交 `ea93741` 将 RoboFactory 纳入 shared-ready 条件，并让同一次隐藏输入在进程内依次经两个 mode-0600 FIFO 复用 S0 环境准备和必要的五任务/PCA 补齐；token 不进入 export、argv、tmux command、manifest、普通文件或日志。dataset 仍使用固定 revision、官方 `hf download`、Xet 开启与默认并发，DINOv3/RoboFactory asset 使用 Xet 关闭和单 worker，中断后原位复用 Hub cache 与 `.incomplete`；已有完整五任务/PCA 时不重算也不复制。accepted S2 parent checkpoint 不是 HF 数据，缺失时必须显式提供 `--protected-own PATH --protected-team PATH`，不能静默重训或换 parent。
 
-monitor 每 5 秒显示 shared prepare 与四个 candidate 的当前程序、queued/waiting/startup/training/validating/accepting/complete 状态、20 秒心跳及 age、update/10,000、loss、gate、当前闭环 task/episode/success、两卡利用率/显存和 GPU process PID。提交 `8dd88e0` 进一步让 rollout 从环境初始化、等待 inference、连接到每 25 step 都原子更新 `task/episode/step/success/stage`，因此第 0 个 episode 也不会回退成旧训练阶段；四分支已同步到表中的 current head。75 秒没有新心跳标记 `STALE`，同时显示最后程序和 candidate log；最后一个 loss 绝不被当作仍在运行。R6L/R6J 结果产生后，monitor 只按本阶段特殊规则逐任务显示 `P0 success、P1 success、delta、P1>=P0 PASS/FAIL`，并单列 protected-own 结构不变量；zero/noise/shuffle/fallback 和 gate-zero 诊断不会变成额外准入 gate。只读查看：
+monitor 每 5 秒显示 shared prepare 与四个 candidate 的当前程序、queued/waiting/startup/training/validating/accepting/complete 状态、20 秒心跳及 age、update/10,000、loss、gate、当前闭环 task/episode/step/success/stage、两卡利用率/显存和 GPU process PID。提交 `8dd88e0` 进一步让 rollout 从环境初始化、等待 inference、连接到每 25 step 都原子更新进度，因此第 0 个 episode 也不会回退成旧训练阶段。75 秒没有新心跳标记 `STALE`，同时显示最后程序和 candidate log；最后一个 loss 绝不被当作仍在运行。R6L/R6J 结果产生后，monitor 单列五任务宏平均 `P0/P1/delta/PASS|FAIL` 硬门槛，并逐任务显示 `P0 success、P1 success、delta`，明确标记为 `report-only`；protected-own 结构不变量仍为模型加载硬约束，zero/noise/shuffle/fallback 和 gate-zero 诊断不会变成额外准入 gate。只读查看：
 
 ```bash
 cd /workspace/fe-pc-wam
@@ -1215,7 +1215,9 @@ stop 只终止本 run 的进程并关闭上述六个 window；禁止 `tmux kill-
 
 #### 8.1.2 正式远程结果（运行后回写）
 
-正式 run、四分支训练/闭环成功数、特殊验收结论、checkpoint/acceptance hash 和失败分析在远程两批实验完成后回写本节；在完整结果产生前不得把 training loss、gate 非零或单任务改善表述为 R6 通过。
+2026-08-01 在原双任务 Gate20 已完成 R6L 后，operator 将本阶段验证范围冻结为全部五任务，并将验收改为五任务宏平均成功率。旧结果 R6L-P0 的 LiftBarrier/LongPipelineDelivery 为 `5/20`、`19/20`，R6L-P1 为 `12/20`、`16/20`；这些已完成且身份、checkpoint、seed 相同的 rollout 会原位复用，只补跑 TakePhoto、ThreeRobotsStackCube、CameraAlignment。旧双任务逐任务规则给出的 “LPD 下降、retain P0” 已标记为 superseded preliminary decision，不再是 R6L 正式结论。
+
+R6J-P0 在规则变更时刚进入旧双任务验证，已保留 partial output 并停止；R6J-P1 在 `2060/10000` 安全暂停，最近 `resume.pt` 为 `2000/10000`。双卡先并行完成 R6L-P0/P1 缺少的三个任务，再并行恢复 R6J-P0/P1 并运行全部五任务，保持两两执行。正式五任务成功数、宏平均验收结论、checkpoint/acceptance hash 和失败分析在两批实验完成后继续回写；在完整结果产生前不得把 training loss、gate 非零、旧双任务决定或单任务改善表述为 R6 通过。
 
 每个 solver step 必须重新执行：
 
@@ -1228,11 +1230,17 @@ stop 只终止本 run 的进程并关闭上述六个 window；禁止 `tmux kill-
 
 ### 8.2 闭环保持规则
 
-R6L/R6J 的 P1 分别与对应 P0 比较。只要 P1 在每个任务的闭环成功率都不低于 P0，就可以继续，持平也算通过。`gate=0` 等价性、zero/noise、mask、fallback 和数值诊断不再作为额外准入门槛；protected own hash/输出等价属于模型加载不变量，不是可以被闭环持平豁免的候选指标。
+R6L/R6J 的 P1 分别与对应 P0 在 LiftBarrier、LongPipelineDelivery、TakePhoto、ThreeRobotsStackCube、CameraAlignment 五个任务上使用相同 Gate20 seeds `900–919`。令每任务成功率为 $s_t$，阶段唯一闭环硬门槛为宏平均：
+
+$$
+\frac{1}{5}\sum_t s_t(P1) \ge \frac{1}{5}\sum_t s_t(P0).
+$$
+
+持平也算通过。每任务成功数、总数、成功率和 P1-P0 delta 必须作为附加结果完整输出，但单个任务下降不强制判失败；不得用 micro average 按 episode 数重新加权，也不得遗漏困难任务。`gate=0` 等价性、zero/noise、mask、fallback 和数值诊断不再作为额外准入门槛；protected own hash/输出等价属于模型加载不变量，不是可以被宏平均持平豁免的候选指标。
 
 ### 8.3 实现说明
 
-真实未来只用于训练 target，部署动作路径使用模型预测的 future latent。zero/shuffle intervention 可以作为论文分析，但不决定候选能否继续。R6J-P1 只要相对 R6J-P0 没有闭环成功率退步，就可以进入 R7；与 R6L-P1 的比较只用于结果说明。
+真实未来只用于训练 target，部署动作路径使用模型预测的 future latent。zero/shuffle intervention 可以作为论文分析，但不决定候选能否继续。R6J-P1 只要相对 R6J-P0 的五任务宏平均闭环成功率没有退步，就可以进入 R7；与 R6L-P1 的比较及每任务升降只用于结果说明。
 
 ### 8.4 R7a/R7b：逐模块解冻（可选，四卡并行）
 
@@ -1322,7 +1330,7 @@ active-agent loss weighting 不进入主表和消融表。
 
 ### 10.3 On-path 候选只需闭环；S2 使用 capability gate
 
-从 S3 起，候选完成训练后跑与父方案相同的闭环任务并输出成功率。主动早停或没有闭环结果的候选退出本轮，不阻塞其他候选；不再要求额外 smoke、reload、provenance 或 artifact 审计才能进入选择。S2 predictor 严格 off-path，是此规则的唯一例外：R3 按 7.4 的 local capability gate 选择，R4 按 7.5 只做 hybrid 诊断，R5 按 7.6 的 protected-own/team capability gate 选择；三者不进行没有区分力的成对闭环选型。
+从 S3 起，候选完成训练后跑与父方案相同的闭环任务并输出成功率。S3-R6 必须覆盖全部五任务并按 8.2 的宏平均特殊规则验收；每任务结果必须报告但不单独卡验收。主动早停或没有完整五任务闭环结果的候选退出本轮，不阻塞其他候选；不再要求额外 smoke、reload、provenance 或 artifact 审计才能进入选择。S2 predictor 严格 off-path：R3 按 7.4 的 local capability gate 选择，R4 按 7.5 只做 hybrid 诊断，R5 按 7.6 的 protected-own/team capability gate 选择；三者不进行没有区分力的成对闭环选型。
 
 ### 10.4 选择一个或多个 winner
 
@@ -1335,7 +1343,7 @@ $$
 \operatorname{SuccessRate}(P0,\text{task}).
 $$
 
-对于进入动作路径的候选，满足即通过，持平也通过；任一任务下降则保留 P0。无需显著性、置信区间、正式 episode 数、其他指标或额外审计。两个并行 P1 都通过时可以进入组合闭环。S2 不适用该公式，按第 7 节 capability gate 执行。
+对于一般进入动作路径的候选，满足即通过，持平也通过；任一任务下降则保留 P0。**S3-R6 是本公式的阶段特例：**使用第 8.2 节五任务宏平均公式，单任务下降只报告、不强制失败。无需显著性、置信区间或额外诊断作为准入条件。两个并行 P1 都通过时可以进入组合闭环。S2 不适用该公式，按第 7 节 capability gate 执行。
 
 ### 10.5 多分支组合不是直接 Git 合并
 
@@ -1492,4 +1500,4 @@ configs/wam_flow/
 7. **已完成但未晋级：** 旧 R4-P1 通过五任务 peer/shared persistence 与 peer-action-shuffle 门槛，但 own no-regression 失败；gate 置零、分组梯度裁剪、team dropout RNG 隔离三项诊断均未改变结论。
 8. **已完成但未通过：** 新 R4 零训练 hybrid 在五任务保持 protected-own 精确等价、team loss 优于 persistence、source/action-equivalence 不变；仅 LiftBarrier peer-action-shuffle bootstrap 95% 下界为 `-0.002375`，按特殊规则判定旧 team tower 与 protected P0 表示不兼容。
 9. **已完成并通过：** R5 从共同 protected P0 parent 建立 `s2/r5-p0-protected-shared` 与 `s2/r5-p1-protected-role-mot`；两者 own 精确等价、五任务 persistence/shuffle CI、action-equivalence 与 frozen-parent gate 全部通过，按 macro peer/shared loss `1.406178 < 1.412414` 选择 P0。
-10. **进行中：** S3-R6 world-to-Flow gated residual injection 已完成四分支实现、白名单、双卡两两 launcher、常驻 monitor 与特殊闭环验收器；下一步在远程完成 R6L/R6J 两批正式训练和 Gate20，按逐任务 P1 不退步规则决定是否进入 R7。
+10. **进行中：** S3-R6 world-to-Flow gated residual injection 已完成四分支实现、白名单、双卡两两 launcher、常驻 monitor 与特殊闭环验收器；远程双任务预跑已被 2026-08-01 新协议取代，下一步按双卡两两顺序完成 R6L/R6J 全部五任务 Gate20，以五任务宏平均 P1 不退步决定是否进入 R7，并把每任务成功率作为非强制附加结果报告。
