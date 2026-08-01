@@ -300,3 +300,4 @@ def test_s3_s0_preparation_covers_robofactory_with_protected_fifos() -> None:
     assert "HF_TOKEN_INPUT" in wrapper
     assert "S3_R6_ROBOFACTORY_ROOT" in prepare
     assert "ROBOFACTORY_SENTINEL" in launcher
+    assert 'unlink "${READY_FILE}"' in launcher
