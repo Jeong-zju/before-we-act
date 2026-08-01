@@ -221,6 +221,11 @@ if [[ ! -f "${READY_FILE}" || ! -x "${RF_PYTHON}" || \
   elif [[ "$(tmux display-message -p -t "${SESSION}:${PREPARE_WINDOW}" '#{pane_dead}')" == "1" ]]; then
     PREPARE_NEEDS_START=1
   fi
+  if (( PREPARE_NEEDS_START )); then
+    # A stale ready marker must not let repaired candidate windows outrun a
+    # newly required environment/bootstrap pass.
+    unlink "${READY_FILE}" 2>/dev/null || true
+  fi
   if (( PREPARE_FROM_S0 )) && (( PREPARE_NEEDS_START )); then
     prompt_hf_token
     s0_prepare_hf_token_fifo
