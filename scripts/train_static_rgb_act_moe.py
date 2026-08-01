@@ -336,15 +336,24 @@ def _dataset(config: Mapping[str, Any]) -> RoboFactoryMultitaskDataset:
     data = _mapping(config, "data")
     manifests = [(ROOT / str(value)).resolve(strict=True) for value in data["manifests"]]
     horizon = int(_mapping(config, "model")["horizon"])
+    configured_horizons = data.get("task_action_horizons")
+    task_action_horizons = (
+        {
+            str(task): int(value)
+            for task, value in _mapping(data, "task_action_horizons").items()
+        }
+        if configured_horizons is not None
+        else {
+            "lift_barrier": horizon,
+            "long_pipeline_delivery": horizon,
+        }
+    )
     return RoboFactoryMultitaskDataset(
         manifests,
         split="train",
         state_history=1,
         action_horizon=horizon,
-        task_action_horizons={
-            "lift_barrier": horizon,
-            "long_pipeline_delivery": horizon,
-        },
+        task_action_horizons=task_action_horizons,
         visual_history=1,
         future_horizons=(1,),
         cameras=("global", "agent_0", "agent_1", "agent_2", "agent_3"),
