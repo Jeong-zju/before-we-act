@@ -180,7 +180,16 @@ def test_grouped_flow_objective_respects_agent_and_horizon_masks() -> None:
     assert float(loss) == 0.0
 
 
-def _gate(successes: tuple[int, int]) -> dict[str, object]:
+TASKS = (
+    "lift_barrier",
+    "long_pipeline_delivery",
+    "take_photo",
+    "three_robots_stack_cube",
+    "camera_alignment",
+)
+
+
+def _gate(successes: tuple[int, int, int, int, int]) -> dict[str, object]:
     def task(count: int) -> dict[str, object]:
         episodes = [
             {"seed": 900 + index, "success": index < count}
@@ -188,13 +197,18 @@ def _gate(successes: tuple[int, int]) -> dict[str, object]:
         ]
         return {"successes": count, "success_rate": count / 4, "episodes": episodes}
 
+    tasks = {task_id: task(count) for task_id, count in zip(TASKS, successes)}
     return {
         "format_version": GATE_FORMAT,
         "mode": "gate",
         "candidate": {"policy_kind": "s3_flow"},
-        "seed_protocol": {"seed_start": 900, "episodes_per_task": 4},
-        "lift_barrier": task(successes[0]),
-        "long_pipeline_delivery": task(successes[1]),
+        "seed_protocol": {
+            "seed_start": 900,
+            "episodes_per_task": 4,
+            "task_order": list(TASKS),
+        },
+        "task_order": list(TASKS),
+        **tasks,
     }
 
 
@@ -219,26 +233,30 @@ def _checkpoint(kind: str) -> dict[str, object]:
     }
 
 
-def test_s3_acceptance_uses_only_per_task_no_regression_plus_structure() -> None:
+def test_s3_acceptance_uses_five_task_macro_average_plus_structure() -> None:
     accepted = build_pair_acceptance(
         "R6L",
-        _gate((1, 2)),
-        _gate((1, 3)),
+        _gate((2, 2, 2, 2, 2)),
+        _gate((1, 3, 2, 2, 2)),
         _checkpoint("s3_r6l_protected_local_aux"),
         _checkpoint("s3_r6l_protected_local_gated"),
     )
     assert accepted["passed"] is True
+    assert accepted["macro_average"]["p0_success_rate"] == 0.5
+    assert accepted["macro_average"]["p1_success_rate"] == 0.5
+    assert accepted["tasks"]["lift_barrier"]["passed_no_regression"] is False
+    assert accepted["tasks"]["lift_barrier"]["acceptance_required"] is False
     # A report-only gate-zero diagnostic is deliberately false above and does
     # not alter the stage rule.
     rejected = build_pair_acceptance(
         "R6L",
-        _gate((2, 2)),
-        _gate((1, 4)),
+        _gate((2, 2, 2, 2, 2)),
+        _gate((1, 2, 2, 2, 2)),
         _checkpoint("s3_r6l_protected_local_aux"),
         _checkpoint("s3_r6l_protected_local_gated"),
     )
     assert rejected["passed"] is False
-    assert rejected["tasks"]["lift_barrier"]["passed_no_regression"] is False
+    assert rejected["closed_loop_macro_average_passed"] is False
 
     final = build_final_acceptance(accepted, {**accepted, "micro_round": "R6J"})
     assert final["passed_for_r7"] is True
@@ -285,7 +303,7 @@ def test_s3_monitor_names_program_heartbeat_progress_and_special_rule(tmp_path: 
     rendered = render_monitor(root)
     assert "train_s3_r6_world_action_flow.py" in rendered
     assert "HEARTBEAT" in rendered
-    assert "P1>=P0" in rendered
+    assert "macro-average P1>=P0" in rendered
     assert "phase1 GPU0=R6L-P0" in rendered
 
 

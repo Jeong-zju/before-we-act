@@ -282,11 +282,12 @@ def collect_candidate(root: Path, candidate: str) -> dict[str, str]:
     if validation:
         progress = validation
     if gate:
-        lift = _mapping_or_empty(gate.get("lift_barrier"))
-        lpd = _mapping_or_empty(gate.get("long_pipeline_delivery"))
+        macro = _number(gate.get("macro_average_success_rate"))
+        tasks = gate.get("task_order")
+        task_count = len(tasks) if isinstance(tasks, list) else "?"
         progress = (
-            f"Gate complete lift={lift.get('successes', '?')}/{len(lift.get('episodes', []))} "
-            f"lpd={lpd.get('successes', '?')}/{len(lpd.get('episodes', []))}"
+            f"Gate complete tasks={task_count}/5 "
+            f"macro={_number_text(macro)}"
         )
     detail = _compact(status.get("detail", ""), 116)
     if heartbeat.startswith("STALE"):
@@ -325,7 +326,14 @@ def _rollout_progress(candidate_root: Path) -> str:
             path
             for path in validation.rglob("*")
             if path.is_dir()
-            and path.name in {"lift_barrier", "long_pipeline_delivery"}
+            and path.name
+            in {
+                "lift_barrier",
+                "long_pipeline_delivery",
+                "take_photo",
+                "three_robots_stack_cube",
+                "camera_alignment",
+            }
         ]
         if not task_dirs:
             return ""
@@ -343,7 +351,7 @@ def _acceptance_lines(root: Path) -> list[str]:
         for name in ("R6L", "R6J")
     }
     lines = [
-        "S3 special acceptance (only per-task P1>=P0; ties pass; diagnostics are report-only):"
+        "S3 acceptance (five-task macro-average P1>=P0; ties pass; per-task is report-only):"
     ]
     for name, report in reports.items():
         if not report:
@@ -358,13 +366,22 @@ def _acceptance_lines(root: Path) -> list[str]:
                 ).items()
             )
         )
+        macro = _mapping_or_empty(report.get("macro_average"))
+        if macro:
+            lines.append(
+                "  macro-average (hard gate) "
+                f"P0={_number_text(_number(macro.get('p0_success_rate')))} "
+                f"P1={_number_text(_number(macro.get('p1_success_rate')))} "
+                f"delta={_number_text(_number(macro.get('delta_success_rate')))} "
+                f"{'PASS' if macro.get('passed_no_regression') else 'FAIL'}"
+            )
         for task, row in _mapping_or_empty(report.get("tasks")).items():
             values = _mapping_or_empty(row)
             lines.append(
                 f"  {task:<24} P0={values.get('p0_successes', '?')}/"
                 f"{values.get('episodes', '?')} P1={values.get('p1_successes', '?')}/"
                 f"{values.get('episodes', '?')} delta={values.get('delta_successes', '?')} "
-                f"{'PASS' if values.get('passed_no_regression') else 'FAIL'}"
+                "report-only"
             )
     final = _maybe_json(root / "acceptance.json")
     if final:

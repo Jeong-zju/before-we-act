@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build an identity-complete LPD gate summary from two rollout summaries."""
+"""Build an identity-complete fixed-seed gate summary from rollout summaries."""
 
 from __future__ import annotations
 
@@ -20,8 +20,15 @@ from eval.m1_statistics import wilson_interval  # noqa: E402
 from train.m2_checkpointing import m2_checkpoint_tree_sha256  # noqa: E402
 
 
-FORMAT_VERSION = "wam.robofactory.lpd_fixed_seed_gate/2"
-TASKS = ("lift_barrier", "long_pipeline_delivery")
+FORMAT_VERSION = "wam.robofactory.lpd_fixed_seed_gate/3"
+LEGACY_FORMAT_VERSION = "wam.robofactory.lpd_fixed_seed_gate/2"
+TASKS = (
+    "lift_barrier",
+    "long_pipeline_delivery",
+    "take_photo",
+    "three_robots_stack_cube",
+    "camera_alignment",
+)
 POLICY_KINDS = {"wam", "static_act", "agent_flow", "s3_flow"}
 FILE_CHECKPOINT_POLICY_KINDS = {"static_act", "agent_flow", "s3_flow"}
 
@@ -36,8 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--seed-start", type=int, required=True)
     parser.add_argument("--episodes", type=int, required=True)
-    parser.add_argument("--lift-summary", type=Path, required=True)
-    parser.add_argument("--lpd-summary", type=Path, required=True)
+    parser.add_argument("--task-summary", action="append", default=[], metavar="TASK=PATH")
+    parser.add_argument("--lift-summary", type=Path)
+    parser.add_argument("--lpd-summary", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -46,8 +54,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = args.config.expanduser().resolve(strict=True)
     checkpoint = args.checkpoint.expanduser().resolve(strict=True)
-    lift = _read_mapping(args.lift_summary.expanduser().resolve(strict=True))
-    lpd = _read_mapping(args.lpd_summary.expanduser().resolve(strict=True))
+    task_summaries: dict[str, Mapping[str, Any]] | None = None
+    if args.task_summary:
+        task_summaries = {}
+        for value in args.task_summary:
+            task, separator, raw_path = value.partition("=")
+            if not separator or task in task_summaries:
+                raise ValueError("--task-summary must be unique TASK=PATH values")
+            task_summaries[task] = _read_mapping(
+                Path(raw_path).expanduser().resolve(strict=True)
+            )
+        if set(task_summaries) != set(TASKS):
+            raise ValueError(f"five-task gate requires exactly {TASKS}")
+    elif args.lift_summary is None or args.lpd_summary is None:
+        raise ValueError("provide five --task-summary values or both legacy summaries")
     summary = build_gate_summary(
         mode=args.mode,
         experiment=args.experiment,
@@ -57,8 +77,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         source_commit=args.source_commit,
         seed_start=args.seed_start,
         episodes=args.episodes,
-        lift=lift,
-        lpd=lpd,
+        lift=(
+            _read_mapping(args.lift_summary.expanduser().resolve(strict=True))
+            if args.lift_summary is not None
+            else None
+        ),
+        lpd=(
+            _read_mapping(args.lpd_summary.expanduser().resolve(strict=True))
+            if args.lpd_summary is not None
+            else None
+        ),
+        task_summaries=task_summaries,
     )
     _atomic_json(args.output.expanduser().resolve(), summary)
     print(json.dumps(summary, indent=2))
@@ -75,8 +104,9 @@ def build_gate_summary(
     source_commit: str,
     seed_start: int,
     episodes: int,
-    lift: Mapping[str, Any],
-    lpd: Mapping[str, Any],
+    lift: Mapping[str, Any] | None = None,
+    lpd: Mapping[str, Any] | None = None,
+    task_summaries: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if mode not in {"gate", "formal"}:
         raise ValueError("mode must be gate or formal")
@@ -90,48 +120,56 @@ def build_gate_summary(
         character not in "0123456789abcdef" for character in source_commit
     ):
         raise ValueError("source commit must be a lowercase 40-character SHA")
+    raw_tasks: dict[str, Mapping[str, Any]]
+    five_task_gate = task_summaries is not None
+    if five_task_gate:
+        if set(task_summaries) != set(TASKS):
+            raise ValueError(f"five-task gate requires exactly {TASKS}")
+        raw_tasks = {task: task_summaries[task] for task in TASKS}
+    else:
+        if lift is None or lpd is None:
+            raise ValueError("legacy gate requires lift and LPD summaries")
+        raw_tasks = {"lift_barrier": lift, "long_pipeline_delivery": lpd}
     validated = {
-        "lift_barrier": _task_summary(
-            lift,
+        task: _task_summary(
+            raw,
             expected_episodes=episodes,
             seed_start=seed_start,
-        ),
-        "long_pipeline_delivery": _task_summary(
-            lpd,
-            expected_episodes=episodes,
-            seed_start=seed_start,
-        ),
+        )
+        for task, raw in raw_tasks.items()
     }
-    lift_client = _mapping(lift, "client")
-    lpd_client = _mapping(lpd, "client")
-    if lift_client != lpd_client:
+    clients = [_mapping(raw, "client") for raw in raw_tasks.values()]
+    reference_client = clients[0]
+    if any(client != reference_client for client in clients[1:]):
         raise ValueError("tasks used different inference client identities")
-    lift_digest = _checkpoint_digest(lift_client)
-    lpd_digest = _checkpoint_digest(lpd_client)
-    if lift_digest != lpd_digest:
+    reference_digest = _checkpoint_digest(reference_client)
+    if any(_checkpoint_digest(client) != reference_digest for client in clients[1:]):
         raise ValueError("tasks used different checkpoint identities")
-    if lift_client.get("checkpoint_format") != lpd_client.get("checkpoint_format"):
+    if any(
+        client.get("checkpoint_format") != reference_client.get("checkpoint_format")
+        for client in clients[1:]
+    ):
         raise ValueError("tasks used different checkpoint formats")
     actual_checkpoint_digest = _checkpoint_path_digest(
         checkpoint,
         policy_kind=policy_kind,
     )
-    if lift_digest != actual_checkpoint_digest:
+    if reference_digest != actual_checkpoint_digest:
         raise ValueError("client checkpoint identity differs from gate checkpoint")
-    client_checkpoint = lift_client.get("checkpoint")
+    client_checkpoint = reference_client.get("checkpoint")
     if (
         not isinstance(client_checkpoint, str)
         or Path(client_checkpoint).expanduser().resolve(strict=True) != checkpoint
     ):
         raise ValueError("client checkpoint path differs from gate checkpoint")
     config_digest = _sha256(config)
-    client_config_digest = lift_client.get("config_sha256")
+    client_config_digest = reference_client.get("config_sha256")
     if (
         client_config_digest is not None
         and client_config_digest != config_digest
     ):
         raise ValueError("client config identity differs from gate config")
-    client_config = lift_client.get("config")
+    client_config = reference_client.get("config")
     if (
         client_config is not None
         and (
@@ -146,7 +184,7 @@ def build_gate_summary(
         else all(task["successes"] >= 1 for task in validated.values())
     )
     return {
-        "format_version": FORMAT_VERSION,
+        "format_version": FORMAT_VERSION if five_task_gate else LEGACY_FORMAT_VERSION,
         "mode": mode,
         "experiment": experiment,
         "candidate": {
@@ -155,15 +193,21 @@ def build_gate_summary(
             "config": str(config),
             "config_sha256": config_digest,
             "checkpoint": str(checkpoint),
-            "checkpoint_format": lift_client["checkpoint_format"],
-            "checkpoint_sha256": lift_digest,
-            "client": dict(lift_client),
+            "checkpoint_format": reference_client["checkpoint_format"],
+            "checkpoint_sha256": reference_digest,
+            "client": dict(reference_client),
         },
         "seed_protocol": {
             "seed_start": seed_start,
             "episodes_per_task": episodes,
             "identical_across_tasks": True,
+            "task_order": list(raw_tasks),
         },
+        "task_order": list(raw_tasks),
+        "macro_average_success_rate": sum(
+            task["success_rate"] for task in validated.values()
+        )
+        / len(validated),
         **validated,
         "passed": passed,
     }
