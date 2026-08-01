@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import os
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,15 @@ from scripts.train_static_rgb_act_moe import _mapping
 from train.s2_future_prediction import file_sha256, state_dict_sha256
 
 
+S3_TASKS = (
+    "lift_barrier",
+    "long_pipeline_delivery",
+    "take_photo",
+    "three_robots_stack_cube",
+    "camera_alignment",
+)
+
+
 def build_s3_r6_model(
     raw: Mapping[str, Any],
     *,
@@ -37,22 +47,40 @@ def build_s3_r6_model(
     injection: bool,
 ) -> tuple[CrossAgentWorldConditionedFlow, dict[str, Any]]:
     parent = _mapping(raw, "parent")
-    flow_path = _root_path(parent["flow_checkpoint"])
+    flow_override = os.environ.get("S3_R6_FLOW_CHECKPOINT", "")
+    if not flow_override:
+        raise ValueError("S3_R6_FLOW_CHECKPOINT must name this candidate's fresh Flow")
+    flow_path = Path(flow_override).expanduser().resolve(strict=True)
     protected_path = _root_path(parent["protected_own_checkpoint"])
     team_path = _root_path(parent["protected_team_checkpoint"])
     flow_payload = torch.load(flow_path, map_location="cpu", weights_only=False)
+    if not isinstance(flow_payload, Mapping):
+        raise ValueError("S3-R6 Flow checkpoint must contain a mapping")
+    flow_method = _mapping(flow_payload, "method")
+    round_contract = _mapping(raw, "round")
+    task_runtime = flow_payload.get("task_runtime")
+    flow_tasks = tuple(
+        str(value.get("task_id"))
+        for value in task_runtime
+        if isinstance(value, Mapping)
+    ) if isinstance(task_runtime, list) else ()
     if (
-        not isinstance(flow_payload, Mapping)
-        or flow_payload.get("format_version") != FLOW_FORMAT
-        or _mapping(flow_payload, "method").get("action_generator")
-        != "rectified_flow_cold"
+        flow_payload.get("format_version") != FLOW_FORMAT
+        or flow_method.get("action_generator") != "rectified_flow_cold"
+        or flow_method.get("round_id") != "s3-r6"
+        or flow_method.get("micro_round") != round_contract.get("micro_round")
+        or flow_method.get("candidate_id") != round_contract.get("candidate_id")
+        or flow_method.get("training_scope")
+        != "five_task_from_scratch_per_candidate"
+        or flow_tasks != S3_TASKS
     ):
-        raise ValueError("S3-R6 requires the promoted S1-R1 cold Flow checkpoint")
+        raise ValueError("S3-R6 requires this candidate's fresh five-task cold Flow")
     flow_config = StaticRGBMoEACTConfig.from_dict(
         _mapping(flow_payload, "model_config")
     )
     base_flow = AgentFactorizedFlowWAM(flow_config)
     base_flow.load_state_dict(flow_payload["model"], strict=True)
+    flow_model_hash = state_dict_sha256(base_flow)
     flow_hash = file_sha256(flow_path)
     del flow_payload
 
@@ -139,6 +167,9 @@ def build_s3_r6_model(
     identity = {
         "flow_checkpoint": str(flow_path),
         "flow_checkpoint_sha256": flow_hash,
+        "flow_model_sha256": flow_model_hash,
+        "flow_training_scope": "five_task_from_scratch_per_candidate",
+        "flow_task_vocabulary": list(S3_TASKS),
         "protected_own_checkpoint": str(protected_path),
         "protected_own_checkpoint_sha256": protected_hash,
         "protected_own_model_sha256": protected_model_hash,

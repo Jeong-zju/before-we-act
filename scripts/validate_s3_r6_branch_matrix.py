@@ -17,6 +17,15 @@ from scripts.train_static_rgb_act_moe import _load_yaml, _mapping  # noqa: E402
 from train.s3_model_registry import validate_s3_r6_candidate  # noqa: E402
 
 
+TASKS = (
+    "lift_barrier",
+    "long_pipeline_delivery",
+    "take_photo",
+    "three_robots_stack_cube",
+    "camera_alignment",
+)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("r6l_p0", "r6l_p1", "r6j_p0", "r6j_p1"):
@@ -33,6 +42,23 @@ def main() -> int:
     ]
     if observed != expected:
         raise ValueError(f"S3 branch ordering/identities differ: {observed!r}")
+    for raw in configs:
+        evaluation = _mapping(raw, "evaluation")
+        if tuple(evaluation.get("tasks", ())) != TASKS:
+            raise ValueError("S3 branch evaluation must cover the exact five tasks")
+        if evaluation.get("rule") != "five_task_macro_average_p1_greater_or_equal_p0":
+            raise ValueError("S3 branch evaluation must use the five-task macro rule")
+    flow = _load_yaml(ROOT / "configs/wam_flow/s3_r6_flow_five_task.yaml")
+    flow_manifests = tuple(
+        Path(str(value)).parent.name for value in _mapping(flow, "data")["manifests"]
+    )
+    if (
+        flow_manifests != TASKS
+        or int(_mapping(flow, "training").get("updates", 0)) != 80000
+        or _mapping(flow, "round").get("training_scope")
+        != "five_task_from_scratch_per_candidate"
+    ):
+        raise ValueError("S3 fresh Flow config is not the frozen five-task/80k recipe")
     normalized = []
     for raw in configs:
         value = copy.deepcopy(raw)
@@ -53,8 +79,9 @@ def main() -> int:
             "S3 branch configs drift beyond registered identity/future scope/injection/output"
         )
     print(
-        "S3-R6 matrix valid: same data/parents/adapter/init/optimizer/budget/solver/"
-        "closed-loop seeds; only R6L-vs-R6J scope and P0-vs-P1 injection differ."
+        "S3-R6 matrix valid: every candidate freshly trains the same 80k five-task "
+        "Flow recipe and validates all five tasks; only R6L-vs-R6J scope and "
+        "P0-vs-P1 injection differ."
     )
     return 0
 

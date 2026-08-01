@@ -353,6 +353,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "injection": injection,
             "action_generator": "rectified_flow_cold_gated_residual",
             "candidate_action_contract": "clean_endpoint_each_solver_evaluation",
+            "flow_training_scope": "five_task_from_scratch_per_candidate",
             "trainable_modules": ["world_to_flow_adapter", "velocity_gate"]
             if injection
             else [],

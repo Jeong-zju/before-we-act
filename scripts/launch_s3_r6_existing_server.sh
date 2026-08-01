@@ -12,6 +12,6 @@ if [[ ! -x "${ROBOFACTORY_ROOT}/.venv/bin/python" || \
   PREPARE_ARGS+=(--prepare-from-s0)
   printf 'RoboFactory is absent; enabling the S0 hidden-token FIFO preparation path.\n'
 fi
-printf 'Existing-server S3-R6: reusing data/parents and scheduling four branches two-by-two.\n'
+printf 'Existing-server S3-R6: sharing five-task data/S2 parents; freshly training four Flow candidates two-by-two.\n'
 exec bash "${FE_ROOT}/scripts/launch_s3_r6_2gpu_tmux.sh" \
   --run-id "${RUN_ID}" "${PREPARE_ARGS[@]}" "$@"
