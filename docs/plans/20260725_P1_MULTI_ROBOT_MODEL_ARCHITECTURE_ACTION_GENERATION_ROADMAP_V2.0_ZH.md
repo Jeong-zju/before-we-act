@@ -1167,10 +1167,10 @@ S3-R6 公共基础设施已先在本地写入 `feat/model-improvements` 提交 `
 
 | 执行批次 | GPU | 分支 | 候选身份提交 / 当前 head | model kind | 训练 |
 |---|---:|---|---|---|---|
-| 1 | 0 | `s3/r6l-p0-protected-local-aux` | `b61ee77` / `691ea94` | `s3_r6l_protected_local_aux` | 0 update，off-path 控制 |
-| 1 | 1 | `s3/r6l-p1-protected-local-gated` | `1479aa3` / `76d36ab` | `s3_r6l_protected_local_gated` | 10,000 update，仅 adapter/gate |
-| 2 | 0 | `s3/r6j-p0-protected-team-offpath` | `21e36fa` / `964fe3a` | `s3_r6j_protected_team_offpath` | 0 update，off-path 控制 |
-| 2 | 1 | `s3/r6j-p1-protected-team-gated` | `84db555` / `05a5cdc` | `s3_r6j_protected_team_gated` | 10,000 update，仅 adapter/gate |
+| 1 | 0 | `s3/r6l-p0-protected-local-aux` | `b61ee77` / `52a651d` | `s3_r6l_protected_local_aux` | 0 update，off-path 控制 |
+| 1 | 1 | `s3/r6l-p1-protected-local-gated` | `1479aa3` / `2981c58` | `s3_r6l_protected_local_gated` | 10,000 update，仅 adapter/gate |
+| 2 | 0 | `s3/r6j-p0-protected-team-offpath` | `21e36fa` / `3aaef9e` | `s3_r6j_protected_team_offpath` | 0 update，off-path 控制 |
+| 2 | 1 | `s3/r6j-p1-protected-team-gated` | `84db555` / `b31d4f2` | `s3_r6j_protected_team_gated` | 10,000 update，仅 adapter/gate |
 
 训练、checkpoint loader、闭环服务端和验收器的 fail-closed 白名单只增加上表四个 kind；未知 kind、kind 与 `micro_round/candidate_id/future_scope/injection` 不一致、R6J 不是 accepted R5-P0 Shared team parent、protected-own/R5-P0 hash 漂移时均在创建有效结果前失败。四个 config 使用相同五任务数据、Flow、protected-own、R5-P0、PCA、adapter shape、adapter seed `60606`、训练 seed `606`、optimizer、P1 10,000 updates、4-step Euler、Gate20 seed `900` 与 temporal ensemble；矩阵校验器只允许 R6L/R6J future scope、P0/P1 injection 和隔离输出路径不同。
 
