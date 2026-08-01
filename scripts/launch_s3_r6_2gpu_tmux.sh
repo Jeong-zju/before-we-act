@@ -50,6 +50,10 @@ done
 if [[ ! "${RUN_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
   printf >&2 'Invalid run id: %s\n' "${RUN_ID}"; exit 2
 fi
+if [[ -n "${FLOW_SOURCE}" ]]; then
+  printf >&2 'S3-R6 now requires fresh per-candidate five-task Flow training; --flow reuse is disabled.\n'
+  exit 2
+fi
 RUN_ROOT="${S3_R6_RUN_ROOT:-${FE_ROOT}/outputs/s3_r6_runs/${RUN_ID}}"
 WINDOW_PREFIX="${S3_R6_WINDOW_PREFIX:-${RUN_ID}}"
 PREPARE_WINDOW="${WINDOW_PREFIX}-prepare"
@@ -117,8 +121,9 @@ print_plan() {
   printf 'phase1 GPU0=%s GPU1=%s\n' "${BRANCHES[0]}" "${BRANCHES[1]}"
   printf 'phase2 GPU0=%s GPU1=%s (auto-starts after R6L pair result)\n' \
     "${BRANCHES[2]}" "${BRANCHES[3]}"
-  printf 'shared data=%s/datasets/robofactory_multitask; artifacts=%s/artifacts\n' \
+  printf 'shared five-task data=%s/datasets/robofactory_multitask; immutable S2 artifacts=%s/artifacts\n' \
     "${FE_ROOT}" "${FE_ROOT}"
+  printf 'training=each of four candidates trains a fresh 80k five-task Flow; P1 then trains 10k adapter/gate\n'
   printf 'monitor=program/status/phase/update/loss/gate/rollout progress/heartbeat/GPU/PID/S3 gates\n'
   if (( PREPARE_FROM_S0 )); then
     printf 'HF=S0 FIFO method; dataset Xet/default concurrency; DINO no-Xet/one worker\n'
@@ -207,7 +212,7 @@ fi
 prepare_command="$(shell_join env -u HF_TOKEN \
   "S3_R6_RUN_ROOT=${RUN_ROOT}" "S3_R6_READY_FILE=${READY_FILE}" \
   "S3_R6_FAILED_FILE=${FAILED_FILE}" "S3_R6_USE_S0_PREP=${PREPARE_FROM_S0}" \
-  "S3_R6_HF_TOKEN_FIFO=${HF_TOKEN_FIFO}" "S3_R6_FLOW_SOURCE=${FLOW_SOURCE}" \
+  "S3_R6_HF_TOKEN_FIFO=${HF_TOKEN_FIFO}" \
   "S3_R6_PROTECTED_OWN_SOURCE=${PROTECTED_SOURCE}" \
   "S3_R6_PROTECTED_TEAM_SOURCE=${TEAM_SOURCE}" \
   "S3_R6_ROBOFACTORY_ROOT=${ROBOFACTORY_ROOT}" "S3_R6_RF_PYTHON=${RF_PYTHON}" \

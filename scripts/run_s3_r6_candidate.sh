@@ -22,6 +22,10 @@ STATUS_TOOL="${S3_R6_BASE_REPO}/scripts/s3_r6_runtime.py"
 CONFIG="${FE_ROOT}/${S3_R6_CONFIG_REL}"
 CHECKPOINT="${CANDIDATE_ROOT}/checkpoints/policy.pt"
 RESUME="${CANDIDATE_ROOT}/checkpoints/resume.pt"
+FLOW_CHECKPOINT="${CANDIDATE_ROOT}/checkpoints/five_task_flow.pt"
+FLOW_RESUME="${CANDIDATE_ROOT}/checkpoints/five_task_flow_resume.pt"
+FLOW_CONFIG="${FE_ROOT}/configs/wam_flow/s3_r6_flow_five_task.yaml"
+FLOW_UPDATES="${S3_R6_FLOW_UPDATES:-80000}"
 TRAIN_PROGRESS="${CANDIDATE_ROOT}/train/progress.jsonl"
 STAGE_LOG="${CANDIDATE_ROOT}/train/stages.jsonl"
 LOG_PATH="${CANDIDATE_ROOT}/logs/candidate.log"
@@ -31,10 +35,12 @@ mkdir -p "${CANDIDATE_ROOT}"/{logs,train,validation,checkpoints,outputs} || exit
 exec > >(tee -a "${LOG_PATH}") 2>&1
 
 status() {
+  total_updates="${S3_R6_TOTAL_UPDATES}"
+  if [[ "$1" == "training_flow" ]]; then total_updates="${FLOW_UPDATES}"; fi
   arguments=(status --run-root "${S3_R6_RUN_ROOT}" \
     --candidate "${S3_R6_CANDIDATE_ID}" --phase "$1" --program "$2" \
     --detail "${3:-}" --gpu-index "${GPU_INDEX}" \
-    --total-updates "${S3_R6_TOTAL_UPDATES}")
+    --total-updates "${total_updates}")
   if (( $# >= 4 )); then arguments+=(--exit-code "$4"); fi
   python3 "${STATUS_TOOL}" "${arguments[@]}"
 }
@@ -95,11 +101,23 @@ export UV_PROJECT_ENVIRONMENT="${S3_R6_UV_ENV}"
 export LPD_STAGE_LOG="${STAGE_LOG}"
 unset HF_TOKEN
 
+if [[ ! -f "${FLOW_CHECKPOINT}" ]]; then
+  status training_flow train_agent_factorized_flow_wam.py \
+    "fresh candidate-specific five-task Flow 0/${FLOW_UPDATES}; no old Flow reuse"
+  ( cd "${FE_ROOT}" && PYTHONUNBUFFERED=1 uv run --frozen python \
+    scripts/train_agent_factorized_flow_wam.py --config "${FLOW_CONFIG}" \
+    --device cuda:0 --updates "${FLOW_UPDATES}" --output "${FLOW_CHECKPOINT}" \
+    --resume "${FLOW_RESUME}" --progress-log "${TRAIN_PROGRESS}" \
+    --round-id s3-r6 --micro-round "${MICRO_ROUND}" \
+    --candidate-id "${CANDIDATE_SHORT}" ) || exit $?
+fi
+export S3_R6_FLOW_CHECKPOINT="${FLOW_CHECKPOINT}"
+
 if [[ ! -f "${CHECKPOINT}" ]]; then
   if (( S3_R6_TOTAL_UPDATES > 0 )); then
-    detail="adapter/gate-only five-task training; Flow and all world predictors frozen"
+    detail="five-task adapter/gate training above freshly trained five-task Flow"
   else
-    detail="zero-training off-path control composition and structural invariant check"
+    detail="off-path control composition above freshly trained five-task Flow"
   fi
   status training train_s3_r6_world_action_flow.py "${detail}"
   ( cd "${FE_ROOT}" && PYTHONUNBUFFERED=1 uv run --frozen python \

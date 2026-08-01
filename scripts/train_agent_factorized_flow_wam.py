@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the S1-R1 per-agent cold-start Rectified Flow candidate."""
+"""Train a per-agent cold-start Rectified Flow candidate."""
 
 from __future__ import annotations
 
@@ -57,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--progress-log", type=Path)
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument("--round-id", default="s1-r1")
+    parser.add_argument("--micro-round", default="")
+    parser.add_argument("--candidate-id", default="F1")
     return parser
 
 
@@ -67,6 +70,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     raw = _load_yaml(config_path)
     training = _mapping(raw, "training")
     generation = _mapping(raw, "generation")
+    training_identity = {
+        "config_sha256": _sha256(config_path),
+        "round_id": args.round_id,
+        "micro_round": args.micro_round,
+        "candidate_id": args.candidate_id,
+    }
     if (
         generation.get("source_distribution") != "standard_normal"
         or generation.get("solver") != "euler"
@@ -83,16 +92,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if not torch.cuda.is_bf16_supported():
         raise RuntimeError("S1-R1 Flow training requires native BF16")
+    deterministic = args.round_id == "s3-r6"
     torch.set_float32_matmul_precision("high")
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = not deterministic
+    torch.backends.cudnn.deterministic = deterministic
+    torch.use_deterministic_algorithms(deterministic)
     seed = int(training.get("seed", 101))
     _seed_everything(seed)
 
     _emit_stage(
         "dataset_validation",
-        "verifying the two promoted S1-R1 manifests and local HDF5 identities",
+        (
+            "verifying the five S3-R6 manifests and local HDF5 identities"
+            if args.round_id == "s3-r6"
+            else "verifying the two promoted S1-R1 manifests and local HDF5 identities"
+        ),
     )
     dataset = _dataset(raw)
     _emit_stage(
@@ -152,6 +168,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "wam.robofactory.agent_factorized_flow.resume/1"
         ):
             raise ValueError("resume file is not S1-R1 AgentFactorizedFlow")
+        if args.round_id == "s3-r6" and saved.get("identity") != training_identity:
+            raise ValueError("S3-R6 Flow resume identity differs from this candidate")
         model.load_state_dict(saved["model"], strict=True)
         optimizer.load_state_dict(saved["optimizer"])
         scheduler.load_state_dict(saved["scheduler"])
@@ -235,6 +253,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "wam.robofactory.agent_factorized_flow.resume/1"
                     ),
                     "update": update,
+                    "identity": training_identity,
                     "model": model.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "scheduler": scheduler.state_dict(),
@@ -248,11 +267,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "update": updates,
         "method": {
-            "round_id": "s1-r1",
-            "candidate_id": "F1",
+            "round_id": args.round_id,
+            "micro_round": args.micro_round,
+            "candidate_id": args.candidate_id,
             "action_generator": "rectified_flow_cold",
             "future_path": False,
             "active_agent_loss_weighting": False,
+            "training_scope": (
+                "five_task_from_scratch_per_candidate"
+                if args.round_id == "s3-r6"
+                else "promoted_s1_r1"
+            ),
         },
         "model_config": model_config.to_dict(),
         "model": model.state_dict(),

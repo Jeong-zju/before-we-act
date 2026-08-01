@@ -109,8 +109,19 @@ def build_pair_acceptance(
             or method.get("candidate_id") != candidate_id
             or method.get("model_kind") != expected_kind
             or expected_kind not in S3_R6_MODEL_KINDS
+            or method.get("flow_training_scope")
+            != "five_task_from_scratch_per_candidate"
         ):
             raise ValueError("checkpoint is outside the registered S3 pair")
+        data = _mapping(checkpoint, "data")
+        manifests = data.get("manifests")
+        checkpoint_tasks = tuple(
+            str(value.get("task_id"))
+            for value in manifests
+            if isinstance(value, Mapping)
+        ) if isinstance(manifests, list) else ()
+        if checkpoint_tasks != TASKS:
+            raise ValueError("S3 checkpoint was not trained on the exact five tasks")
     if p0_gate.get("seed_protocol") != p1_gate.get("seed_protocol"):
         raise ValueError("P0/P1 closed-loop seed protocols differ")
 
@@ -126,6 +137,13 @@ def build_pair_acceptance(
                 "parents_excluded_from_optimizer",
             )
         )
+    p0_parent = _mapping(p0_checkpoint, "parent_identity")
+    p1_parent = _mapping(p1_checkpoint, "parent_identity")
+    structural["paired_five_task_flow_model_exact"] = (
+        p0_parent.get("flow_model_sha256") == p1_parent.get("flow_model_sha256")
+        and isinstance(p0_parent.get("flow_model_sha256"), str)
+        and len(str(p0_parent.get("flow_model_sha256"))) == 64
+    )
     tasks: dict[str, Any] = {}
     for task in TASKS:
         p0 = _mapping(p0_gate, task)

@@ -222,7 +222,10 @@ def _checkpoint(kind: str) -> dict[str, object]:
             "model_kind": kind,
             "future_scope": scope,
             "injection": injection,
+            "flow_training_scope": "five_task_from_scratch_per_candidate",
         },
+        "data": {"manifests": [{"task_id": task} for task in TASKS]},
+        "parent_identity": {"flow_model_sha256": "1" * 64},
         "structural_invariants": {
             "protected_own_elementwise_exact": True,
             "protected_parent_model_hashes_unchanged": True,
@@ -257,6 +260,24 @@ def test_s3_acceptance_uses_five_task_macro_average_plus_structure() -> None:
     )
     assert rejected["passed"] is False
     assert rejected["closed_loop_macro_average_passed"] is False
+
+    mismatched_flow = build_pair_acceptance(
+        "R6L",
+        _gate((2, 2, 2, 2, 2)),
+        _gate((3, 2, 2, 2, 2)),
+        _checkpoint("s3_r6l_protected_local_aux"),
+        {
+            **_checkpoint("s3_r6l_protected_local_gated"),
+            "parent_identity": {"flow_model_sha256": "2" * 64},
+        },
+    )
+    assert mismatched_flow["passed"] is False
+    assert (
+        mismatched_flow["structural_invariants"][
+            "paired_five_task_flow_model_exact"
+        ]
+        is False
+    )
 
     final = build_final_acceptance(accepted, {**accepted, "micro_round": "R6J"})
     assert final["passed_for_r7"] is True
@@ -319,6 +340,19 @@ def test_s3_s0_preparation_covers_robofactory_with_protected_fifos() -> None:
     assert "S3_R6_ROBOFACTORY_ROOT" in prepare
     assert "ROBOFACTORY_SENTINEL" in launcher
     assert 'unlink "${READY_FILE}"' in launcher
+
+
+def test_s3_retrains_every_candidate_flow_on_exact_five_tasks() -> None:
+    root = Path(__file__).resolve().parents[1]
+    runner = (root / "scripts/run_s3_r6_candidate.sh").read_text()
+    model_io = (root / "scripts/s3_r6_model_io.py").read_text()
+    flow = (root / "configs/wam_flow/s3_r6_flow_five_task.yaml").read_text()
+    assert "train_agent_factorized_flow_wam.py" in runner
+    assert "--round-id s3-r6" in runner
+    assert "S3_R6_FLOW_CHECKPOINT" in runner
+    assert "fresh five-task cold Flow" in model_io
+    assert flow.count("training_manifest.json") == 5
+    assert "updates: 80000" in flow
 
 
 def test_s3_monitor_reports_live_rollout_task_episode_step(tmp_path: Path) -> None:

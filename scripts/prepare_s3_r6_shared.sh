@@ -36,7 +36,7 @@ mkdir -p "${S3_R6_RUN_ROOT}" || exit $?
 exec > >(tee -a "${S3_R6_RUN_ROOT}/prepare.log") 2>&1
 heartbeat_loop & HEARTBEAT_PID=$!
 status verifying prepare_s3_r6_shared.sh \
-  "locating shared five-task data, DINO/PCA/Flow, protected-own and R5-P0"
+  "locating shared five-task data, DINO/PCA, protected-own and R5-P0"
 
 if [[ "${S3_R6_USE_S0_PREP:-0}" == "1" ]]; then
   for name in S3_R6_HF_TOKEN_FIFO S3_R6_ROBOFACTORY_ROOT S3_R6_RF_PYTHON; do
@@ -65,7 +65,6 @@ find_latest() {
   return 1
 }
 
-FLOW_SOURCE="${S3_R6_FLOW_SOURCE:-${FE_ROOT}/artifacts/s1_r1_f1/checkpoint_080000.pt}"
 PROTECTED_SOURCE="${S3_R6_PROTECTED_OWN_SOURCE:-}"
 TEAM_SOURCE="${S3_R6_PROTECTED_TEAM_SOURCE:-}"
 if [[ -z "${PROTECTED_SOURCE}" && -f "${FE_ROOT}/artifacts/s2_r5_protected_p0/predictor.pt" ]]; then
@@ -87,7 +86,7 @@ required=(
   "${FE_ROOT}/artifacts/s2_r4/dino_pca_statistics.pt"
   "${S3_R6_ROBOFACTORY_ROOT:-}/robofactory/assets/scenes/table/table.glb"
   "${S3_R6_RF_PYTHON:-}"
-  "${FLOW_SOURCE}" "${PROTECTED_SOURCE}" "${TEAM_SOURCE}"
+  "${PROTECTED_SOURCE}" "${TEAM_SOURCE}"
 )
 for path in "${required[@]}"; do
   if [[ ! -f "${path}" ]]; then
@@ -110,7 +109,6 @@ link_parent() {
     return 3
   fi
 }
-link_parent "${FLOW_SOURCE}" "${parent_dir}/flow.pt" || exit $?
 link_parent "${PROTECTED_SOURCE}" "${parent_dir}/protected_own.pt" || exit $?
 link_parent "${TEAM_SOURCE}" "${parent_dir}/protected_team.pt" || exit $?
 
@@ -124,11 +122,11 @@ if [[ "${team_sha}" != "fcc0af76c2acd6805750f12e828a1249eb91e466e51f4aa77c118b6e
   printf >&2 'Protected-team parent hash is not the accepted R5-P0 artifact: %s\n' "${team_sha}"
   exit 3
 fi
-sha256sum "${parent_dir}/flow.pt" "${parent_dir}/protected_own.pt" \
+sha256sum "${parent_dir}/protected_own.pt" \
   "${parent_dir}/protected_team.pt" "${FE_ROOT}/artifacts/s2_r4/dino_pca_statistics.pt" \
   | tee "${S3_R6_RUN_ROOT}/shared_artifact_sha256.txt"
 touch "${S3_R6_READY_FILE}"
 status complete prepare_s3_r6_shared.sh \
-  "shared data/artifacts/RoboFactory linked once; accepted S2 parents and hashes verified"
+  "shared five-task data/artifacts/RoboFactory and accepted S2 parents verified; Flow trains per candidate"
 COMPLETED=1
 printf 'S3-R6 shared preparation complete.\n'

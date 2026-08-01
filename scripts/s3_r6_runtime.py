@@ -147,6 +147,10 @@ def initialize(
             ],
             "shared_data": str(base / "datasets/robofactory_multitask"),
             "shared_artifacts": str(base / "artifacts"),
+            "training_scope": (
+                "fresh candidate-specific five-task Flow for all four candidates; "
+                "P1 then trains adapter/gate"
+            ),
         },
     )
     for candidate in CANDIDATES:
@@ -360,8 +364,8 @@ def _acceptance_lines(root: Path) -> list[str]:
         lines.append(
             f"{name}: {'PASS P1' if report.get('passed') else 'FAIL retain P0'} | "
             + " | ".join(
-                f"{candidate} protected-own={'PASS' if passed else 'FAIL'}"
-                for candidate, passed in _mapping_or_empty(
+                f"{invariant}={'PASS' if passed else 'FAIL'}"
+                for invariant, passed in _mapping_or_empty(
                     report.get("structural_invariants")
                 ).items()
             )
