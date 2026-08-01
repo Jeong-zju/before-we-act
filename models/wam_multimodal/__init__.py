@@ -10,6 +10,12 @@ from models.wam_multimodal.block_causal_transformer import (
     UTF8TaskEncoder,
     build_block_causal_attention_mask,
 )
+from models.wam_multimodal.cross_agent_world_conditioned_flow import (
+    CrossAgentWorldConditionedFlow,
+    PredictedFutureLatents,
+    WorldToFlowAdapterConfig,
+    WorldToFlowResidualAdapter,
+)
 
 from models.wam_multimodal.latent_wam import (
     CapacityControl,
@@ -80,6 +86,7 @@ __all__ = [
     "BlockCausalWAMOutput",
     "CANONICAL_FUTURE_HORIZONS",
     "CapacityControl",
+    "CrossAgentWorldConditionedFlow",
     "DEFAULT_DINOV3_ENCODER",
     "DEFAULT_DINOV3_CONFIG_SHA256",
     "DEFAULT_DINOV3_MODEL_ID",
@@ -105,6 +112,7 @@ __all__ = [
     "OFFICIAL_RESNET18_FILENAME",
     "OFFICIAL_RESNET18_SHA256",
     "PerceiverResampler",
+    "PredictedFutureLatents",
     "PerceiverResamplerConfig",
     "ProtectedHybridFuturePrediction",
     "ProtectedHybridFuturePredictor",
@@ -117,6 +125,8 @@ __all__ = [
     "UTF8TaskEncoder",
     "VisualAdapterOutput",
     "VisionEncoderOutput",
+    "WorldToFlowAdapterConfig",
+    "WorldToFlowResidualAdapter",
     "build_resnet18_classifier",
     "build_block_causal_attention_mask",
     "canonical_json_sha256",

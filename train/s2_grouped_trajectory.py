@@ -203,6 +203,15 @@ def grouped_s2_batch(batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
         & future_visual_valid[:, :, 1:5].permute(0, 2, 1)
     )
     shared_future_visual_valid = future_visual_valid[:, :, 0]
+    action_valid_mask = batch.get("action_target_valid_mask")
+    if action_valid_mask is None:
+        # Compatibility for synthetic contract fixtures created before S3.
+        action_valid_mask = torch.ones(
+            batch_size,
+            max(S2_FUTURE_HORIZONS),
+            dtype=torch.bool,
+            device=actions.device,
+        )
 
     output = {
         "dataset_index": batch["dataset_index"],
@@ -212,6 +221,7 @@ def grouped_s2_batch(batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
         "decision_t": batch["decision_t"],
         "current_state": current_state,
         "candidate_actions": candidate_actions,
+        "action_valid_mask": action_valid_mask.bool(),
         "agent_observations": agent_observations,
         "shared_observation": images[:, -1, 0],
         "shared_observation_valid_mask": current_image_valid[:, 0],
@@ -246,6 +256,10 @@ def validate_grouped_s2_contract(batch: Mapping[str, Tensor]) -> None:
             S2_MAX_AGENTS,
             max(S2_FUTURE_HORIZONS),
             S2_ACTION_DIM,
+        ),
+        "action_valid_mask": (
+            batch_size,
+            max(S2_FUTURE_HORIZONS),
         ),
         "valid_agent_mask": (batch_size, S2_MAX_AGENTS),
         "agent_camera_valid_mask": (batch_size, S2_MAX_AGENTS),

@@ -128,6 +128,79 @@ def encode_local_visual_targets(
     return current, normalized
 
 
+def encode_current_visual_context(
+    vision: nn.Module,
+    grouped: Mapping[str, Tensor],
+    artifact: Mapping[str, Any],
+    *,
+    device: torch.device,
+    grid_height: int,
+    grid_width: int,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Encode only the current local/global views needed by on-path S3.
+
+    Returns raw local DINO tokens for the frozen Flow plus PCA-projected local
+    and shared grids for the frozen future predictor. Future observations are
+    deliberately not read by the deployed action path.
+    """
+
+    valid_agents = grouped["valid_agent_mask"].to(device=device, dtype=torch.bool)
+    shared_valid = grouped["shared_observation_valid_mask"].to(
+        device=device, dtype=torch.bool
+    )
+    batch_size, agents = valid_agents.shape
+    grid_tokens = grid_height * grid_width
+    latent_dim = int(artifact["pca_components"].shape[1])
+    local_images = grouped["agent_observations"].to(device=device, non_blocking=True)
+    shared_images = grouped["shared_observation"].to(device=device, non_blocking=True)
+    raw_local = torch.zeros(
+        batch_size,
+        agents,
+        1,
+        1024,
+        device=device,
+        dtype=torch.float32,
+    )
+    projected_local = torch.zeros(
+        batch_size,
+        agents,
+        grid_tokens,
+        latent_dim,
+        device=device,
+        dtype=torch.float32,
+    )
+    projected_shared = torch.zeros(
+        batch_size,
+        grid_tokens,
+        latent_dim,
+        device=device,
+        dtype=torch.float32,
+    )
+    if bool(valid_agents.any()):
+        raw = vision(local_images[valid_agents]).spatial_tokens.float()
+        raw_local = raw_local.expand(
+            -1, -1, raw.shape[1], -1
+        ).clone()
+        raw_local[valid_agents] = raw
+        patch_rows = int(vision.config.image_height) // int(vision.patch_size)
+        patch_columns = int(vision.config.image_width) // int(vision.patch_size)
+        grid = F.adaptive_avg_pool2d(
+            raw.transpose(1, 2).reshape(
+                raw.shape[0], raw.shape[-1], patch_rows, patch_columns
+            ),
+            (grid_height, grid_width),
+        ).flatten(2).transpose(1, 2)
+        projected_local[valid_agents] = project_dino_grid(grid, artifact)
+    if bool(shared_valid.any()):
+        grid = vision.forward_spatial_grid(
+            shared_images[shared_valid],
+            grid_height=grid_height,
+            grid_width=grid_width,
+        ).spatial_tokens.float()
+        projected_shared[shared_valid] = project_dino_grid(grid, artifact)
+    return raw_local, projected_local, projected_shared
+
+
 def encode_shared_visual_targets(
     vision: nn.Module,
     grouped: Mapping[str, Tensor],
@@ -365,6 +438,7 @@ def _masked_per_trajectory(
 __all__ = [
     "S2_ARTIFACT_FORMAT",
     "encode_local_visual_targets",
+    "encode_current_visual_context",
     "encode_shared_visual_targets",
     "file_sha256",
     "load_s2_artifact",

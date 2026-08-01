@@ -212,6 +212,16 @@ train() {
           --progress-log "${LPD_PROGRESS_LOG}"
       )
       ;;
+    s3_flow)
+      (
+        cd "${FE_ROOT}"
+        PYTHONUNBUFFERED=1 uv run --frozen python \
+          scripts/train_s3_r6_world_action_flow.py \
+          --config "${LPD_CONFIG}" \
+          --device cuda:0 \
+          --progress-log "${LPD_PROGRESS_LOG}"
+      )
+      ;;
     wam)
       (
         cd "${FE_ROOT}"

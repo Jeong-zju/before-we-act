@@ -51,6 +51,23 @@ class AgentFactorizedFlowWAM(nn.Module):
         action_inputs: Tensor,
         flow_time: Tensor,
     ) -> tuple[Tensor, Tensor]:
+        velocity, router_aux, _ = self.forward_features(
+            vision_tokens,
+            state,
+            action_inputs,
+            flow_time,
+        )
+        return velocity, router_aux
+
+    def forward_features(
+        self,
+        vision_tokens: Tensor,
+        state: Tensor,
+        action_inputs: Tensor,
+        flow_time: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Return the frozen decoder features used by the S3 residual adapter."""
+
         batch_size = self._validate_inputs(
             vision_tokens=vision_tokens,
             state=state,
@@ -80,7 +97,7 @@ class AgentFactorizedFlowWAM(nn.Module):
             self.config.action_dim,
         ):
             raise RuntimeError("velocity head violated the per-agent chunk contract")
-        return velocity, router_aux
+        return velocity, router_aux, decoded
 
     def integrate_actions(
         self,
