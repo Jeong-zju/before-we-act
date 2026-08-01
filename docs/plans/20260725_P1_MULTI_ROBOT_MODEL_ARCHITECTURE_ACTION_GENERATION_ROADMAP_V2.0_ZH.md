@@ -1165,12 +1165,12 @@ P1 只训练 adapter 与 velocity gate。两组使用相同 adapter 宽度、初
 
 S3-R6 公共基础设施已先在本地写入 `feat/model-improvements` 提交 `50d64bd`、完成相关回归测试并推送。公共提交包含 `CrossAgentWorldConditionedFlow`、同构 local/team residual adapter、有界 `max_gate*tanh(alpha)` velocity gate、adapter/gate-only trainer、闭环 inference、四分支矩阵校验器、S3 特殊验收器、常驻 monitor、S0 下载复用、双卡两两 launcher 和保留产物的 stop 脚本；不包含候选身份配置。随后四个分支全部直接从同一个 `50d64bd` 创建，不从彼此派生：
 
-| 执行批次 | GPU | 分支 | 提交 | model kind | 训练 |
+| 执行批次 | GPU | 分支 | 候选身份提交 / 当前 head | model kind | 训练 |
 |---|---:|---|---|---|---|
-| 1 | 0 | `s3/r6l-p0-protected-local-aux` | `b61ee77` | `s3_r6l_protected_local_aux` | 0 update，off-path 控制 |
-| 1 | 1 | `s3/r6l-p1-protected-local-gated` | `1479aa3` | `s3_r6l_protected_local_gated` | 10,000 update，仅 adapter/gate |
-| 2 | 0 | `s3/r6j-p0-protected-team-offpath` | `21e36fa` | `s3_r6j_protected_team_offpath` | 0 update，off-path 控制 |
-| 2 | 1 | `s3/r6j-p1-protected-team-gated` | `84db555` | `s3_r6j_protected_team_gated` | 10,000 update，仅 adapter/gate |
+| 1 | 0 | `s3/r6l-p0-protected-local-aux` | `b61ee77` / `691ea94` | `s3_r6l_protected_local_aux` | 0 update，off-path 控制 |
+| 1 | 1 | `s3/r6l-p1-protected-local-gated` | `1479aa3` / `76d36ab` | `s3_r6l_protected_local_gated` | 10,000 update，仅 adapter/gate |
+| 2 | 0 | `s3/r6j-p0-protected-team-offpath` | `21e36fa` / `964fe3a` | `s3_r6j_protected_team_offpath` | 0 update，off-path 控制 |
+| 2 | 1 | `s3/r6j-p1-protected-team-gated` | `84db555` / `05a5cdc` | `s3_r6j_protected_team_gated` | 10,000 update，仅 adapter/gate |
 
 训练、checkpoint loader、闭环服务端和验收器的 fail-closed 白名单只增加上表四个 kind；未知 kind、kind 与 `micro_round/candidate_id/future_scope/injection` 不一致、R6J 不是 accepted R5-P0 Shared team parent、protected-own/R5-P0 hash 漂移时均在创建有效结果前失败。四个 config 使用相同五任务数据、Flow、protected-own、R5-P0、PCA、adapter shape、adapter seed `60606`、训练 seed `606`、optimizer、P1 10,000 updates、4-step Euler、Gate20 seed `900` 与 temporal ensemble；矩阵校验器只允许 R6L/R6J future scope、P0/P1 injection 和隔离输出路径不同。
 
@@ -1195,7 +1195,7 @@ bash scripts/launch_s3_r6_existing_server.sh \
 
 `launch_s3_r6_existing_server.sh` 会同时检查五任务数据、DINO 与 `/workspace/RoboFactory` 的 Python/scene asset；RoboFactory 缺失时自动追加 `--prepare-from-s0` 并在当前终端做一次隐藏 token 提示，手动调用底层 launcher 时也可显式追加该参数。提交 `ea93741` 将 RoboFactory 纳入 shared-ready 条件，并让同一次隐藏输入在进程内依次经两个 mode-0600 FIFO 复用 S0 环境准备和必要的五任务/PCA 补齐；token 不进入 export、argv、tmux command、manifest、普通文件或日志。dataset 仍使用固定 revision、官方 `hf download`、Xet 开启与默认并发，DINOv3/RoboFactory asset 使用 Xet 关闭和单 worker，中断后原位复用 Hub cache 与 `.incomplete`；已有完整五任务/PCA 时不重算也不复制。accepted S2 parent checkpoint 不是 HF 数据，缺失时必须显式提供 `--protected-own PATH --protected-team PATH`，不能静默重训或换 parent。
 
-monitor 每 5 秒显示 shared prepare 与四个 candidate 的当前程序、queued/waiting/startup/training/validating/accepting/complete 状态、20 秒心跳及 age、update/10,000、loss、gate、当前闭环 task/episode/success、两卡利用率/显存和 GPU process PID。75 秒没有新心跳标记 `STALE`，同时显示最后程序和 candidate log；最后一个 loss 绝不被当作仍在运行。R6L/R6J 结果产生后，monitor 只按本阶段特殊规则逐任务显示 `P0 success、P1 success、delta、P1>=P0 PASS/FAIL`，并单列 protected-own 结构不变量；zero/noise/shuffle/fallback 和 gate-zero 诊断不会变成额外准入 gate。只读查看：
+monitor 每 5 秒显示 shared prepare 与四个 candidate 的当前程序、queued/waiting/startup/training/validating/accepting/complete 状态、20 秒心跳及 age、update/10,000、loss、gate、当前闭环 task/episode/success、两卡利用率/显存和 GPU process PID。提交 `8dd88e0` 进一步让 rollout 从环境初始化、等待 inference、连接到每 25 step 都原子更新 `task/episode/step/success/stage`，因此第 0 个 episode 也不会回退成旧训练阶段；四分支已同步到表中的 current head。75 秒没有新心跳标记 `STALE`，同时显示最后程序和 candidate log；最后一个 loss 绝不被当作仍在运行。R6L/R6J 结果产生后，monitor 只按本阶段特殊规则逐任务显示 `P0 success、P1 success、delta、P1>=P0 PASS/FAIL`，并单列 protected-own 结构不变量；zero/noise/shuffle/fallback 和 gate-zero 诊断不会变成额外准入 gate。只读查看：
 
 ```bash
 cd /workspace/fe-pc-wam
