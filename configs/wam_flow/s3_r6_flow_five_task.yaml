@@ -15,6 +15,12 @@ data:
     - datasets/robofactory_multitask/camera_alignment/training_manifest.json
   stride: 1
   hdf5_cache_size: 4
+  task_action_horizons:
+    lift_barrier: 100
+    long_pipeline_delivery: 100
+    take_photo: 100
+    three_robots_stack_cube: 100
+    camera_alignment: 100
   observation: existing_world_fixed_agent_rgb
   depth: false
   wrist_camera: false

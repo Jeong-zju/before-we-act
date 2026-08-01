@@ -352,6 +352,8 @@ def test_s3_retrains_every_candidate_flow_on_exact_five_tasks() -> None:
     assert "S3_R6_FLOW_CHECKPOINT" in runner
     assert "fresh five-task cold Flow" in model_io
     assert flow.count("training_manifest.json") == 5
+    assert flow.count(": 100") >= 5
+    assert "task_action_horizons" in flow
     assert "updates: 80000" in flow
 
 
