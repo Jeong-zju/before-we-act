@@ -301,3 +301,33 @@ def test_s3_s0_preparation_covers_robofactory_with_protected_fifos() -> None:
     assert "S3_R6_ROBOFACTORY_ROOT" in prepare
     assert "ROBOFACTORY_SENTINEL" in launcher
     assert 'unlink "${READY_FILE}"' in launcher
+
+
+def test_s3_monitor_reports_live_rollout_task_episode_step(tmp_path: Path) -> None:
+    worktrees = []
+    for candidate in ("R6L-P0", "R6L-P1", "R6J-P0", "R6J-P1"):
+        path = tmp_path / candidate
+        path.mkdir()
+        worktrees.append(f"{candidate}={path}")
+    root = tmp_path / "run"
+    initialize(
+        root,
+        run_id="s3-test",
+        session="permanent",
+        window_prefix="s3-test",
+        monitor_window="s3-test-monitor",
+        base_repo=tmp_path,
+        worktrees=worktrees,
+    )
+    rollout = (
+        root
+        / "candidates/r6l_p0/validation/gate_s3-test/lift_barrier"
+        / "rollout_status.json"
+    )
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text(
+        '{"task_id":"lift_barrier","stage":"rollout","episode_current":2,'
+        '"episodes_total":20,"step":125,"max_steps":500,"successes":1}'
+    )
+    rendered = render_monitor(root)
+    assert "task=lift_barrier episode=2/20 step=125/500 success=1" in rendered

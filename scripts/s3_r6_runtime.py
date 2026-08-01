@@ -308,9 +308,29 @@ def _rollout_progress(candidate_root: Path) -> str:
     validation = candidate_root / "validation"
     if not validation.is_dir():
         return ""
+    statuses = list(validation.rglob("rollout_status.json"))
+    if statuses:
+        path = max(statuses, key=lambda value: value.stat().st_mtime_ns)
+        status = _maybe_json(path)
+        return (
+            f"validate task={status.get('task_id', path.parent.name)} "
+            f"episode={status.get('episode_current', 0)}/"
+            f"{status.get('episodes_total', '?')} "
+            f"step={status.get('step', 0)}/{status.get('max_steps', '?')} "
+            f"success={status.get('successes', 0)} stage={status.get('stage', '?')}"
+        )
     candidates = sorted(validation.rglob("rollout_episodes.jsonl"))
     if not candidates:
-        return ""
+        task_dirs = [
+            path
+            for path in validation.rglob("*")
+            if path.is_dir()
+            and path.name in {"lift_barrier", "long_pipeline_delivery"}
+        ]
+        if not task_dirs:
+            return ""
+        current = max(task_dirs, key=lambda value: value.stat().st_mtime_ns)
+        return f"validate task={current.name} episode=0 success=0 stage=starting"
     path = candidates[-1]
     records = _read_jsonl(path)
     successes = sum(bool(value.get("success")) for value in records)

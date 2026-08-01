@@ -118,6 +118,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         videos.mkdir(parents=True)
     episode_path = output_dir / "rollout_episodes.jsonl"
     summary_path = output_dir / "rollout_summary.json"
+    progress_path = output_dir / "rollout_status.json"
     seeds = list(range(args.seed_start, args.seed_start + args.episodes))
     listener: socket.socket | None = None
     connection: socket.socket | None = None
@@ -127,6 +128,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     fatal_error: dict[str, str] | None = None
     client: dict[str, Any] | None = None
     contract: dict[str, Any] | None = None
+
+    def report_progress(
+        stage: str,
+        *,
+        episodes_completed: int = 0,
+        episode_current: int = 0,
+        step: int = 0,
+    ) -> None:
+        _write_json(
+            progress_path,
+            {
+                "format_version": "wam.robofactory.m2.rollout_status/1",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "task": args.task,
+                "task_id": task_id,
+                "stage": stage,
+                "episodes_completed": episodes_completed,
+                "episodes_total": args.episodes,
+                "episode_current": episode_current,
+                "step": step,
+                "max_steps": args.max_steps,
+                "successes": sum(bool(value.get("success")) for value in results),
+            },
+        )
+
+    report_progress("environment_initializing")
     try:
         env = _make_environment(
             robofactory_root=robofactory_root,
@@ -172,6 +199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "future_path": bool(args.future_path),
         }
         listener = _listen(args.host, args.port, timeout=args.socket_timeout)
+        report_progress("waiting_for_inference")
         print(
             f"[environment] {args.task} ready on {args.host}:{args.port}; "
             "waiting for M2 inference…",
@@ -179,6 +207,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         connection, peer = listener.accept()
         configure_socket(connection, timeout_seconds=args.socket_timeout)
+        report_progress("inference_connected")
         print(f"[environment] inference connected from {peer}", flush=True)
         send_message(
             connection,
@@ -214,6 +243,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             episode_return = 0.0
             step = 0
             episode_started = time.perf_counter()
+            report_progress(
+                "rollout",
+                episodes_completed=episode_index,
+                episode_current=episode_index + 1,
+            )
             while step < args.max_steps:
                 request_id = f"{episode_index}:{step}"
                 request_started = time.perf_counter()
@@ -281,6 +315,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if not isinstance(info, Mapping) or "success" not in info:
                     raise RuntimeError("RoboFactory info lacks success")
                 success = success or scalar_bool(info["success"], name="info.success")
+                if step % 25 == 0 or success or terminated or truncated:
+                    report_progress(
+                        "rollout",
+                        episodes_completed=episode_index,
+                        episode_current=episode_index + 1,
+                        step=step,
+                    )
                 if success or terminated or truncated or step >= args.max_steps:
                     break
                 state, images = extract_robofactory_multiview_observation(
@@ -314,6 +355,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
             results.append(result)
             _append_jsonl(episode_path, result)
+            report_progress(
+                "episode_complete",
+                episodes_completed=episode_index + 1,
+                episode_current=episode_index + 1,
+                step=step,
+            )
             send_message(
                 connection,
                 {
@@ -336,6 +383,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             elapsed=time.perf_counter() - started,
         )
         _write_json(summary_path, summary)
+        report_progress("complete", episodes_completed=len(results))
         send_message(connection, {"type": "summary", "summary": summary})
         print(f"[environment] summary: {summary_path}", flush=True)
         return 0
@@ -355,6 +403,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             elapsed=time.perf_counter() - started,
         )
         _write_json(summary_path, summary)
+        report_progress("failed", episodes_completed=len(results))
         raise
     finally:
         if env is not None:
