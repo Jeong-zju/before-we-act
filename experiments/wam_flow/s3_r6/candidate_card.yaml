@@ -1,0 +1,25 @@
+format_version: wam.robofactory.wam_flow.candidate_card/1
+round_id: s3-r6
+micro_round: R6L
+candidate_id: P1
+branch: s3/r6l-p1-protected-local-gated
+source_parent_commit: 50d64bdba80152a8186df32ca79e86b2814799d0
+hypothesis: >-
+  A zero-init gated residual driven only by protected own future latents can improve or preserve every paired closed-loop task.
+changed_axis: protected_local_future_gated_residual
+unchanged_axes:
+  - one_copy_five_task_shared_dataset
+  - frozen_s1_r1_flow
+  - frozen_protected_r4_p0_own
+  - frozen_r5_p0_shared_team
+  - adapter_shape_and_initialization_seed_60606
+  - optimizer_and_10000_update_p1_budget
+  - four_step_euler_solver
+  - paired_gate20_seed_900
+runtime:
+  model_kind: s3_r6l_protected_local_gated
+  future_scope: local
+  injection: true
+  config: configs/wam_flow/s3_r6.yaml
+  scheduled_gpu_index: 1
+
