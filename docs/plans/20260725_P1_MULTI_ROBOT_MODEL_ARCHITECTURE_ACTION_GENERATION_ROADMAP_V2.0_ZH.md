@@ -3,7 +3,7 @@
 > 文档更新：2026-08-02
 > 工程起点：当前 `feat/model-improvements` 分支
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：M0、M1、S0、S1-R1、S2 已完成；R1 选择 `rectified_flow_cold` F1，R3 选择 own-action-conditioned W1；新 R4 hybrid 因 LiftBarrier peer-action-shuffle bootstrap 95% 下界为负而按特殊规则失败；R5 选择 Protected Shared P0；S3-R6 已完成四候选五任务 fresh Flow 训练与两张 5090 两两实验，R6L-P1 五任务宏平均 `39% > 29%` 通过，R6J-P1 在可证明宏平均上界 `38% < 40%` 后按 operator 指令提前停止剩余 CameraAlignment eval、不晋级；R2a 跳过、R2b 延后
+> 当前状态：M0、M1、S0、S1-R1、S2、S3-R6 已完成；R1 选择 `rectified_flow_cold` F1，R3 选择 own-action-conditioned W1，R5 选择 Protected Shared P0；R6L-P1 五任务宏平均 `39% > 29%` 通过并经 merge commit `7308f5e` 晋级 `feat/model-improvements`，R6J-P1 在可证明上界 `38% < 40%` 后提前停止且不合并；依赖 R6J-P1 的 R7/R8 关闭，下一步直接以 R6L-P1 进入双卡两两 S4 正式复现与统计
 > 评测原则：进入动作路径的候选按闭环成功率推进；S2 predictor 严格 off-path，因此按预测能力与因果干预门槛推进
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -11,14 +11,14 @@
 
 ICRA 截稿临近，后续不再按旧版 M3–M11 的长串行路线推进。当前分支直接作为工程起点，压缩成一条可以在约七周内形成论文闭环的主线：
 
-> 按机器人组织多模态上下文，用 Rectified Flow / Flow Matching 生成每台机器人的动作；再用动作条件的多机器人未来表示显式调制 Flow 速度场，使预测未来真正参与协作动作生成。
+> 按机器人组织多模态上下文，用 Rectified Flow / Flow Matching 生成每台机器人的动作；再用受保护、动作条件的本地未来表示通过可回退的 gated residual 调制 Flow 速度场。peer/shared future 注入保留为本轮失败消融，不再作为 ICRA 主方法主张。
 
 本次调整包含七项硬决策：
 
 1. **当前分支就是起点。** 不重写已经验证的数据、DINOv3、按机器人视图、共享解码器、dense/MoE、时间集成、采样、checkpoint 和闭环评测基础。
 2. **最终目标是 World Action Model 与 Flow Matching。** 旧的 CVAE 动作分块模型仅保留为历史基线；论文标题、方法名和主张不以 ACT 为目标。
 3. **每个候选只做一个单步改进。** 相对冻结父提交，只允许改变一个研究变量、回答一个假设，并能用一个 flag 或一个 commit 完整回退；禁止同时改变数据、表示、损失、模型接口和推理协议中的多个维度。
-4. **使用两卡微轮次和远程 GPU 并行验证。** 一个训练微轮次固定为 `P0=父方案复跑` 与 `P1=父方案+一个 Δ` 两个候选；两个互不依赖的微轮次可以四卡同时运行。P0/P1 使用相同训练预算与阶段对应验证：S2 比较 held-out capability，进入动作路径后比较同协议闭环成功率。新 R4 是唯一的零训练诊断例外，只组合已经完成的 checkpoint，不参与正式 winner 选择。
+4. **使用两卡微轮次和远程 GPU 并行验证。** 一个训练微轮次固定为 `P0=父方案复跑` 与 `P1=父方案+一个 Δ` 两个候选；当前双卡服务器一次只运行一对，多个微轮次或正式种子必须两两排队。P0/P1 使用相同训练预算与阶段对应验证：S2 比较 held-out capability，进入动作路径后比较同协议闭环成功率。新 R4 是唯一的零训练诊断例外，只组合已经完成的 checkpoint，不参与正式 winner 选择。
 5. **暂时舍弃 active-agent loss weighting。** 训练目标不再根据动作幅度、active/inactive 标签或机器人活跃比例调整权重。所有 agent 使用相同损失规则，activity 最多保留为 debugging log，不参与反向传播或候选选择。
 6. **进入动作路径后只用闭环成功率决定推进。** P1 与对应 P0/父方案跑相同任务。一般微轮次要求每个任务闭环成功率均不低于父方案；S3-R6 按 2026-08-01 冻结的阶段特殊规则，改为五任务宏平均成功率不低于 P0，每任务成功率只作附加报告、不单独卡验收，持平也算通过。S2 predictor 尚未进入动作路径，因此只用 held-out prediction 与 action/peer-action shuffle 证明其能力，并用 action-equivalence smoke 排除误接线。
 7. **own predictor 从软约束改为硬保护。** 旧 R4 已证明 multi-head、own residual gate、分组梯度裁剪和随机数流隔离都不能保证逐任务 own no-regression。新 R5 固定从同一个合格 P0 own checkpoint 出发，own tower 以 `eval + frozen + optimizer-excluded` 方式保持函数不变；peer/shared 只能单向读取 detached own 表示，不能反向改写 own 输出。
@@ -27,29 +27,29 @@ ICRA 截稿临近，后续不再按旧版 M3–M11 的长串行路线推进。�
 
 ### 2.1 暂定论文题目
 
-**Cross-Agent World-Conditioned Flow Matching for Multi-Robot Collaboration**
+**Protected Local-Future-Conditioned Flow Matching for Multi-Robot Collaboration**
 
 中文工作名：
 
-**面向多机器人协作的跨智能体世界条件 Flow Matching**
+**面向多机器人协作的受保护本地未来条件 Flow Matching**
 
-最终方法类建议命名为 `CrossAgentFlowWAM`。`AgentFactorizedFlowWAM` 可以保留为 S1 纯 Flow 基类，避免把旧类名直接改包装后当作新方法。
+最终方法配置固定为 `s3_r6l_protected_local_gated`；通用实现类 `CrossAgentWorldConditionedFlow` 继续保留 local/team scope，但论文方法不再命名为 `CrossAgentFlowWAM`。`AgentFactorizedFlowWAM` 保留为 S1 纯 Flow 基类，R6J team scope 只作为失败消融与后续长期研究入口。
 
 ### 2.2 核心研究问题
 
 论文只回答一个主要问题：
 
-> 候选联合动作所诱导的跨机器人未来后果，能否直接调制按机器人分解的 Rectified Flow 速度场，并提高真实协作任务的闭环成功率？
+> 候选动作所诱导的受保护本地未来，能否通过可关闭的 gated residual 直接调制按机器人分解的 Rectified Flow 速度场，并提高多机器人任务的闭环宏平均成功率？
 
 目标计算图为：
 
 $$
-\hat{\mathbf z}_{t+1:t+H}^{1:N,\mathrm{shared}}
+\hat{\mathbf z}_{t+1:t+H}^{i}
 =
-W_\phi
+W_{\phi,\mathrm{own}}
 \left(
-\mathbf h_t^{1:N},
-\mathbf x_\tau^{1:N},
+\mathbf h_t^{i},
+\mathbf x_\tau^{i},
 \tau
 \right),
 $$
@@ -62,8 +62,7 @@ F_\theta
 \mathbf x_\tau^i,
 \tau,
 \mathbf h_t^i,
-\hat{\mathbf z}_{t+1:t+H}^{i},
-\hat{\mathbf z}_{t+1:t+H}^{-i,\mathrm{shared}}
+\hat{\mathbf z}_{t+1:t+H}^{i}
 \right),
 $$
 
@@ -71,17 +70,17 @@ $$
 
 - $\mathbf h_t^i$ 是第 $i$ 台机器人的视觉、状态、动作历史和任务上下文；
 - $\mathbf x_\tau^i$ 是 Flow 中间状态或候选动作；
-- $W_\phi$ 根据整队候选动作预测各 agent 与共享对象的联合未来 latent；
-- $F_\theta$ 预测第 $i$ 台机器人的速度场，并显式读取自己的未来、其他 agent 的后果和共享对象后果；
+- $W_{\phi,\mathrm{own}}$ 根据第 $i$ 台机器人的候选动作预测其受保护本地未来 latent；
+- $F_\theta$ 预测第 $i$ 台机器人的速度场，并通过有界、零初始化 gate 显式读取自己的预测未来；
 - 推理时只能向动作路径输入**预测未来**，不能输入真实未来。
 
-如果未来分支只作为辅助损失、没有回到速度场，它只能叫 `Flow + auxiliary future prediction`，不能作为最终 WAM 主张。
+如果未来分支只作为辅助损失、没有回到速度场，它只能叫 `Flow + auxiliary future prediction`，不能作为最终 WAM 主张。R6J 已经说明“加入 peer/shared future”本身不保证闭环收益：其五任务最好上界仍低于控制，因此跨智能体 future coupling 不进入最终正向主张。
 
-### 2.3 截至 2026-07-28 的新颖性研判
+### 2.3 截至 2026-08-02 的新颖性研判
 
-**结论：当前宽泛目标不具备足够新颖性；收紧后的核心目标具有条件性的新颖性，但尚未被实验建立。**
+**结论：宽泛的 cross-agent world-to-flow 目标未被本轮闭环结果支持；收紧后的 protected local-future gated residual 已获得单轮五任务正向证据，但仍需 S4 多种子复现才能形成最终论文结论。**
 
-代码现状也支持这一判断：当前 `block_causal_transformer.py` 明确禁止 action query 读取 future query，Flow solver 又以 `include_future=False` 调用 velocity model。因此当前分支实现的是 S0/S1 工程起点和近似 R6-P0 的 `Flow + auxiliary future prediction`，**还没有实现本文拟主张的 cross-agent world-to-flow coupling**。目前能评价的是最终目标的潜在新颖性，不能把现有代码直接称为新方法。
+代码已经通过通用 `CrossAgentWorldConditionedFlow` backend 实现 local/team 两种 future scope 和 gated velocity residual；但“实现了接口”不等于“实验支持主张”。五任务闭环只支持 local scope，team/shared scope 的最好上界低于控制。因此当前主线只能把 `s3_r6l_protected_local_gated` 称为晋级方法，cross-agent scope 必须作为失败消融，不能用类名或 capability 指标替代闭环证据。
 
 以下组件不能单独作为论文贡献：
 
@@ -95,15 +94,15 @@ $$
 | 多机器人 Flow 轨迹/动作协同 | [GCo](https://arxiv.org/abs/2511.10874) 已做多机器人接触与轨迹 Flow co-generation；[Flow-Opt](https://arxiv.org/abs/2510.09204) 已做带置换不变编码的集中式多机器人 Flow 轨迹优化 | “multi-robot + Flow” 本身不新颖 |
 | action-conditioned multiview world model | [A2World](https://arxiv.org/abs/2606.29501) 已建模动作驱动的多视角场景演化 | 多视角预测不是核心贡献 |
 
-在本轮检索到的最接近工作中，尚未发现与以下完整机制相同的公开方案：
+在本轮检索到的最接近工作中，原计划关注以下完整机制：
 
 > **对联合候选 action chunk 建模其跨 agent 与共享对象的后果，再将“自己的未来 + peer 后果 + shared-object 后果”逐 Flow step 注入共享参数、按 agent 分解的速度场，并以跨 agent 因果干预证明该耦合改善闭环协作。**
 
-因此论文贡献必须收敛为：
+R6J 的闭环验收没有支持上述完整 cross-agent 机制，因此不能再把它作为已经成立的论文贡献。论文贡献收敛为：
 
-1. **方法贡献：** `joint candidate action → cross-agent future consequences → factorized velocity fields` 的可变 agent-slot 结构，而不是 WAM 或 Flow Matching 的简单组合；
-2. **因果证据：** 对 peer action、peer future、agent slot 和共享对象 future 做 zero/shuffle/intervention，并用干预前后的闭环成功率验证这些输入是否必要；
-3. **闭环证据：** 在必须同步或交接的任务中，优于 `joint Flow without world`、`local-future WAM` 和 `auxiliary-only future` 三类公平基线，并同时报告 centralized joint policy 信息上限。
+1. **方法贡献：** `candidate action → protected local future → zero-init gated velocity residual`，并在 gate 为零或 future 无效时精确回退到 base Flow；
+2. **受保护耦合证据：** own predictor 始终冻结、optimizer-excluded 且逐元素等价，只有 adapter/gate 改变动作路径；
+3. **闭环证据：** R6L-P1 在相同五任务、seeds 与 pair-exact fresh Flow 下宏平均提高 `10pp`，同时完整披露 LongPipelineDelivery 的 `-15pp` 与 R6J team/shared 注入失败，避免把负结果包装成 cross-agent 提升。
 
 新颖性与因果分析只用于最终论文表述，不再设置工程阶段门槛。投稿前不得使用 “first” 或 “首次”；最终 claim 根据已有闭环结果收缩，但不阻塞模型迭代。
 
@@ -178,8 +177,8 @@ flowchart LR
     S0["S0 冻结起点<br/>B0/B1/B2/B3"]
     S1["S1 Per-Agent Flow<br/>R1 Flow；R2 延后"]
     S2["S2 Protected Action-Conditioned World<br/>R3 Action / R4 Hybrid / R5 Role-MoT"]
-    S3["S3 Safe World-to-Flow<br/>R6 Injection / R7 Unfreeze / R8 Dropout"]
-    S4["S4 四种子正式评测<br/>E1/E2/E3/E4"]
+    S3["S3 Protected Local World-to-Flow<br/>R6L selected；R6J/R7/R8 closed"]
+    S4["S4 双卡两批四种子正式评测<br/>E1/E2 then E3/E4"]
     S5["S5 论文与视频<br/>冻结方法"]
 
     S0 --> S1 --> S2 --> S3 --> S4 --> S5
@@ -202,11 +201,11 @@ flowchart LR
     T --> E --> S --> N
 ```
 
-两个独立微轮次可以占用四张卡并行。例如：
+若服务器有四张卡，两个独立微轮次可以四卡并行；当前服务器只有两张卡，所以必须两两排队：
 
 ```text
-卡 0/1：P vs P + Δdecoder
-卡 2/3：P vs P + Δsource_prior
+第一批 GPU 0/1：P vs P + Δa
+第二批 GPU 0/1：P vs P + Δb
 ```
 
 如果 $\Delta_{\mathrm{decoder}}$ 与 $\Delta_{\mathrm{source\_prior}}$ 都没有造成成功率退步，可以启动组合闭环；组合相对其 P0 不退步即可进入下一阶段。
@@ -1257,6 +1256,14 @@ R6J-P1 CameraAlignment 已完成 seeds `900–905`：seed `900/905` 各跑满 1,
 
 中断后 R6J-P1 的 RoboFactory、inference 和 Gate 进程全部退出，`nvidia-smi` 无 compute PID；永久 `ssh_tmux`、index 0 和 monitor window 保留，candidate window 以 130 留作审计。提交 `0c0765f` 让 monitor 把该候选显示为终态 `failed/finished`，从 partial summary 显示 `camera_alignment episode=6/20 success=4 reason=KeyboardInterrupt`，并且只在 `exit_code=130`、P0 五任务 Gate 完整且 partial summary 确认人工中断时计算保守上界；本轮实际显示 `observed=24/100 max=0.38 < P0=0.4` 和 `FINAL: R6L pass P1; R6J early-stop fail retain P0`，不会误报为待运行、心跳过期或完整 pair acceptance。后续如需重跑，应使用新的 run id，不能在本 run 上补写一个貌似完整的 R6J acceptance。
 
+#### 8.1.3 工程晋级与主路线收敛（2026-08-02）
+
+正式 winner 分支 `s3/r6l-p1-protected-local-gated` 已通过 merge commit `7308f5e` 合并回 `feat/model-improvements`，merge 的两个 parent 分别为主线 `69fbe52` 与候选 head `a4faf38`，因此独立实验历史仍可审计。主线新增获胜候选的 `configs/wam_flow/s3_r6.yaml`、`experiments/wam_flow/s3_r6/candidate.env` 和 `candidate_card.yaml`；candidate card 已按真实实验修正为 pair-exact fresh 五任务 Flow 和五任务宏平均假设，不再声称冻结旧 S1 两任务 Flow 或逐任务均不下降。
+
+R6L-P0、R6J-P0 和 R6J-P1 都不合并：两个 P0 是控制/回退身份，不是新增改进；R6J-P1 未通过硬门槛。它们的远程分支、checkpoint、Gate/partial summary 与 hash 继续保留作负结果和复现实验审计，但不得成为 `feat/model-improvements` 的 parent。S3 正式选型固定为 R6L-P1 policy SHA256 `5f3a05628563a0b2e26ea62941cda6ae49a6f161739d26abb351cdc483a18fc9`；合并的是可复现代码与候选身份，不把远程大 checkpoint 提交进 Git。
+
+路线据此停止横向扩张：R7a/R7b 原本只允许从通过的 R6J-P1 解冻 team 或 Flow，前提已经失败；R8 又依赖 R6/R7 冻结方案且不阻塞主路径。因此 R7a、R7b、R7m 与 R8 全部记为 `closed/not-run`，不从 R6L-P1 擅自改写为新的未配对实验，也不组合 local 与失败的 team 注入。下一步直接进入 S4：冻结 R6L-P1 的结构、数据协议和五任务评测，当前两张 GPU 分两批完成四个正式 seeds。论文正向主张只覆盖 protected local-future gated residual；R6J 作为“更丰富 future scope 不一定更好”的失败消融报告。
+
 每个 solver step 必须重新执行：
 
 1. 用冻结 base Flow 从当前 $\mathbf x_\tau^{1:N}$ 计算 base velocity 与 provisional clean action $\hat{\mathbf a}_1^{1:N}$；
@@ -1278,37 +1285,35 @@ $$
 
 ### 8.3 实现说明
 
-真实未来只用于训练 target，部署动作路径使用模型预测的 future latent。zero/shuffle intervention 可以作为论文分析，但不决定候选能否继续。R6J-P1 只要相对 R6J-P0 的五任务宏平均闭环成功率没有退步，就可以进入 R7；与 R6L-P1 的比较及每任务升降只用于结果说明。
+真实未来只用于训练 target，部署动作路径使用模型预测的 future latent。zero/shuffle intervention 可以作为论文分析，但不决定候选能否继续。R6L-P1 已按第 8.2 节规则通过并成为 S3 winner；R6J-P1 的可证明上界低于 R6J-P0，故 joint/team future scope 到此终止，不得进入 R7。
 
-### 8.4 R7a/R7b：逐模块解冻（可选，四卡并行）
+### 8.4 R7a/R7b：关闭，不执行
 
-R6J-P1 通过后，将其冻结为 `P_inject`，再运行两个独立微轮次。protected own tower 在两个微轮次中都保持冻结，旧版“解冻整个 world predictor”被取消：
+R7a/R7b 的前置条件是 R6J-P1 通过后将其冻结为 `P_inject`。该条件未满足，因此以下原计划仅作为审计记录，不创建分支、不训练、不验收：
 
 | 微轮次 | P0 控制 | P1 单步改进 | 唯一变量 |
 |---|---|---|---|
 | R7a Team adaptation | R5 team tower 冻结 | 仅以小学习率解冻 peer/shared Role-MoT team modules | team gradient scope |
 | R7b Flow adaptation | Flow 冻结 | 仅以小学习率解冻 Flow | Flow gradient scope |
 
-两轮都保留同一 gated residual，protected own 始终不进入 optimizer、EMA 或 gradient clipping。每个 P1 只要相对 P0 的各任务闭环成功率没有退步即可保留；若两个都通过，可以直接进行组合闭环，组合没有成功率退步即可继续。
+不允许把表中的 parent 偷换为 R6L-P1 后继续运行，因为这会同时改变 future scope 与梯度范围，破坏单变量配对。R7a、R7b 和 R7m 状态统一为 `closed/not-run`。
 
-### 8.5 R8：Future dropout（可选，两卡）
+### 8.5 R8：关闭，不执行
 
-只有 R6/R7 已冻结且仍有时间时，比较 `future_dropout=off` 与 `future_dropout=on`。dropout 只作用于送往 Flow adapter 的预测 future，不作用于 protected own tower；P1 闭环成功率不低于 P0 即可保留，R8 不阻塞主路径。
+Future dropout 原本是 R6/R7 冻结后、仍有余量时的可选微轮次。当前正向证据只支持 R6L-P1，且 LongPipelineDelivery 已有 `-15pp` 单任务代价；继续增加正则化变量会延迟正式复现而不能补足 cross-agent 主张。因此 R8 状态为 `closed/not-run`，future dropout 移回 ICRA 后研究列表。
 
-## 9. S4：正式训练、评测与统计（08-22 至 08-31）
+## 9. S4：正式训练、评测与统计（08-03 至 08-12）
 
-### 9.1 四卡并行方式
+### 9.1 双卡两两正式复现
 
-冻结模型后，四张卡不再训练新结构，而是并行训练同一正式方案的四个随机种子：
+冻结 R6L-P1 后不再训练新结构。当前只有两张 GPU，四个正式随机种子分两批执行，每批两卡并行：
 
-| 卡 | 训练随机种子 | 作用 |
-|---|---:|---|
-| E1 | 101 | 正式复现 1 |
-| E2 | 202 | 正式复现 2 |
-| E3 | 303 | 正式复现 3 |
-| E4 | 404 | 正式复现 4 |
+| 批次 | GPU0 | GPU1 | 作用 |
+|---|---|---|---|
+| 1 | E1 / seed `101` | E2 / seed `202` | 正式复现 1–2 |
+| 2 | E3 / seed `303` | E4 / seed `404` | 正式复现 3–4 |
 
-S4 使用 S3 中最近一个闭环成功率没有退步的方案。存在组合分支时先跑一次组合闭环；不退步就使用组合，否则使用其 P0。随后四张卡用于该方案的四个正式种子。
+S4 唯一方案是 merge commit `7308f5e` 晋级的 R6L-P1，不再建立 local+team 组合分支。四个 seed 复用同一五任务数据、架构、训练预算与评测协议；共享数据和 Hub cache 仍只有一份，checkpoint、日志和验证结果按 seed 隔离。
 
 ### 9.2 主表
 
@@ -1316,26 +1321,26 @@ S4 使用 S3 中最近一个闭环成功率没有退步的方案。存在组合�
 2. R1/R2 冻结的 Per-Agent Flow；
 3. Joint/team-context Flow without world prediction，隔离“多机器人联合建模”本身；
 4. R5 winner：Protected own + Team/Role-MoT world prediction，不注入 velocity；
-5. R6L-P1：Protected local-future gated residual injection，隔离单机器人 latent WAM；
-6. R6J-P1 或 R7/R8 verified winner：Protected Team+Shared World-Conditioned Action Flow；
-7. centralized joint policy，作为信息上限而不是最终方法。
+5. **R6L-P1（最终方法）：** Protected local-future gated residual injection；
+6. centralized joint policy，作为信息上限而不是最终方法。
+
+R6J-P1 不进入正向主表 winner 行；它与 R6J-P0 的完整/partial 结果进入失败消融，明确报告 team/shared future 注入的最好宏平均上界 `38% < 40%`。
 
 ### 9.3 核心消融
 
 - dense vs top-2 MoE；
-- local future vs joint/peer-conditioned future；
+- local future vs joint/peer-conditioned future（R6L-P1 通过，R6J-P1 early-stop 失败）；
 - shared team Transformer vs peer/shared Role-MoT；
 - post-hoc R4 hybrid vs 从共同 protected parent 正式训练的 R5；
 - joint/team-context Flow without world vs cross-agent world-conditioned Flow；
 - auxiliary-only vs world-to-flow coupling；
 - zero-init gate 的 residual injection：`gate=0` 等价性；
-- frozen base vs 仅解冻 team Role-MoT vs 仅解冻 Flow；protected own 不参与解冻消融；
 - normal vs zero vs shuffled predicted future；
 - own action/future 不变时，normal vs zero/shuffled peer action 和 peer future；
 - temporal ensemble on/off；
 - 1-step Euler、4-step Euler、2-step Heun。
 
-active-agent loss weighting 不进入主表和消融表。
+active-agent loss weighting、R7 解冻和 R8 future dropout 不进入主表和消融表。
 
 上述主表和消融按时间选择执行，不阻塞阶段推进。
 
@@ -1346,7 +1351,7 @@ active-agent loss weighting 不进入主表和消融表。
 - 成功 episode 数、总 episode 数和闭环成功率；
 - paired initial conditions 下的逐回合结果。
 
-推进时直接比较同任务成功率。候选相对父方案在所有任务都没有下降即可通过；Wilson 区间、paired test、多随机种子和其他统计均为可选报告项，不构成准入条件。
+S4 不再进行架构选型，也不因某个 seed 的结果临时切换回失败分支。正式报告逐任务、逐 seed、四种子均值与五任务宏平均；paired test 和区间估计用于论文不确定性说明，不新增方法准入门槛。只有运行故障、产物损坏或协议偏离才重跑对应 seed。
 
 ## 10. 远程 GPU 多分支闭环迭代协议
 
@@ -1368,7 +1373,7 @@ active-agent loss weighting 不进入主表和消融表。
 
 ### 10.3 On-path 候选只需闭环；S2 使用 capability gate
 
-从 S3 起，候选完成训练后跑与父方案相同的闭环任务并输出成功率。S3-R6 必须覆盖全部五任务并按 8.2 的宏平均特殊规则验收；每任务结果必须报告但不单独卡验收。主动早停或没有完整五任务闭环结果的候选退出本轮，不阻塞其他候选；不再要求额外 smoke、reload、provenance 或 artifact 审计才能进入选择。S2 predictor 严格 off-path：R3 按 7.4 的 local capability gate 选择，R4 按 7.5 只做 hybrid 诊断，R5 按 7.6 的 protected-own/team capability gate 选择；三者不进行没有区分力的成对闭环选型。
+从 S3 起，候选完成训练后跑与父方案相同的闭环任务并输出成功率。S3-R6 必须覆盖全部五任务并按 8.2 的宏平均特殊规则验收；每任务结果必须报告但不单独卡验收。原则上必须完成全部五任务；唯一可接受的提前终止是已完成结果加剩余回合全胜仍不能达到 P0，并保留 partial summary、保守上界和人工中断记录，如本轮 R6J-P1。没有完整结果且不能给出这种失败证明的候选只退出本轮、不产生 acceptance。S2 predictor 严格 off-path：R3 按 7.4 的 local capability gate 选择，R4 按 7.5 只做 hybrid 诊断，R5 按 7.6 的 protected-own/team capability gate 选择；三者不进行没有区分力的成对闭环选型。
 
 ### 10.4 选择一个或多个 winner
 
@@ -1385,7 +1390,7 @@ $$
 
 ### 10.5 多分支组合不是直接 Git 合并
 
-多个通过候选可以建立组合分支。组合分支相对其 P0 在所有任务的成功率都不下降即可继续，持平也通过；无需兼容性表、Pareto 条件或额外 artifact 审计。
+多个通过候选可以建立组合分支。组合分支相对其 P0 在所有任务的成功率都不下降即可继续，持平也通过；无需兼容性表、Pareto 条件或额外 artifact 审计。本轮只有 R6L-P1 通过，R6J-P1 失败，因此不创建组合分支，Git 也只合并 R6L-P1。
 
 ### 10.6 分支与产物命名
 
@@ -1411,13 +1416,13 @@ s2/r4-hybrid-diagnostic
 s2/r5-p0-protected-shared
 s2/r5-p1-protected-role-mot
 s3/r6l-p0-protected-local-aux
-s3/r6l-p1-protected-local-gated
+s3/r6l-p1-protected-local-gated             # selected, merged as 7308f5e
 s3/r6j-p0-protected-team-offpath
-s3/r6j-p1-protected-team-gated
-s3/r7a-p1-unfreeze-team
-s3/r7b-p1-unfreeze-flow
-s3/r7m-verified-merge
-s3/r8-p1-future-dropout
+s3/r6j-p1-protected-team-gated              # failed, audit only
+s3/r7a-p1-unfreeze-team                     # closed/not-run
+s3/r7b-p1-unfreeze-flow                     # closed/not-run
+s3/r7m-verified-merge                       # closed/not-run
+s3/r8-p1-future-dropout                     # closed/not-run
 ```
 
 每轮保留选定 parent、checkpoint、配置和成功率摘要即可；其他信息按需记录，不作为推进条件。
@@ -1491,8 +1496,8 @@ configs/wam_flow/
 7. 新 R4 组合旧 P0 own 与旧 P1 team source，只做 exact-own、persistence 和 peer-action-shuffle 诊断，禁止训练和晋级；
 8. R5 从共同 protected P0 parent 建立 Protected Shared/Protected Role-MoT 两卡候选；own 硬旁路，peer/shared 单向读取 detached own K/V；
 9. 训练、验证、加载与验收白名单加入 R4 evaluate-only 和两个 R5 model kind；trainer 必须拒绝 hybrid kind；
-10. 建立 `CrossAgentFlowWAM` residual adapter，并只将 velocity gate 初始化为 0；R6 只训练 adapter/gate，Flow 与全部 world predictor 冻结；
-11. R6 通过后才允许 R7 分别解冻 team Role-MoT 或 Flow，protected own 永不解冻；future dropout 单独放在 R8；
+10. 建立通用 world-conditioned residual adapter，并只将 velocity gate 初始化为 0；R6 只训练 adapter/gate，Flow 与全部 world predictor 冻结；
+11. R6L-P1 通过后合并 local scope；R6J-P1 失败后关闭 R7 team/Flow 解冻与 R8 future dropout，不再扩展结构；
 12. checkpoint schema 显式记录 `action_generator`、`future_scope`、`protected_own_sha256`、`protected_own_exact`、`team_mixer`、`injection`、`trainable_modules`、gate、solver、target normalization/PCA 与 manifest hash；
 13. 加入 peer-action/future zero/shuffle intervention 和 joint-Flow-without-world baseline；
 14. legacy checkpoint 只通过 legacy loader 读取，禁止静默加载到新方法。
@@ -1508,10 +1513,10 @@ configs/wam_flow/
 | 07-31–08-01 | 旧 R4 已完成且未晋级：team capability 通过、own no-regression 失败并完成三项隔离诊断 | 固化负结果和结构转向依据 |
 | 08-01–08-02 | 新 R4 已完成：own 精确等价，但 LiftBarrier peer-shuffle CI 跨零，按特殊规则失败并进入 R5 | 记录旧 R4 三项隔离反证、hybrid 负结果与 protected-own 动机 |
 | 08-01 | R5 已完成：Protected Shared 与 Protected Role-MoT 均通过，按 macro peer/shared loss 选择 P0 | 写单向 role routing、exact-own contract 与 cross-agent/shared future |
-| 08-11–08-17 | S3 R6L/R6J：protected local/team 注入四卡并行 | 完成方法图与首轮闭环结果 |
-| 08-18–08-21 | S3 R7 可选逐模块解冻；R8 不得阻塞；冻结模型 | 根据成功率整理主张 |
-| 08-22–08-31 | S4 四种子正式训练与闭环 | 成功率主表与统计脚本 |
-| 09-01–09-07 | 必要消融与补跑 | 完整初稿、图表和附录 |
+| 08-01–08-02 | S3 R6L/R6J 双卡两两完成；选择并合并 R6L-P1，关闭 R7/R8 | 收缩方法名与主张，记录 R6J 负结果 |
+| 08-03–08-12 | S4 两批双卡完成 seeds 101/202/303/404 正式训练与五任务闭环 | 成功率主表与统计脚本 |
+| 08-13–08-20 | 只补主表必需基线、已冻结消融和失败分析 | 完整初稿、方法图、图表和附录 |
+| 08-21–09-07 | 不再新增结构；必要时只复核异常 seed | 完整初稿、图表、附录与内部审稿 |
 | 09-08–09-09 | 只修关键缺口 | 完成 supplementary video |
 | 09-10–09-14 | 禁止新增方法 | 压缩到 8 页、内部审稿、最终检查 |
 | 09-15 | 只做提交检查 | 提交 |
@@ -1521,10 +1526,10 @@ configs/wam_flow/
 ## 13. 简化推进与回退规则
 
 1. S2 off-path predictor 按第 7 节推进：R3 验证 own-action dependence，R4 只做零训练 hybrid 诊断，R5 同时要求 protected-own 精确等价和 team capability；action/peer-action shuffle 无效时停止，不能用闭环持平替代。
-2. 从 S3 起，P1 在所有任务的闭环成功率都不低于 P0：P1 通过，持平也通过。
-3. 从 S3 起，P1 任一任务成功率低于 P0：该轮保留 P0，后续阶段仍可从 P0 继续。
-4. On-path 候选主动早停或没有闭环结果：跳过该候选，不阻塞其他分支。
-5. 可选轮次来不及完成：直接跳过，不阻塞主路径。
+2. S3-R6 使用五任务宏平均特殊规则：P1 宏平均不低于对应 P0 即通过，持平也通过；每任务结果必须报告但不单独卡验收。
+3. 其他 on-path 微轮次若以后恢复，默认仍要求 P1 每个任务均不低于 P0；任何阶段特例必须在运行前冻结，不能看完结果后修改。
+4. On-path 候选只有在“剩余回合全部成功仍失败”的保守上界已成立时才能提前终止并判失败；否则没有完整闭环结果的候选只跳过、不产生 acceptance。
+5. R6J-P1 已失败，因此其后继 R7a/R7b/R7m/R8 全部关闭；可选轮次不阻塞 R6L-P1 直接进入 S4。
 6. protected own 的 checkpoint hash、冻结范围和逐元素输出等价是 R5 以后始终成立的结构不变量；除该不变量和 S2 已定义的 capability/equivalence 检查外，不再增加其他审计或额外准入清单阻塞推进。
 
 ## 14. 从现在开始的执行清单
@@ -1539,3 +1544,5 @@ configs/wam_flow/
 8. **已完成但未通过：** 新 R4 零训练 hybrid 在五任务保持 protected-own 精确等价、team loss 优于 persistence、source/action-equivalence 不变；仅 LiftBarrier peer-action-shuffle bootstrap 95% 下界为 `-0.002375`，按特殊规则判定旧 team tower 与 protected P0 表示不兼容。
 9. **已完成并通过：** R5 从共同 protected P0 parent 建立 `s2/r5-p0-protected-shared` 与 `s2/r5-p1-protected-role-mot`；两者 own 精确等价、五任务 persistence/shuffle CI、action-equivalence 与 frozen-parent gate 全部通过，按 macro peer/shared loss `1.406178 < 1.412414` 选择 P0。
 10. **已完成并部分通过：** S3-R6 旧 run 已终止且不得复用；新 run 四候选均完成 fresh 五任务 Flow 80k，两个 P1 均完成 adapter/gate 10k。R6L-P1 以宏平均 `39% > 29%` 通过；R6J-P1 在四个完整任务及 CameraAlignment 6 回合后可证明最终上界 `38% < 40%`，经 operator 授权停止剩余 eval，不晋级并保留 R6J-P0。
+11. **已完成工程晋级：** `s3/r6l-p1-protected-local-gated` 通过 merge commit `7308f5e` 合并到 `feat/model-improvements`；R6L-P0、R6J-P0、R6J-P1 均不合并，只保留分支与远程产物供审计。
+12. **路线已收敛：** R7a/R7b/R7m/R8 关闭且不运行，不再追求未经闭环支持的 cross-agent future 正向主张；下一步冻结 R6L-P1，用两张 GPU 分两批完成 S4 seeds `101/202/303/404` 的正式训练、五任务评测与统计。
