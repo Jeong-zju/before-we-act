@@ -1776,6 +1776,62 @@ Gate5 只用于 `20k` 首次可运行性与灾难性回归筛查，不产生 win
 
 所有报告必须带 task、episode、decision time、有效 agent/source/horizon mask 与 checkpoint SHA256；禁止只保存全局平均后丢掉失败任务，尤其单列 LongPipelineDelivery 和 TakePhoto。
 
+### 9.6 R7 已实现运行链、双分支与一键操作（2026-08-02）
+
+R7 已按“本地实现与测试 → 推送公共父提交 → 从公共父提交创建两个候选分支 → 远程 fast-forward → 永久 tmux 自主训练/验证 → 特殊验收 → 结果回写”的顺序实现。公共父分支为 `feat/model-improvements`，两个候选分支固定为：
+
+| GPU | 分支 | model kind | 唯一候选轴 |
+|---:|---|---|---|
+| 0 | `s4/r7-p0-token-preserving-evidence` | `s4_r7_token_preserving` | `utility_coupling_weight=0` |
+| 1 | `s4/r7-p1-world-utility-coupling` | `s4_r7_world_utility_coupling` | `utility_coupling_weight=0.05` |
+
+公共实现包含层级 team sampler、per-agent→per-team→batch 联合损失、scale-aligned active clones、12 组 token-preserving rank-32 adapter、dense utility router、每 4 updates forced-evidence audit、router-only WUC、update 26668 Flow 解冻、精确 resume、逐模块有效 agent-window exposure、训练/闭环 inference 白名单、八条件 Gate20、episode-bootstrap utility gate、成对验收、共享准备、常驻 monitor 和精确 stop。`pair_exact.json` 会把候选轴移除后逐字段比较 config，并核对 200-step dataset-index/hash、两个 phase 的 trainable-name hash、LR 曲线、显存、吞吐、forced overhead 与 resume-next-batch；任一候选 OOM 或余量低于 2 GiB 时只允许两边共同切到 `micro=1/accum=12` 后使用新 run，禁止单边自动降配。
+
+正式 candidate runner 的顺序固定为：共享 ancestor/data hash ready → 各自 200-step preflight → 等待并验证 pair exact → 各自 125,000 optimizer updates → 离线 forced-evidence/router utility 审计 → 依次运行 `normal`、`legacy_reference`、`world_evidence_gate_zero`、`all_world_gates_zero`、`shuffle_all`、`shuffle_own`、`shuffle_peer`、`shuffle_shared` 五任务 Gate20 → 等待另一候选 → 应用 9.5 的特殊验收。normal 先生成 within-task/different-episode predicted-future donor bank，四个 shuffle 条件不得读取环境真实 future。`all_world_gates_zero` 只报告，不成为准入 gate；P1 的 Spearman、episode bootstrap 下界与 WUC-only 梯度范围是独立硬门槛。
+
+已有双 RTX 5090 服务器的一键更新、只读预检和启动如下。launcher 只复用已经存在的永久 `ssh_tmux`，创建或修复 `s4-r7-round1-prepare/p0/p1/monitor` 四个 `remain-on-exit=on` window；P0/P1 分别只看到物理 GPU0/GPU1，不使用 DDP。五任务数据、Hub cache、DINO/PCA 和 R6L/R5 ancestors 只在基础仓库保存一份，两个 worktree 只建只读符号链接，checkpoint/resume/log/video/report 按 candidate 隔离：
+
+```bash
+cd /workspace/fe-pc-wam
+git fetch --no-tags origin \
+  +refs/heads/feat/model-improvements:refs/remotes/origin/feat/model-improvements \
+  +refs/heads/s4/r7-p0-token-preserving-evidence:refs/remotes/origin/s4/r7-p0-token-preserving-evidence \
+  +refs/heads/s4/r7-p1-world-utility-coupling:refs/remotes/origin/s4/r7-p1-world-utility-coupling
+git switch feat/model-improvements
+git merge --ff-only origin/feat/model-improvements
+
+bash scripts/launch_s4_r7_2gpu_tmux.sh \
+  --run-id s4-r7-round1 --dry-run
+bash scripts/launch_s4_r7_existing_server.sh \
+  --run-id s4-r7-round1 --no-focus-monitor
+```
+
+默认复用现有数据与缓存时不会请求 HF token。只有缺少 RoboFactory/HF 资产时，existing-server wrapper 才自动追加 `--prepare-from-s0`；此路径完整保留 S0 规则：token 只从当前终端隐藏读取并经 mode-0600 FIFO 交付，不进入 export、argv、tmux command、manifest 或日志；dataset 继续使用固定 revision 的官方 `hf download`、Xet 与默认并发，DINO/RoboFactory 关闭 Xet 且单 worker，中断后原位复用 Hub cache 和 `.incomplete`，禁止改用 `snapshot_download`。
+
+monitor 每 5 秒显示 shared 与 P0/P1 的当前 phase、正在运行的程序、detail、runner/child/GPU PID、20 秒心跳与 age、GPU 利用率/显存、preflight 状态、micro/accum/effective batch、optimizer update、team/有效 agent windows、Flow 冻结/解冻、milestone、loss/grad/LR，以及验证 condition/task/episode/step。超过 75 秒没有心跳明确标记 `STALE`；进程正常退出、异常退出和外部 SIGTERM 分别显示为不同终态。特殊验收区直接推导 pair structure、梯度、normal/legacy/new-gate-zero/shuffle gap、source gap、P1 utility CI 和最终 winner，不以一个泛化的 `passed=true` 代替规则。只读查看命令为：
+
+```bash
+cd /workspace/fe-pc-wam
+python3 scripts/s4_r7_runtime.py monitor --once \
+  --run-root /workspace/fe-pc-wam/outputs/s4_r7_runs/s4-r7-round1
+tmux select-window -t ssh_tmux:s4-r7-round1-monitor
+```
+
+需要一键退出时，必须从永久 session 的非本轮 window 执行：
+
+```bash
+cd /workspace/fe-pc-wam
+bash scripts/stop_s4_r7_2gpu_tmux.sh \
+  --run-id s4-r7-round1 --dry-run
+bash scripts/stop_s4_r7_2gpu_tmux.sh \
+  --run-id s4-r7-round1
+tmux has-session -t ssh_tmux
+```
+
+stop 只按 manifest 中的精确 run root、四个 window 名和进程环境标签终止本轮，先 `SIGINT`、再限时 `SIGTERM/SIGKILL`；绝不调用 `tmux kill-session`，也不删除共享数据/cache/ancestors、worktree、checkpoint/resume、日志、视频或验收报告。若训练或验收报错，必须在本地修复并测试、推送对应公共/候选分支，再在远程 fast-forward 并以保留的 resume 重启；不得直接在服务器 worktree 做不可追踪修补。
+
+R7 正式结果产生后，本节继续追加两候选 checkpoint/report SHA256、逐任务八条件 Gate20、utility CI、验收结论和唯一 merge commit。只有 `acceptance.json.r8_may_start=true` 时才把胜出分支合并回 `feat/model-improvements` 并创建 R8 两分支；R8 将使用独立 run root 和 R8 专用 launcher/monitor/stop，重复同一代码处理与文档回写流程，不载入 R7 的 125k model/optimizer state。
+
 ## 10. S5-R9：正式训练、评测与统计（08-23 至 09-04）
 
 ### 10.1 双卡两两正式复现

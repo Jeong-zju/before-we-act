@@ -29,8 +29,13 @@ TASKS = (
     "three_robots_stack_cube",
     "camera_alignment",
 )
-POLICY_KINDS = {"wam", "static_act", "agent_flow", "s3_flow"}
-FILE_CHECKPOINT_POLICY_KINDS = {"static_act", "agent_flow", "s3_flow"}
+POLICY_KINDS = {"wam", "static_act", "agent_flow", "s3_flow", "s4_flow"}
+FILE_CHECKPOINT_POLICY_KINDS = {
+    "static_act",
+    "agent_flow",
+    "s3_flow",
+    "s4_flow",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -113,7 +118,9 @@ def build_gate_summary(
     if not experiment:
         raise ValueError("experiment must be non-empty")
     if policy_kind not in POLICY_KINDS:
-        raise ValueError("policy kind must be wam, static_act, agent_flow or s3_flow")
+        raise ValueError(
+            "policy kind must be wam, static_act, agent_flow, s3_flow or s4_flow"
+        )
     if episodes <= 0 or seed_start < 0:
         raise ValueError("seed protocol is invalid")
     if len(source_commit) != 40 or any(

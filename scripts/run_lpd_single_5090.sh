@@ -222,6 +222,16 @@ train() {
           --progress-log "${LPD_PROGRESS_LOG}"
       )
       ;;
+    s4_flow)
+      (
+        cd "${FE_ROOT}"
+        PYTHONUNBUFFERED=1 uv run --frozen python \
+          scripts/train_s4_r7_world_utility.py \
+          --config "${LPD_CONFIG}" \
+          --device cuda:0 \
+          --progress-log "${LPD_PROGRESS_LOG}"
+      )
+      ;;
     wam)
       (
         cd "${FE_ROOT}"

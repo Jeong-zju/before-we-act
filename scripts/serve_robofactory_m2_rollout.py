@@ -491,6 +491,14 @@ def _validate_client(raw: Any, *, contract: Mapping[str, Any]) -> dict[str, Any]
             "s3_r6j_protected_offpath_flow_p0",
             "s3_r6j_protected_gated_residual_flow_p1",
         },
+        "wam.robofactory.s4_r7.world_utility.checkpoint/1": {
+            "s4_r7_token_preserving_world_flow",
+            "s4_r7_world_utility_coupled_flow",
+        },
+        "wam.robofactory.s4_r8.horizon_causal.checkpoint/1": {
+            "s4_r8_horizon_prefix_mean_world_flow",
+            "s4_r8_causal_prefix_attention_world_flow",
+        },
     }
     if checkpoint_format not in supported_sources:
         raise RuntimeError("client did not load a supported direct-policy checkpoint")

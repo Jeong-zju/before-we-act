@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import torch
@@ -59,6 +61,8 @@ class S2GroupedTrajectoryDataset(Dataset[dict[str, Tensor]]):
         self.contracts = self.source.contracts
         self.task_vocabulary = self.source.task_vocabulary
         self.split = str(split)
+        self._hierarchical_indices_cache = self._build_hierarchical_indices()
+        self._restore_hierarchical_indices_view()
 
     def __len__(self) -> int:
         return len(self.source)
@@ -95,6 +99,91 @@ class S2GroupedTrajectoryDataset(Dataset[dict[str, Tensor]]):
     def task_indices(self, task_index: int) -> range:
         return self.source.task_indices(task_index)
 
+    def hierarchical_indices(
+        self,
+    ) -> Mapping[str, Mapping[int, tuple[int, ...]]]:
+        """Return the cached ``task -> episode -> time`` dataset indices.
+
+        The innermost tuples are ordered by ``decision_t``.  The returned
+        nested mappings are read-only so a sampler cannot accidentally change
+        the shared dataset contract.  Building the cache only reads window
+        metadata; it never calls ``__getitem__`` or opens episode payloads.
+        """
+
+        return self._hierarchical_indices_view
+
+    def _build_hierarchical_indices(
+        self,
+    ) -> dict[str, dict[int, tuple[int, ...]]]:
+        hierarchy: dict[str, dict[int, tuple[int, ...]]] = {}
+        for task_index, (contract, task_dataset) in enumerate(
+            zip(self.contracts, self.source.datasets, strict=True)
+        ):
+            task_id = str(contract.task_id)
+            task_range = self.source.task_indices(task_index)
+            windows = getattr(task_dataset, "_index", None)
+            if windows is None:
+                # Compatibility with an older metadata adapter.  This still
+                # avoids materializing samples or opening HDF5 payloads.
+                windows = tuple(
+                    task_dataset._window(local_index)
+                    for local_index in range(len(task_dataset))
+                )
+            if len(windows) != len(task_range):
+                raise RuntimeError(
+                    f"task {task_id!r} window metadata length drifted"
+                )
+
+            episode_windows: defaultdict[int, list[tuple[int, int]]] = (
+                defaultdict(list)
+            )
+            for local_index, window in enumerate(windows):
+                record = task_dataset.records[int(window.record_index)]
+                episode_index = int(record.episode_index)
+                decision_t = int(window.decision_t)
+                dataset_index = task_range.start + local_index
+                episode_windows[episode_index].append(
+                    (decision_t, dataset_index)
+                )
+
+            task_hierarchy: dict[int, tuple[int, ...]] = {}
+            for episode_index in sorted(episode_windows):
+                ordered = sorted(episode_windows[episode_index])
+                decision_times = [decision_t for decision_t, _ in ordered]
+                if len(decision_times) != len(set(decision_times)):
+                    raise RuntimeError(
+                        f"task {task_id!r} episode {episode_index} has "
+                        "duplicate decision_t windows"
+                    )
+                task_hierarchy[episode_index] = tuple(
+                    dataset_index for _, dataset_index in ordered
+                )
+            if not task_hierarchy:
+                raise RuntimeError(f"task {task_id!r} has no hierarchical windows")
+            hierarchy[task_id] = task_hierarchy
+        return hierarchy
+
+    def _restore_hierarchical_indices_view(self) -> None:
+        self._hierarchical_indices_view = MappingProxyType(
+            {
+                task_id: MappingProxyType(episodes)
+                for task_id, episodes in self._hierarchical_indices_cache.items()
+            }
+        )
+
+    def __getstate__(self) -> dict[str, Any]:
+        # ``mappingproxy`` is intentionally read-only but not pickleable.
+        # Workers reconstruct the cheap views around the cached plain dicts.
+        state = dict(self.__dict__)
+        state.pop("_hierarchical_indices_view", None)
+        return state
+
+    def __setstate__(self, state: Mapping[str, Any]) -> None:
+        self.__dict__.update(dict(state))
+        if not hasattr(self, "_hierarchical_indices_cache"):
+            self._hierarchical_indices_cache = self._build_hierarchical_indices()
+        self._restore_hierarchical_indices_view()
+
     def close(self) -> None:
         self.source.close()
 
@@ -111,6 +200,19 @@ class S2GroupedTrajectoryDataset(Dataset[dict[str, Tensor]]):
                 ],
                 "future_horizons": list(S2_FUTURE_HORIZONS),
                 "global_view_is_separate": True,
+                "hierarchical_sampling": {
+                    "order": ["task", "episode", "time", "all_valid_agent"],
+                    "tasks": len(self._hierarchical_indices_cache),
+                    "episodes": sum(
+                        len(episodes)
+                        for episodes in self._hierarchical_indices_cache.values()
+                    ),
+                    "team_windows": sum(
+                        len(indices)
+                        for episodes in self._hierarchical_indices_cache.values()
+                        for indices in episodes.values()
+                    ),
+                },
             }
         )
         return value

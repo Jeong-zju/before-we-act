@@ -25,7 +25,9 @@ S3_TASKS = (
 )
 
 
-@pytest.mark.parametrize("policy_kind", ["static_act", "agent_flow"])
+@pytest.mark.parametrize(
+    "policy_kind", ["static_act", "agent_flow", "s3_flow", "s4_flow"]
+)
 def test_gate_summary_binds_file_checkpoint_config_and_episode_records(
     tmp_path,
     policy_kind,

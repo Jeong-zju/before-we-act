@@ -9,7 +9,7 @@ ROBOFACTORY_ROOT="${ROBOFACTORY_ROOT:-${WORKSPACE}/RoboFactory}"
 RF_PYTHON="${RF_PYTHON:-${ROBOFACTORY_ROOT}/.venv/bin/python}"
 LPD_CONFIG="${LPD_CONFIG:?set LPD_CONFIG}"
 LPD_CHECKPOINT="${LPD_CHECKPOINT:?set LPD_CHECKPOINT}"
-LPD_POLICY_KIND="${LPD_POLICY_KIND:?set LPD_POLICY_KIND to wam, static_act, agent_flow or s3_flow}"
+LPD_POLICY_KIND="${LPD_POLICY_KIND:?set LPD_POLICY_KIND to wam, static_act, agent_flow, s3_flow or s4_flow}"
 LPD_GATE_MODE="${LPD_GATE_MODE:-gate}"
 LPD_PORT="${LPD_PORT:-8872}"
 LPD_RUN_ID="${LPD_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
@@ -143,6 +143,17 @@ run_case() {
       (
         cd "${FE_ROOT}"
         uv run --frozen python scripts/run_s3_r6_world_action_flow_inference.py \
+          --checkpoint "${LPD_CHECKPOINT}" \
+          --config "${LPD_CONFIG}" \
+          --device cuda:0 \
+          --host 127.0.0.1 \
+          --port "${LPD_PORT}"
+      )
+      ;;
+    s4_flow)
+      (
+        cd "${FE_ROOT}"
+        uv run --frozen python scripts/run_s4_r7_world_utility_inference.py \
           --checkpoint "${LPD_CHECKPOINT}" \
           --config "${LPD_CONFIG}" \
           --device cuda:0 \
