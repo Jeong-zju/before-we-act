@@ -18,6 +18,14 @@ from typing import Any, Mapping, Sequence
 
 FORMAT_VERSION = "wam.robofactory.s3_r6.runtime/1"
 CANDIDATES = ("R6L-P0", "R6L-P1", "R6J-P0", "R6J-P1")
+S3_TASKS = (
+    "lift_barrier",
+    "long_pipeline_delivery",
+    "take_photo",
+    "three_robots_stack_cube",
+    "camera_alignment",
+)
+EPISODES_PER_TASK = 20
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -258,7 +266,7 @@ def collect_candidate(root: Path, candidate: str) -> dict[str, str]:
     phase = str(status.get("phase", "pending"))
     heartbeat = (
         "finished"
-        if phase == "complete"
+        if phase in {"complete", "failed"}
         else _heartbeat(
             _maybe_json(candidate_root / "heartbeat.json").get("updated_at")
         )
@@ -285,6 +293,10 @@ def collect_candidate(root: Path, candidate: str) -> dict[str, str]:
     validation = _rollout_progress(candidate_root)
     if validation:
         progress = validation
+    if phase == "failed":
+        interrupted = _interrupted_rollout_progress(candidate_root)
+        if interrupted:
+            progress = interrupted
     if gate:
         macro = _number(gate.get("macro_average_success_rate"))
         tasks = gate.get("task_order")
@@ -359,7 +371,31 @@ def _acceptance_lines(root: Path) -> list[str]:
     ]
     for name, report in reports.items():
         if not report:
-            lines.append(f"{name}: pending")
+            early_stop = _early_stop_bound(root, name)
+            if not early_stop:
+                lines.append(f"{name}: pending")
+                continue
+            lines.append(
+                f"{name}: EARLY-STOP FAIL retain P0 | "
+                f"observed={early_stop['observed_successes']}/"
+                f"{early_stop['total_episodes']} "
+                f"max={_number_text(early_stop['max_success_rate'])} < "
+                f"P0={_number_text(early_stop['p0_success_rate'])}"
+            )
+            lines.append(
+                "  macro-average upper bound (hard gate) "
+                f"P1<={_number_text(early_stop['max_success_rate'])} "
+                f"P0={_number_text(early_stop['p0_success_rate'])} FAIL; "
+                f"remaining={early_stop['remaining_episodes']} episodes"
+            )
+            for task, row in _mapping_or_empty(early_stop.get("tasks")).items():
+                values = _mapping_or_empty(row)
+                lines.append(
+                    f"  {task:<24} P0={values.get('p0_successes', '?')}/"
+                    f"{EPISODES_PER_TASK} P1={values.get('p1_successes', '?')}/"
+                    f"{values.get('episodes_completed', '?')} "
+                    f"remaining={values.get('remaining_episodes', '?')} report-only"
+                )
             continue
         lines.append(
             f"{name}: {'PASS P1' if report.get('passed') else 'FAIL retain P0'} | "
@@ -390,9 +426,109 @@ def _acceptance_lines(root: Path) -> list[str]:
     final = _maybe_json(root / "acceptance.json")
     if final:
         lines.append(f"FINAL: {final.get('decision', '?')}")
+    elif reports.get("R6L") and _early_stop_bound(root, "R6J"):
+        lines.append("FINAL: R6L pass P1; R6J early-stop fail retain P0")
     else:
         lines.append("FINAL: pending both micro-rounds")
     return lines
+
+
+def _interrupted_rollout_progress(candidate_root: Path) -> str:
+    summaries = list(
+        (candidate_root / "validation").rglob("rollout_summary.json")
+    )
+    incomplete = []
+    for path in summaries:
+        summary = _maybe_json(path)
+        if summary.get("completed") is False:
+            incomplete.append((path, summary))
+    if not incomplete:
+        return ""
+    path, summary = max(
+        incomplete, key=lambda value: value[0].stat().st_mtime_ns
+    )
+    error = _mapping_or_empty(summary.get("fatal_error"))
+    reason = str(error.get("type", "interrupted"))
+    return (
+        f"early-stop task={path.parent.name} "
+        f"episode={summary.get('episodes_completed', '?')}/"
+        f"{summary.get('episodes_requested', '?')} "
+        f"success={summary.get('successes', '?')} reason={reason}"
+    )
+
+
+def _early_stop_bound(root: Path, micro_round: str) -> dict[str, Any]:
+    if micro_round not in {"R6L", "R6J"}:
+        return {}
+    p0_root = root / "candidates" / _slug(f"{micro_round}-P0")
+    p1_root = root / "candidates" / _slug(f"{micro_round}-P1")
+    p1_status = _maybe_json(p1_root / "status.json")
+    if p1_status.get("phase") != "failed" or p1_status.get("exit_code") != 130:
+        return {}
+    p0_gate = _find_gate(p0_root)
+    if tuple(p0_gate.get("task_order", ())) != S3_TASKS:
+        return {}
+
+    p0_successes: dict[str, int] = {}
+    for task in S3_TASKS:
+        value = _integer(_mapping_or_empty(p0_gate.get(task)).get("successes"))
+        if value is None or not 0 <= value <= EPISODES_PER_TASK:
+            return {}
+        p0_successes[task] = value
+    total_episodes = len(S3_TASKS) * EPISODES_PER_TASK
+    p0_success_rate = sum(p0_successes.values()) / total_episodes
+
+    tasks: dict[str, dict[str, int]] = {}
+    observed_successes = 0
+    max_successes = 0
+    interrupted = False
+    for task in S3_TASKS:
+        paths = sorted(
+            (p1_root / "validation").rglob(f"{task}/rollout_summary.json")
+        )
+        if paths:
+            summary = _maybe_json(paths[-1])
+            requested = _integer(summary.get("episodes_requested"))
+            completed = _integer(summary.get("episodes_completed"))
+            successes = _integer(summary.get("successes"))
+            if (
+                requested != EPISODES_PER_TASK
+                or completed is None
+                or successes is None
+                or not 0 <= successes <= completed <= EPISODES_PER_TASK
+            ):
+                return {}
+            error = _mapping_or_empty(summary.get("fatal_error"))
+            interrupted = interrupted or (
+                summary.get("completed") is False
+                and error.get("type") == "KeyboardInterrupt"
+            )
+        else:
+            completed = 0
+            successes = 0
+        remaining = EPISODES_PER_TASK - completed
+        observed_successes += successes
+        max_successes += successes + remaining
+        tasks[task] = {
+            "p0_successes": p0_successes[task],
+            "p1_successes": successes,
+            "episodes_completed": completed,
+            "remaining_episodes": remaining,
+        }
+    max_success_rate = max_successes / total_episodes
+    if not interrupted or max_success_rate >= p0_success_rate:
+        return {}
+    return {
+        "p0_success_rate": p0_success_rate,
+        "observed_successes": observed_successes,
+        "max_successes": max_successes,
+        "max_success_rate": max_success_rate,
+        "remaining_episodes": sum(
+            value["remaining_episodes"] for value in tasks.values()
+        ),
+        "total_episodes": total_episodes,
+        "tasks": tasks,
+    }
 
 
 def _find_gate(candidate_root: Path) -> Mapping[str, Any]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -386,3 +387,82 @@ def test_s3_monitor_reports_live_rollout_task_episode_step(tmp_path: Path) -> No
     rendered = render_monitor(root)
     assert "task=lift_barrier episode=2/20 step=125/500 success=1" in rendered
     assert "stage=rollout" in rendered
+
+
+def test_s3_monitor_proves_operator_early_stop_upper_bound(tmp_path: Path) -> None:
+    worktrees = []
+    for candidate in ("R6L-P0", "R6L-P1", "R6J-P0", "R6J-P1"):
+        path = tmp_path / candidate
+        path.mkdir()
+        worktrees.append(f"{candidate}={path}")
+    root = tmp_path / "run"
+    initialize(
+        root,
+        run_id="s3-test",
+        session="permanent",
+        window_prefix="s3-test",
+        monitor_window="s3-test-monitor",
+        base_repo=tmp_path,
+        worktrees=worktrees,
+    )
+
+    p0_gate = root / "candidates/r6j_p0/validation/gate/gate_summary.json"
+    p0_gate.parent.mkdir(parents=True)
+    p0_gate.write_text(
+        json.dumps(
+            {
+                "task_order": list(TASKS),
+                **{
+                    task: {"successes": successes}
+                    for task, successes in zip(TASKS, (4, 16, 4, 0, 16))
+                },
+            }
+        )
+    )
+    p1_root = root / "candidates/r6j_p1/validation/gate"
+    for task, successes in zip(TASKS[:-1], (4, 16, 0, 0)):
+        summary = p1_root / task / "rollout_summary.json"
+        summary.parent.mkdir(parents=True)
+        summary.write_text(
+            json.dumps(
+                {
+                    "completed": True,
+                    "episodes_completed": 20,
+                    "episodes_requested": 20,
+                    "successes": successes,
+                    "fatal_error": None,
+                }
+            )
+        )
+    partial = p1_root / "camera_alignment/rollout_summary.json"
+    partial.parent.mkdir(parents=True)
+    partial.write_text(
+        json.dumps(
+            {
+                "completed": False,
+                "episodes_completed": 6,
+                "episodes_requested": 20,
+                "successes": 4,
+                "fatal_error": {"type": "KeyboardInterrupt", "message": ""},
+            }
+        )
+    )
+    update_status(
+        root,
+        candidate="R6J-P1",
+        phase="failed",
+        program="run_s3_r6_candidate.sh",
+        detail="candidate exited 130",
+        gpu_index=1,
+        total_updates=10000,
+        exit_code=130,
+    )
+
+    rendered = render_monitor(root)
+    failed_row = next(line for line in rendered.splitlines() if line.startswith("R6J-P1"))
+    assert "failed" in failed_row
+    assert "finished" in failed_row
+    assert "early-stop task=camera_alignment episode=6/20 success=4" in failed_row
+    assert "R6J: EARLY-STOP FAIL retain P0" in rendered
+    assert "max=0.38 < P0=0.4" in rendered
+    assert "remaining=14 episodes" in rendered
