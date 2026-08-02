@@ -1,0 +1,116 @@
+name: wam.robofactory/s3-r6l-p1-protected-local-gated
+format_version: wam.robofactory.s3_r6.world_action_flow.config/1
+
+round:
+  round_id: s3-r6
+  micro_round: R6L
+  candidate_id: P1
+  model_kind: s3_r6l_protected_local_gated
+  future_scope: local
+  injection: true
+
+parent:
+  flow_checkpoint: artifacts/s3_r6_parent/flow.pt
+  protected_own_checkpoint: artifacts/s3_r6_parent/protected_own.pt
+  protected_team_checkpoint: artifacts/s3_r6_parent/protected_team.pt
+  expected_protected_own_sha256: c04f8ea12c5b6d8f7c04992d7dd4a8c0a33aa7d0058987679e6553b17e410a2f
+  expected_protected_team_sha256: fcc0af76c2acd6805750f12e828a1249eb91e466e51f4aa77c118b6e9d330c67
+
+data:
+  manifests:
+    - datasets/robofactory_multitask/lift_barrier/training_manifest.json
+    - datasets/robofactory_multitask/long_pipeline_delivery/training_manifest.json
+    - datasets/robofactory_multitask/take_photo/training_manifest.json
+    - datasets/robofactory_multitask/three_robots_stack_cube/training_manifest.json
+    - datasets/robofactory_multitask/camera_alignment/training_manifest.json
+  stride: 1
+  validation_stride: 1
+  hdf5_cache_size: 4
+
+vision:
+  encoder_name: dinov3_vitl16_lvd
+  model_id: facebook/dinov3-vitl16-pretrain-lvd1689m
+  revision: dd0a398fa8e84f2a37179332f6c561d20276300b
+  config_path: artifacts/vision/dinov3_vitl16_lvd/config.json
+  weights_path: artifacts/vision/dinov3_vitl16_lvd/model.safetensors
+  expected_config_sha256: ce962b0c8ca4f2deb48c6fdfd6035257e3769f1d4d9154c92aba51991e46e290
+  expected_weights_sha256: dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179
+  preprocess_id: dinov3_imagenet_rgb_resize_rectangular_antialias_v2
+  input_height: 480
+  input_width: 640
+  inference_batch_size: 2
+
+pca:
+  grid_height: 2
+  grid_width: 2
+
+world_model:
+  max_agents: 4
+  state_dim: 18
+  action_dim: 8
+  action_horizon: 100
+  future_horizons: [1, 25, 50, 100]
+  visual_grid_tokens: 4
+  visual_latent_dim: 256
+  d_model: 384
+  ffn_dim: 1536
+  layers: 3
+  heads: 8
+  dropout: 0.1
+
+team_model:
+  layers: 2
+  heads: 8
+  ffn_dim: 1536
+  dropout: 0.1
+  team_mixer: shared
+
+adapter:
+  flow_dim: 384
+  state_dim: 18
+  visual_dim: 256
+  hidden_dim: 384
+  action_dim: 8
+  max_gate: 0.25
+
+training:
+  seed: 606
+  adapter_seed: 60606
+  batch_size: 1
+  num_workers: 4
+  updates: 10000
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  gradient_clip_norm: 1.0
+  save_interval: 500
+  log_interval: 20
+
+generation:
+  source_distribution: standard_normal
+  solver_steps: 4
+  solver: euler
+  normalized_action_clip: 10.0
+
+evaluation:
+  tasks:
+    - lift_barrier
+    - long_pipeline_delivery
+    - take_photo
+    - three_robots_stack_cube
+    - camera_alignment
+  episodes_per_task: 20
+  seed_start: 900
+  rule: five_task_macro_average_p1_greater_or_equal_p0
+
+artifacts:
+  pca_statistics: artifacts/s2_r4/dino_pca_statistics.pt
+
+inference:
+  chunk_aggregation: temporal_ensemble
+  temporal_ensemble_decay: 0.01
+  flow_noise_seed: 606
+
+checkpoint:
+  output: checkpoints/s3_r6_r6l_p1/policy.pt
+  resume: checkpoints/s3_r6_r6l_p1/resume.pt
+  progress_log: outputs/s3_r6_r6l_p1/train_progress.jsonl
