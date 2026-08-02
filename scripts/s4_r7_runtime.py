@@ -392,7 +392,10 @@ def _candidate_lines(
     if child is None:
         child = _first_child_pid(_integer(pid))
     gpu_pid = progress.get("gpu_pid", heartbeat_data.get("gpu_pid"))
-    if gpu_pid is None and gpu_index is not None:
+    # The shell status bridge uses 0 until the CUDA child is discoverable.  Treat
+    # that sentinel as missing so a later monitor call can resolve the live PID
+    # from nvidia-smi instead of permanently rendering ``gpu_pid=-``.
+    if _integer(gpu_pid) in {None, 0} and gpu_index is not None:
         values = gpu_processes.get(gpu_index, ())
         gpu_pid = ",".join(str(value) for value in values) or "-"
 
@@ -475,7 +478,11 @@ def _special_acceptance_lines(root: Path) -> list[str]:
     pair_exact = _first_json(
         root / "pair_exact.json", root / "pairs" / "pair_exact.json"
     ) or _mapping_or_empty(final.get("pair_exact"))
-    structural = _boolean_gate(pair_exact)
+    # pair_exact embeds complete preflight reports, including expected-false
+    # observations such as ``oom=false`` and ``formal_budget_complete=false``.
+    # Only the validator's named equality/invariant checks form this gate.
+    pair_checks = _mapping_or_empty(pair_exact.get("checks"))
+    structural = _boolean_gate(pair_checks or pair_exact)
     lines.append(f"  pair structure | {structural} | artifact={_presence(pair_exact)}")
     final_candidates = _mapping_or_empty(final.get("candidates"))
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
+import scripts.s4_r7_runtime as s4_r7_runtime
 from scripts.s4_r7_runtime import (
     FORMAT_VERSION,
     initialize_run,
@@ -160,6 +161,73 @@ def test_r7_monitor_reports_runtime_heartbeat_progress_and_derived_gates(
     assert "P1 utility calibration | PASS spearman=0.22 ci95_lower=0.08" in rendered
     assert "decision=select_p1 winner=?" in rendered
     assert "metrics above remain authoritative" in rendered
+
+
+def test_r7_monitor_uses_named_pair_checks_not_expected_false_observations(
+    tmp_path: Path,
+) -> None:
+    root = _initialize(tmp_path)
+    _write_json(
+        root / "pair_exact.json",
+        {
+            "passed": True,
+            "checks": {
+                "same_dataset_index_sequence": True,
+                "no_oom": True,
+            },
+            "preflight": {
+                "P0": {"oom": False, "formal_budget_complete": False},
+                "P1": {"oom": False, "formal_budget_complete": False},
+                "required_fallback": None,
+            },
+        },
+    )
+
+    rendered = render_monitor(root)
+    assert "pair structure | PASS 2/2" in rendered
+
+
+def test_r7_monitor_replaces_zero_gpu_pid_sentinel_with_live_process(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    root = _initialize(tmp_path)
+    update_status(
+        root,
+        candidate="P0",
+        phase="training",
+        program="train_s4_r7_world_utility.py",
+        detail="optimizer active",
+        pid=123,
+        child_pid=124,
+        gpu_pid=0,
+        gpu_index=0,
+        condition=None,
+        task=None,
+        episode=None,
+        episodes_total=None,
+        step=None,
+        steps_total=None,
+        micro_batch=2,
+        gradient_accumulation=6,
+        effective_batch=12,
+        update=1,
+        total_updates=125_000,
+        team_windows_seen=12,
+        agent_windows_seen=38,
+        milestone=None,
+        flow_unfreeze_state=None,
+        loss=1.0,
+        grad_norm=1.0,
+        learning_rate="1e-4",
+        preflight="PASS",
+        exit_code=None,
+    )
+    monkeypatch.setattr(
+        s4_r7_runtime, "_gpu_processes_by_index", lambda: {0: [456]}
+    )
+
+    rendered = render_monitor(root)
+    assert "gpu_pid=456" in rendered
 
 
 def test_r7_monitor_marks_nonterminal_heartbeat_stale_after_75_seconds(
