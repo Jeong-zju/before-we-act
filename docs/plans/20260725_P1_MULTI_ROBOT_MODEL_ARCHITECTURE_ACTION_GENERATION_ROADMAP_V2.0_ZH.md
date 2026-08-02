@@ -1255,7 +1255,7 @@ R6J-P1 CameraAlignment 已完成 seeds `900–905`：seed `900/905` 各跑满 1,
 - R6J-P1 partial CameraAlignment summary：`candidates/r6j_p1/validation/gate_s3-r6-five-task-retrain-round1/camera_alignment/rollout_summary.json`，SHA256 `8faca7a513175839287f1a256bf877b647b67020fae8784f73a02830f48082b1`；
 - policy SHA256：R6L-P0 `93c574624e4b46abfc72b6c55a8b83e4322a94e7c4e0c7a20b02952b53822e77`，R6L-P1 `5f3a05628563a0b2e26ea62941cda6ae49a6f161739d26abb351cdc483a18fc9`，R6J-P0 `3320897428b40f588e760f10882f16433361c7dce2d4b34fa8d8f1586126dc63`，R6J-P1 `c83b3c2198d4264acec60745464eb7bf3c5659a3ed553e14f512d8028d88d1ef`。
 
-中断后 R6J-P1 的 RoboFactory、inference 和 Gate 进程全部退出，`nvidia-smi` 无 compute PID；永久 `ssh_tmux`、index 0 和 monitor window 保留，candidate window 以 130 留作审计。monitor 将该候选显示为 `failed`，并从 partial summary 显示中断任务；不会误报 pair acceptance。后续如需重跑，应使用新的 run id，不能在本 run 上补写一个貌似完整的 R6J acceptance。
+中断后 R6J-P1 的 RoboFactory、inference 和 Gate 进程全部退出，`nvidia-smi` 无 compute PID；永久 `ssh_tmux`、index 0 和 monitor window 保留，candidate window 以 130 留作审计。提交 `0c0765f` 让 monitor 把该候选显示为终态 `failed/finished`，从 partial summary 显示 `camera_alignment episode=6/20 success=4 reason=KeyboardInterrupt`，并且只在 `exit_code=130`、P0 五任务 Gate 完整且 partial summary 确认人工中断时计算保守上界；本轮实际显示 `observed=24/100 max=0.38 < P0=0.4` 和 `FINAL: R6L pass P1; R6J early-stop fail retain P0`，不会误报为待运行、心跳过期或完整 pair acceptance。后续如需重跑，应使用新的 run id，不能在本 run 上补写一个貌似完整的 R6J acceptance。
 
 每个 solver step 必须重新执行：
 
