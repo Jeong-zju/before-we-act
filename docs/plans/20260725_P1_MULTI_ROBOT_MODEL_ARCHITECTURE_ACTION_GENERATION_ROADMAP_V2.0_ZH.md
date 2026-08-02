@@ -1840,6 +1840,8 @@ R7 正式结果产生后，本节继续追加两候选 checkpoint/report SHA256�
 
 pair exact 通过后，P0/P1 已分别在物理 GPU0/GPU1 从各自精确 resume 自动进入 `125,000` 正式训练，永久 `ssh_tmux` session 与本轮四个 `remain-on-exit` window 保持存活。此记录写入时特殊 causal Gate20、utility CI、winner 与 merge commit 均为 pending；不得把 preflight loss 或 routing entropy 当作质量结论，也不得在 `acceptance.json.r8_may_start=true` 前创建或运行 R8 候选。
 
+正式训练另从共同 ancestor 的 update 0 计满 125k，预检 200 步不计入预算；两路于 `2026-08-02T17:24:43Z` 同步完成 parent/resume load 与 first-batch exact audit，并于 `17:24:58Z` 进入 optimizer loop。update 20 时 P0/P1 吞吐为 `0.223447/0.229459 updates/s`，GPU 利用率约 `97%/98%`、显存约 `2.675/2.677 GiB`，team/有效 agent windows 同为 `240/752`，无 OOM、NaN、stale 或配对漂移。按较慢 P0 的早期实测仅估算训练 wall time 约 `6.5 days`；该估算不是验收结果，runner 会在训练后继续执行完整离线审计、八条件 Gate20 与特殊验收。
+
 ## 10. S5-R9：正式训练、评测与统计（08-23 至 09-04）
 
 ### 10.1 双卡两两正式复现
