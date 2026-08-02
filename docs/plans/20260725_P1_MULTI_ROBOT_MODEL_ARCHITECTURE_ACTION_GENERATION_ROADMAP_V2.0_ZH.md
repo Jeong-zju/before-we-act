@@ -1,9 +1,9 @@
 # P1 多机器人 World-Action Flow Matching 技术路线 V3.0（ICRA Fast Track）
 
-> 文档更新：2026-08-01
+> 文档更新：2026-08-02
 > 工程起点：当前 `feat/model-improvements` 分支
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：M0、M1、S0、S1-R1、S2 已完成；R1 选择 `rectified_flow_cold` F1，R3 选择 own-action-conditioned W1；新 R4 hybrid 因 LiftBarrier peer-action-shuffle bootstrap 95% 下界为负而按特殊规则失败；R5 Protected Shared 与 Protected Role-MoT 均通过 protected-own/team 全部门槛，按五任务 macro peer/shared loss 选择更简单的 R5-P0 Protected Shared，且正式 P0 分支已合并回 `feat/model-improvements`；R2a 跳过、R2b 延后，下一步进入 S3-R6 world-to-Flow gated injection
+> 当前状态：M0、M1、S0、S1-R1、S2 已完成；R1 选择 `rectified_flow_cold` F1，R3 选择 own-action-conditioned W1；新 R4 hybrid 因 LiftBarrier peer-action-shuffle bootstrap 95% 下界为负而按特殊规则失败；R5 选择 Protected Shared P0；S3-R6 已完成四候选五任务 fresh Flow 训练与两张 5090 两两实验，R6L-P1 五任务宏平均 `39% > 29%` 通过，R6J-P1 在可证明宏平均上界 `38% < 40%` 后按 operator 指令提前停止剩余 CameraAlignment eval、不晋级；R2a 跳过、R2b 延后
 > 评测原则：进入动作路径的候选按闭环成功率推进；S2 predictor 严格 off-path，因此按预测能力与因果干预门槛推进
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -1150,7 +1150,7 @@ $$
 
 实现时使用有界 gate，例如 $g=g_{\max}\tanh(\alpha)$ 且 $\alpha_{\mathrm{init}}=0$；future 无效或全部被 mask 时强制 $g=0$。这里的 gate 只控制 **world-to-Flow velocity residual**，与旧 R4 已废弃的 `own_residual_gate` 不是同一个参数。`gate=0` 时必须退化为冻结的 S1 Flow。第一版不允许用直接 cross-attention 覆盖所有 action layers，不做 proposal scoring 或 energy guidance；这些高跨度方案移到 ICRA 后。
 
-### 8.1 R6L/R6J：只增加 gated residual injection（四卡并行）
+### 8.1 R6L/R6J：只增加 gated residual injection（双卡两两执行）
 
 使用 S2 冻结的 protected-own parent 与 R5 team parent，各启动一个两卡微轮次：
 
@@ -1163,14 +1163,14 @@ P1 只训练 adapter 与 velocity gate。两组使用相同 adapter 宽度、初
 
 #### 8.1.1 四分支实现、双卡两两排程与白名单（2026-08-01）
 
-S3-R6 公共基础设施已先在本地写入 `feat/model-improvements` 提交 `50d64bd`、完成相关回归测试并推送。公共提交包含 `CrossAgentWorldConditionedFlow`、同构 local/team residual adapter、有界 `max_gate*tanh(alpha)` velocity gate、训练/闭环 inference、四分支矩阵校验器、S3 特殊验收器、常驻 monitor、S0 下载复用、双卡两两 launcher 和保留产物的 stop 脚本；不包含候选身份配置。随后四个分支全部直接从同一个 `50d64bd` 创建，不从彼此派生。2026-08-01 的重置指令进一步要求四个候选各自从随机初始化完整训练五任务 Flow，不再复用旧两任务 S1 Flow：
+S3-R6 公共基础设施已先在本地写入 `feat/model-improvements` 提交 `50d64bd`、完成相关回归测试并推送；五任务全量重训、分支 head 记录与 action-horizon 修复随后落在公共 head `b0e2532`。公共实现包含 `CrossAgentWorldConditionedFlow`、同构 local/team residual adapter、有界 `max_gate*tanh(alpha)` velocity gate、训练/闭环 inference、四分支矩阵校验器、S3 特殊验收器、常驻 monitor、S0 下载复用、双卡两两 launcher 和保留产物的 stop 脚本；不包含候选身份配置。四个分支全部直接从同一个公共父提交创建，不从彼此派生。2026-08-01 的重置指令进一步要求四个候选各自从随机初始化完整训练五任务 Flow，不再复用旧两任务 S1 Flow：
 
 | 执行批次 | GPU | 分支 | 候选身份提交 / 当前 head | model kind | 训练 |
 |---|---:|---|---|---|---|
-| 1 | 0 | `s3/r6l-p0-protected-local-aux` | `b61ee77` / `001c141` | `s3_r6l_protected_local_aux` | fresh 五任务 Flow 80,000；off-path 控制 |
-| 1 | 1 | `s3/r6l-p1-protected-local-gated` | `1479aa3` / `46067ad` | `s3_r6l_protected_local_gated` | fresh 五任务 Flow 80,000 + adapter/gate 10,000 |
-| 2 | 0 | `s3/r6j-p0-protected-team-offpath` | `21e36fa` / `b159f3d` | `s3_r6j_protected_team_offpath` | fresh 五任务 Flow 80,000；off-path 控制 |
-| 2 | 1 | `s3/r6j-p1-protected-team-gated` | `84db555` / `9992518` | `s3_r6j_protected_team_gated` | fresh 五任务 Flow 80,000 + adapter/gate 10,000 |
+| 1 | 0 | `s3/r6l-p0-protected-local-aux` | `b61ee77` / `8e95778` | `s3_r6l_protected_local_aux` | fresh 五任务 Flow 80,000；off-path 控制 |
+| 1 | 1 | `s3/r6l-p1-protected-local-gated` | `1479aa3` / `a4faf38` | `s3_r6l_protected_local_gated` | fresh 五任务 Flow 80,000 + adapter/gate 10,000 |
+| 2 | 0 | `s3/r6j-p0-protected-team-offpath` | `21e36fa` / `18b84d1` | `s3_r6j_protected_team_offpath` | fresh 五任务 Flow 80,000；off-path 控制 |
+| 2 | 1 | `s3/r6j-p1-protected-team-gated` | `84db555` / `a4901cc` | `s3_r6j_protected_team_gated` | fresh 五任务 Flow 80,000 + adapter/gate 10,000 |
 
 训练、checkpoint loader、闭环服务端和验收器的 fail-closed 白名单只增加上表四个 kind；未知 kind、kind 与 `micro_round/candidate_id/future_scope/injection` 不一致、R6J 不是 accepted R5-P0 Shared team parent、protected-own/R5-P0 hash 漂移时均在创建有效结果前失败。四个候选都使用 `s3_r6_flow_five_task.yaml` 的相同五任务 manifest、seed `606`、80,000 updates、optimizer、标准高斯 cold source 和 4-step Euler，从 update 0 独立训练 Flow；S3 模式强制 deterministic algorithms，pair 内完成 Flow 的 model-state SHA256 必须精确相同，否则结构验收失败。P1 随后使用 adapter seed `60606` 训练 10,000 updates，P0 只形成同一 fresh Flow 上的 off-path 控制。accepted protected-own/R5-P0 与 PCA 继续只读共享，因为它们本身已在 S2 用五任务训练并且是本阶段需要保护的固定研究变量。
 
@@ -1213,11 +1213,49 @@ bash scripts/stop_s3_r6_2gpu_tmux.sh s3-r6-five-task-retrain-round1
 
 stop 只终止本 run 的进程并关闭上述六个 window；禁止 `tmux kill-session`，不会删除共享数据、Hub cache、父 checkpoint、candidate checkpoint/resume、日志、视频、Gate summary 或 acceptance JSON。永久 tmux session 始终保留。
 
-#### 8.1.2 正式远程结果（运行后回写）
+#### 8.1.2 正式远程结果（2026-08-01 至 2026-08-02）
 
 旧 run `s3-r6-round1` 使用了两任务 S1 Flow，并曾产生 R6L-P0/P1 的 LiftBarrier/LongPipelineDelivery `5/20,19/20` 与 `12/20,16/20`；之后补跑五任务时 TakePhoto 尚在第 3 回合。2026-08-01 operator 明确要求全部重新训练，已终止远程全部项目进程、销毁永久 tmux 中除 index 0 外的所有窗口并确认 GPU process 为 0。该 run 的 checkpoint、resume、partial rollout 和旧 acceptance 仅保留作失败审计，全部标记 superseded，不得被新训练、汇总或论文结果复用。
 
-正式重跑固定为 `s3-r6-five-task-retrain-round1`：四个候选都从 update 0 训练独立五任务 Flow，P1 再训练 adapter/gate；R6L 完成训练和全部五任务 Gate20/宏平均验收后才启动 R6J。正式成功数、宏平均结论、checkpoint/acceptance hash、训练稳定性与失败分析在两批实验完成后继续回写；在完整结果产生前不得把 training loss、gate 非零、旧 run 或单任务改善表述为 R6 通过。
+正式重跑 `s3-r6-five-task-retrain-round1` 于 `2026-08-01T09:53:27Z` 创建。四个候选都从 update 0 训练独立五任务 Flow，R6L 完成 pair acceptance 后才自动启动 R6J；P1 再训练 adapter/gate，P0 形成 off-path 控制。双卡两两排程、共享数据、单份 Hub cache/DINO/PCA/protected parent 与 candidate 隔离输出均按 8.1.1 执行。Hugging Face 下载继续原样复用 S0 的固定 revision、官方 `hf download`、受保护 token FIFO、Xet/worker 分流与 `.incomplete` 原位恢复方案，本轮没有另建下载路径或把 token 写入环境、参数、manifest、日志。
+
+四个 Flow 均完成 `80,000/80,000`；最终记录完全相同：flow-matching loss `0.0252816416`、total loss `0.0254137516`、router aux `1.0132110119`，model-state SHA256 均为 `78cc8a56b4201f40e97d826c0e48d0e477e8c01895967972794f4fb20d4071d4`。checkpoint 文件 hash 因 candidate identity/path metadata 不同而允许不同；pair gate 比较 model-state hash。R6L-P1 与 R6J-P1 又分别完成 10,000 adapter/gate updates，最终 gate 为 `-0.0145405652` 与 `-0.0132108815`。训练日志无 NaN、OOM 或 Traceback；四个 policy 的 `protected_own_elementwise_exact`、`protected_parent_model_hashes_unchanged`、`parent_files_unchanged`、`parents_excluded_from_optimizer` 与 `gate_zero_base_action_elementwise_exact` 全为 `true`。
+
+R6L 在五个任务上完成相同 seeds `900–919` 的 Gate20，正式结果如下；每任务列是附加报告，唯一硬门槛是最后一行宏平均：
+
+| 任务 | R6L-P0 | R6L-P1 | P1-P0 | 准入作用 |
+|---|---:|---:|---:|---|
+| LiftBarrier | `4/20 = 20%` | `5/20 = 25%` | `+5pp` | report-only |
+| LongPipelineDelivery | `17/20 = 85%` | `14/20 = 70%` | `-15pp` | report-only |
+| TakePhoto | `0/20 = 0%` | `5/20 = 25%` | `+25pp` | report-only |
+| ThreeRobotsStackCube | `0/20 = 0%` | `0/20 = 0%` | `0pp` | report-only |
+| CameraAlignment | `8/20 = 40%` | `15/20 = 75%` | `+35pp` | report-only |
+| **五任务宏平均** | **`29%`** | **`39%`** | **`+10pp`** | **PASS，`pass_r6l_p1`** |
+
+R6L pair acceptance 在 `2026-08-01T23:21:15Z` 生成，`paired_five_task_flow_model_exact=true` 且两候选结构不变量通过。P1 的主要收益来自 CameraAlignment 与 TakePhoto，足以覆盖 LongPipelineDelivery 的下降；这正是本阶段采用宏平均而不是逐任务 no-regression 后的预期判定。R6L-P1 晋级，不能把 LongPipelineDelivery 单项下降隐去。
+
+R6J-P0 完成全部五任务 Gate20；R6J-P1 完成前三任务和 ThreeRobotsStackCube 后进入 CameraAlignment。2026-08-02 operator 在结果已数学不可逆失败后授权中断剩余 eval；正式和中断结果如下：
+
+| 任务 | R6J-P0 | R6J-P1 已完成结果 | P1-P0 / 状态 |
+|---|---:|---:|---:|
+| LiftBarrier | `4/20 = 20%` | `4/20 = 20%` | `0pp`，report-only |
+| LongPipelineDelivery | `16/20 = 80%` | `16/20 = 80%` | `0pp`，report-only |
+| TakePhoto | `4/20 = 20%` | `0/20 = 0%` | `-20pp`，report-only |
+| ThreeRobotsStackCube | `0/20 = 0%` | `0/20 = 0%` | `0pp`，report-only |
+| CameraAlignment | `16/20 = 80%` | 已跑 `6/20`：`4` 成功、`2` 失败；其余 `14` 未运行 | operator early-stop |
+| **五任务宏平均/上界** | **`40/100 = 40%`** | **最多 `(20+4+14)/100 = 38%`** | **FAIL，P1 不可能满足 `>=40%`** |
+
+R6J-P1 CameraAlignment 已完成 seeds `900–905`：seed `900/905` 各跑满 1,500 steps 失败，seed `901–904` 在 `91–95` steps 成功。由于前三个完整任务加堆叠合计只有 `20` 次成功，即使未运行的 14 个相机回合全部成功，最终也最多 `38/100`，严格小于 P0 的 `40/100`。因此 `2026-08-02T13:14:39Z` 向 candidate window 发送 `Ctrl-C`，status 正确记录为 `phase=failed, exit_code=130`，partial rollout summary 记录 `completed=false`、`episodes_completed=6`、`fatal_error.type=KeyboardInterrupt`。这是有上界证明且经 operator 授权的节省算力 early-stop，不是训练崩溃，也不伪造五任务完整 `r6j_acceptance.json`；按第 13 节规则 R6J-P1 退出本轮、不晋级，保留 R6J-P0。
+
+结果与审计路径/哈希：
+
+- run root：`/workspace/fe-pc-wam/outputs/s3_r6_runs/s3-r6-five-task-retrain-round1`；
+- R6L acceptance：`pairs/r6l_acceptance.json`，SHA256 `81ac4acb895adce2e6a936200d4ccd8ca26a176aab8a5b5bddd88b096c0b9042`；
+- R6J-P0 Gate summary：`candidates/r6j_p0/validation/gate_s3-r6-five-task-retrain-round1/gate_summary.json`，SHA256 `1c903d746a0e499f791ba6b477958a5c0d85419ca9ff8b16519b051706ab4ae2`；
+- R6J-P1 partial CameraAlignment summary：`candidates/r6j_p1/validation/gate_s3-r6-five-task-retrain-round1/camera_alignment/rollout_summary.json`，SHA256 `8faca7a513175839287f1a256bf877b647b67020fae8784f73a02830f48082b1`；
+- policy SHA256：R6L-P0 `93c574624e4b46abfc72b6c55a8b83e4322a94e7c4e0c7a20b02952b53822e77`，R6L-P1 `5f3a05628563a0b2e26ea62941cda6ae49a6f161739d26abb351cdc483a18fc9`，R6J-P0 `3320897428b40f588e760f10882f16433361c7dce2d4b34fa8d8f1586126dc63`，R6J-P1 `c83b3c2198d4264acec60745464eb7bf3c5659a3ed553e14f512d8028d88d1ef`。
+
+中断后 R6J-P1 的 RoboFactory、inference 和 Gate 进程全部退出，`nvidia-smi` 无 compute PID；永久 `ssh_tmux`、index 0 和 monitor window 保留，candidate window 以 130 留作审计。monitor 将该候选显示为 `failed`，并从 partial summary 显示中断任务；不会误报 pair acceptance。后续如需重跑，应使用新的 run id，不能在本 run 上补写一个貌似完整的 R6J acceptance。
 
 每个 solver step 必须重新执行：
 
@@ -1500,4 +1538,4 @@ configs/wam_flow/
 7. **已完成但未晋级：** 旧 R4-P1 通过五任务 peer/shared persistence 与 peer-action-shuffle 门槛，但 own no-regression 失败；gate 置零、分组梯度裁剪、team dropout RNG 隔离三项诊断均未改变结论。
 8. **已完成但未通过：** 新 R4 零训练 hybrid 在五任务保持 protected-own 精确等价、team loss 优于 persistence、source/action-equivalence 不变；仅 LiftBarrier peer-action-shuffle bootstrap 95% 下界为 `-0.002375`，按特殊规则判定旧 team tower 与 protected P0 表示不兼容。
 9. **已完成并通过：** R5 从共同 protected P0 parent 建立 `s2/r5-p0-protected-shared` 与 `s2/r5-p1-protected-role-mot`；两者 own 精确等价、五任务 persistence/shuffle CI、action-equivalence 与 frozen-parent gate 全部通过，按 macro peer/shared loss `1.406178 < 1.412414` 选择 P0。
-10. **进行中：** S3-R6 旧 run 已按 operator 指令完全终止且不得复用；四分支正在切换为每候选 fresh 五任务 Flow 80k、P1 adapter/gate 10k、五任务 Gate20 与宏平均验收，随后以 `s3-r6-five-task-retrain-round1` 双卡两两自主运行直至 R6L/R6J 都完成。
+10. **已完成并部分通过：** S3-R6 旧 run 已终止且不得复用；新 run 四候选均完成 fresh 五任务 Flow 80k，两个 P1 均完成 adapter/gate 10k。R6L-P1 以宏平均 `39% > 29%` 通过；R6J-P1 在四个完整任务及 CameraAlignment 6 回合后可证明最终上界 `38% < 40%`，经 operator 授权停止剩余 eval，不晋级并保留 R6J-P0。
