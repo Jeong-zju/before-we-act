@@ -1832,6 +1832,14 @@ stop 只按 manifest 中的精确 run root、四个 window 名和进程环境标
 
 R7 正式结果产生后，本节继续追加两候选 checkpoint/report SHA256、逐任务八条件 Gate20、utility CI、验收结论和唯一 merge commit。只有 `acceptance.json.r8_may_start=true` 时才把胜出分支合并回 `feat/model-improvements` 并创建 R8 两分支；R8 将使用独立 run root 和 R8 专用 launcher/monitor/stop，重复同一代码处理与文档回写流程，不载入 R7 的 125k model/optimizer state。
 
+#### 9.6.1 R7 round1 实际运行账本（2026-08-03，进行中）
+
+实际 run root 为 `/workspace/fe-pc-wam/outputs/s4_r7_runs/s4-r7-round1`。启动时公共父提交为 `5f40a9e9c626a1547e8f8937dcdd1a1cc9ddf3d4`，P0/P1 候选提交分别为 `7ea6c7796557856911a7823f6cf60795a0a31044` 与 `c92c10cf096405c27e61d3fd591629d180790f09`；两候选均从该公共父提交后代启动。公共 monitor 的 pair-gate 与 GPU PID 展示修复已按本地测试、推送、服务器 fast-forward 流程落到 `c30b72e`，没有移动两个在训候选 worktree，也没有重启训练。
+
+200-step paired preflight 于 `2026-08-02T17:06:09Z` 完成，`pairs/pair_exact.json` SHA256 为 `b36cc69b7b2bede4ecd6962f79b5f1c42e92faca5b5989172ffe3c80a1150ed3`，明确检查 `23/23 PASS`，`required_fallback=null`。两路均使用 `micro=2/accum=6/effective=12`，dataset-index sequence SHA256 同为 `b9e860e6457cd4c33de0f42d749b2012a285f420f37454c68ffebfbea9cefaa9`，LR curve SHA256 同为 `5c7b1c5634693c190ebce7705d47d81f37d538721c89e0041e33833cc22992e2`；P0/P1 preflight report SHA256 分别为 `5ef7274ab5468bcb68f47a6a53709eb21ee38d42059f4181e3920ae665a16db8`、`a5e6c43e5f9b8b0ad895661813ac5549e2ad0c6c12758154447ef3894925f194`。两路峰值显存均为 `2,021,687,296 bytes`，显存余量均为 `31,647,301,632 bytes`，实测吞吐分别为 `0.227033/0.230602 updates/s`；P1 的 WUC-only audit 为 router gradient norm `0.4254692535`、forbidden gradient norm `0`。
+
+pair exact 通过后，P0/P1 已分别在物理 GPU0/GPU1 从各自精确 resume 自动进入 `125,000` 正式训练，永久 `ssh_tmux` session 与本轮四个 `remain-on-exit` window 保持存活。此记录写入时特殊 causal Gate20、utility CI、winner 与 merge commit 均为 pending；不得把 preflight loss 或 routing entropy 当作质量结论，也不得在 `acceptance.json.r8_may_start=true` 前创建或运行 R8 候选。
+
 ## 10. S5-R9：正式训练、评测与统计（08-23 至 09-04）
 
 ### 10.1 双卡两两正式复现
