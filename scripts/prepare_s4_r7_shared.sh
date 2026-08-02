@@ -70,14 +70,16 @@ if [[ "${S4_R7_USE_S0_PREP:-0}" == "1" ]]; then
   done
   status s0_prepare prepare_s3_r6_from_s0.sh \
     "S0 mode-0600 FIFO; pinned hf download; datasets use Xet, DINO/RoboFactory do not"
-  S3_R6_HF_TOKEN_FIFO="${S4_R7_HF_TOKEN_FIFO}" \
-  S3_R6_ROBOFACTORY_ROOT="${S4_R7_ROBOFACTORY_ROOT}" \
-  S3_R6_RF_PYTHON="${S4_R7_RF_PYTHON}" \
-  S3_R6_P0_CONFIG="${FE_ROOT}/configs/wam_flow/s2_r5_protected_team.yaml" \
-  UV_CACHE_DIR="${UV_CACHE_DIR}" \
-  UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT}" \
-  ROBOFACTORY_ROOT="${S4_R7_ROBOFACTORY_ROOT}" \
-  RF_PYTHON="${S4_R7_RF_PYTHON}" \
+  env -u HF_TOKEN -u HUGGING_FACE_HUB_TOKEN \
+    S3_R6_RUN_ROOT="${S4_R7_RUN_ROOT}" \
+    S3_R6_HF_TOKEN_FIFO="${S4_R7_HF_TOKEN_FIFO}" \
+    S3_R6_ROBOFACTORY_ROOT="${S4_R7_ROBOFACTORY_ROOT}" \
+    S3_R6_RF_PYTHON="${S4_R7_RF_PYTHON}" \
+    S3_R6_P0_CONFIG="${FE_ROOT}/configs/wam_flow/s2_r5_protected_team.yaml" \
+    UV_CACHE_DIR="${UV_CACHE_DIR}" \
+    UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT}" \
+    ROBOFACTORY_ROOT="${S4_R7_ROBOFACTORY_ROOT}" \
+    RF_PYTHON="${S4_R7_RF_PYTHON}" \
     bash "${FE_ROOT}/scripts/prepare_s3_r6_from_s0.sh"
   prep_code=$?
   if (( prep_code != 0 )); then
