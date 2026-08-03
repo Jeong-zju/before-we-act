@@ -1880,7 +1880,7 @@ pair exact 通过后，P0/P1 已分别在物理 GPU0/GPU1 从各自精确 resume
 4. `shuffle_all`；
 5. 诊断条件 `all_world_gates_zero`、`shuffle_own`、`shuffle_peer`、`shuffle_shared`。
 
-前四个构成核心准入条件。特殊门槛不变：`normal >= legacy_reference`，且 `normal` 必须严格高于 `world_evidence_gate_zero` 与 `shuffle_all`；`all_world_gates_zero` 仍只报告，三个 source shuffle 仍只决定可声明的证据来源。monitor 在最终 `candidate_report.json` 尚未生成时直接读取已完成的 per-condition `gate_summary.json`，显示 `core=x/4`、`diagnostic=x/4`、normal 五任务成功数、当前 condition/task/episode/step、程序、PID、GPU PID、20 秒心跳与 75 秒 stale 判定，因此 normal 全部结果无需等待其余七条件。
+前四个构成核心准入条件。特殊门槛不变：`normal >= legacy_reference`，且 `normal` 必须严格高于 `world_evidence_gate_zero` 与 `shuffle_all`；`all_world_gates_zero` 仍只报告，三个 source shuffle 仍只决定可声明的证据来源。monitor 在最终 `candidate_report.json` 尚未生成时直接读取已完成的 per-condition `gate_summary.json`，显示 `core=x/4`、`diagnostic=x/4`、normal 五任务成功数、当前 condition/task/episode/step、程序、PID、GPU PID、20 秒心跳与 75 秒 stale 判定，因此 normal 全部结果无需等待其余七条件。缓存阶段另从 `prepare.log` 提取两个 worker 的最新 `episode/375`、task、source episode 与更新时间；这只是进度事件，存活判定仍以每 20 秒更新的 shared heartbeat 为准，避免长 episode 被误报 stale。
 
 R7 新 run 使用独立 root，禁止复用旧 125k 配置绑定的 preflight/resume：
 

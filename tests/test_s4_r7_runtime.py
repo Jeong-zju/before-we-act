@@ -76,6 +76,25 @@ def test_r7_monitor_reports_runtime_heartbeat_progress_and_derived_gates(
         preflight="PASS",
         exit_code=0,
     )
+    (root / "prepare.log").write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "event": "future_cache_progress",
+                    "worker": worker,
+                    "gpu": str(worker),
+                    "episode": 30 + worker,
+                    "episodes": 375,
+                    "task_id": "lift_barrier",
+                    "episode_index": 58 + worker,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            for worker in (0, 1)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     for candidate, gpu in (("P0", 0), ("P1", 1)):
         update_status(
             root,
@@ -148,6 +167,8 @@ def test_r7_monitor_reports_runtime_heartbeat_progress_and_derived_gates(
     rendered = render_monitor(root)
     assert "WAM S4-R7 monitor" in rendered
     assert "producer every 20s; STALE strictly after 75s" in rendered
+    assert "future cache workers | GPU0=30/375 task=lift_barrier" in rendered
+    assert "GPU1=31/375 task=lift_barrier" in rendered
     assert "pid=200 child_pid=300 gpu_pid=400" in rendered
     assert "condition=world_evidence_gate=0 task=take_photo episode=7/20 step=125/1500" in rendered
     assert "micro/accum/effective=4/3/12" in rendered

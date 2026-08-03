@@ -402,6 +402,7 @@ def render_monitor(root: Path) -> str:
             f"sha256={str(future_cache.get('features_sha256', 'pending'))[:12]} "
             f"root={future_cache.get('root', 'pending')}"
         ),
+        *_future_cache_progress_lines(root),
         (
             "schedule | GPU0=P0 token-preserving/no-WUC; "
             "GPU1=P1 token-preserving/WUC; one candidate per GPU (no DDP)"
@@ -422,6 +423,47 @@ def render_monitor(root: Path) -> str:
         f"{manifest.get('tmux_monitor_window', '<window>')}"
     )
     return "\n".join(lines)
+
+
+def _future_cache_progress_lines(root: Path) -> list[str]:
+    """Expose the latest progress event from each two-GPU cache worker."""
+
+    path = root / "prepare.log"
+    if not path.is_file():
+        return ["future cache workers | pending"]
+    try:
+        data = path.read_bytes()[-256 * 1024 :]
+    except OSError:
+        return ["future cache workers | unavailable"]
+    latest: dict[int, Mapping[str, Any]] = {}
+    for line in reversed(data.decode("utf-8", errors="replace").splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(value, Mapping) or value.get("event") != "future_cache_progress":
+            continue
+        worker = _integer(value.get("worker"))
+        if worker in {0, 1} and worker not in latest:
+            latest[worker] = value
+        if len(latest) == 2:
+            break
+    if not latest:
+        return ["future cache workers | starting; shared heartbeat remains authoritative"]
+    parts = []
+    for worker in (0, 1):
+        value = latest.get(worker)
+        if value is None:
+            parts.append(f"GPU{worker}=starting")
+            continue
+        age = _age_seconds(value.get("created_at"))
+        updated = "?" if age is None else _duration(age)
+        parts.append(
+            f"GPU{value.get('gpu', worker)}={value.get('episode', '?')}/"
+            f"{value.get('episodes', '?')} task={value.get('task_id', '-')} "
+            f"source_episode={value.get('episode_index', '?')} updated={updated}-ago"
+        )
+    return ["future cache workers | " + "; ".join(parts)]
 
 
 def _digest_text(path: Path) -> str:
