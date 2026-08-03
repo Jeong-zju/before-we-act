@@ -1909,6 +1909,19 @@ pair exact 通过后，P0/P1 已分别在物理 GPU0/GPU1 从各自精确 resume
 
 `s4-r7-fast30k-round4` 的共享全量缓存已在 `2026-08-03T06:20Z` 前后完成：750/750 episodes、共享 HDF5 receipt SHA256 `4a3c24a91f7a92615cebec58e4608dd4319a548d6ea297119277848195b77f98`，future-feature cache SHA256 `bad343ebe22f3f3b7e72027ff22ca5eff7dc79ae07ae3c1a84520ee3e1d46bbb`。配对 200-step preflight 为 `31/31 PASS`，P0/P1 实测 `0.958887/0.998124 updates/s`，均超过 `0.75` 门槛并自动进入正式 30k。北京时间 `2026-08-03 14:50:14` 的在线快照为 P0/P1 `1440/1460` updates、心跳正常；实时 ETA 分别为 `22:50:03/22:39:30`，较慢侧训练约 `22:50:03` 完成。按上述历史 Gate20 基线，normal、四核心、完整八条件的初始 ETA 分别约为 `2026-08-04 04:42:44`、`2026-08-04 22:20:47`、`2026-08-05 21:51:31`（北京时间）；这些时间随实测自动变化，不构成模型通过或 winner 结论。
 
+round4 两路随后均完成全部 `30000` optimizer updates、`5k/10k/15k/20k/25k/30k` 里程碑、Flow 在 update 6400 解冻及最终策略固化；P0/P1 `policy.pt` SHA256 分别为 `2495caada7731b3237fd91227aa31ee6a9fa5369d54dd217bd58856880546583`、`773045520f1c4f0e57f3ba5fa83cc2efeeff7aedb14d018b0188b25a73beb9a4`。normal-first Gate20 已完整完成，固定 seeds 900–919 的任务级闭环结果如下；这是全量 750 episodes 拟合后的回放结果，只用于结构选型与因果消融，不解释为未见 episode 泛化：
+
+| 候选 | LiftBarrier | LongPipelineDelivery | TakePhoto | ThreeRobotsStackCube | CameraAlignment | 总成功/100 | 五任务 macro |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| P0 token-preserving/no-WUC | `4/20`（20%） | `14/20`（70%） | `2/20`（10%） | `0/20`（0%） | `14/20`（70%） | `34/100` | `34%` |
+| P1 token-preserving/WUC | `1/20`（5%） | `16/20`（80%） | `2/20`（10%） | `0/20`（0%） | `13/20`（65%） | `32/100` | `32%` |
+
+P0/P1 normal `gate_summary.json` SHA256 分别为 `5e15bc5c45c314510df4002bcc5a6302d3f287ed0d638ec1fbed4c7681c72852`、`1fc274a98fc99362deb784330e9daf530c44e9ee3205f6935d906ebdcf13d949`，并分别绑定原训练提交 `9b43a4e0bb79b52616b2295bd06229b251d75721`、`fedb8085e2210bf30a4b9a09c0d4ad57e5b9311d`。P0 normal 暂领先 2 个百分点，但此时尚不能选 winner：仍须满足 `normal >= legacy_reference`、`normal > world_evidence_gate_zero`、`normal > shuffle_all` 及其余特殊门槛。P1 的训练后 utility calibration 已确定失败：Spearman `0.00959688`、episode bootstrap 95% 下界 `-0.00481043`，未满足下界 `>0`；P1 仍继续完成所有条件以提供配对比较，但除非预注册规则被满足（不得事后修改），不具备最终晋级资格。
+
+北京时间 `2026-08-04 06:18`，两路在复用已完成 normal、开始 `legacy_reference/lift_barrier` 第一个 episode 时同步停止。日志证明根因是公共推理 provenance 把显式选择的冻结 `legacy_reference` 模型误写为 `fallback_used=true`，而 RoboFactory 服务端正确要求所有报告动作同时满足 `fallback_used=false` 与 `direct_model_action=true`，因此报 `M2 response did not prove direct model control`；模型权重、normal 结果、GPU 和数据均未损坏。修复严格按“本地修改→测试→推送→服务器 fast-forward→精确重启”执行：公共提交 `5f1a2b4` 将 legacy 明确定义为直接模型路径而非失败 fallback，提交 `ce6cf30` 增加失效关闭的 validation-only hotfix 谱系校验；旧训练提交只能快进到后代，且差异仅允许 runner、S4 推理脚本及对应测试，任何 model/config/trainer/acceptance 文件变化均拒绝复用 30k checkpoint。修复分别移植并推送为 P0 `ff912db`、P1 `60f81c3`；公共相关测试为 `59/59` 与 `52/52`，两候选分支针对性测试分别为 `27/27`、`20/20`。
+
+服务器更新后只 respawn 永久 tmux 的 P0/P1 失败窗格，window 0 与 30 分钟 monitor 未动；runner 重新校验 750 文件 receipt、parent hashes、pair-exact、checkpoint/config/source identity，复用 normal，将两份不完整 legacy task 原样保留为 `lift_barrier.superseded_20260803T222848Z` 后重跑。北京时间 `2026-08-04 06:29:33`，P0/P1 均已通过修复后的 M2 direct-control 握手，legacy seed 900 均 `success=true, steps=71`，正在 episode `2/20`，心跳存活。此时动态 ETA 为核心四条件约 `2026-08-05 01:21:46`、完整 R7 约 `2026-08-06 02:33:03`（北京时间）；仍为运行中估计，不是验收结论。
+
 R7 新 run 使用独立 root，禁止复用旧 125k 配置绑定的 preflight/resume：
 
 ```bash
