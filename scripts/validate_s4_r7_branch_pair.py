@@ -87,17 +87,25 @@ def validate_configs(
         model = _mapping(raw, "model")
         evaluation = _mapping(raw, "evaluation")
         data = _mapping(raw, "data")
+        vision = _mapping(raw, "vision")
         manifests = data.get("manifests")
         tasks = tuple(
             Path(str(path)).parent.name for path in manifests
         ) if isinstance(manifests, list) else ()
         recipe = {
+            "budget_mode": training.get("budget_mode"),
             "updates": int(training.get("updates", 0)),
             "micro": int(training.get("micro_team_batch", 0)),
             "accum": int(training.get("gradient_accumulation", 0)),
             "effective": int(training.get("effective_team_batch", 0)),
             "counterfactual_every": int(training.get("counterfactual_every", 0)),
             "unfreeze": int(training.get("flow_unfreeze_update", 0)),
+            "optimizer": training.get("optimizer"),
+            "prefetch_factor": int(training.get("prefetch_factor", 0)),
+            "vision_inference_batch": int(vision.get("inference_batch_size", 0)),
+            "min_updates_per_second": float(
+                training.get("min_updates_per_second", 0.0)
+            ),
             "flow_lr": float(training.get("flow_learning_rate", -1)),
             "future_body_lr": float(training.get("future_body_learning_rate", -1)),
             "future_head_lr": float(training.get("future_head_learning_rate", -1)),
@@ -119,6 +127,7 @@ def validate_configs(
             "gate_episodes": int(evaluation.get("episodes", 0)),
             "gate_seed_start": int(evaluation.get("seed_start", -1)),
             "gate_tasks": tuple(evaluation.get("tasks", ())),
+            "conditions": tuple(evaluation.get("conditions", ())),
         }
         observed.append(recipe)
     checks = {
@@ -126,13 +135,22 @@ def validate_configs(
         "same_recipe_after_axis_normalization": observed[0] == observed[1],
         "five_task_order_exact": observed[0]["tasks"] == TASKS
         and observed[0]["gate_tasks"] == TASKS,
-        "budget_125000_effective_team_batch_12": observed[0]["updates"] == 125_000
+        "fast_selection_30000_effective_team_batch_12": observed[0][
+            "budget_mode"
+        ]
+        == "fast_selection_30k"
+        and observed[0]["updates"] == 30_000
         and observed[0]["effective"] == 12
         and observed[0]["micro"] * observed[0]["accum"] == 12,
         "supported_micro_accum_pair": (observed[0]["micro"], observed[0]["accum"])
-        in {(2, 6), (1, 12)},
+        in {(4, 3), (2, 6), (1, 12)},
+        "fast_vision_and_optimizer_recipe": observed[0]["vision_inference_batch"]
+        == 16
+        and observed[0]["optimizer"] == "adamw_fused"
+        and observed[0]["prefetch_factor"] == 4
+        and observed[0]["min_updates_per_second"] == 0.75,
         "forced_audit_every_4": observed[0]["counterfactual_every"] == 4,
-        "flow_unfreezes_at_update_26668": observed[0]["unfreeze"] == 26_668,
+        "flow_unfreezes_at_update_6400": observed[0]["unfreeze"] == 6_400,
         "fixed_learning_rates": (
             observed[0]["flow_lr"],
             observed[0]["future_body_lr"],
@@ -153,6 +171,13 @@ def validate_configs(
         and observed[0]["gate_max"] == 0.25,
         "gate20_seed_900_919": observed[0]["gate_episodes"] == 20
         and observed[0]["gate_seed_start"] == 900,
+        "normal_then_four_core_conditions_first": observed[0]["conditions"][:4]
+        == (
+            "normal",
+            "legacy_reference",
+            "world_evidence_gate_zero",
+            "shuffle_all",
+        ),
     }
     if not all(checks.values()):
         failed = sorted(name for name, passed in checks.items() if not passed)
@@ -192,7 +217,8 @@ def validate_preflights(
         "dataset_index_sequence_sha256",
         "agent_count_histogram",
         "update_1_trainable_name_sha256",
-        "update_26668_trainable_name_sha256",
+        "flow_unfreeze_trainable_name_sha256",
+        "vision_inference_batch_size",
         "learning_rate_curve_sha256",
     )
     checks = {
@@ -205,10 +231,19 @@ def validate_preflights(
         == p1.get("agent_count_histogram"),
         "same_update_1_trainable_names": p0.get("update_1_trainable_name_sha256")
         == p1.get("update_1_trainable_name_sha256"),
-        "same_update_26668_trainable_names": p0.get(
-            "update_26668_trainable_name_sha256"
+        "same_flow_unfreeze_update": p0.get("flow_unfreeze_update")
+        == p1.get("flow_unfreeze_update")
+        == 6_400,
+        "same_flow_unfreeze_trainable_names": p0.get(
+            "flow_unfreeze_trainable_name_sha256"
         )
-        == p1.get("update_26668_trainable_name_sha256"),
+        == p1.get("flow_unfreeze_trainable_name_sha256"),
+        "same_vision_inference_batch_size": p0.get(
+            "vision_inference_batch_size"
+        )
+        == p1.get("vision_inference_batch_size")
+        == int(_mapping(p0_config, "vision")["inference_batch_size"])
+        == int(_mapping(p1_config, "vision")["inference_batch_size"]),
         "same_learning_rate_curves": p0.get("learning_rate_curve_sha256")
         == p1.get("learning_rate_curve_sha256"),
         "same_micro_accum_effective_batch": all(
@@ -228,26 +263,43 @@ def validate_preflights(
             float(value.get("updates_per_second", 0.0)) > 0.0
             for value in rows.values()
         ),
+        "throughput_meets_12h_training_slo": all(
+            float(value.get("updates_per_second", 0.0))
+            >= float(_mapping(config, "training")["min_updates_per_second"])
+            for value, config in zip(
+                rows.values(), (p0_config, p1_config), strict=True
+            )
+        ),
         "memory_headroom_at_least_2gib": all(
             value >= 2 * 1024**3 for value in headroom
         ),
         "no_oom": all(value.get("oom") is False for value in rows.values()),
     }
+    memory_failed = (
+        not checks["memory_headroom_at_least_2gib"] or not checks["no_oom"]
+    )
+    vision_batch = int(_mapping(p0_config, "vision")["inference_batch_size"])
+    required_fallback = None
+    if memory_failed and vision_batch == 16:
+        required_fallback = "dino8_micro4_accum3"
+    elif memory_failed and (expected_micro, expected_accum) == (4, 3):
+        required_fallback = "micro2_accum6"
+    elif memory_failed and (expected_micro, expected_accum) == (2, 6):
+        required_fallback = "micro1_accum12"
+
     # Make the equality surface explicit in the report for later audit.
     detail = {
         "P0": dict(p0),
         "P1": dict(p1),
         "compared_keys": list(normalized_hash_keys),
         "memory_headroom_bytes": {"P0": headroom[0], "P1": headroom[1]},
-        "required_fallback": (
-            "micro1_accum12"
-            if (
-                not checks["memory_headroom_at_least_2gib"]
-                or not checks["no_oom"]
-            )
-            and (expected_micro, expected_accum) == (2, 6)
-            else None
-        ),
+        "estimated_training_hours": {
+            candidate: 30_000
+            / max(float(value.get("updates_per_second", 0.0)), 1e-12)
+            / 3600
+            for candidate, value in rows.items()
+        },
+        "required_fallback": required_fallback,
     }
     return detail, checks
 

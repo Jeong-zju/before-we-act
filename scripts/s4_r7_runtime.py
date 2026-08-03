@@ -25,14 +25,33 @@ from typing import Any, Mapping, Sequence
 
 FORMAT_VERSION = "wam.robofactory.s4_r7.runtime/1"
 CANDIDATES = ("P0", "P1")
-TOTAL_UPDATES = 125_000
+TOTAL_UPDATES = 30_000
 EFFECTIVE_TEAM_BATCH = 12
-TARGET_AGENT_WINDOWS = 4_800_000
-FLOW_UNFREEZE_UPDATE = 26_668
+TARGET_AGENT_WINDOWS = 1_152_000
+FLOW_UNFREEZE_UPDATE = 6_400
 HEARTBEAT_SECONDS = 20
 STALE_SECONDS = 75
-MILESTONES = (10_000, 20_000, 40_000, 60_000, 80_000, 100_000, 125_000)
+MILESTONES = (5_000, 10_000, 15_000, 20_000, 25_000, 30_000)
 TERMINAL_PHASES = {"complete", "failed", "stopped"}
+TASKS = (
+    "lift_barrier",
+    "long_pipeline_delivery",
+    "take_photo",
+    "three_robots_stack_cube",
+    "camera_alignment",
+)
+CORE_CONDITIONS = (
+    "normal",
+    "legacy_reference",
+    "world_evidence_gate_zero",
+    "shuffle_all",
+)
+DIAGNOSTIC_CONDITIONS = (
+    "all_world_gates_zero",
+    "shuffle_own",
+    "shuffle_peer",
+    "shuffle_shared",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -237,12 +256,26 @@ def initialize_run(
             "heartbeat_seconds": HEARTBEAT_SECONDS,
             "stale_after_seconds": STALE_SECONDS,
             "training": {
+                "budget_mode": "fast_selection_30k",
                 "updates": TOTAL_UPDATES,
+                "micro_team_batch": 4,
+                "gradient_accumulation": 3,
                 "effective_team_batch": EFFECTIVE_TEAM_BATCH,
                 "target_agent_windows": TARGET_AGENT_WINDOWS,
                 "flow_unfreeze_update": FLOW_UNFREEZE_UPDATE,
+                "min_updates_per_second": 0.75,
                 "milestones": list(MILESTONES),
             },
+            "validation_order": [
+                "normal",
+                "legacy_reference",
+                "world_evidence_gate_zero",
+                "shuffle_all",
+                "all_world_gates_zero",
+                "shuffle_own",
+                "shuffle_peer",
+                "shuffle_shared",
+            ],
         },
     )
     for candidate in CANDIDATES:
@@ -511,7 +544,9 @@ def _special_acceptance_lines(root: Path) -> list[str]:
             candidate_root / "validation" / "causal_candidate_report.json",
             candidate_root / "validation" / "candidate_report.json",
         )
-        gate20 = _mapping_or_empty(accepted.get("gate20"))
+        gate20 = _mapping_or_empty(accepted.get("gate20")) or _gate20_from_disk(
+            candidate_root
+        )
         causal = _mapping_or_empty(special.get("causal")) or causal_report
         normal = _first_number(
             _condition_macro(gate20, "normal"),
@@ -540,6 +575,14 @@ def _special_acceptance_lines(root: Path) -> list[str]:
             ),
         )
         causal_gate = _causal_gate(normal, legacy, zero, shuffled)
+        core_complete = sum(condition in gate20 for condition in CORE_CONDITIONS)
+        diagnostic_complete = sum(
+            condition in gate20 for condition in DIAGNOSTIC_CONDITIONS
+        )
+        lines.append(
+            f"  {candidate} validation priority | core={core_complete}/4 "
+            f"diagnostic={diagnostic_complete}/4; normal is completed first"
+        )
         lines.append(
             f"  {candidate} causal | {causal_gate} normal={_number_text(normal)} "
             f"legacy={_number_text(legacy)} new-gate-zero={_number_text(zero)} "
@@ -652,6 +695,49 @@ def _condition_macro(gate20: Mapping[str, Any], condition: str) -> float | None:
     return _metric(row, "macro_success_rate", "macro_average_success_rate")
 
 
+def _gate20_from_disk(candidate_root: Path) -> Mapping[str, Any]:
+    """Expose completed condition summaries before the final report exists."""
+
+    observed: dict[str, Any] = {}
+    for condition in (*CORE_CONDITIONS, *DIAGNOSTIC_CONDITIONS):
+        summary = _first_json(
+            candidate_root
+            / "validation"
+            / "gate20"
+            / condition
+            / "gate_summary.json"
+        )
+        if tuple(summary.get("task_order", ())) != TASKS:
+            continue
+        tasks: dict[str, Any] = {}
+        for task in TASKS:
+            row = _mapping_or_empty(summary.get(task))
+            episodes = row.get("episodes")
+            if not isinstance(episodes, list) or len(episodes) != 20:
+                tasks = {}
+                break
+            successes = sum(
+                1
+                for episode in episodes
+                if isinstance(episode, Mapping) and episode.get("success") is True
+            )
+            tasks[task] = {
+                "successes": successes,
+                "episodes": 20,
+                "success_rate": successes / 20.0,
+            }
+        if not tasks:
+            continue
+        observed[condition] = {
+            "tasks": tasks,
+            "macro_success_rate": sum(
+                float(row["success_rate"]) for row in tasks.values()
+            )
+            / len(TASKS),
+        }
+    return observed
+
+
 def _first_number(*values: float | None) -> float | None:
     return next((value for value in values if value is not None), None)
 
@@ -743,7 +829,7 @@ def _milestone_text(update: int) -> str:
     for milestone in MILESTONES:
         if update < milestone:
             return f"next={milestone}"
-    return "125k-complete"
+    return "30k-complete"
 
 
 def _terminal_heartbeat(phase: str, updated_at: Any) -> str:

@@ -47,8 +47,7 @@ from scripts.train_static_rgb_act_moe import (  # noqa: E402
     _vision,
 )
 from train.s2_future_prediction import (  # noqa: E402
-    encode_local_visual_targets,
-    encode_shared_visual_targets,
+    encode_future_visual_targets,
     file_sha256,
     load_s2_artifact,
     normalized_state_delta,
@@ -69,6 +68,11 @@ RESUME_FORMAT = "wam.robofactory.s4_r7.world_utility.resume/1"
 PREFLIGHT_FORMAT = "wam.robofactory.s4_r7.preflight/1"
 GRADIENT_AUDIT_FORMAT = "wam.robofactory.s4_r7.gradient_audit/1"
 EXPOSURE_FORMAT = "wam.robofactory.s4_r7.module_exposure/1"
+FAST_SELECTION_BUDGET_MODE = "fast_selection_30k"
+FAST_SELECTION_UPDATES = 30_000
+FAST_SELECTION_FLOW_UNFREEZE = 6_400
+FAST_SELECTION_AGENT_WINDOW_BUDGET = 1_152_000
+SUPPORTED_BATCH_RECIPES = {(4, 3), (2, 6), (1, 12)}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -76,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--updates", type=int)
+    parser.add_argument(
+        "--stop-after-update",
+        type=int,
+        help=(
+            "pause a formal run exactly at a preregistered milestone after "
+            "writing its recoverable resume and milestone checkpoint"
+        ),
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--progress-log", type=Path)
@@ -102,9 +114,17 @@ def _main_impl(args: argparse.Namespace) -> int:
     candidate_id, model_kind, utility_weight = validate_s4_r7_candidate(raw)
     training = _mapping(raw, "training")
     configured_updates = int(training.get("updates", 0))
-    if configured_updates != 125_000:
-        raise ValueError("S4-R7 formal config must contain exactly 125000 updates")
+    if (
+        training.get("budget_mode") != FAST_SELECTION_BUDGET_MODE
+        or configured_updates != FAST_SELECTION_UPDATES
+    ):
+        raise ValueError(
+            "S4-R7 fast selection requires budget_mode=fast_selection_30k "
+            "and exactly 30000 updates"
+        )
     if args.preflight_only:
+        if args.stop_after_update is not None:
+            raise ValueError("preflight cannot use --stop-after-update")
         if args.preflight_report is None:
             raise ValueError("--preflight-only requires --preflight-report")
         updates = int(args.preflight_updates)
@@ -113,7 +133,19 @@ def _main_impl(args: argparse.Namespace) -> int:
     else:
         updates = int(args.updates if args.updates is not None else configured_updates)
         if updates != configured_updates:
-            raise ValueError("formal S4-R7 training cannot change the 125k budget")
+            raise ValueError("formal S4-R7 training cannot change the 30k budget")
+    run_end_update = updates
+    if not args.preflight_only and args.stop_after_update is not None:
+        run_end_update = int(args.stop_after_update)
+        registered_milestones = {
+            int(value) for value in training.get("milestones", ())
+        }
+        if run_end_update not in registered_milestones:
+            raise ValueError(
+                "--stop-after-update must be a preregistered S4-R7 milestone"
+            )
+        if not 0 < run_end_update <= configured_updates:
+            raise ValueError("formal milestone stop lies outside the 30k budget")
 
     device = torch.device(args.device)
     if (
@@ -152,11 +184,14 @@ def _main_impl(args: argparse.Namespace) -> int:
     effective = int(training.get("effective_team_batch", 0))
     if micro * accumulation != effective or effective != 12:
         raise ValueError("S4-R7 requires micro*accum == effective team batch 12")
-    if (micro, accumulation) not in {(2, 6), (1, 12)}:
-        raise ValueError("S4-R7 supports only micro2/accum6 or paired micro1/accum12")
+    if (micro, accumulation) not in SUPPORTED_BATCH_RECIPES:
+        raise ValueError(
+            "S4-R7 supports paired micro4/accum3, micro2/accum6, or "
+            "micro1/accum12"
+        )
     flow_unfreeze = int(training.get("flow_unfreeze_update", 0))
-    if flow_unfreeze != 26_668:
-        raise ValueError("S4-R7 Flow must unfreeze at update 26668")
+    if flow_unfreeze != FAST_SELECTION_FLOW_UNFREEZE:
+        raise ValueError("S4-R7 fast-selection Flow must unfreeze at update 6400")
 
     output = _resolve_path(
         args.output,
@@ -195,6 +230,7 @@ def _main_impl(args: argparse.Namespace) -> int:
     optimizer = torch.optim.AdamW(
         parameter_groups,
         weight_decay=float(training.get("weight_decay", 1e-4)),
+        fused=True,
     )
     identity = {
         "round_id": "s4-r7",
@@ -226,6 +262,10 @@ def _main_impl(args: argparse.Namespace) -> int:
         start_update = int(saved.get("update", -1))
         if not 0 <= start_update < updates:
             raise ValueError("S4-R7 resume update lies outside the formal budget")
+        if start_update >= run_end_update:
+            raise ValueError(
+                "resume already reached or passed the requested milestone stop"
+            )
         model.load_state_dict(saved["model"], strict=True)
         if start_update >= flow_unfreeze:
             for parameter in flow_parameters:
@@ -252,10 +292,13 @@ def _main_impl(args: argparse.Namespace) -> int:
         micro_batch_size=micro,
         gradient_accumulation=accumulation,
         first_update=start_update + 1,
-        final_update=updates,
+        final_update=run_end_update,
         seed=seed,
     )
     workers = int(training.get("num_workers", 8))
+    loader_options: dict[str, Any] = {}
+    if workers > 0:
+        loader_options["prefetch_factor"] = int(training.get("prefetch_factor", 4))
     loader = DataLoader(
         dataset,
         batch_sampler=sampler,
@@ -263,6 +306,7 @@ def _main_impl(args: argparse.Namespace) -> int:
         pin_memory=True,
         persistent_workers=workers > 0,
         generator=torch.Generator().manual_seed(seed + 10_000_000),
+        **loader_options,
     )
     iterator = iter(loader)
     pca = _mapping(raw, "pca")
@@ -284,7 +328,7 @@ def _main_impl(args: argparse.Namespace) -> int:
         micro_batch_size=micro,
         gradient_accumulation=accumulation,
         first_update=start_update + 1,
-        final_update=updates,
+        final_update=run_end_update,
         seed=seed,
     )
     loader = DataLoader(
@@ -294,6 +338,7 @@ def _main_impl(args: argparse.Namespace) -> int:
         pin_memory=True,
         persistent_workers=workers > 0,
         generator=torch.Generator().manual_seed(seed + 10_000_000),
+        **loader_options,
     )
     iterator = iter(loader)
 
@@ -370,7 +415,7 @@ def _main_impl(args: argparse.Namespace) -> int:
         }
 
     try:
-        for update in range(start_update + 1, updates + 1):
+        for update in range(start_update + 1, run_end_update + 1):
             if update == flow_unfreeze:
                 for parameter in flow_parameters:
                     parameter.requires_grad_(True)
@@ -399,7 +444,13 @@ def _main_impl(args: argparse.Namespace) -> int:
                     update_valid_agents += int(count)
                 inputs = _model_inputs(vision, grouped, artifact, device=device, pca=pca)
                 targets = _future_targets(
-                    vision, grouped, artifact, device=device, pca=pca
+                    vision,
+                    grouped,
+                    artifact,
+                    current_local=inputs["local_visual"],
+                    current_shared=inputs["shared_visual"],
+                    device=device,
+                    pca=pca,
                 )
                 actions = grouped["candidate_actions"].to(
                     device=device, dtype=torch.float32, non_blocking=True
@@ -523,8 +574,14 @@ def _main_impl(args: argparse.Namespace) -> int:
                 _append_jsonl(forced_log, audit_row)
 
             if update == start_update + 1:
-                _emit_stage("optimizer_training", f"joint update {update}/{updates}")
-            if update == 1 or update % log_interval == 0 or update == updates:
+                _emit_stage(
+                    "optimizer_training", f"joint update {update}/{configured_updates}"
+                )
+            if (
+                update == 1
+                or update % log_interval == 0
+                or update == run_end_update
+            ):
                 elapsed = max(time.perf_counter() - started, 1e-9)
                 averaged = {
                     key: sum(row[key] for row in update_losses) / len(update_losses)
@@ -537,7 +594,8 @@ def _main_impl(args: argparse.Namespace) -> int:
                     "candidate_id": candidate_id,
                     "model_kind": model_kind,
                     "update": update,
-                    "updates": updates,
+                    "updates": configured_updates if not args.preflight_only else updates,
+                    "segment_end_update": run_end_update,
                     **averaged,
                     "gradient_norm": gradient_norm,
                     "gradient_norms": category_norms,
@@ -549,12 +607,17 @@ def _main_impl(args: argparse.Namespace) -> int:
                     "micro_batch": micro,
                     "gradient_accumulation": accumulation,
                     "effective_team_batch": effective,
+                    "vision_inference_batch_size": int(
+                        _mapping(raw, "vision")["inference_batch_size"]
+                    ),
                     "effective_batch": effective,
                     "team_windows_seen": exposure.team_windows_seen,
                     "valid_agent_windows_seen": exposure.valid_agent_windows_seen,
                     "agent_windows_seen": exposure.valid_agent_windows_seen,
                     "agent_window_budget": int(
-                        training.get("agent_window_budget", 4_800_000)
+                        training.get(
+                            "agent_window_budget", FAST_SELECTION_AGENT_WINDOW_BUDGET
+                        )
                     ),
                     "valid_agents_this_update": update_valid_agents,
                     "flow_unfreeze_update": flow_unfreeze,
@@ -577,7 +640,7 @@ def _main_impl(args: argparse.Namespace) -> int:
             if not args.preflight_only and (
                 update % save_interval == 0 or update in milestones
             ):
-                if update < updates:
+                if update < configured_updates:
                     resume_payload = _resume_payload(
                         identity,
                         update,
@@ -631,6 +694,10 @@ def _main_impl(args: argparse.Namespace) -> int:
                     "micro_team_batch": micro,
                     "gradient_accumulation": accumulation,
                     "effective_team_batch": effective,
+                    "flow_unfreeze_update": flow_unfreeze,
+                    "vision_inference_batch_size": int(
+                        _mapping(raw, "vision")["inference_batch_size"]
+                    ),
                     "peak_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
                     "gpu_total_memory_bytes": int(
                         torch.cuda.get_device_properties(device).total_memory
@@ -640,6 +707,30 @@ def _main_impl(args: argparse.Namespace) -> int:
         raise
 
     elapsed = max(time.perf_counter() - started, 1e-9)
+    if not args.preflight_only and run_end_update < configured_updates:
+        milestone = output.parent / "milestones" / f"update_{run_end_update:06d}.pt"
+        if not milestone.is_file() or not resume.is_file():
+            raise RuntimeError(
+                "milestone pause requires both a checkpoint and recoverable resume"
+            )
+        pause = {
+            "event": "milestone_pause",
+            "program": "train_s4_r7_world_utility.py",
+            "round_id": "s4-r7",
+            "candidate_id": candidate_id,
+            "model_kind": model_kind,
+            "update": run_end_update,
+            "updates": configured_updates,
+            "milestone_checkpoint": str(milestone.resolve(strict=True)),
+            "resume": str(resume.resolve(strict=True)),
+            "team_windows_seen": exposure.team_windows_seen,
+            "valid_agent_windows_seen": exposure.valid_agent_windows_seen,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _append_jsonl(progress_log, pause)
+        dataset.close()
+        print(json.dumps(pause, sort_keys=True), flush=True)
+        return 0
     gradient_audit["normal_group_nonzero"] = normal_categories_seen
     gradient_audit["flow_frozen_gradient_exact_zero"] = (
         flow_frozen_gradient_exact_zero
@@ -668,7 +759,11 @@ def _main_impl(args: argparse.Namespace) -> int:
         "round_id": "s4-r7",
         "candidate_id": candidate_id,
         **exposure.summary(
-            agent_window_budget=int(training.get("agent_window_budget", 4_800_000))
+            agent_window_budget=int(
+                training.get(
+                    "agent_window_budget", FAST_SELECTION_AGENT_WINDOW_BUDGET
+                )
+            )
         ),
         "hierarchy": hierarchy_summary,
         "agent_count_histogram": agent_histogram,
@@ -757,8 +852,12 @@ def _main_impl(args: argparse.Namespace) -> int:
                 if group != "flow"
                 for name in names
             ),
-            "update_26668_trainable_name_sha256": _name_hash(
+            "flow_unfreeze_update": flow_unfreeze,
+            "flow_unfreeze_trainable_name_sha256": _name_hash(
                 name for names in parameter_names.values() for name in names
+            ),
+            "vision_inference_batch_size": int(
+                _mapping(raw, "vision")["inference_batch_size"]
             ),
             "learning_rate_curve_sha256": _lr_curve_hash(training),
             "peak_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
@@ -820,21 +919,17 @@ def _future_targets(
     grouped: Mapping[str, Tensor],
     artifact: Mapping[str, Any],
     *,
+    current_local: Tensor,
+    current_shared: Tensor,
     device: torch.device,
     pca: Mapping[str, Any],
 ) -> dict[str, Tensor]:
-    _, local_visual = encode_local_visual_targets(
+    local_visual, shared_visual = encode_future_visual_targets(
         vision,
         grouped,
         artifact,
-        device=device,
-        grid_height=int(pca["grid_height"]),
-        grid_width=int(pca["grid_width"]),
-    )
-    _, shared_visual, _ = encode_shared_visual_targets(
-        vision,
-        grouped,
-        artifact,
+        current_local=current_local,
+        current_shared=current_shared,
         device=device,
         grid_height=int(pca["grid_height"]),
         grid_width=int(pca["grid_width"]),
@@ -1182,6 +1277,9 @@ def _checkpoint_payload(
 ) -> dict[str, Any]:
     candidate_id = str(identity["candidate_id"])
     model_kind = str(identity["model_kind"])
+    training = _mapping(raw, "training")
+    flow_unfreeze = int(training["flow_unfreeze_update"])
+    total_updates = int(training["updates"])
     return {
         "format_version": CHECKPOINT_FORMAT,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1204,13 +1302,13 @@ def _checkpoint_payload(
         "structural_invariants": dict(structural),
         "parameter_names": {key: list(value) for key, value in parameter_names.items()},
         "trainable_name_sha256_by_phase": {
-            "updates_1_26667": _name_hash(
+            f"updates_1_{flow_unfreeze - 1}": _name_hash(
                 name
                 for group, names in parameter_names.items()
                 if group != "flow"
                 for name in names
             ),
-            "updates_26668_125000": _name_hash(
+            f"updates_{flow_unfreeze}_{total_updates}": _name_hash(
                 name for names in parameter_names.values() for name in names
             ),
         },
@@ -1228,7 +1326,7 @@ def _checkpoint_payload(
             "visual_grid": [2, 2],
             "token_shape": [3, 4, 4, 5, 384],
         },
-        "training": dict(_mapping(raw, "training")),
+        "training": dict(training),
         "generation": dict(_mapping(raw, "generation")),
         "inference": dict(_mapping(raw, "inference")),
         "task_runtime": _task_runtime(dataset.source),
@@ -1307,7 +1405,22 @@ def _name_hash(names: Sequence[str] | Any) -> str:
 
 
 def _lr_curve_hash(training: Mapping[str, Any]) -> str:
-    points = (1, 500, 26_667, 26_668, 27_167, 125_000)
+    total_updates = int(training["updates"])
+    flow_unfreeze = int(training["flow_unfreeze_update"])
+    warmup = int(training["warmup_updates"])
+    flow_warmup = int(training["flow_warmup_updates"])
+    points = tuple(
+        sorted(
+            {
+                1,
+                min(warmup, total_updates),
+                max(flow_unfreeze - 1, 1),
+                flow_unfreeze,
+                min(flow_unfreeze + flow_warmup - 1, total_updates),
+                total_updates,
+            }
+        )
+    )
     rows = []
     bases = {
         "flow": float(training["flow_learning_rate"]),
@@ -1321,11 +1434,13 @@ def _lr_curve_hash(training: Mapping[str, Any]) -> str:
         row = {"update": update}
         for name, base in bases.items():
             if name == "flow":
-                factor = 0.0 if update < 26_668 else _warmup_cosine(
-                    update - 26_668 + 1, 125_000 - 26_668 + 1, 500
+                factor = 0.0 if update < flow_unfreeze else _warmup_cosine(
+                    update - flow_unfreeze + 1,
+                    total_updates - flow_unfreeze + 1,
+                    flow_warmup,
                 )
             else:
-                factor = _warmup_cosine(update, 125_000, 500)
+                factor = _warmup_cosine(update, total_updates, warmup)
             row[name] = base * factor
         rows.append(row)
     return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
@@ -1381,6 +1496,10 @@ def _write_terminal_oom_preflight(args: argparse.Namespace) -> None:
             "micro_team_batch": micro,
             "gradient_accumulation": accumulation,
             "effective_team_batch": effective,
+            "flow_unfreeze_update": int(training["flow_unfreeze_update"]),
+            "vision_inference_batch_size": int(
+                _mapping(raw, "vision")["inference_batch_size"]
+            ),
             "peak_memory_bytes": peak,
             "gpu_total_memory_bytes": total,
             "config_sha256": _sha256(config_path),

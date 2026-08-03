@@ -13,7 +13,7 @@ CONFIG_INPUT=""
 CANDIDATE=""
 GPU_INDEX=""
 HEARTBEAT_SECONDS=""
-TOTAL_UPDATES=125000
+TOTAL_UPDATES=30000
 PREFLIGHT_UPDATES=200
 EARLY_STATUS_ACTIVE=0
 STATUS_TOOL=""
@@ -182,7 +182,12 @@ checks = {
     "ready_path": Path(ready_raw).resolve() == root / "shared.ready",
     "failed_path": Path(failed_raw).resolve() == root / "shared.failed",
     "config_path": config == worktree / "configs/wam_flow/s4_r7.yaml",
-    "total_updates": manifest.get("training", {}).get("updates") == 125000,
+    "budget_mode": manifest.get("training", {}).get("budget_mode") == "fast_selection_30k",
+    "total_updates": manifest.get("training", {}).get("updates") == 30000,
+    "micro_accum": (
+        manifest.get("training", {}).get("micro_team_batch"),
+        manifest.get("training", {}).get("gradient_accumulation"),
+    ) == (4, 3),
     "effective_batch": manifest.get("training", {}).get("effective_team_batch") == 12,
 }
 base = Path(str(manifest.get("base_repo", ""))).resolve(strict=True)
@@ -272,8 +277,8 @@ if set(values) != expected_keys:
     raise ValueError(f"candidate.env keys differ: {sorted(values)}")
 if values["S4_R7_CANDIDATE_ID"] != candidate:
     raise ValueError("candidate.env candidate identity differs from launcher")
-if values["S4_R7_TOTAL_UPDATES"] != "125000":
-    raise ValueError("candidate.env training budget must be exactly 125000")
+if values["S4_R7_TOTAL_UPDATES"] != "30000":
+    raise ValueError("candidate.env training budget must be exactly 30000")
 if values["S4_R7_CONFIG_REL"] != "configs/wam_flow/s4_r7.yaml":
     raise ValueError("candidate.env config path is outside the registered public slice")
 expected_config = Path(root_raw).resolve(strict=True) / values["S4_R7_CONFIG_REL"]
@@ -305,13 +310,14 @@ if config.get("format_version") != "wam.robofactory.s4_r7.world_utility.config/1
     raise ValueError("unsupported S4-R7 config format")
 training = config.get("training", {})
 if (
-    training.get("updates") != 125000
+    training.get("budget_mode") != "fast_selection_30k"
+    or training.get("updates") != 30000
     or training.get("preflight_updates") != 200
     or training.get("effective_team_batch") != 12
     or (
         training.get("micro_team_batch"),
         training.get("gradient_accumulation"),
-    ) not in ((2, 6), (1, 12))
+    ) not in ((4, 3), (2, 6), (1, 12))
 ):
     raise ValueError("config budget or initial paired micro-batch recipe differs")
 print(
@@ -611,6 +617,10 @@ if value.get("micro_team_batch") != int(micro_raw) or value.get(
     "gradient_accumulation"
 ) != int(accumulation_raw) or value.get("effective_team_batch") != 12:
     raise ValueError("preflight batch recipe differs from the paired configs")
+if value.get("flow_unfreeze_update") != 6400:
+    raise ValueError("preflight Flow-unfreeze identity differs from fast selection")
+if value.get("vision_inference_batch_size") != 16:
+    raise ValueError("preflight DINO batch identity differs from fast selection")
 peak = value.get("peak_memory_bytes")
 total = value.get("gpu_total_memory_bytes")
 if (
@@ -632,7 +642,7 @@ if value.get("completed") is not True:
 for key in (
     "dataset_index_sequence_sha256",
     "update_1_trainable_name_sha256",
-    "update_26668_trainable_name_sha256",
+    "flow_unfreeze_trainable_name_sha256",
     "learning_rate_curve_sha256",
 ):
     if re.fullmatch(r"[0-9a-f]{64}", str(value.get(key, ""))) is None:
@@ -1137,11 +1147,13 @@ PAIR_FALLBACK=""
 if [[ -f "${PAIR_EXACT}" ]]; then
   PAIR_FALLBACK="$(jq -r '.preflight.required_fallback // empty' "${PAIR_EXACT}" 2>/dev/null)"
 fi
-if [[ "${PAIR_FALLBACK}" == "micro1_accum12" ]]; then
+if [[ "${PAIR_FALLBACK}" == "dino8_micro4_accum3" || \
+      "${PAIR_FALLBACK}" == "micro2_accum6" || \
+      "${PAIR_FALLBACK}" == "micro1_accum12" ]]; then
   flock -u "${PAIR_FD}" || true
   CURRENT_PROGRAM="validate_s4_r7_branch_pair.py"
-  CURRENT_PREFLIGHT="FAIL-required-fallback-micro1_accum12"
-  abort "paired preflight requires micro1_accum12; no one-sided auto-change is allowed—update both candidate configs/branches together and start a new run"
+  CURRENT_PREFLIGHT="FAIL-required-fallback-${PAIR_FALLBACK}"
+  abort "paired preflight requires ${PAIR_FALLBACK}; no one-sided auto-change is allowed—update both candidate configs/branches together and start a new run"
 fi
 if (( pair_code != 0 )); then
   flock -u "${PAIR_FD}" || true
@@ -1179,7 +1191,7 @@ else
     abort "missing candidate trainer: ${TRAINER}"
   fi
   run_stage training train_s4_r7_world_utility.py \
-    "pair-exact passed; formal 125000 updates with validated candidate-isolated resume" \
+    "pair-exact passed; formal 30000-update fast selection with validated candidate-isolated resume" \
     uv run --frozen python scripts/train_s4_r7_world_utility.py \
       --config "${CONFIG}" --device cuda:0 --updates "${TOTAL_UPDATES}" \
       --output "${CHECKPOINT}" --resume "${RESUME}" \
@@ -1209,7 +1221,7 @@ else
     abort "RoboFactory Python required for causal Gate20 is unavailable: ${RF_PYTHON}"
   fi
   run_stage validating evaluate_s4_r7_causal.py \
-    "structural audits plus paired 8-condition five-task Gate20 and utility calibration" \
+    "normal complete first; then legacy/gate-zero/shuffle-all core Gate20; diagnostics last" \
     uv run --frozen python scripts/evaluate_s4_r7_causal.py \
       --config "${CONFIG}" --checkpoint "${CHECKPOINT}" \
       --output "${CANDIDATE_REPORT}" --progress-log "${VALIDATION_PROGRESS}" \

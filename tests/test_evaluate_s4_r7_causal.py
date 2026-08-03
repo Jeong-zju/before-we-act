@@ -146,7 +146,7 @@ def test_training_audits_require_formal_budget_and_recoverable_resume(
     torch.save(
         {
             "format_version": RESUME_FORMAT,
-            "update": 124_000,
+            "update": 29_000,
             "identity": {"candidate_id": "P0"},
         },
         resume,
@@ -172,7 +172,7 @@ def test_training_audits_require_formal_budget_and_recoverable_resume(
         "candidate_id": "P0",
         "passed": True,
         "formal_budget_complete": True,
-        "team_windows_seen": 1_500_000,
+        "team_windows_seen": 360_000,
         "agent_windows_seen_by_module": modules,
     }
     _validate_training_audits(
@@ -181,6 +181,8 @@ def test_training_audits_require_formal_budget_and_recoverable_resume(
         {"agent_windows_seen_by_module": modules},
         resume_path=resume,
         candidate_id="P0",
+        total_updates=30_000,
+        effective_team_batch=12,
     )
     exposure["formal_budget_complete"] = False
     with pytest.raises(ValueError, match="exposure audit"):
@@ -190,11 +192,19 @@ def test_training_audits_require_formal_budget_and_recoverable_resume(
             {"agent_windows_seen_by_module": modules},
             resume_path=resume,
             candidate_id="P0",
+            total_updates=30_000,
+            effective_team_batch=12,
         )
 
 
 def test_normal_precedes_every_shuffle_for_donor_bank_creation() -> None:
     assert EVALUATION_ORDER[0] == "normal"
+    assert EVALUATION_ORDER[:4] == (
+        "normal",
+        "legacy_reference",
+        "world_evidence_gate_zero",
+        "shuffle_all",
+    )
     assert set(EVALUATION_ORDER) == {
         "normal",
         "legacy_reference",

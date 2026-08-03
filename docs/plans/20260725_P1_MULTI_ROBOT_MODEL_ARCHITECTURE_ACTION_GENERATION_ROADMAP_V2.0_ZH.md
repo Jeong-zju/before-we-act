@@ -1842,6 +1842,72 @@ pair exact 通过后，P0/P1 已分别在物理 GPU0/GPU1 从各自精确 resume
 
 正式训练另从共同 ancestor 的 update 0 计满 125k，预检 200 步不计入预算；两路于 `2026-08-02T17:24:43Z` 同步完成 parent/resume load 与 first-batch exact audit，并于 `17:24:58Z` 进入 optimizer loop。update 20 时 P0/P1 吞吐为 `0.223447/0.229459 updates/s`，GPU 利用率约 `97%/98%`、显存约 `2.675/2.677 GiB`，team/有效 agent windows 同为 `240/752`，无 OOM、NaN、stale 或配对漂移。按较慢 P0 的早期实测仅估算训练 wall time 约 `6.5 days`；该估算不是验收结果，runner 会在训练后继续执行完整离线审计、八条件 Gate20 与特殊验收。
 
+#### 9.6.2 R7/R8 30k fast-selection 覆盖条款（2026-08-03）
+
+本小节覆盖 9.5、9.6 与 9.6.1 中关于 **R7/R8 架构选型执行预算、解冻点、batch recipe、吞吐门槛和验证执行顺序** 的旧值；旧的 125k 设计与 round1 日志继续保留为性能诊断和 R9 正式训练依据，不得删除或改写成已验收结果。R9 的四种子正式复现仍使用 125k；30k checkpoint 只能用于 R7/R8 fast-selection 和进入下一结构阶段的决策，不能声称达到 4.8M 新 agent-window scale alignment，也不能直接替代 R9 正式模型。
+
+`s4-r7-round1` 已按用户指令于 `2026-08-03T01:53:14Z`（北京时间 `09:53:14`）收到精确 `SIGINT` 并停止。P0/P1 最后完整日志分别为 update `6900/125000`、`7100/125000`，吞吐 `0.226754/0.232876 updates/s`，有效 agent windows `264887/272564`；退出状态为外部停止 `exit=130`，不是模型报错。旧 run root、checkpoint、resume、preflight、日志和数据均保留；永久 `ssh_tmux` 会话仍存活，且清理后只有 `0|@0|bash`，GPU 与训练/验证进程均为空。
+
+新 fast-selection 公共训练协议如下，两候选除原有 `utility_coupling_weight` 外仍不得漂移：
+
+| 项目 | 30k fast-selection 固定值 | 说明 |
+|---|---:|---|
+| budget mode | `fast_selection_30k` | 训练/验证白名单显式注册，未知模式 fail closed |
+| optimizer updates | `30,000` | 预检 200 updates 不计入正式预算 |
+| micro / accumulation / effective | `4 / 3 / 12` | OOM/余量不足时先共同把 DINO batch 降到 8，再共同退到 `2/6`，最后共同退到 `1/12` |
+| nominal new agent windows | `1,152,000` | `30k×12×3.2`，仅为选型预算标签，实际有效窗口仍由 exposure counter 记录 |
+| Flow unfreeze | update `6,400` | 保持旧 `26668/125000≈21.33%` 的相对解冻位置；Flow update 1..6399 冻结 |
+| milestones | `5k/10k/15k/20k/25k/30k` | 每 1000 updates 仍保存可恢复 resume |
+| DINO inference batch | `16` | 两候选固定相同；OOM 时成对降到 8，不得单边调参 |
+| optimizer / loader | fused AdamW；8 workers；prefetch 4 | BF16、TF32、loss、LR 与 Gate20 seed 不变 |
+| preflight speed gate | 每路 `>=0.75 update/s` | 30k 训练估算不超过 `11.12 h`；未达门槛不得启动正式训练 |
+
+加速实现不改变监督定义：同一 micro-batch 内，部署输入路径已经算出的 current local/shared FP32 PCA grid 直接复用于 future delta target，避免当前帧重复 DINO；current local/shared 图像合成一次冻结 DINO 调用，future local/shared 图像也合成一次调用；DINO/PCA/legacy reference 继续永久冻结且 optimizer-excluded。测试会逐元素比较合并前后的 local/shared target，并要求 `rtol=0, atol=0`。同时启用 `micro=4`、DINO internal batch 16、fused AdamW 和 DataLoader prefetch。200-step paired preflight 除原有 dataset-index、agent histogram、trainable-name、LR、resume-next-batch、显存与 OOM 检查外，新增两路最低吞吐和预计训练小时数；任一路低于 `0.75 update/s` 时 `pair_exact.passed=false`，runner 不进入 30k。
+
+验证仍最终产出八条件完整报告，但执行优先级固定为：
+
+1. `normal`：先独立完成五任务各 20 episodes，立即落盘 `validation/gate20/normal/gate_summary.json`，同时建立 predicted-future donor bank；
+2. `legacy_reference`；
+3. `world_evidence_gate_zero`；
+4. `shuffle_all`；
+5. 诊断条件 `all_world_gates_zero`、`shuffle_own`、`shuffle_peer`、`shuffle_shared`。
+
+前四个构成核心准入条件。特殊门槛不变：`normal >= legacy_reference`，且 `normal` 必须严格高于 `world_evidence_gate_zero` 与 `shuffle_all`；`all_world_gates_zero` 仍只报告，三个 source shuffle 仍只决定可声明的证据来源。monitor 在最终 `candidate_report.json` 尚未生成时直接读取已完成的 per-condition `gate_summary.json`，显示 `core=x/4`、`diagnostic=x/4`、normal 五任务成功数、当前 condition/task/episode/step、程序、PID、GPU PID、20 秒心跳与 75 秒 stale 判定，因此 normal 全部结果无需等待其余七条件。
+
+R7 新 run 使用独立 root，禁止复用旧 125k 配置绑定的 preflight/resume：
+
+```bash
+cd /workspace/fe-pc-wam
+git fetch --no-tags origin \
+  +refs/heads/feat/model-improvements:refs/remotes/origin/feat/model-improvements \
+  +refs/heads/s4/r7-p0-token-preserving-evidence:refs/remotes/origin/s4/r7-p0-token-preserving-evidence \
+  +refs/heads/s4/r7-p1-world-utility-coupling:refs/remotes/origin/s4/r7-p1-world-utility-coupling
+git switch feat/model-improvements
+git merge --ff-only origin/feat/model-improvements
+
+bash scripts/launch_s4_r7_2gpu_tmux.sh \
+  --run-id s4-r7-fast30k-round1 --dry-run
+bash scripts/launch_s4_r7_existing_server.sh \
+  --run-id s4-r7-fast30k-round1 --no-focus-monitor
+
+python3 scripts/s4_r7_runtime.py monitor --once \
+  --run-root /workspace/fe-pc-wam/outputs/s4_r7_runs/s4-r7-fast30k-round1
+tmux select-window -t ssh_tmux:s4-r7-fast30k-round1-monitor
+```
+
+默认继续复用 S0 已下载的数据、Hub cache、固定 revision DINO/PCA 和 ancestors，不请求或导出 HF token；只有缺资产时才沿用 S0 的隐藏输入、mode-0600 FIFO、固定 revision、断点续传和 Xet/worker 规则。一键停止仍为：
+
+```bash
+cd /workspace/fe-pc-wam
+bash scripts/stop_s4_r7_2gpu_tmux.sh \
+  --run-id s4-r7-fast30k-round1 --dry-run
+bash scripts/stop_s4_r7_2gpu_tmux.sh \
+  --run-id s4-r7-fast30k-round1
+tmux has-session -t ssh_tmux
+```
+
+R7 核心与完整验收通过后，仍须把 checkpoint/report hashes、五任务八条件结果、utility CI、winner 和 merge commit 写回本节，再把胜出分支合并到 `feat/model-improvements`。R8 随后从更新后的模型修改分支创建两个分支，重复同一 `30k fast-selection → normal-first core validation → diagnostics → 特殊验收 → 文档回写 → winner merge` 流程；R8 不载入 R7 的 30k model/optimizer state。R7/R8 都结束后，R9 再从共同 ancestors 按胜出 recipe 进行 125k 四种子正式训练。
+
 ## 10. S5-R9：正式训练、评测与统计（08-23 至 09-04）
 
 ### 10.1 双卡两两正式复现

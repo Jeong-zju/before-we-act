@@ -246,7 +246,9 @@ print_plan() {
     "${WINDOW_PREFIX}" "${PREPARE_WINDOW}" "${CANDIDATE_WINDOWS[0]}" \
     "${CANDIDATE_WINDOWS[1]}" "${MONITOR_WINDOW}"
   printf 'GPU0=%s GPU1=%s; independent candidates, no DDP\n' "${BRANCHES[0]}" "${BRANCHES[1]}"
-  printf 'training=effective team batch 12; 125000 updates; target 4800000 agent windows; Flow unfreezes at 26668\n'
+  printf 'training=30k fast-selection; micro4/accum3/effective12; target 1152000 agent windows; Flow unfreezes at 6400\n'
+  printf 'speed=DINO inference batch 16 + fused AdamW + reused current/combined visual encodes; paired preflight requires >=0.75 update/s\n'
+  printf 'validation=normal first; then legacy/gate-zero/shuffle-all core; four diagnostic conditions last\n'
   printf 'shared=%s/datasets/robofactory_multitask and %s/artifacts; candidate outputs remain isolated\n' \
     "${FE_ROOT}" "${FE_ROOT}"
   printf 'heartbeat=20s; STALE after 75s; monitor includes program/phase/PIDs/GPU/rollout/batch/exposure/optimizer/preflight/special gates\n'

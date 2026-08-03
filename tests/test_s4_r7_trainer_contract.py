@@ -33,9 +33,9 @@ def test_flow_schedule_is_exactly_frozen_then_has_its_own_warmup() -> None:
 
     _set_learning_rates(
         optimizer,
-        update=26_667,
-        total_updates=125_000,
-        flow_unfreeze_update=26_668,
+        update=6_399,
+        total_updates=30_000,
+        flow_unfreeze_update=6_400,
         warmup_updates=500,
         flow_warmup_updates=500,
     )
@@ -44,9 +44,9 @@ def test_flow_schedule_is_exactly_frozen_then_has_its_own_warmup() -> None:
 
     _set_learning_rates(
         optimizer,
-        update=26_668,
-        total_updates=125_000,
-        flow_unfreeze_update=26_668,
+        update=6_400,
+        total_updates=30_000,
+        flow_unfreeze_update=6_400,
         warmup_updates=500,
         flow_warmup_updates=500,
     )
@@ -106,9 +106,15 @@ round:
   round_id: s4-r7
   candidate_id: P0
   model_kind: s4_r7_token_preserving
+vision:
+  inference_batch_size: 16
 training:
-  micro_team_batch: 2
-  gradient_accumulation: 6
+  budget_mode: fast_selection_30k
+  updates: 30000
+  flow_unfreeze_update: 6400
+  agent_window_budget: 1152000
+  micro_team_batch: 4
+  gradient_accumulation: 3
   effective_team_batch: 12
   utility_coupling_weight: 0.0
   relation_weight: 0.0

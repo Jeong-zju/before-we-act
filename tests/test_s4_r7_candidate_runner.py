@@ -75,9 +75,11 @@ def test_minimal_oom_preflight_is_terminal_but_not_a_pass(tmp_path: Path) -> Non
                 "updates": 200,
                 "completed": False,
                 "oom": True,
-                "micro_team_batch": 2,
-                "gradient_accumulation": 6,
+                "micro_team_batch": 4,
+                "gradient_accumulation": 3,
                 "effective_team_batch": 12,
+                "flow_unfreeze_update": 6400,
+                "vision_inference_batch_size": 16,
                 "peak_memory_bytes": 0,
                 "gpu_total_memory_bytes": 32 * 1024**3,
             }
@@ -91,8 +93,8 @@ def test_minimal_oom_preflight_is_terminal_but_not_a_pass(tmp_path: Path) -> Non
         "P0",
         "s4_r7_token_preserving",
         "a" * 64,
-        "2",
-        "6",
+        "4",
+        "3",
     ]
     terminal = subprocess.run(
         [*common, "terminal"],
@@ -159,7 +161,7 @@ def test_checkpoint_verifier_requires_canonical_hash_and_resume_format(
                 "P0",
                 "s4_r7_token_preserving",
                 mode,
-                "125000",
+                "30000",
                 str(config),
                 config_sha,
                 git_commit,
@@ -176,7 +178,7 @@ def test_checkpoint_verifier_requires_canonical_hash_and_resume_format(
     torch.save(
         {
             "format_version": "wam.robofactory.s4_r7.world_utility.checkpoint/1",
-            "update": 125000,
+            "update": 30000,
             "method": method,
             "parent_identity": digests,
             "source": {"config_sha256": config_sha, "git_commit": git_commit},
@@ -190,7 +192,7 @@ def test_checkpoint_verifier_requires_canonical_hash_and_resume_format(
     torch.save(
         {
             "format_version": "wam.robofactory.s4_r7.world_utility.checkpoint/1",
-            "update": 125000,
+            "update": 30000,
             "method": method,
             "parent_identity": digests,
             "source": {},
@@ -279,6 +281,7 @@ def test_candidate_runner_rejects_noncanonical_heartbeat_interval() -> None:
 
 def test_candidate_runner_orders_pair_exact_before_formal_training() -> None:
     source = RUNNER.read_text(encoding="utf-8")
+    assert 'PAIR_FALLBACK}" == "dino8_micro4_accum3"' in source
     preflight_call = source.index("--preflight-only --preflight-updates")
     pair_lock = source.index('flock -x "${PAIR_FD}"')
     pair_validator = source.index("--p0-preflight")
@@ -291,6 +294,7 @@ def test_candidate_runner_orders_pair_exact_before_formal_training() -> None:
 
 def test_candidate_runner_is_fail_closed_for_pair_fallback_and_old_artifacts() -> None:
     source = RUNNER.read_text(encoding="utf-8")
+    assert 'PAIR_FALLBACK}" == "micro2_accum6"' in source
     assert 'PAIR_FALLBACK}" == "micro1_accum12"' in source
     assert "no one-sided auto-change is allowed" in source
     assert "verify_preflight" in source

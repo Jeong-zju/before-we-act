@@ -56,7 +56,7 @@ def _report(candidate_id: str, *, normal: int) -> dict[str, object]:
         "checkpoint_sha256": f"checkpoint-{candidate_id}",
         "structural_invariants": {name: True for name in STRUCTURAL_GATES},
         "training_audits": {
-            "checkpoint_update_125000": True,
+            "checkpoint_update_30000": True,
             "parameter_gradient_audit_passed": True,
             "module_exposure_passed": True,
             "formal_budget_complete": True,
@@ -95,7 +95,7 @@ def _checkpoint(candidate_id: str) -> dict[str, object]:
     return {
         "format_version": CHECKPOINT_FORMAT,
         "file_sha256": f"checkpoint-{candidate_id}",
-        "update": 125_000,
+        "update": 30_000,
         "method": {
             "round_id": "s4-r7",
             "candidate_id": candidate_id,

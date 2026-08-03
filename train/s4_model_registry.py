@@ -11,6 +11,10 @@ S4_R7_MODEL_KINDS: dict[str, tuple[str, float]] = {
     "s4_r7_token_preserving": ("P0", 0.0),
     "s4_r7_world_utility_coupling": ("P1", 0.05),
 }
+S4_R7_BUDGET_MODES: dict[str, tuple[int, int, int]] = {
+    # (optimizer updates, Flow unfreeze update, nominal valid-agent windows)
+    "fast_selection_30k": (30_000, 6_400, 1_152_000),
+}
 
 S4_R8_MODEL_KINDS: dict[str, tuple[str, str]] = {
     "s4_r8_horizon_prefix_mean": ("P0", "prefix_mean"),
@@ -134,6 +138,27 @@ def validate_s4_r7_candidate(
     if candidate_id != expected_candidate or utility != expected_utility:
         raise ValueError(
             "S4-R7 candidate identity disagrees with the model-kind allowlist"
+        )
+    budget_mode = str(_field(value, "budget_mode", sections=("training",)))
+    if budget_mode not in S4_R7_BUDGET_MODES:
+        raise ValueError(
+            f"S4-R7 budget mode is not in the training allowlist: {budget_mode!r}"
+        )
+    expected_updates, expected_unfreeze, expected_agent_windows = (
+        S4_R7_BUDGET_MODES[budget_mode]
+    )
+    observed_budget = (
+        int(_field(value, "updates", sections=("training",))),
+        int(_field(value, "flow_unfreeze_update", sections=("training",))),
+        int(_field(value, "agent_window_budget", sections=("training",))),
+    )
+    if observed_budget != (
+        expected_updates,
+        expected_unfreeze,
+        expected_agent_windows,
+    ):
+        raise ValueError(
+            "S4-R7 budget fields disagree with the registered fast-selection mode"
         )
     _validate_disabled_auxiliary_weights(value)
     return candidate_id, model_kind, utility
@@ -328,6 +353,7 @@ validate_s4_r8_candidate_pair = validate_s4_r8_pair
 __all__ = [
     "S4_MODEL_KINDS",
     "S4_ALLOWED_OBJECTIVE_WEIGHTS",
+    "S4_R7_BUDGET_MODES",
     "S4_R7_MODEL_KINDS",
     "S4_R8_MODEL_KINDS",
     "S4_ZERO_AUXILIARY_WEIGHTS",

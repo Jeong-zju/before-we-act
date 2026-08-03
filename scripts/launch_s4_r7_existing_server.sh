@@ -4,7 +4,7 @@
 # identity, GPU, worktree, tmux, resume and acceptance check.
 
 FE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUN_ID="${S4_R7_RUN_ID:-s4-r7-round1}"
+RUN_ID="${S4_R7_RUN_ID:-s4-r7-fast30k-round1}"
 PREPARE_ARGS=()
 
 if (( $# )) && [[ "$1" == "--run-id" && -n "${2:-}" ]]; then

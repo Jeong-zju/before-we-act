@@ -176,12 +176,18 @@ def encode_current_visual_context(
         device=device,
         dtype=torch.float32,
     )
-    if bool(valid_agents.any()):
-        raw = vision(local_images[valid_agents]).spatial_tokens.float()
+    local_count = int(valid_agents.sum().item())
+    shared_count = int(shared_valid.sum().item())
+    if local_count + shared_count:
+        selected_images = torch.cat(
+            (local_images[valid_agents], shared_images[shared_valid]), dim=0
+        )
+        raw = vision(selected_images).spatial_tokens.float()
+        local_raw = raw[:local_count]
         raw_local = raw_local.expand(
-            -1, -1, raw.shape[1], -1
+            -1, -1, local_raw.shape[1], -1
         ).clone()
-        raw_local[valid_agents] = raw
+        raw_local[valid_agents] = local_raw
         patch_rows = int(vision.config.image_height) // int(vision.patch_size)
         patch_columns = int(vision.config.image_width) // int(vision.patch_size)
         grid = F.adaptive_avg_pool2d(
@@ -190,15 +196,109 @@ def encode_current_visual_context(
             ),
             (grid_height, grid_width),
         ).flatten(2).transpose(1, 2)
-        projected_local[valid_agents] = project_dino_grid(grid, artifact)
-    if bool(shared_valid.any()):
+        projected = project_dino_grid(grid, artifact)
+        projected_local[valid_agents] = projected[:local_count]
+        projected_shared[shared_valid] = projected[local_count:]
+    return raw_local, projected_local, projected_shared
+
+
+def encode_future_visual_targets(
+    vision: nn.Module,
+    grouped: Mapping[str, Tensor],
+    artifact: Mapping[str, Any],
+    *,
+    current_local: Tensor,
+    current_shared: Tensor,
+    device: torch.device,
+    grid_height: int,
+    grid_width: int,
+) -> tuple[Tensor, Tensor]:
+    """Encode local/shared future frames in one frozen-DINO call.
+
+    The current projected grids are supplied by the deployed input path.  This
+    avoids encoding the same current local and shared observations a second
+    time solely to construct training targets, while retaining FP32 PCA target
+    construction and the exact masking/statistics contract.
+    """
+
+    local_valid = grouped["future_agent_visual_valid_mask"].to(
+        device=device, dtype=torch.bool
+    )
+    shared_valid = grouped["future_shared_visual_valid_mask"].to(
+        device=device, dtype=torch.bool
+    )
+    batch_size, agents, futures = local_valid.shape
+    grid_tokens = grid_height * grid_width
+    latent_dim = int(artifact["pca_components"].shape[1])
+    expected_local = (batch_size, agents, grid_tokens, latent_dim)
+    expected_shared = (batch_size, grid_tokens, latent_dim)
+    if tuple(current_local.shape) != expected_local:
+        raise ValueError(f"current_local must have shape {expected_local}")
+    if tuple(current_shared.shape) != expected_shared:
+        raise ValueError(f"current_shared must have shape {expected_shared}")
+
+    future_local = torch.zeros(
+        batch_size,
+        agents,
+        futures,
+        grid_tokens,
+        latent_dim,
+        device=device,
+        dtype=torch.float32,
+    )
+    future_shared = torch.zeros(
+        batch_size,
+        futures,
+        grid_tokens,
+        latent_dim,
+        device=device,
+        dtype=torch.float32,
+    )
+    local_images = grouped["future_agent_observations"].to(
+        device=device, non_blocking=True
+    )
+    shared_images = grouped["future_shared_observations"].to(
+        device=device, non_blocking=True
+    )
+    local_count = int(local_valid.sum().item())
+    shared_count = int(shared_valid.sum().item())
+    if local_count + shared_count:
+        selected_images = torch.cat(
+            (local_images[local_valid], shared_images[shared_valid]), dim=0
+        )
         grid = vision.forward_spatial_grid(
-            shared_images[shared_valid],
+            selected_images,
             grid_height=grid_height,
             grid_width=grid_width,
         ).spatial_tokens.float()
-        projected_shared[shared_valid] = project_dino_grid(grid, artifact)
-    return raw_local, projected_local, projected_shared
+        projected = project_dino_grid(grid, artifact)
+        future_local[local_valid] = projected[:local_count]
+        future_shared[shared_valid] = projected[local_count:]
+
+    local_delta = future_local - current_local[:, :, None]
+    local_mean = artifact["visual_delta_mean"].to(local_delta)
+    local_std = artifact["visual_delta_std"].to(local_delta)
+    normalized_local = (
+        local_delta - local_mean[None, None, :, None]
+    ) / local_std[None, None, :, None]
+    normalized_local = normalized_local.masked_fill(
+        ~local_valid[:, :, :, None, None], 0.0
+    )
+
+    shared_mean = artifact.get("shared_visual_delta_mean")
+    shared_std = artifact.get("shared_visual_delta_std")
+    if not isinstance(shared_mean, Tensor) or not isinstance(shared_std, Tensor):
+        raise ValueError("S2-R4 artifact lacks shared-view target statistics")
+    shared_delta = future_shared - current_shared[:, None]
+    mean = shared_mean.to(shared_delta)
+    std = shared_std.to(shared_delta)
+    normalized_shared = (shared_delta - mean[None, :, None]) / std[
+        None, :, None
+    ]
+    normalized_shared = normalized_shared.masked_fill(
+        ~shared_valid[:, :, None, None], 0.0
+    )
+    return normalized_local, normalized_shared
 
 
 def encode_shared_visual_targets(
@@ -437,6 +537,7 @@ def _masked_per_trajectory(
 
 __all__ = [
     "S2_ARTIFACT_FORMAT",
+    "encode_future_visual_targets",
     "encode_local_visual_targets",
     "encode_current_visual_context",
     "encode_shared_visual_targets",

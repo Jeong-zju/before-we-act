@@ -209,8 +209,8 @@ def _evaluate_candidate(
     }
     training = _mapping(report, "training_audits")
     training_results = {
-        "checkpoint_update_125000": checkpoint.get("update") == 125_000
-        and training.get("checkpoint_update_125000") is True,
+        "checkpoint_update_30000": checkpoint.get("update") == 30_000
+        and training.get("checkpoint_update_30000") is True,
         "parameter_gradient_audit_passed": training.get(
             "parameter_gradient_audit_passed"
         )

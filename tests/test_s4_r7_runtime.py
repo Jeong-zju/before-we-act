@@ -93,14 +93,14 @@ def test_r7_monitor_reports_runtime_heartbeat_progress_and_derived_gates(
             episodes_total=20,
             step=125,
             steps_total=1500,
-            micro_batch=2,
-            gradient_accumulation=6,
+            micro_batch=4,
+            gradient_accumulation=3,
             effective_batch=12,
-            update=40_000,
-            total_updates=125_000,
-            team_windows_seen=480_000,
-            agent_windows_seen=1_536_000,
-            milestone="40k",
+            update=15_000,
+            total_updates=30_000,
+            team_windows_seen=180_000,
+            agent_windows_seen=576_000,
+            milestone="15k",
             flow_unfreeze_state="unfrozen",
             loss=0.125,
             grad_norm=0.75,
@@ -150,10 +150,10 @@ def test_r7_monitor_reports_runtime_heartbeat_progress_and_derived_gates(
     assert "producer every 20s; STALE strictly after 75s" in rendered
     assert "pid=200 child_pid=300 gpu_pid=400" in rendered
     assert "condition=world_evidence_gate=0 task=take_photo episode=7/20 step=125/1500" in rendered
-    assert "micro/accum/effective=2/6/12" in rendered
-    assert "update=40000/125000 (32.0%)" in rendered
-    assert "agent_windows=1536000/4800000 (32.0%)" in rendered
-    assert "milestone=40k flow=unfrozen preflight=PASS" in rendered
+    assert "micro/accum/effective=4/3/12" in rendered
+    assert "update=15000/30000 (50.0%)" in rendered
+    assert "agent_windows=576000/1152000 (50.0%)" in rendered
+    assert "milestone=15k flow=unfrozen preflight=PASS" in rendered
     assert "loss=0.125 grad=0.75 lr=flow=2e-5,router=3e-4" in rendered
     assert "generic passed=true is insufficient" in rendered
     assert "pair structure | PASS 2/2" in rendered
@@ -187,6 +187,39 @@ def test_r7_monitor_uses_named_pair_checks_not_expected_false_observations(
     assert "pair structure | PASS 2/2" in rendered
 
 
+def test_r7_monitor_exposes_complete_normal_results_before_final_report(
+    tmp_path: Path,
+) -> None:
+    root = _initialize(tmp_path)
+    tasks = (
+        "lift_barrier",
+        "long_pipeline_delivery",
+        "take_photo",
+        "three_robots_stack_cube",
+        "camera_alignment",
+    )
+    summary: dict[str, object] = {
+        "task_order": list(tasks),
+    }
+    for task in tasks:
+        summary[task] = {
+            "episodes": [
+                {"seed": 900 + index, "success": index < 9}
+                for index in range(20)
+            ]
+        }
+    _write_json(
+        root
+        / "candidates/p0/validation/gate20/normal/gate_summary.json",
+        summary,
+    )
+
+    rendered = render_monitor(root)
+    assert "P0 validation priority | core=1/4 diagnostic=0/4" in rendered
+    assert "P0 causal | pending normal=0.45" in rendered
+    assert "P0 normal Gate20 by task | lift_barrier=9/20" in rendered
+
+
 def test_r7_monitor_replaces_zero_gpu_pid_sentinel_with_live_process(
     tmp_path: Path, monkeypatch: object
 ) -> None:
@@ -207,11 +240,11 @@ def test_r7_monitor_replaces_zero_gpu_pid_sentinel_with_live_process(
         episodes_total=None,
         step=None,
         steps_total=None,
-        micro_batch=2,
-        gradient_accumulation=6,
+        micro_batch=4,
+        gradient_accumulation=3,
         effective_batch=12,
         update=1,
-        total_updates=125_000,
+        total_updates=30_000,
         team_windows_seen=12,
         agent_windows_seen=38,
         milestone=None,
@@ -250,11 +283,11 @@ def test_r7_monitor_marks_nonterminal_heartbeat_stale_after_75_seconds(
         episodes_total=None,
         step=None,
         steps_total=None,
-        micro_batch=2,
-        gradient_accumulation=6,
+        micro_batch=4,
+        gradient_accumulation=3,
         effective_batch=12,
         update=10,
-        total_updates=125_000,
+        total_updates=30_000,
         team_windows_seen=120,
         agent_windows_seen=384,
         milestone=None,

@@ -74,8 +74,8 @@ EVALUATION_ORDER = (
     "normal",
     "legacy_reference",
     "world_evidence_gate_zero",
-    "all_world_gates_zero",
     "shuffle_all",
+    "all_world_gates_zero",
     "shuffle_own",
     "shuffle_peer",
     "shuffle_shared",
@@ -110,13 +110,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     raw = _load_yaml(config_path)
     candidate_id, model_kind, utility_weight = validate_s4_r7_candidate(raw)
+    training = _mapping(raw, "training")
+    total_updates = int(training["updates"])
     checkpoint_sha256 = file_sha256(checkpoint_path)
     saved = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if not isinstance(saved, Mapping) or saved.get("format_version") != CHECKPOINT_FORMAT:
         raise ValueError("checkpoint is not an S4-R7 world-utility policy")
     method = _mapping(saved, "method")
     if (
-        saved.get("update") != 125_000
+        saved.get("update") != total_updates
         or method.get("round_id") != "s4-r7"
         or method.get("candidate_id") != candidate_id
         or method.get("model_kind") != model_kind
@@ -149,6 +151,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         saved,
         resume_path=resume_path,
         candidate_id=candidate_id,
+        total_updates=total_updates,
+        effective_team_batch=int(training["effective_team_batch"]),
     )
     structural = dict(_mapping(saved, "structural_invariants"))
     if any(structural.get(name) is not True for name in STRUCTURAL_GATES):
@@ -336,7 +340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "checkpoint_sha256": checkpoint_sha256,
         "structural_invariants": structural,
         "training_audits": {
-            "checkpoint_update_125000": saved.get("update") == 125_000,
+            "checkpoint_update_30000": saved.get("update") == 30_000,
             "parameter_gradient_audit_passed": gradient.get("passed") is True,
             "module_exposure_passed": exposure.get("passed") is True,
             "formal_budget_complete": exposure.get("formal_budget_complete")
@@ -361,7 +365,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         progress_log,
         event="candidate_report_complete",
         condition="special_acceptance_inputs",
-        detail=f"eight Gate20 conditions complete; report={output}",
+        detail=f"four core plus four diagnostic Gate20 conditions complete; report={output}",
     )
     print(json.dumps(report, indent=2, sort_keys=True), flush=True)
     return 0
@@ -374,6 +378,8 @@ def _validate_training_audits(
     *,
     resume_path: Path,
     candidate_id: str,
+    total_updates: int,
+    effective_team_batch: int,
 ) -> None:
     if (
         gradient.get("format_version") != GRADIENT_FORMAT
@@ -386,7 +392,8 @@ def _validate_training_audits(
         or exposure.get("candidate_id") != candidate_id
         or exposure.get("passed") is not True
         or exposure.get("formal_budget_complete") is not True
-        or exposure.get("team_windows_seen") != 1_500_000
+        or exposure.get("team_windows_seen")
+        != total_updates * effective_team_batch
     ):
         raise ValueError("formal per-module exposure audit did not pass")
     by_module = exposure.get("agent_windows_seen_by_module")
@@ -405,7 +412,7 @@ def _validate_training_audits(
     if (
         not isinstance(resume, Mapping)
         or resume.get("format_version") != RESUME_FORMAT
-        or not 0 <= int(resume.get("update", -1)) < 125_000
+        or not 0 <= int(resume.get("update", -1)) < total_updates
         or _mapping(resume, "identity").get("candidate_id") != candidate_id
     ):
         raise ValueError("formal resume artifact is not a valid recoverable state")

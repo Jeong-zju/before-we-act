@@ -6,6 +6,7 @@ import pytest
 
 from train.s4_model_registry import (
     S4_MODEL_KINDS,
+    S4_R7_BUDGET_MODES,
     S4_R7_MODEL_KINDS,
     S4_R8_MODEL_KINDS,
     validate_s4_candidate,
@@ -34,7 +35,10 @@ def _r7(candidate: str) -> dict[str, object]:
         },
         "training": {
             "seed": 707,
-            "updates": 125000,
+            "budget_mode": "fast_selection_30k",
+            "updates": 30000,
+            "flow_unfreeze_update": 6400,
+            "agent_window_budget": 1152000,
             "utility_coupling_weight": 0.05 if p1 else 0.0,
             "relation_weight": 0.0,
             "specialization_weight": 0.0,
@@ -77,6 +81,9 @@ def test_s4_model_kind_allowlists_are_exact_and_fail_closed() -> None:
     assert S4_R7_MODEL_KINDS == {
         "s4_r7_token_preserving": ("P0", 0.0),
         "s4_r7_world_utility_coupling": ("P1", 0.05),
+    }
+    assert S4_R7_BUDGET_MODES == {
+        "fast_selection_30k": (30_000, 6_400, 1_152_000)
     }
     assert S4_R8_MODEL_KINDS == {
         "s4_r8_horizon_prefix_mean": ("P0", "prefix_mean"),
@@ -140,6 +147,18 @@ def test_r7_pair_allows_only_registered_utility_axis() -> None:
     drifted["training"]["seed"] = 708  # type: ignore[index]
     with pytest.raises(ValueError, match="pre-registered axis"):
         validate_s4_r7_pair(p0, drifted)
+
+
+def test_r7_registry_rejects_unregistered_or_drifted_budget() -> None:
+    value = _r7("P0")
+    value["training"]["budget_mode"] = "full_125k"  # type: ignore[index]
+    with pytest.raises(ValueError, match="budget mode.*allowlist"):
+        validate_s4_r7_candidate(value)
+
+    value = _r7("P0")
+    value["training"]["flow_unfreeze_update"] = 26_668  # type: ignore[index]
+    with pytest.raises(ValueError, match="budget fields"):
+        validate_s4_r7_candidate(value)
 
 
 def test_r8_pair_allows_only_registered_action_aggregator_axis() -> None:
