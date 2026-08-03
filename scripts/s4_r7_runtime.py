@@ -109,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     monitor_parser = commands.add_parser("monitor", help="render the persistent monitor")
     monitor_parser.add_argument("--run-root", type=Path, required=True)
-    monitor_parser.add_argument("--interval", type=float, default=300.0)
+    monitor_parser.add_argument("--interval", type=float, default=1_800.0)
     monitor_parser.add_argument("--once", action="store_true")
     return parser
 
