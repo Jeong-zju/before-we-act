@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Ordered, resumable automation for FE-PC WAM and RoboFactory.
+# Ordered, resumable automation for Before We Act and RoboFactory.
 #
 # This file intentionally uses only Bash and common system tools before the
 # uv environments exist, so it can also be copied to a fresh remote server.
@@ -31,7 +31,7 @@ Options:
   -h, --help          Show this help.
 
 Actions are executed from left to right and may also be comma-separated:
-  code                Clone/update FE-PC WAM and switch FE_REF.
+  code                Clone/update Before We Act and switch FE_REF.
   robofactory         Clone/update RoboFactory and switch ROBOFACTORY_REF.
   env                 Install uv/Python 3.11 and sync the WAM lockfile.
   robofactory-env     Create the isolated RoboFactory Python 3.9 environment.
@@ -142,15 +142,15 @@ fi
 
 if [[ -f "${SCRIPT_PROJECT_ROOT}/pyproject.toml" ]]; then
   DEFAULT_WORKSPACE_ROOT="$(cd "${SCRIPT_PROJECT_ROOT}/.." && pwd)"
-  DEFAULT_FE_DIR_NAME="$(basename "${SCRIPT_PROJECT_ROOT}")"
+  DEFAULT_FE_DIR_NAME="before-we-act"
 else
   DEFAULT_WORKSPACE_ROOT="${PWD}/wam-workspace"
-  DEFAULT_FE_DIR_NAME="fe_pc_wam"
+  DEFAULT_FE_DIR_NAME="before-we-act"
 fi
 
 : "${WORKSPACE_ROOT:=${DEFAULT_WORKSPACE_ROOT}}"
 : "${FE_DIR_NAME:=${DEFAULT_FE_DIR_NAME}}"
-: "${FE_REPO_URL:=https://github.com/Jeong-zju/fe-pc-wam.git}"
+: "${FE_REPO_URL:=https://github.com/Jeong-zju/before-we-act.git}"
 : "${FE_REF:=main}"
 : "${ROBOFACTORY_DIR_NAME:=RoboFactory}"
 : "${ROBOFACTORY_REPO_URL:=https://github.com/MARS-EAI/RoboFactory.git}"
@@ -377,7 +377,7 @@ sync_repository() {
 }
 
 action_code() {
-  sync_repository "FE-PC WAM" "${FE_REPO_URL}" "${FE_REF}" "${FE_ROOT}"
+  sync_repository "Before We Act" "${FE_REPO_URL}" "${FE_REF}" "${FE_ROOT}"
 }
 
 action_robofactory() {
@@ -533,7 +533,7 @@ action_hf_upload() {
         --type dataset \
         --revision "${HF_UPLOAD_REVISION}" \
         --exclude ".cache/**" \
-        --commit-message "Upload FE-PC WAM dataset"
+        --commit-message "Upload Before We Act dataset"
       ;;
     large)
       wam_uv hf upload-large-folder \

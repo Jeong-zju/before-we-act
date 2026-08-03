@@ -28,15 +28,15 @@ ICRA 截稿临近，后续不再按旧版 M3–M11 的长串行路线推进。�
 
 ## 2. 论文目标与边界
 
-### 2.1 暂定论文题目（R7-P1 胜出时）
+### 2.1 论文工作标题
 
-**Utility-Calibrated Future Evidence for World-Conditioned Flow Matching in Multi-Robot Collaboration**
+**Before We Act: Learning Multi-Robot Policies from Predicted Consequences**
 
 中文工作名：
 
-**面向多机器人协作的效用校准未来证据条件 Flow Matching**
+**行动之前：从预测后果学习多机器人策略**
 
-当前已验收方法固定为 `s3_r6l_protected_local_gated`，也是 R7 的不可变回退点。只有 `R7-P1 WUC` 被选中时，最终方法才命名为 **UC-WAM（Utility-Calibrated World-Action Model）**；若 R7-P0 胜出则使用 **Token-Preserving WAM**，R8 通过后再称 **Horizon-Causal WAM**，不得继续使用 “Utility-Calibrated”。若 R7 未通过，论文方法退回 R6L-P1 与旧题目；若 R7 通过而 R8 未通过，则以 R7 winner 作为最终方法，不为追求新名称牺牲已成立的闭环结果。
+项目与论文统一使用 **Before We Act**。该名称描述稳定的研究问题，不绑定 R7/R8 的具体 winner：当前已验收方法仍固定为 `s3_r6l_protected_local_gated`，也是 R7 的不可变回退点；`utility-calibrated`、`token-preserving` 与 `horizon-causal` 只在相应实验通过后作为正文中的组件或变体名称。若 R7/R8 未通过，正文主张按证据回退，但不再更换项目标题。
 
 ### 2.2 核心研究问题
 

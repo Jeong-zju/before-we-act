@@ -1,6 +1,8 @@
-# FE-PC WAM
+# Before We Act
 
-FE-PC WAM 是一个从 legacy proprioceptive Joint WAM 逐步扩展到多模态 WAM 与去中心化多机器人协作的研究仓库。已验收的 cooperative-stop legacy baseline 使用双机器人 22 维集中式状态和 8 维连续动作；M1/M2 与后续 IG-DeWAM 是独立的扩展阶段，不能套用 legacy 任务的结论。
+> **Before We Act: Learning Multi-Robot Policies from Predicted Consequences**
+
+Before We Act 是一个研究如何把动作条件化的未来预测转化为多机器人协作策略的研究仓库。仓库从 legacy proprioceptive Joint WAM 逐步扩展到多模态 world-action modeling 与去中心化多机器人协作；`FE-PC WAM`、`Joint WAM` 和 `IG-DeWAM` 等旧名称继续作为历史实验阶段与兼容命名保留，不再作为项目标题。
 
 当前正式结果已经通过：关闭 fallback 的 prior-anchored Joint WAM direct 与 action prior 在 standard 和 challenge 各 500 个未见 seeds 上均为 100%，`policy_acceptable=true`。现有任务已饱和，因此该结果不用于声称 joint training 带来了额外控制收益。完整判断见 [Benchmark 与 Baseline 计划](docs/plans/20260718_FE_PC_WAM_BENCHMARK_AND_BASELINE_PLAN_V1.0_ZH.md)。
 
@@ -34,14 +36,14 @@ outputs/                       # 本地可再生产物，全部由 Git 忽略
 把代码/RoboFactory 下载、双 uv 环境、Hugging Face 数据、DINOv3、训练和
 真实闭环验证按顺序组合执行；`full` 可从零运行完整链路，`full-smoke`
 用于低成本预检。配置、断点续跑、数据上传和一键命令见
-[`FE-PC WAM 远程自动化运行手册`](docs/runbooks/20260726_FE_PC_WAM_AUTOMATION_ZH.md)。
+[`Before We Act 远程自动化运行手册`](docs/runbooks/20260726_FE_PC_WAM_AUTOMATION_ZH.md)。
 
 ## 数据收集、训练与验证全流程
 
 以下命令均从仓库根目录执行，并且必须等待前一步成功结束后再进入下一步：
 
 ```bash
-cd ~/zeno/wam/fe_pc_wam
+cd ~/zeno/wam/before-we-act
 ```
 
 ### 1. 准备环境

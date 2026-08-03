@@ -1,10 +1,10 @@
-# FE-PC WAM 的 uv 环境
+# Before We Act 的 uv 环境
 
-`fe_pc_wam` 目录内的 `pyproject.toml`、`.python-version` 和 `uv.lock` 是本项目唯一的 Python 环境定义。项目只支持 Python 3.11；Linux/Windows 上的 PyTorch 使用 CUDA 12.8 wheel。
+`before-we-act` 目录内的 `pyproject.toml`、`.python-version` 和 `uv.lock` 是本项目唯一的 Python 环境定义。项目只支持 Python 3.11；Linux/Windows 上的 PyTorch 使用 CUDA 12.8 wheel。
 
 ## 初始化或更新
 
-在 `fe_pc_wam` 目录运行：
+在 `before-we-act` 目录运行：
 
 ```bash
 uv sync

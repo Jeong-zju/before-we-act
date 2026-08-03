@@ -108,7 +108,7 @@ def test_full_smoke_dry_run_is_ordered_non_mutating_and_secret_safe(
     assert "run_robofactory_m1_inference.py" in combined
     assert (
         "--checkpoint "
-        f"{workspace}/fe_pc_wam/checkpoints/preflight/"
+        f"{workspace}/before-we-act/checkpoints/preflight/"
         "m1_liftbarrier_automation_smoke"
     ) in combined
 
@@ -158,7 +158,7 @@ def test_code_action_clones_local_repo_and_resume_skips_it(tmp_path: Path) -> No
     }
     initial = _run("code", env=environment)
     assert initial.returncode == 0, initial.stdout + initial.stderr
-    clone = workspace / "fe_pc_wam"
+    clone = workspace / "before-we-act"
     assert (clone / "README.md").read_text(encoding="utf-8") == "fixture\n"
 
     resumed = _run("--resume", "code", env=environment)
