@@ -63,6 +63,23 @@ R7_CHECKPOINT_FORMAT = "wam.robofactory.s4_r7.world_utility.checkpoint/1"
 R8_CHECKPOINT_FORMAT = "wam.robofactory.s4_r8.horizon_causal.checkpoint/1"
 
 
+def _action_diagnostics(
+    *, action_source: str, model_kind: str, intervention: str, task_id: str
+) -> dict[str, Any]:
+    """Describe a direct model action without conflating an ablation with fallback."""
+    return {
+        "action_source": action_source,
+        "model_kind": model_kind,
+        "world_intervention": intervention,
+        # ``legacy_reference`` is an explicitly requested frozen-model condition.
+        # It still produces the action directly; fallback means an inference failure
+        # was hidden behind another controller, which this runtime never permits.
+        "fallback_used": False,
+        "direct_model_action": True,
+        "task_id": task_id,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
@@ -356,14 +373,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "episode_index": episode,
                         "step": step,
                         "inference_latency_ms": latency,
-                        "diagnostics": {
-                            "action_source": action_source,
-                            "model_kind": model_kind,
-                            "world_intervention": intervention,
-                            "fallback_used": intervention == "legacy_reference",
-                            "direct_model_action": True,
-                            "task_id": task_id,
-                        },
+                        "diagnostics": _action_diagnostics(
+                            action_source=action_source,
+                            model_kind=model_kind,
+                            intervention=intervention,
+                            task_id=task_id,
+                        ),
                     },
                     {"action": action},
                 )

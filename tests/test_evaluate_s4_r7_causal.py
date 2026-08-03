@@ -23,6 +23,23 @@ from scripts.evaluate_s4_r7_causal import (
     _validate_gate_summary,
     _validate_training_audits,
 )
+from scripts.run_s4_r7_world_utility_inference import _action_diagnostics
+
+
+@pytest.mark.parametrize("intervention", ["normal", "legacy_reference"])
+def test_selected_model_intervention_is_never_mislabeled_as_fallback(
+    intervention: str,
+) -> None:
+    diagnostics = _action_diagnostics(
+        action_source="s4_r7_token_preserving_world_flow",
+        model_kind="s4_r7_token_preserving",
+        intervention=intervention,
+        task_id="lift_barrier",
+    )
+
+    assert diagnostics["world_intervention"] == intervention
+    assert diagnostics["direct_model_action"] is True
+    assert diagnostics["fallback_used"] is False
 
 
 def test_spearman_handles_order_reversal_and_ties() -> None:
