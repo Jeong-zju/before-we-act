@@ -1620,6 +1620,8 @@ training:
 
 `s4-r8-parallel-fast30k-round3` 已完成上述 750/750 跨服务器内容校验并生成收据，随后在 optimizer update 0 前构建共享 future-feature cache。为复用另一台服务器上同一固定数据、DINO/PCA hash 和 cache contract 已完成且有整文件 SHA256 的公共数据派生缓存，round3 采用精确 stop 后同 run 恢复；这不是读取 R7 候选 checkpoint，更不是权重融合。恢复实现补齐 fail-closed 语义：只有同一 run、尚未 ready 且 prepare pane 需要重启时才清除中断标记；已有 receipt 与 sidecar 必须成对存在并重新验证 750 文件 stat identity、manifest/proof/receipt hash，部分状态或任一漂移均拒绝就地重扫/覆盖。该机制避免重复哈希约 707 GiB HDF5，同时保留完整 provenance。
 
+round3 第一次进入 paired preflight 后，两候选 heartbeat 正常但停留在 `parent_load`、update 0 且各自累计读取约 116 GiB。根因不是 GPU 或缓存损坏，而是 R8 复用的 dataset builder 将 receipt/cache 环境变量硬编码为 `S4_R7_*`，未识别 runner 正确传入的 `S4_R8_*`，从而静默退化为两份 HDF5 重新校验及非 projected-future 路径。本轮在首个 optimizer update 前再次精确 stop；修复按 config `round_id` 只接受对应 namespace，要求 receipt path/hash 与 future-cache path/hash 四项完整、SHA256 合法，并拒绝另一阶段 namespace 混入。monitor 同时新增 update 0 的最新 `startup_stage` 显示。回归测试覆盖 R7/R8 正确选择、R8 收到 R7 namespace 拒绝和缺字段拒绝；修复推送、服务器 fast-forward 后仍恢复同一 round3，不改变 candidate axis、训练预算或验收协议。
+
 R8 只在 R7 至少一个候选通过后启动。它修复两处已经在代码中定位的 action 信息压缩：
 
 - `local_future_predictor.py::LocalActionConditionedFuturePredictor.encode_context()` 当前以 `action_tokens.mean(dim=2)` 把 100 步压成一个 token，再让四个 future horizons 共用同一个 context；

@@ -357,6 +357,68 @@ def test_r7_monitor_marks_nonterminal_heartbeat_stale_after_75_seconds(
     assert "gpu_pid=125" in rendered
 
 
+def test_monitor_surfaces_the_latest_startup_stage_before_update_one(
+    tmp_path: Path,
+) -> None:
+    root = _initialize(tmp_path)
+    update_status(
+        root,
+        candidate="P0",
+        phase="preflight",
+        program="train_s4_r8_horizon_causal.py",
+        detail="200-step paired preflight",
+        pid=123,
+        child_pid=124,
+        gpu_pid=125,
+        gpu_index=0,
+        condition=None,
+        task=None,
+        episode=None,
+        episodes_total=None,
+        step=None,
+        steps_total=None,
+        micro_batch=4,
+        gradient_accumulation=3,
+        effective_batch=12,
+        update=0,
+        total_updates=200,
+        team_windows_seen=None,
+        agent_windows_seen=None,
+        milestone=None,
+        flow_unfreeze_state=None,
+        loss=None,
+        grad_norm=None,
+        learning_rate=None,
+        preflight="running-200",
+        exit_code=None,
+    )
+    log = root / "candidates/p0/logs/candidate.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        json.dumps(
+            {
+                "event": "startup_stage",
+                "stage": "parent_load",
+                "detail": "loading exact active clones",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "event": "startup_stage",
+                "stage": "first_batch",
+                "detail": "running structural audits",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rendered = render_monitor(root)
+    assert "startup | stage=first_batch detail=running structural audits" in rendered
+    assert "startup | stage=parent_load" not in rendered
+
+
 def test_r7_shell_contracts_are_permanent_tmux_scoped_and_cli_driven() -> None:
     launcher_path = ROOT / "scripts/launch_s4_r8_2gpu_tmux.sh"
     stopper_path = ROOT / "scripts/stop_s4_r8_2gpu_tmux.sh"

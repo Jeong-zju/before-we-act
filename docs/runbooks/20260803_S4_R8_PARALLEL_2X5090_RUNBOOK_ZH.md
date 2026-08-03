@@ -63,6 +63,8 @@ monitor 每 5 秒刷新，并明确显示：
 - 20 秒 producer heartbeat，超过 75 秒显示 `STALE`；
 - shared prepare、双 GPU future-cache worker 的 task/episode 进度；
 - 跨服务器新下载数据会先显示一次 `HDF5 import SHA256=x/750` 与字节进度；只有逐文件匹配 accepted manifest 后才生成 stat-bound receipt，绝不通过回拨 mtime 绕过 proof；
+- R7/R8 共用的 dataset builder 会按 config 中的 `round_id` 严格选择 `S4_R7_*` 或 `S4_R8_*` receipt/cache namespace；当前 namespace 缺字段、混入另一阶段变量或 hash 非法都会直接失败，禁止静默退化为 707 GiB HDF5 重扫或在线 future-image 解码；
+- optimizer update 0 的启动期显示最新 `startup stage`（如 `parent_load`、`resume_load`、`first_batch`），因此 CPU/磁盘准备不会被误判成无心跳挂起；
 - preflight、update/30000、百分比、team/agent exposure、下一 milestone、Flow 冻结/解冻状态、loss、gradient norm、各组 LR；
 - Gate20 的 condition/task/episode/step，四个 core condition 优先完成，四个 diagnostic condition 后置；
 - `p0_p1_step0_exact`、12/12 suffix/prefix-sensitive、12/12 prefix bootstrap lower>0、common causal gates 和最终 winner。

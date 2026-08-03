@@ -4,8 +4,10 @@ import argparse
 import json
 import math
 
+import pytest
 import torch
 
+from scripts.train_s2_r4_future_predictor import _s4_dataset_reuse_environment
 from scripts.train_s4_r7_world_utility import (
     RESUME_FORMAT,
     _name_hash,
@@ -14,6 +16,67 @@ from scripts.train_s4_r7_world_utility import (
     _write_terminal_oom_preflight,
 )
 from train.s4_hierarchical_team_sampler import S4ExposureCounter
+
+
+@pytest.mark.parametrize(
+    ("round_id", "prefix"), (("s4-r7", "S4_R7"), ("s4-r8", "S4_R8"))
+)
+def test_shared_dataset_reuse_uses_the_current_round_namespace(
+    monkeypatch: pytest.MonkeyPatch, round_id: str, prefix: str
+) -> None:
+    for candidate_prefix in ("S4_R7", "S4_R8"):
+        for suffix in (
+            "SHARED_HDF5_RECEIPT",
+            "SHARED_HDF5_RECEIPT_SHA256",
+            "FUTURE_FEATURE_CACHE",
+            "FUTURE_FEATURE_CACHE_SHA256",
+        ):
+            monkeypatch.delenv(f"{candidate_prefix}_{suffix}", raising=False)
+    monkeypatch.setenv(f"{prefix}_SHARED_HDF5_RECEIPT", "/verified/receipt.json")
+    monkeypatch.setenv(f"{prefix}_SHARED_HDF5_RECEIPT_SHA256", "a" * 64)
+    monkeypatch.setenv(f"{prefix}_FUTURE_FEATURE_CACHE", "/verified/cache")
+    monkeypatch.setenv(f"{prefix}_FUTURE_FEATURE_CACHE_SHA256", "b" * 64)
+
+    assert _s4_dataset_reuse_environment({"round": {"round_id": round_id}}) == (
+        "/verified/receipt.json",
+        "a" * 64,
+        True,
+    )
+
+
+def test_r8_dataset_reuse_rejects_r7_namespace_instead_of_rescanning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for suffix, value in (
+        ("SHARED_HDF5_RECEIPT", "/wrong/receipt.json"),
+        ("SHARED_HDF5_RECEIPT_SHA256", "a" * 64),
+        ("FUTURE_FEATURE_CACHE", "/wrong/cache"),
+        ("FUTURE_FEATURE_CACHE_SHA256", "b" * 64),
+    ):
+        monkeypatch.setenv(f"S4_R7_{suffix}", value)
+        monkeypatch.delenv(f"S4_R8_{suffix}", raising=False)
+
+    with pytest.raises(ValueError, match="other S4 round namespace"):
+        _s4_dataset_reuse_environment({"round": {"round_id": "s4-r8"}})
+
+
+def test_r8_dataset_reuse_rejects_an_incomplete_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("S4_R8_SHARED_HDF5_RECEIPT", "/verified/receipt.json")
+    monkeypatch.setenv("S4_R8_SHARED_HDF5_RECEIPT_SHA256", "a" * 64)
+    monkeypatch.setenv("S4_R8_FUTURE_FEATURE_CACHE", "/verified/cache")
+    monkeypatch.delenv("S4_R8_FUTURE_FEATURE_CACHE_SHA256", raising=False)
+    for suffix in (
+        "SHARED_HDF5_RECEIPT",
+        "SHARED_HDF5_RECEIPT_SHA256",
+        "FUTURE_FEATURE_CACHE",
+        "FUTURE_FEATURE_CACHE_SHA256",
+    ):
+        monkeypatch.delenv(f"S4_R7_{suffix}", raising=False)
+
+    with pytest.raises(ValueError, match="FUTURE_FEATURE_CACHE_SHA256"):
+        _s4_dataset_reuse_environment({"round": {"round_id": "s4-r8"}})
 
 
 def test_flow_schedule_is_exactly_frozen_then_has_its_own_warmup() -> None:

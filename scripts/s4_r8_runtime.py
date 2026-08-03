@@ -573,12 +573,38 @@ def _candidate_lines(
             f"lr={_lr_text(progress.get('learning_rate'))}"
         ),
     ]
+    startup = _latest_startup_stage(candidate_root) if update == 0 else {}
+    if startup:
+        lines.insert(
+            2,
+            "  startup | "
+            f"stage={startup.get('stage', '-')} "
+            f"detail={_compact(startup.get('detail', ''), 92)}",
+        )
     if heartbeat.startswith("STALE"):
         lines.append(
             f"  STALE | last_program={progress.get('program', '-')} "
             f"log={candidate_root / 'logs' / 'candidate.log'} gpu_pid={gpu_pid or '-'}"
         )
     return lines
+
+
+def _latest_startup_stage(candidate_root: Path) -> Mapping[str, Any]:
+    path = candidate_root / "logs" / "candidate.log"
+    if not path.is_file():
+        return {}
+    try:
+        data = path.read_bytes()[-256 * 1024 :]
+    except OSError:
+        return {}
+    for line in reversed(data.decode("utf-8", errors="replace").splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, Mapping) and value.get("event") == "startup_stage":
+            return value
+    return {}
 
 
 def _merged_progress(candidate_root: Path, status: Mapping[str, Any]) -> dict[str, Any]:

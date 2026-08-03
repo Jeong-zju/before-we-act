@@ -544,14 +544,11 @@ def _dataset(
         (ROOT / str(value)).resolve(strict=True)
         for value in data["manifests"]  # type: ignore[index]
     ]
-    verify_hdf5_sha256 = True
-    receipt = os.environ.get("S4_R7_SHARED_HDF5_RECEIPT")
+    receipt, expected_receipt_sha256, use_projected_future_cache = (
+        _s4_dataset_reuse_environment(config)
+    )
+    verify_hdf5_sha256 = receipt is None
     if receipt:
-        expected_receipt_sha256 = os.environ.get(
-            "S4_R7_SHARED_HDF5_RECEIPT_SHA256"
-        )
-        if not expected_receipt_sha256:
-            raise ValueError("shared HDF5 receipt path lacks a runner SHA256 identity")
         validate_shared_hdf5_receipt(
             receipt,
             manifests,
@@ -562,17 +559,65 @@ def _dataset(
             ),
             expected_receipt_sha256=expected_receipt_sha256,
         )
-        verify_hdf5_sha256 = False
     return S2GroupedTrajectoryDataset(
         manifests,
         split=split,
         stride=int(data.get("stride", 1)),
         hdf5_cache_size=int(data.get("hdf5_cache_size", 4)),
         verify_hdf5_sha256=verify_hdf5_sha256,
-        use_projected_future_cache=bool(
-            os.environ.get("S4_R7_FUTURE_FEATURE_CACHE")
-        ),
+        use_projected_future_cache=use_projected_future_cache,
     )
+
+
+def _s4_dataset_reuse_environment(
+    config: Mapping[str, object],
+) -> tuple[str | None, str | None, bool]:
+    """Resolve the current S4 round namespace without silently falling back.
+
+    R7 and R8 share this dataset builder, but their runners intentionally expose
+    distinct environment contracts.  A namespace mismatch must never trigger a
+    707-GiB HDF5 rescan or future-image decoding as an accidental fallback.
+    """
+
+    round_value = config.get("round")
+    round_id = (
+        str(round_value.get("round_id", ""))
+        if isinstance(round_value, Mapping)
+        else ""
+    )
+    prefix_by_round = {"s4-r7": "S4_R7", "s4-r8": "S4_R8"}
+    prefix = prefix_by_round.get(round_id)
+    if prefix is None:
+        return None, None, False
+
+    other_prefix = "S4_R8" if prefix == "S4_R7" else "S4_R7"
+    suffixes = (
+        "SHARED_HDF5_RECEIPT",
+        "SHARED_HDF5_RECEIPT_SHA256",
+        "FUTURE_FEATURE_CACHE",
+        "FUTURE_FEATURE_CACHE_SHA256",
+    )
+    if any(os.environ.get(f"{other_prefix}_{suffix}") for suffix in suffixes):
+        raise ValueError(
+            f"{round_id} dataset environment contains the other S4 round namespace"
+        )
+    values = {suffix: os.environ.get(f"{prefix}_{suffix}") for suffix in suffixes}
+    missing = [suffix for suffix, value in values.items() if not value]
+    if missing:
+        raise ValueError(
+            f"{round_id} dataset reuse environment is incomplete: {', '.join(missing)}"
+        )
+    receipt_sha256 = str(values["SHARED_HDF5_RECEIPT_SHA256"])
+    cache_sha256 = str(values["FUTURE_FEATURE_CACHE_SHA256"])
+    for label, value in (
+        ("shared HDF5 receipt", receipt_sha256),
+        ("future feature cache", cache_sha256),
+    ):
+        if len(value) != 64 or any(
+            character not in "0123456789abcdef" for character in value
+        ):
+            raise ValueError(f"{round_id} {label} SHA256 identity is invalid")
+    return str(values["SHARED_HDF5_RECEIPT"]), receipt_sha256, True
 
 
 def _validate_artifact_dataset(
