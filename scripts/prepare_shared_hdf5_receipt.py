@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import json
 from pathlib import Path
 import sys
@@ -28,6 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--expected-receipt-sha256")
+    parser.add_argument("--verify-imported-content-if-newer", action="store_true")
+    parser.add_argument("--progress-log", type=Path)
     return parser
 
 
@@ -43,11 +46,22 @@ def main() -> int:
     else:
         if args.proof_checkpoint is None:
             raise ValueError("--proof-checkpoint is required when creating a receipt")
+        if args.progress_log is not None:
+            args.progress_log.parent.mkdir(parents=True, exist_ok=True)
+
+        def progress(value: Mapping[str, object]) -> None:
+            if args.progress_log is None:
+                return
+            with args.progress_log.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(dict(value), sort_keys=True) + "\n")
+
         payload = create_shared_hdf5_receipt(
             args.manifest,
             proof_checkpoint=args.proof_checkpoint,
             expected_proof_sha256=args.expected_proof_sha256,
             output=args.output,
+            verify_imported_content_if_newer=args.verify_imported_content_if_newer,
+            progress=progress,
         )
     print(
         json.dumps(

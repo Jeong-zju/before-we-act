@@ -78,6 +78,12 @@ def test_shared_hdf5_receipt_reuses_proof_and_fails_on_stat_change(
         output=receipt,
     )
     assert len(payload["files"]) == 750
+    assert payload["content_verification"] == {
+        "mode": "accepted_proof_mtime_reuse",
+        "imported_files_sha256_verified": 0,
+        "imported_bytes_sha256_verified": 0,
+        "all_750_files_content_anchored": True,
+    }
     receipt_sha256 = file_sha256(receipt)
     validated = validate_shared_hdf5_receipt(
         receipt,
@@ -95,4 +101,60 @@ def test_shared_hdf5_receipt_reuses_proof_and_fails_on_stat_change(
             manifests,
             expected_proof_sha256=proof_sha256,
             expected_receipt_sha256=receipt_sha256,
+        )
+
+
+def test_shared_hdf5_receipt_rehashes_newer_cross_server_imports(
+    tmp_path: Path,
+) -> None:
+    manifests, proof, proof_sha256 = _dataset_and_proof(tmp_path)
+    manifest = json.loads(manifests[0].read_text())
+    imported = manifests[0].parent / manifest["episodes"][0]["hdf5_path"]
+    newer = proof.stat().st_mtime_ns + 1_000_000
+    os.utime(imported, ns=(newer, newer))
+
+    with pytest.raises(ValueError, match="explicit one-time manifest SHA256"):
+        create_shared_hdf5_receipt(
+            manifests,
+            proof_checkpoint=proof,
+            expected_proof_sha256=proof_sha256,
+            output=tmp_path / "rejected.json",
+        )
+
+    progress: list[dict[str, object]] = []
+    receipt = tmp_path / "imported.json"
+    payload = create_shared_hdf5_receipt(
+        manifests,
+        proof_checkpoint=proof,
+        expected_proof_sha256=proof_sha256,
+        output=receipt,
+        verify_imported_content_if_newer=True,
+        progress=lambda value: progress.append(dict(value)),
+    )
+    verification = payload["content_verification"]
+    assert verification["mode"] == "accepted_proof_plus_import_manifest_sha256"
+    assert verification["imported_files_sha256_verified"] == 1
+    assert verification["all_750_files_content_anchored"] is True
+    assert progress[-1]["verified_files"] == 1
+    assert progress[-1]["total_files"] == 1
+
+
+def test_shared_hdf5_receipt_rejects_newer_import_with_wrong_content(
+    tmp_path: Path,
+) -> None:
+    manifests, proof, proof_sha256 = _dataset_and_proof(tmp_path)
+    manifest = json.loads(manifests[0].read_text())
+    imported = manifests[0].parent / manifest["episodes"][0]["hdf5_path"]
+    original = imported.read_bytes()
+    imported.write_bytes(b"x" * len(original))
+    newer = proof.stat().st_mtime_ns + 1_000_000
+    os.utime(imported, ns=(newer, newer))
+
+    with pytest.raises(ValueError, match="SHA256 differs from manifest"):
+        create_shared_hdf5_receipt(
+            manifests,
+            proof_checkpoint=proof,
+            expected_proof_sha256=proof_sha256,
+            output=tmp_path / "wrong.json",
+            verify_imported_content_if_newer=True,
         )

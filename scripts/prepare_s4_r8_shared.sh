@@ -244,8 +244,9 @@ sha256sum "${parent_dir}/legacy_r6l_policy.pt" \
 mv "${manifest_tmp}" "${S4_R8_RUN_ROOT}/shared_artifact_sha256.txt" || exit $?
 
 status dataset_receipt prepare_shared_hdf5_receipt.py \
-  "binding 750 shared HDF5 identities to the exact accepted R6L-P1 proof; no 707GB rescan"
+  "binding 750 HDF5 identities to R6L-P1 proof; newer cross-server imports get one exact SHA256 scan"
 dataset_receipt="${S4_R8_RUN_ROOT}/shared_hdf5_verification_receipt.json"
+receipt_progress="${S4_R8_RUN_ROOT}/shared_hdf5_import_progress.jsonl"
 receipt_args=()
 for manifest in "${required[@]:0:5}"; do
   receipt_args+=(--manifest "${manifest}")
@@ -255,7 +256,24 @@ done
     "${receipt_args[@]}" \
     --proof-checkpoint "${parent_dir}/legacy_r6l_policy.pt" \
     --expected-proof-sha256 "${LEGACY_SHA}" \
-    --output "${dataset_receipt}" ) || exit $?
+    --verify-imported-content-if-newer \
+    --progress-log "${receipt_progress}" \
+    --output "${dataset_receipt}" ) &
+receipt_pid=$!
+while kill -0 "${receipt_pid}" 2>/dev/null; do
+  if [[ -s "${receipt_progress}" ]]; then
+    progress_detail="$(tail -n 1 "${receipt_progress}" | jq -r \
+      '"cross-server content SHA256=" + (.verified_files|tostring) + "/" + (.total_files|tostring) + "; bytes=" + (.verified_bytes|tostring) + "/" + (.total_bytes|tostring)')"
+    status dataset_receipt prepare_shared_hdf5_receipt.py "${progress_detail}"
+  fi
+  sleep 20
+done
+wait "${receipt_pid}"
+receipt_code=$?
+if (( receipt_code != 0 )); then
+  printf >&2 'Shared HDF5 receipt creation failed with code %d\n' "${receipt_code}"
+  exit "${receipt_code}"
+fi
 receipt_sha="$(sha256sum "${dataset_receipt}" | awk '{print $1}')" || exit $?
 printf '%s\n' "${receipt_sha}" > "${dataset_receipt}.sha256" || exit $?
 

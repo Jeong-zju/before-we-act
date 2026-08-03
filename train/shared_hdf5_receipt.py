@@ -16,7 +16,7 @@ from pathlib import Path
 import re
 import stat
 import tempfile
-from typing import Any
+from typing import Any, Callable
 
 import torch
 
@@ -98,8 +98,17 @@ def create_shared_hdf5_receipt(
     proof_checkpoint: str | Path,
     expected_proof_sha256: str,
     output: str | Path,
+    verify_imported_content_if_newer: bool = False,
+    progress: Callable[[Mapping[str, object]], None] | None = None,
 ) -> dict[str, object]:
-    """Create a stat-bound receipt from the exact accepted R6L-P1 proof."""
+    """Create a stat-bound receipt from the exact accepted R6L-P1 proof.
+
+    Files older than the proof reuse its fail-closed content verification.  A
+    freshly downloaded/copied file has a newer mtime and is accepted only when
+    the caller explicitly requests a one-time SHA256 comparison with the exact
+    manifest.  The resulting receipt then binds that verified content to its
+    current filesystem identity.
+    """
 
     if SHA256_PATTERN.fullmatch(expected_proof_sha256) is None:
         raise ValueError("expected proof checkpoint SHA256 is invalid")
@@ -145,10 +154,6 @@ def create_shared_hdf5_receipt(
         seen_tasks.add(task_id)
         if proof_manifests.get(task_id) != manifest_sha256:
             raise ValueError(f"{task_id} manifest differs from the accepted proof")
-        if any(int(record["mtime_ns"]) > proof_stat.st_mtime_ns for record in records):
-            raise ValueError(
-                f"{task_id} has HDF5 content modified after the accepted proof"
-            )
         manifest_rows.append(
             {
                 "task_id": task_id,
@@ -162,13 +167,58 @@ def create_shared_hdf5_receipt(
         raise ValueError("receipt requires the exact five-task/750-episode dataset")
     manifest_rows.sort(key=lambda value: EXPECTED_TASKS.index(str(value["task_id"])))
     file_rows.sort(key=lambda value: str(value["path"]))
+    imported_rows = [
+        record
+        for record in file_rows
+        if int(record["mtime_ns"]) > proof_stat.st_mtime_ns
+    ]
+    if imported_rows and not verify_imported_content_if_newer:
+        raise ValueError(
+            "HDF5 content newer than the accepted proof requires explicit "
+            "one-time manifest SHA256 verification"
+        )
+    imported_bytes = sum(int(record["size_bytes"]) for record in imported_rows)
+    verified_bytes = 0
+    for index, record in enumerate(imported_rows, start=1):
+        episode = Path(str(record["path"]))
+        observed_sha256 = file_sha256(episode)
+        if observed_sha256 != record["hdf5_sha256"]:
+            raise ValueError(f"imported HDF5 SHA256 differs from manifest: {episode}")
+        verified_bytes += int(record["size_bytes"])
+        if progress is not None:
+            progress(
+                {
+                    "event": "shared_hdf5_import_sha256_progress",
+                    "verified_files": index,
+                    "total_files": len(imported_rows),
+                    "verified_bytes": verified_bytes,
+                    "total_bytes": imported_bytes,
+                    "path": str(episode),
+                }
+            )
+    verification_semantics = (
+        "accepted checkpoint was built after fail-closed manifest HDF5 SHA256 "
+        "verification; current files predating that proof reuse it"
+    )
+    if imported_rows:
+        verification_semantics += (
+            "; files newer than the proof were rehashed against the exact "
+            "accepted manifests before this stat-bound receipt was written"
+        )
     payload: dict[str, object] = {
         "format_version": RECEIPT_FORMAT,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "verification_semantics": (
-            "accepted checkpoint was built after fail-closed manifest HDF5 SHA256 "
-            "verification; all current file identities predate and match that proof"
-        ),
+        "verification_semantics": verification_semantics,
+        "content_verification": {
+            "mode": (
+                "accepted_proof_plus_import_manifest_sha256"
+                if imported_rows
+                else "accepted_proof_mtime_reuse"
+            ),
+            "imported_files_sha256_verified": len(imported_rows),
+            "imported_bytes_sha256_verified": verified_bytes,
+            "all_750_files_content_anchored": True,
+        },
         "proof": {
             "path": str(proof),
             "sha256": observed_proof_sha256,

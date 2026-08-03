@@ -1616,6 +1616,8 @@ training:
 
 空服务器部署的 S0 路径采用 R8 专用 asset-only bootstrap：五个 dataset 继续固定 revision、官方 `hf download`、Xet 开启和默认 8 workers，DINOv3/RoboFactory 继续关闭 Xet且单 worker，token 仍只经 mode-0600 FIFO 交付并原位复用 `.incomplete`。该路径只准备数据、DINO 与仿真环境，不触发 S1/R3/R4 等旧阶段补训；R6L-P1 policy/五任务 Flow、R4-P0 local future、R5-P0 team future 和 R4 PCA 必须从已验收服务器复制或显式提供，并由固定 SHA256 拒绝任何身份漂移。existing-server wrapper 同时检查五个 manifest、DINO 与 RoboFactory，不再只凭 RoboFactory 是否存在决定是否进入 S0 准备。
 
+第一次空服务器启动 `s4-r8-parallel-fast30k-round2` 在 optimizer update 0 前按设计 fail closed：固定 revision 新下载的 HDF5 内容虽完整，但本机 mtime 晚于 R6L-P1 accepted proof，旧 receipt 只允许“文件身份早于 proof”的同机复用，不能为跨机导入作证。修复不伪造 mtime，也不放宽 manifest：receipt creator 对所有晚于 proof 的导入文件逐个重算 SHA256 并与 accepted manifest 的 `hdf5_sha256` 比较，显示 `verified_files/total_files` 与字节进度；全数匹配后才写 stat-bound receipt，之后 P0/P1 仍只读同一个 receipt SHA256。旧服务器已有且早于 proof 的文件继续走无 707GiB 重扫的快路径。失败 run 保留日志且未创建 cache/preflight/checkpoint；修复按本地测试、提交推送、服务器 fast-forward 后使用新 run-id 重启。
+
 R8 只在 R7 至少一个候选通过后启动。它修复两处已经在代码中定位的 action 信息压缩：
 
 - `local_future_predictor.py::LocalActionConditionedFuturePredictor.encode_context()` 当前以 `action_tokens.mean(dim=2)` 把 100 步压成一个 token，再让四个 future horizons 共用同一个 context；
