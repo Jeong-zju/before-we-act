@@ -1905,6 +1905,10 @@ pair exact 通过后，P0/P1 已分别在物理 GPU0/GPU1 从各自精确 resume
 
 前四个构成核心准入条件。特殊门槛不变：`normal >= legacy_reference`，且 `normal` 必须严格高于 `world_evidence_gate_zero` 与 `shuffle_all`；`all_world_gates_zero` 仍只报告，三个 source shuffle 仍只决定可声明的证据来源。monitor 在最终 `candidate_report.json` 尚未生成时直接读取已完成的 per-condition `gate_summary.json`，显示 `core=x/4`、`diagnostic=x/4`、normal 五任务成功数、当前 condition/task/episode/step、程序、PID、GPU PID、20 秒心跳与 75 秒 stale 判定，因此 normal 全部结果无需等待其余七条件。缓存阶段另从 `prepare.log` 提取两个 worker 的最新 `episode/375`、task、source episode 与更新时间；这只是进度事件，存活判定仍以每 20 秒更新的 shared heartbeat 为准，避免长 episode 被误报 stale。
 
+自基础分支提交 `0a5c2b4` 起，monitor 每次刷新还固定显示当前北京时间，以及 P0、P1 和较慢一侧配对训练的预计完成北京时间。训练 ETA 直接使用各候选正式 `train/progress.jsonl` 中从 update 1 累积的 `updates_per_second` 与剩余 update 计算，不用瞬时 GPU utilization 反推。验证尚未开始时，normal、四核心条件和完整八条件 ETA 以同服务器已完成 S3-R6 五任务 Gate20 的实测 `21,161 seconds/condition` 为带来源的初始基线；P0/P1 各占一张卡并行，因此不把两候选耗时相加。该外推会明确标为历史基线而非验收结果，normal 启动并产生本轮 rollout 后再按本轮实测校准。
+
+`s4-r7-fast30k-round4` 的共享全量缓存已在 `2026-08-03T06:20Z` 前后完成：750/750 episodes、共享 HDF5 receipt SHA256 `4a3c24a91f7a92615cebec58e4608dd4319a548d6ea297119277848195b77f98`，future-feature cache SHA256 `bad343ebe22f3f3b7e72027ff22ca5eff7dc79ae07ae3c1a84520ee3e1d46bbb`。配对 200-step preflight 为 `31/31 PASS`，P0/P1 实测 `0.958887/0.998124 updates/s`，均超过 `0.75` 门槛并自动进入正式 30k。北京时间 `2026-08-03 14:50:14` 的在线快照为 P0/P1 `1440/1460` updates、心跳正常；实时 ETA 分别为 `22:50:03/22:39:30`，较慢侧训练约 `22:50:03` 完成。按上述历史 Gate20 基线，normal、四核心、完整八条件的初始 ETA 分别约为 `2026-08-04 04:42:44`、`2026-08-04 22:20:47`、`2026-08-05 21:51:31`（北京时间）；这些时间随实测自动变化，不构成模型通过或 winner 结论。
+
 R7 新 run 使用独立 root，禁止复用旧 125k 配置绑定的 preflight/resume：
 
 ```bash

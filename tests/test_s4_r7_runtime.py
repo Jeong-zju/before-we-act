@@ -166,6 +166,9 @@ def test_r7_monitor_reports_runtime_heartbeat_progress_and_derived_gates(
 
     rendered = render_monitor(root)
     assert "WAM S4-R7 monitor" in rendered
+    assert "Beijing time | current=" in rendered
+    assert "Beijing ETA | P0-train=complete; P1-train=complete" in rendered
+    assert "paired-train=" in rendered
     assert "producer every 20s; STALE strictly after 75s" in rendered
     assert "future cache workers | GPU0=30/375 task=lift_barrier" in rendered
     assert "GPU1=31/375 task=lift_barrier" in rendered
@@ -182,6 +185,38 @@ def test_r7_monitor_reports_runtime_heartbeat_progress_and_derived_gates(
     assert "P1 utility calibration | PASS spearman=0.22 ci95_lower=0.08" in rendered
     assert "decision=select_p1 winner=?" in rendered
     assert "metrics above remain authoritative" in rendered
+
+
+def test_r7_monitor_reports_live_beijing_training_and_full_run_eta(
+    tmp_path: Path,
+) -> None:
+    root = _initialize(tmp_path)
+    for candidate, update, rate in (("P0", 1_000, 0.95), ("P1", 1_200, 1.0)):
+        progress = root / "candidates" / candidate.lower() / "train" / "progress.jsonl"
+        progress.parent.mkdir(parents=True, exist_ok=True)
+        progress.write_text(
+            json.dumps(
+                {
+                    "event": "optimizer_step",
+                    "update": update,
+                    "updates": 30_000,
+                    "updates_per_second": rate,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    rendered = render_monitor(root)
+    assert "Beijing ETA | P0-train=" in rendered
+    assert "(0.95 update/s); P1-train=" in rendered
+    assert "(1 update/s)" in rendered
+    assert "paired-train=" in rendered
+    assert "normal≈" in rendered
+    assert "core4≈" in rendered
+    assert "full-R7≈" in rendered
+    assert "validation=historical S3-R6 five-task Gate20 5h52m/condition" in rendered
 
 
 def test_r7_monitor_uses_named_pair_checks_not_expected_false_observations(
