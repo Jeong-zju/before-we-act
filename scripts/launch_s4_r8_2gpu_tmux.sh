@@ -377,6 +377,11 @@ if (( PREPARE_FROM_S0 && PREPARE_NEEDS_START )); then
   s0_prepare_hf_token_fifo || fail "could not create protected token FIFO"
   trap s0_cleanup_hf_secret EXIT
 fi
+if (( PREPARE_NEEDS_START )) && [[ ! -f "${READY_FILE}" && -f "${FAILED_FILE}" ]]; then
+  # An exact same-run restart is allowed to repair an interrupted prepare pane.
+  # The prepare script still validates every persisted receipt/cache artifact.
+  unlink "${FAILED_FILE}" || fail "could not clear interrupted shared preparation marker"
+fi
 start_or_repair_window "${PREPARE_WINDOW}" "${FE_ROOT}" "${prepare_command}" >/dev/null \
   || fail "could not start prepare window"
 if (( PREPARE_FROM_S0 && PREPARE_NEEDS_START )); then

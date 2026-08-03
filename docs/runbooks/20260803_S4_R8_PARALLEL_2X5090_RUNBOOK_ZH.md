@@ -86,7 +86,7 @@ bash scripts/stop_s4_r8_2gpu_tmux.sh \
   --run-id s4-r8-parallel-fast30k-round1
 ```
 
-重新执行同一个 launch 命令会核验 manifest、branch、config、checkpoint/resume hash 后修复 dead pane 并从候选隔离的 resume 继续。不要手工 `killall python`、删除 run root 或重建同名 run。需要改变 micro/accum、cache 或验收协议时，必须两分支同步修改并使用新 run-id。
+重新执行同一个 launch 命令会核验 manifest、branch、config、checkpoint/resume hash 后修复 dead pane 并从候选隔离的 resume 继续。若 shared prepare 在 ready 前被精确 stop，launcher 只会在同一 run 且 prepare pane 确实需要重启时清除 `shared.failed`；已有 `shared_hdf5_verification_receipt.json` 与 SHA256 sidecar 必须成对存在并重新通过 750 文件 stat identity、manifest、proof hash 和 receipt hash 校验后才复用，因此不会重扫跨服务器导入的约 707 GiB 内容，也不会用未验证收据绕过门槛。不要手工 `killall python`、删除 run root 或重建同名 run。需要改变 micro/accum、cache 或验收协议时，必须两分支同步修改并使用新 run-id。
 
 ## 5. 验收产物与 winner 处理
 

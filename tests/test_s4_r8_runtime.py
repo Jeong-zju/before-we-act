@@ -378,6 +378,8 @@ def test_r7_shell_contracts_are_permanent_tmux_scoped_and_cli_driven() -> None:
     assert "status --porcelain)" in launcher
     assert "--untracked-files=no" not in launcher
     assert 'bash "${CANDIDATE_REL}"' in launcher
+    assert 'unlink "${FAILED_FILE}"' in launcher
+    assert '[[ ! -f "${READY_FILE}" && -f "${FAILED_FILE}" ]]' in launcher
     for option in (
         "--candidate",
         "--run-root",

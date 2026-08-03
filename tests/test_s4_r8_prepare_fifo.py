@@ -26,6 +26,16 @@ def test_s4_prepare_bridge_is_valid_bash_without_errexit_bundle() -> None:
     assert "set -euo pipefail" not in source
 
 
+def test_s4_prepare_same_run_resume_revalidates_receipt_fail_closed() -> None:
+    source = PREPARE.read_text(encoding="utf-8")
+    assert 'dataset_receipt_sha_file="${dataset_receipt}.sha256"' in source
+    assert "Partial shared HDF5 receipt state" in source
+    assert "--verify" in source
+    assert '--expected-receipt-sha256 "${receipt_sha}"' in source
+    assert "same-run resume: validating and reusing" in source
+    assert "refusing to rescan or replace it in-place" in source
+
+
 def test_s4_asset_bootstrap_keeps_s0_download_and_secret_contract() -> None:
     result = subprocess.run(
         ["bash", "-n", str(S0_ASSETS)],
