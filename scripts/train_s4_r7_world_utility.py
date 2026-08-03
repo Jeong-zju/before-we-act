@@ -192,7 +192,10 @@ def _main_impl(args: argparse.Namespace) -> int:
     )
     artifact = load_s2_artifact(artifact_path, device=device)
     artifact_sha256 = file_sha256(artifact_path)
-    dataset = _dataset(raw, split="train")
+    training_split = str(_mapping(raw, "data").get("training_split", ""))
+    if training_split != "all":
+        raise ValueError("S4-R7 training must consume all manifest episodes")
+    dataset = _dataset(raw, split=training_split)
     _validate_artifact_dataset(artifact, dataset)
     manifests = [contract.manifest_path for contract in dataset.contracts]
     future_feature_cache = S4ProjectedFutureFeatureCache(

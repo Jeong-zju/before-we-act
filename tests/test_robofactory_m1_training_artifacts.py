@@ -44,6 +44,8 @@ def test_generic_m1_loader_consumes_training_manifest_without_cue_fields(
     assert manifest.camera_order == ("global",)
     assert manifest.task_order == ("lift_barrier",)
     assert manifest.normalization_verified
+    assert len(manifest.records_for_split("all")) == 6
+    assert manifest.split_summary("all")["episodes"] == 6
     capabilities = m1_data_capabilities(manifest)
     assert capabilities.dataset_protocol == GENERIC_M1_DATASET_PROTOCOL
     assert not capabilities.causal_pairs
@@ -100,6 +102,21 @@ def test_generic_m1_loader_consumes_training_manifest_without_cue_fields(
         assert checkpoint["normalization_verified"] is True
     finally:
         dataset.close()
+
+    all_dataset = build_m1_window_dataset(
+        manifest,
+        split="all",
+        state_history=4,
+        action_chunk=1,
+        visual_history=1,
+        future_horizons=(1,),
+        hdf5_cache_size=1,
+    )
+    try:
+        assert len(all_dataset) == 12
+        assert all_dataset.checkpoint_lineage()["split"] == "all"
+    finally:
+        all_dataset.close()
 
 
 def test_generic_m1_tail_windows_repeat_pad_without_supervising_padding(

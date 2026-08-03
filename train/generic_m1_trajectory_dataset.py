@@ -35,6 +35,7 @@ from models.wam.normalizer import NormalizationStats
 GENERIC_M1_MANIFEST_FORMAT = "wam.multimodal.trajectory.training_manifest/1"
 GENERIC_M1_DATASET_PROTOCOL = "generic_multimodal_trajectory"
 GENERIC_M1_SPLITS = ("train", "validation", "test")
+GENERIC_M1_ALL_SPLIT = "all"
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _SPLIT_ALIASES = {"val": "validation", "valid": "validation"}
@@ -170,6 +171,9 @@ class GenericM1ManifestIndex:
             split: tuple(sorted(values, key=lambda item: item.episode_index))
             for split, values in grouped.items()
         }
+        self._by_split[GENERIC_M1_ALL_SPLIT] = tuple(
+            sorted(self.episodes, key=lambda item: item.episode_index)
+        )
         self._split_summaries = {
             split: _build_split_summary(self, split, records)
             for split, records in self._by_split.items()
@@ -1582,7 +1586,7 @@ def _mapping(value: Mapping[str, Any], key: str) -> Mapping[str, Any]:
 
 def _normalize_split(split: str) -> str:
     normalized = _SPLIT_ALIASES.get(str(split), str(split))
-    if normalized not in GENERIC_M1_SPLITS:
+    if normalized not in (*GENERIC_M1_SPLITS, GENERIC_M1_ALL_SPLIT):
         raise ValueError(f"unknown split {split!r}")
     return normalized
 

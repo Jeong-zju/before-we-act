@@ -16,6 +16,7 @@ S4_R7_BUDGET_MODES: dict[str, tuple[int, int, int]] = {
     "fast_selection_30k": (30_000, 6_400, 1_152_000),
 }
 S4_R7_FUTURE_FEATURE_CACHE_MODE = "shared_float32_projected_next_view"
+S4_R7_TRAINING_SPLIT = "all"
 
 S4_R8_MODEL_KINDS: dict[str, tuple[str, str]] = {
     "s4_r8_horizon_prefix_mean": ("P0", "prefix_mean"),
@@ -168,6 +169,9 @@ def validate_s4_r7_candidate(
         raise ValueError(
             "S4-R7 future feature cache mode is not in the training allowlist"
         )
+    training_split = str(_field(value, "training_split", sections=("data",)))
+    if training_split != S4_R7_TRAINING_SPLIT:
+        raise ValueError("S4-R7 training split allowlist requires all 750 episodes")
     _validate_disabled_auxiliary_weights(value)
     return candidate_id, model_kind, utility
 

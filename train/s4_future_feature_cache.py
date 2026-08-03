@@ -96,7 +96,7 @@ class S4ProjectedFutureFeatureCache:
                 raise ValueError(f"duplicate S4 future cache episode {key}")
             episode_index[key] = (int(row["offset"]), int(row["steps"]))
         if len(episode_index) != 750:
-            raise ValueError("S4 future feature cache requires 750 episodes")
+            raise ValueError("S4 future feature cache requires 750 all-split episodes")
         self.root = cache_root
         self.metadata = dict(metadata)
         self.features = features

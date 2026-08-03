@@ -83,6 +83,9 @@ def _dataset_index(
             if not isinstance(value, dict):
                 raise ValueError(f"manifest episode must be a mapping: {manifest}")
             episode = value
+            split = str(episode.get("split", ""))
+            if split not in {"train", "validation", "test"}:
+                raise ValueError(f"unsupported episode split {split!r} in {manifest}")
             steps = int(episode["steps"])
             hdf5_path = (manifest.parent / str(episode["hdf5_path"])).resolve(
                 strict=True
@@ -98,11 +101,12 @@ def _dataset_index(
                     "offset": offset,
                     "cameras": list(cameras),
                     "next_prefix": next_prefix,
+                    "split": split,
                 }
             )
             offset += steps
     if len(episodes) != 750:
-        raise ValueError("S4 cache requires exactly 750 episodes")
+        raise ValueError("S4 cache requires exactly 750 all-split episodes")
     return episodes, manifest_rows, offset
 
 

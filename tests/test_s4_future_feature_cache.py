@@ -119,6 +119,13 @@ def test_prepare_cache_parses_manifest_root_contract(tmp_path: Path) -> None:
                             "hdf5_path": hdf5.name,
                             "hdf5_sha256": "a" * 64,
                             "steps": 1,
+                            "split": (
+                                "train"
+                                if episode_index < 120
+                                else "validation"
+                                if episode_index < 135
+                                else "test"
+                            ),
                         }
                         for episode_index in range(150)
                     ],

@@ -96,6 +96,7 @@ def validate_configs(
         ) if isinstance(manifests, list) else ()
         recipe = {
             "budget_mode": training.get("budget_mode"),
+            "training_split": data.get("training_split"),
             "updates": int(training.get("updates", 0)),
             "micro": int(training.get("micro_team_batch", 0)),
             "accum": int(training.get("gradient_accumulation", 0)),
@@ -137,6 +138,8 @@ def validate_configs(
         "same_recipe_after_axis_normalization": observed[0] == observed[1],
         "five_task_order_exact": observed[0]["tasks"] == TASKS
         and observed[0]["gate_tasks"] == TASKS,
+        "all_750_episodes_used_for_training": observed[0]["training_split"]
+        == "all",
         "fast_selection_30000_effective_team_batch_12": observed[0][
             "budget_mode"
         ]

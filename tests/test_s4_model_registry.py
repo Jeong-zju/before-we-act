@@ -34,7 +34,8 @@ def _r7(candidate: str) -> dict[str, object]:
             "route_mode": "dense",
         },
         "data": {
-            "future_feature_cache_mode": "shared_float32_projected_next_view"
+            "future_feature_cache_mode": "shared_float32_projected_next_view",
+            "training_split": "all",
         },
         "training": {
             "seed": 707,

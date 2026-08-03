@@ -1868,7 +1868,9 @@ pair exact 通过后，P0/P1 已分别在物理 GPU0/GPU1 从各自精确 resume
 
 第一次 fast30k 性能探针 `s4-r7-fast30k-round1` 证明仅合并在线 DINO 调用还不足以达到 12 小时：P0/P1 的全量 HDF5 初始化从 `02:15:57Z` 到 `02:34:53Z`，约 19 分钟；稳定到 update 120 时吞吐仅 `0.288766/0.292560 update/s`，峰值显存 `3,121,837,056/3,122,508,800 bytes`，30k 仅训练段估算约 `28.9/28.5 h`。该探针于 `2026-08-03T02:42:09Z` 按 exact run identity 收到外部 `SIGINT`、`exit=130`；不是训练错误，产物保留，未生成 pair-exact，绝不进入 formal training。
 
-第二层加速因此固定为 **shared future-feature cache**：prepare 独占 GPU0/GPU1，把五任务 750 episodes 的 `next_observation` 按真实 row/camera 通过同一冻结 DINOv3-L/16、同一 2×2 adaptive grid 和同一 PCA-256 投影一次，保存 float32 memory-map；缓存身份绑定五个 manifest、DINO weights/config、preprocess、PCA artifact 和 binary SHA256。P0/P1 使用相同 cache SHA；训练 DataLoader 不再解码 raw future RGB，future target 不再在线运行 DINO，只保留部署路径必须的 current local/shared DINO。`future_feature_cache_mode=shared_float32_projected_next_view` 加入训练/验证白名单，未知模式、cache hash/shape/dtype/episode offset 漂移全部 fail closed；preflight、checkpoint 与 monitor 同时记录 cache SHA。缓存生成不计入 30k optimizer budget，但从一键启动开始计入 wall time；只有新一轮 200-step 实测两路均 `>=0.75 update/s` 才允许正式训练。
+缓存管线首次启动 `s4-r7-fast30k-round2` 在创建 GPU cache 前暴露 manifest root 解析错误（`manifest must be a mapping`），已严格按本地修复、测试、提交推送、服务器 fast-forward 的流程修正，失败 run 的日志保留且未进入训练。修复后的 `round3` 已成功生成共享 HDF5 receipt 并启动双 GPU 缓存 worker；项目方随后要求改为全量数据训练，因此在 `2026-08-03T03:02:11Z` 精确停止该 run，四个 run window 全部关闭、GPU 归零、永久 window 0 保留。`round3` 不作为失败候选，也没有 checkpoint/验收结论；全量训练协议从独立 `round4` 重启。
+
+第二层加速因此固定为 **shared future-feature cache**：prepare 独占 GPU0/GPU1，把五任务完整 `5×150=750` 个 episodes 的 `next_observation` 按真实 row/camera 通过同一冻结 DINOv3-L/16、同一 2×2 adaptive grid和同一 PCA-256 投影一次，保存 float32 memory-map；缓存身份绑定五个完整 manifest、DINO weights/config、preprocess、PCA artifact 和 binary SHA256。按项目方 `2026-08-03` 最新决定，R7 训练 `training_split=all`，分支配对与模型白名单均拒绝其它值，即 30k sampler 直接在 train/validation/test 全量 750 episodes 上做 task→episode→time 均衡采样；父阶段 PCA/normalization 仍冻结不重拟合，以维持 ancestor 数值契约。P0/P1 使用相同 cache SHA；训练 DataLoader 不再解码 raw future RGB，future target 不再在线运行 DINO，只保留部署路径必须的 current local/shared DINO。`future_feature_cache_mode=shared_float32_projected_next_view` 加入训练/验证白名单，未知模式、cache hash/shape/dtype/episode offset 漂移全部 fail closed；preflight、checkpoint 与 monitor 同时记录 cache SHA。缓存生成不计入 30k optimizer budget，但从一键启动开始计入 wall time；只有新一轮 200-step 实测两路均 `>=0.75 update/s` 才允许正式训练。由于 validation/test 已参与参数更新，后续 normal/legacy/gate-zero/shuffle-all 仍按固定 validation/Gate20 协议执行，但结论只能解释为全量拟合后的回放/因果消融验收，不再宣称未见 episode 泛化。
 
 验证仍最终产出八条件完整报告，但执行优先级固定为：
 
@@ -1892,13 +1894,13 @@ git switch feat/model-improvements
 git merge --ff-only origin/feat/model-improvements
 
 bash scripts/launch_s4_r7_2gpu_tmux.sh \
-  --run-id s4-r7-fast30k-round2 --dry-run
+  --run-id s4-r7-fast30k-round4 --dry-run
 bash scripts/launch_s4_r7_existing_server.sh \
-  --run-id s4-r7-fast30k-round2 --no-focus-monitor
+  --run-id s4-r7-fast30k-round4 --no-focus-monitor
 
 python3 scripts/s4_r7_runtime.py monitor --once \
-  --run-root /workspace/fe-pc-wam/outputs/s4_r7_runs/s4-r7-fast30k-round2
-tmux select-window -t ssh_tmux:s4-r7-fast30k-round2-monitor
+  --run-root /workspace/fe-pc-wam/outputs/s4_r7_runs/s4-r7-fast30k-round4
+tmux select-window -t ssh_tmux:s4-r7-fast30k-round4-monitor
 ```
 
 默认继续复用 S0 已下载的数据、Hub cache、固定 revision DINO/PCA 和 ancestors，不请求或导出 HF token；只有缺资产时才沿用 S0 的隐藏输入、mode-0600 FIFO、固定 revision、断点续传和 Xet/worker 规则。一键停止仍为：
@@ -1906,9 +1908,9 @@ tmux select-window -t ssh_tmux:s4-r7-fast30k-round2-monitor
 ```bash
 cd /workspace/fe-pc-wam
 bash scripts/stop_s4_r7_2gpu_tmux.sh \
-  --run-id s4-r7-fast30k-round2 --dry-run
+  --run-id s4-r7-fast30k-round4 --dry-run
 bash scripts/stop_s4_r7_2gpu_tmux.sh \
-  --run-id s4-r7-fast30k-round2
+  --run-id s4-r7-fast30k-round4
 tmux has-session -t ssh_tmux
 ```
 

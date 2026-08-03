@@ -110,6 +110,7 @@ vision:
   inference_batch_size: 16
 data:
   future_feature_cache_mode: shared_float32_projected_next_view
+  training_split: all
 training:
   budget_mode: fast_selection_30k
   updates: 30000
