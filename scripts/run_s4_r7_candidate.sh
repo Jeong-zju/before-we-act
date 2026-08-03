@@ -676,12 +676,50 @@ if reported_config is not None and reported_config != config_sha256:
 PY
 }
 
+verify_runtime_hotfix_lineage() {
+  local candidate_worktree="$1"
+  local training_commit="$2"
+  local current_commit changed_paths changed_path
+  if [[ ! "${training_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+    printf >&2 'Runtime hotfix lineage has an invalid training commit: %s\n' \
+      "${training_commit}"
+    return 3
+  fi
+  current_commit="$(git -C "${candidate_worktree}" rev-parse HEAD)" || return $?
+  if ! git -C "${candidate_worktree}" cat-file -e \
+      "${training_commit}^{commit}" 2>/dev/null || \
+     ! git -C "${candidate_worktree}" merge-base --is-ancestor \
+      "${training_commit}" "${current_commit}"; then
+    printf >&2 'Current candidate is not a descendant of training commit %s\n' \
+      "${training_commit}"
+    return 3
+  fi
+  changed_paths="$(git -C "${candidate_worktree}" diff --name-only \
+    --diff-filter=ACDMRTUXB "${training_commit}..${current_commit}")" || return $?
+  while IFS= read -r changed_path; do
+    if [[ -z "${changed_path}" ]]; then continue; fi
+    case "${changed_path}" in
+      scripts/run_s4_r7_candidate.sh|\
+      scripts/run_s4_r7_world_utility_inference.py|\
+      tests/test_evaluate_s4_r7_causal.py|\
+      tests/test_s4_r7_candidate_runner.py)
+        ;;
+      *)
+        printf >&2 'Runtime hotfix lineage changed forbidden path: %s\n' \
+          "${changed_path}"
+        return 3
+        ;;
+    esac
+  done <<< "${changed_paths}"
+}
+
 preflight_provenance() {
   local report="$1"
   local candidate="$2"
   local action="$3"
   local provenance="${report}.provenance.json"
   local candidate_worktree candidate_config candidate_config_sha candidate_kind
+  local provenance_commit
   if [[ "${candidate}" == "P0" ]]; then
     candidate_worktree="${P0_WORKTREE}"
     candidate_config="${P0_CONFIG}"
@@ -693,10 +731,17 @@ preflight_provenance() {
     candidate_config_sha="${P1_CONFIG_SHA256}"
     candidate_kind="s4_r7_world_utility_coupling"
   fi
+  provenance_commit="$(git -C "${candidate_worktree}" rev-parse HEAD)" || return $?
+  if [[ "${action}" == "verify" ]]; then
+    provenance_commit="$(jq -er '.git_commit | strings' "${provenance}")" || \
+      return $?
+    verify_runtime_hotfix_lineage "${candidate_worktree}" \
+      "${provenance_commit}" || return $?
+  fi
   python3 - "${action}" "${provenance}" "${report}" "${candidate}" \
     "${candidate_kind}" "${RUN_ID}" "${candidate_config}" \
     "${candidate_config_sha}" "${candidate_worktree}/scripts/train_s4_r7_world_utility.py" \
-    "$(git -C "${candidate_worktree}" rev-parse HEAD)" <<'PY'
+    "${provenance_commit}" <<'PY'
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -811,16 +856,29 @@ verify_checkpoint() {
   local expected_config
   local expected_config_sha
   local expected_git_commit
+  local candidate_worktree
+  local training_provenance
   if [[ "${candidate}" == "P0" ]]; then
     expected_kind="s4_r7_token_preserving"
     expected_config="${P0_CONFIG}"
     expected_config_sha="${P0_CONFIG_SHA256}"
-    expected_git_commit="$(git -C "${P0_WORKTREE}" rev-parse HEAD)"
+    candidate_worktree="${P0_WORKTREE}"
+    training_provenance="${P0_PREFLIGHT}.provenance.json"
   else
     expected_kind="s4_r7_world_utility_coupling"
     expected_config="${P1_CONFIG}"
     expected_config_sha="${P1_CONFIG_SHA256}"
-    expected_git_commit="$(git -C "${P1_WORKTREE}" rev-parse HEAD)"
+    candidate_worktree="${P1_WORKTREE}"
+    training_provenance="${P1_PREFLIGHT}.provenance.json"
+  fi
+  if [[ "${mode}" == "complete" ]]; then
+    expected_git_commit="$(jq -er '.git_commit | strings' \
+      "${training_provenance}")" || return $?
+    verify_runtime_hotfix_lineage "${candidate_worktree}" \
+      "${expected_git_commit}" || return $?
+  else
+    expected_git_commit="$(git -C "${candidate_worktree}" rev-parse HEAD)" || \
+      return $?
   fi
   ( cd "${BASE_REPO}" && uv run --frozen python - "${path}" "${candidate}" \
       "${expected_kind}" "${mode}" "${TOTAL_UPDATES}" "${expected_config}" \
