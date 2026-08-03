@@ -10,7 +10,7 @@ field is never sufficient to report acceptance.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import math
 import os
@@ -31,6 +31,13 @@ TARGET_AGENT_WINDOWS = 1_152_000
 FLOW_UNFREEZE_UPDATE = 6_400
 HEARTBEAT_SECONDS = 20
 STALE_SECONDS = 75
+# The latest completed five-task Gate20 reference on the same server/model
+# family took 21,161 seconds for one 5-task x 20-seed condition.  This is only
+# an initial wall-time estimate.  The monitor labels it as historical and the
+# validation-time estimate can be replaced by live rollout timing once normal
+# starts producing this run's episode records.
+HISTORICAL_GATE20_CONDITION_SECONDS = 21_161
+BEIJING_TIMEZONE = timezone(timedelta(hours=8), name="UTC+08:00")
 MILESTONES = (5_000, 10_000, 15_000, 20_000, 25_000, 30_000)
 TERMINAL_PHASES = {"complete", "failed", "stopped"}
 TASKS = (
@@ -383,6 +390,7 @@ def render_monitor(root: Path) -> str:
             f"WAM S4-R7 monitor | run={manifest.get('run_id', root.name)} | "
             f"tmux={manifest.get('tmux_session', '?')} | {_now()}"
         ),
+        *_beijing_timeline_lines(root),
         f"artifacts: {root}",
         (
             "shared | "
@@ -423,6 +431,91 @@ def render_monitor(root: Path) -> str:
         f"{manifest.get('tmux_monitor_window', '<window>')}"
     )
     return "\n".join(lines)
+
+
+def _beijing_timeline_lines(root: Path) -> list[str]:
+    """Render current Beijing time and conservative, provenance-labelled ETAs."""
+
+    now = datetime.now(timezone.utc)
+    candidate_etas: dict[str, datetime] = {}
+    candidate_rates: dict[str, float] = {}
+    candidate_complete: dict[str, bool] = {}
+    for candidate in CANDIDATES:
+        candidate_root = _candidate_root(root, candidate)
+        status = _maybe_json(candidate_root / "status.json")
+        progress = _latest_jsonl(candidate_root / "train" / "progress.jsonl")
+        update = _integer(progress.get("update")) or 0
+        total = (
+            _integer(progress.get("updates"))
+            or _integer(progress.get("total_updates"))
+            or TOTAL_UPDATES
+        )
+        rate = _number(progress.get("updates_per_second"))
+        complete = update >= total or str(status.get("phase", "")) in {
+            "validating",
+            "waiting_peer_report",
+            "accepting",
+            "complete",
+        }
+        candidate_complete[candidate] = complete
+        if complete:
+            candidate_etas[candidate] = now
+        elif rate is not None and rate > 0 and update > 0:
+            candidate_rates[candidate] = rate
+            candidate_etas[candidate] = now + timedelta(
+                seconds=max(total - update, 0) / rate
+            )
+
+    current_text = _beijing_datetime(now)
+    rate_parts = []
+    for candidate in CANDIDATES:
+        if candidate_complete.get(candidate):
+            rate_parts.append(f"{candidate}-train=complete")
+        elif candidate in candidate_etas:
+            rate_parts.append(
+                f"{candidate}-train={_beijing_datetime(candidate_etas[candidate])} "
+                f"({_number_text(candidate_rates.get(candidate))} update/s)"
+            )
+        else:
+            rate_parts.append(f"{candidate}-train=pending")
+
+    lines = [
+        f"Beijing time | current={current_text}",
+        "Beijing ETA | " + "; ".join(rate_parts),
+    ]
+    if len(candidate_etas) != len(CANDIDATES):
+        lines.append(
+            "Beijing ETA | paired-train=pending normal=pending core4=pending "
+            "full-R7=pending"
+        )
+        return lines
+
+    paired_train = max(candidate_etas.values())
+    normal = paired_train + timedelta(seconds=HISTORICAL_GATE20_CONDITION_SECONDS)
+    core = paired_train + timedelta(
+        seconds=4 * HISTORICAL_GATE20_CONDITION_SECONDS
+    )
+    full = paired_train + timedelta(
+        seconds=8 * HISTORICAL_GATE20_CONDITION_SECONDS
+    )
+    lines.extend(
+        (
+            "Beijing ETA | "
+            f"paired-train={_beijing_datetime(paired_train)} "
+            f"normal≈{_beijing_datetime(normal)} "
+            f"core4≈{_beijing_datetime(core)} "
+            f"full-R7≈{_beijing_datetime(full)}",
+            "ETA basis | training=live cumulative update/s; "
+            f"validation=historical S3-R6 five-task Gate20 "
+            f"{_duration(HISTORICAL_GATE20_CONDITION_SECONDS)}/condition; "
+            "recalibrate from this run after normal starts",
+        )
+    )
+    return lines
+
+
+def _beijing_datetime(value: datetime) -> str:
+    return value.astimezone(BEIJING_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S UTC+08:00")
 
 
 def _future_cache_progress_lines(root: Path) -> list[str]:
