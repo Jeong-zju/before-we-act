@@ -61,13 +61,15 @@ def _dataset_index(
     offset = 0
     for task_index, manifest in enumerate(manifests):
         raw = json.loads(manifest.read_text(encoding="utf-8"))
-        task_id = str(_mapping(raw, "manifest")["task"]["id"])
-        vision = _mapping(_mapping(raw, "manifest")["vision"], "manifest.vision")
+        if not isinstance(raw, dict):
+            raise ValueError(f"manifest root must be a mapping: {manifest}")
+        task_id = str(_mapping(raw, "task")["id"])
+        vision = _mapping(raw, "vision")
         cameras = tuple(str(value) for value in vision["camera_order"])
         if not cameras or cameras != CAMERAS[: len(cameras)]:
             raise ValueError(f"non-canonical camera order in {manifest}")
         next_prefix = str(vision["next_prefix"])
-        raw_episodes = _mapping(raw, "manifest").get("episodes")
+        raw_episodes = raw.get("episodes")
         if not isinstance(raw_episodes, list) or len(raw_episodes) != 150:
             raise ValueError(f"S4 cache requires 150 episodes in {manifest}")
         manifest_rows.append(
@@ -78,7 +80,9 @@ def _dataset_index(
             }
         )
         for value in raw_episodes:
-            episode = _mapping(value, "manifest episode")
+            if not isinstance(value, dict):
+                raise ValueError(f"manifest episode must be a mapping: {manifest}")
+            episode = value
             steps = int(episode["steps"])
             hdf5_path = (manifest.parent / str(episode["hdf5_path"])).resolve(
                 strict=True

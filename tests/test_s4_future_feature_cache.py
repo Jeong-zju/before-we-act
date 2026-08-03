@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from scripts.prepare_s4_future_feature_cache import _dataset_index
 from train.s4_future_feature_cache import (
     CACHE_FORMAT,
     HORIZONS,
@@ -94,3 +95,39 @@ def test_projected_future_cache_indexes_and_normalizes_exactly(tmp_path: Path) -
     expected = torch.tensor([1.0, 25.0, 50.0, 100.0])
     torch.testing.assert_close(local[0, 0, :, 0, 0], expected, rtol=0, atol=0)
     torch.testing.assert_close(shared[0, :, 0, 0], expected, rtol=0, atol=0)
+
+
+def test_prepare_cache_parses_manifest_root_contract(tmp_path: Path) -> None:
+    manifests = []
+    for task_index in range(5):
+        task_root = tmp_path / f"task_{task_index}"
+        task_root.mkdir()
+        hdf5 = task_root / "episode.hdf5"
+        hdf5.write_bytes(b"fixture")
+        manifest = task_root / "training_manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "task": {"id": f"task_{task_index}"},
+                    "vision": {
+                        "camera_order": ["global"],
+                        "next_prefix": "data/next_observation/images",
+                    },
+                    "episodes": [
+                        {
+                            "episode_index": episode_index,
+                            "hdf5_path": hdf5.name,
+                            "hdf5_sha256": "a" * 64,
+                            "steps": 1,
+                        }
+                        for episode_index in range(150)
+                    ],
+                }
+            )
+            + "\n"
+        )
+        manifests.append(manifest)
+    episodes, rows, total = _dataset_index(manifests)
+    assert len(episodes) == 750
+    assert len(rows) == 5
+    assert total == 750
