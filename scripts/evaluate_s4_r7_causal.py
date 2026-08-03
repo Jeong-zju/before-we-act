@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,11 +38,11 @@ from scripts.evaluate_s2_r5_protected_team import (  # noqa: E402
     _validation_indices,
 )
 from scripts.s4_r7_model_io import build_s4_r7_model  # noqa: E402
+from scripts.s4_r8_model_io import build_s4_r8_model  # noqa: E402
 from scripts.train_s2_r4_future_predictor import (  # noqa: E402
     _validate_artifact_dataset,
 )
 from scripts.train_s3_r6_world_action_flow import _model_inputs  # noqa: E402
-from scripts.train_s4_r7_world_utility import CHECKPOINT_FORMAT  # noqa: E402
 from scripts.train_static_rgb_act_moe import (  # noqa: E402
     _append_jsonl,
     _load_yaml,
@@ -57,7 +56,10 @@ from train.s2_future_prediction import (  # noqa: E402
     load_s2_artifact,
 )
 from train.s2_grouped_trajectory import grouped_s2_batch  # noqa: E402
-from train.s4_model_registry import validate_s4_r7_candidate  # noqa: E402
+from train.s4_model_registry import (  # noqa: E402
+    validate_s4_r7_candidate,
+    validate_s4_r8_candidate,
+)
 from train.world_action_flow_training import grouped_flow_matching_batch  # noqa: E402
 
 
@@ -70,6 +72,10 @@ GATE_FORMAT = "wam.robofactory.lpd_fixed_seed_gate/3"
 GRADIENT_FORMAT = "wam.robofactory.s4_r7.gradient_audit/1"
 EXPOSURE_FORMAT = "wam.robofactory.s4_r7.module_exposure/1"
 RESUME_FORMAT = "wam.robofactory.s4_r7.world_utility.resume/1"
+CHECKPOINT_FORMAT = "wam.robofactory.s4_r7.world_utility.checkpoint/1"
+ROUND_ID = "s4-r7"
+PROGRAM_NAME = "evaluate_s4_r7_causal.py"
+ENV_PREFIX = "S4_R7"
 EVALUATION_ORDER = (
     "normal",
     "legacy_reference",
@@ -85,6 +91,60 @@ GROUP_NAMES = tuple(
     for source in ("own", "peer", "shared")
     for horizon in (1, 25, 50, 100)
 )
+R8_STRUCTURAL_GATES = (
+    "token_contract_exact",
+    "dense_router_train_inference_identical",
+    "legacy_reference_elementwise_exact_not_required",
+    "legacy_reference_file_unchanged",
+    "active_gate_zero_elementwise_exact",
+    "active_gate_zero_without_provider_elementwise_exact",
+    "dino_optimizer_excluded",
+    "legacy_reference_optimizer_excluded",
+    "auxiliary_weights_zero",
+    "no_depth_or_wrist_input",
+    "no_ground_truth_future_input",
+    "r7_candidate_checkpoint_not_consumed",
+    "strict_horizon_prefix_mask",
+    "p1_output_projection_zero_initialized_or_p0",
+)
+
+
+def _configure_round(raw: Mapping[str, Any]) -> tuple[str, str, float, str]:
+    global ARTIFACT_HASH_FORMAT, CAUSAL_GATE_FORMAT, CANDIDATE_REPORT_FORMAT
+    global CHECKPOINT_FORMAT, EXPOSURE_FORMAT, FORCED_FORMAT, GRADIENT_FORMAT
+    global RESUME_FORMAT, SOURCE_SHUFFLE_FORMAT, STRUCTURAL_GATES, UTILITY_FORMAT
+    global ROUND_ID, PROGRAM_NAME, ENV_PREFIX
+    observed = str(_mapping(raw, "round").get("round_id", ""))
+    if observed == "s4-r7":
+        candidate, kind, utility = validate_s4_r7_candidate(raw)
+        return candidate, kind, utility, "trajectory_mean_legacy_r7"
+    if observed != "s4-r8":
+        raise ValueError(f"unsupported S4 evaluation round: {observed!r}")
+    candidate, kind, aggregator = validate_s4_r8_candidate(raw)
+    utility = float(_mapping(raw, "training")["utility_coupling_weight"])
+    ROUND_ID = "s4-r8"
+    PROGRAM_NAME = "evaluate_s4_r8_causal.py"
+    ENV_PREFIX = "S4_R8"
+    CHECKPOINT_FORMAT = "wam.robofactory.s4_r8.horizon_causal.checkpoint/1"
+    RESUME_FORMAT = "wam.robofactory.s4_r8.horizon_causal.resume/1"
+    CANDIDATE_REPORT_FORMAT = "wam.robofactory.s4_r8.causal_candidate_report/1"
+    UTILITY_FORMAT = "wam.robofactory.s4_r8.router_utility_spearman/1"
+    SOURCE_SHUFFLE_FORMAT = "wam.robofactory.s4_r8.source_shuffle_gate20/1"
+    CAUSAL_GATE_FORMAT = "wam.robofactory.s4_r8.legacy_scaled_zero_shuffle_gate20/1"
+    ARTIFACT_HASH_FORMAT = "wam.robofactory.s4_r8.artifact_hashes/1"
+    FORCED_FORMAT = "wam.robofactory.s4_r8.forced_evidence_errors/1"
+    GRADIENT_FORMAT = "wam.robofactory.s4_r8.gradient_audit/1"
+    EXPOSURE_FORMAT = "wam.robofactory.s4_r8.module_exposure/1"
+    STRUCTURAL_GATES = R8_STRUCTURAL_GATES
+    return candidate, kind, utility, aggregator
+
+
+def _build_round_model(
+    raw: Mapping[str, Any], *, device: torch.device
+) -> tuple[torch.nn.Module, torch.nn.Module, dict[str, Any]]:
+    if ROUND_ID == "s4-r8":
+        return build_s4_r8_model(raw, device=device)
+    return build_s4_r7_model(raw, device=device)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -109,20 +169,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     progress_log.parent.mkdir(parents=True, exist_ok=True)
 
     raw = _load_yaml(config_path)
-    candidate_id, model_kind, utility_weight = validate_s4_r7_candidate(raw)
+    candidate_id, model_kind, utility_weight, action_prefix_aggregator = (
+        _configure_round(raw)
+    )
     training = _mapping(raw, "training")
     total_updates = int(training["updates"])
     checkpoint_sha256 = file_sha256(checkpoint_path)
     saved = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if not isinstance(saved, Mapping) or saved.get("format_version") != CHECKPOINT_FORMAT:
+    if (
+        not isinstance(saved, Mapping)
+        or saved.get("format_version") != CHECKPOINT_FORMAT
+    ):
         raise ValueError("checkpoint is not an S4-R7 world-utility policy")
     method = _mapping(saved, "method")
     if (
         saved.get("update") != total_updates
-        or method.get("round_id") != "s4-r7"
+        or method.get("round_id") != ROUND_ID
         or method.get("candidate_id") != candidate_id
         or method.get("model_kind") != model_kind
         or float(method.get("utility_coupling_weight", -1.0)) != utility_weight
+        or method.get("action_prefix_aggregator") != action_prefix_aggregator
     ):
         raise ValueError("checkpoint method/update differs from the candidate config")
     source = _mapping(saved, "source")
@@ -215,13 +281,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not _donor_bank_complete(evidence_bank):
                 raise RuntimeError("normal Gate20 did not create both donor episodes")
 
-    conditions = {
-        name: _candidate_condition(gate_reports[name]) for name in CONDITIONS
-    }
+    conditions = {name: _candidate_condition(gate_reports[name]) for name in CONDITIONS}
     macros = {name: _condition_macro(row) for name, row in conditions.items()}
     source_report = {
         "format_version": SOURCE_SHUFFLE_FORMAT,
-        "round_id": "s4-r7",
+        "round_id": ROUND_ID,
         "candidate_id": candidate_id,
         "checkpoint_sha256": checkpoint_sha256,
         "task_order": list(TASKS),
@@ -239,7 +303,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     causal_report = {
         "format_version": CAUSAL_GATE_FORMAT,
-        "round_id": "s4-r7",
+        "round_id": ROUND_ID,
         "candidate_id": candidate_id,
         "checkpoint_sha256": checkpoint_sha256,
         "task_order": list(TASKS),
@@ -264,8 +328,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         },
         "causal_gates": {
-            "normal_not_below_legacy": macros["normal"]
-            >= macros["legacy_reference"],
+            "normal_not_below_legacy": macros["normal"] >= macros["legacy_reference"],
             "normal_strictly_above_world_evidence_gate_zero": macros["normal"]
             > macros["world_evidence_gate_zero"],
             "normal_strictly_above_shuffle_all": macros["normal"]
@@ -294,7 +357,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     artifact_hashes = {
         "format_version": ARTIFACT_HASH_FORMAT,
-        "round_id": "s4-r7",
+        "round_id": ROUND_ID,
         "candidate_id": candidate_id,
         "checkpoint_sha256": checkpoint_sha256,
         "files": {
@@ -316,23 +379,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "forced_evidence_audit_present": True,
         "utility_coupling_weight": utility_weight,
         "spearman": float(offline["spearman"]),
-        "episode_bootstrap_95_lower": float(
-            offline["episode_bootstrap_95_lower"]
-        ),
-        "episode_bootstrap_95_upper": float(
-            offline["episode_bootstrap_95_upper"]
-        ),
+        "episode_bootstrap_95_lower": float(offline["episode_bootstrap_95_lower"]),
+        "episode_bootstrap_95_upper": float(offline["episode_bootstrap_95_upper"]),
         "wuc_router_gradient_norm": float(wuc.get("router_gradient_norm", 0.0)),
-        "wuc_forbidden_gradient_norm": float(
-            wuc.get("forbidden_gradient_norm", 0.0)
-        ),
-        "wuc_backward_disabled": utility_weight == 0.0
-        and wuc.get("enabled") is False,
+        "wuc_forbidden_gradient_norm": float(wuc.get("forbidden_gradient_norm", 0.0)),
+        "wuc_backward_disabled": utility_weight == 0.0 and wuc.get("enabled") is False,
     }
     report = {
         "format_version": CANDIDATE_REPORT_FORMAT,
         "identity": {
-            "round_id": "s4-r7",
+            "round_id": ROUND_ID,
             "candidate_id": candidate_id,
             "model_kind": model_kind,
         },
@@ -343,8 +399,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "checkpoint_update_30000": saved.get("update") == 30_000,
             "parameter_gradient_audit_passed": gradient.get("passed") is True,
             "module_exposure_passed": exposure.get("passed") is True,
-            "formal_budget_complete": exposure.get("formal_budget_complete")
-            is True,
+            "formal_budget_complete": exposure.get("formal_budget_complete") is True,
         },
         "reports": {
             "parameter_gradient_audit": _report_reference(gradient_path),
@@ -392,8 +447,7 @@ def _validate_training_audits(
         or exposure.get("candidate_id") != candidate_id
         or exposure.get("passed") is not True
         or exposure.get("formal_budget_complete") is not True
-        or exposure.get("team_windows_seen")
-        != total_updates * effective_team_batch
+        or exposure.get("team_windows_seen") != total_updates * effective_team_batch
     ):
         raise ValueError("formal per-module exposure audit did not pass")
     by_module = exposure.get("agent_windows_seen_by_module")
@@ -408,7 +462,9 @@ def _validate_training_audits(
         raise ValueError("module exposure does not cover the exact optimizer groups")
     if checkpoint.get("agent_windows_seen_by_module") != by_module:
         raise ValueError("checkpoint and exposure report module counters differ")
-    resume = torch.load(resume_path.resolve(strict=True), map_location="cpu", weights_only=False)
+    resume = torch.load(
+        resume_path.resolve(strict=True), map_location="cpu", weights_only=False
+    )
     if (
         not isinstance(resume, Mapping)
         or resume.get("format_version") != RESUME_FORMAT
@@ -438,15 +494,15 @@ def _run_offline_audit(
     ):
         raise RuntimeError("S4-R7 causal evaluation requires one visible CUDA GPU")
     _seed_everything(int(_mapping(raw, "evaluation").get("bootstrap_seed", 70707)))
-    model, legacy_reference, parent_identity = build_s4_r7_model(raw, device=device)
+    model, legacy_reference, parent_identity = _build_round_model(raw, device=device)
     if dict(_mapping(saved, "parent_identity")) != parent_identity:
         raise ValueError("evaluation ancestor identity differs from checkpoint")
     model.load_state_dict(saved["model"], strict=True)
     model.eval()
     del legacy_reference
-    artifact_path = (
-        ROOT / str(_mapping(raw, "artifacts")["pca_statistics"])
-    ).resolve(strict=True)
+    artifact_path = (ROOT / str(_mapping(raw, "artifacts")["pca_statistics"])).resolve(
+        strict=True
+    )
     artifact = load_s2_artifact(artifact_path, device=device)
     dataset = _validation_dataset(raw)
     _validate_artifact_dataset(artifact, dataset)
@@ -560,16 +616,12 @@ def _run_offline_audit(
                 episodes = grouped["episode_index"].cpu().numpy().astype(np.int64)
                 decisions = grouped["decision_t"].cpu().numpy().astype(np.int64)
                 arrays["task_id"].append(task_ids)
-                arrays["task_index"].append(
-                    np.full(batch, task_index, dtype=np.int64)
-                )
+                arrays["task_index"].append(np.full(batch, task_index, dtype=np.int64))
                 arrays["episode_index"].append(episodes)
                 arrays["decision_t"].append(decisions)
                 arrays["valid_agent_mask"].append(inputs["valid"].cpu().numpy())
                 arrays["group_mask"].append(forced.group_mask.cpu().numpy())
-                arrays["valid_query_mask"].append(
-                    forced.valid_query_mask.cpu().numpy()
-                )
+                arrays["valid_query_mask"].append(forced.valid_query_mask.cpu().numpy())
                 errors = forced.velocity_errors.float().cpu().numpy()
                 pi = router_pi.cpu().numpy()
                 arrays["velocity_errors"].append(errors)
@@ -610,7 +662,9 @@ def _run_offline_audit(
     structural["active_gate_zero_executed_max_abs_diff"] = max_executed_zero_diff
     if any(structural.get(name) is not True for name in STRUCTURAL_GATES):
         raise RuntimeError("offline trained-checkpoint structural audit failed")
-    concatenated = {name: np.concatenate(values, axis=0) for name, values in arrays.items()}
+    concatenated = {
+        name: np.concatenate(values, axis=0) for name, values in arrays.items()
+    }
     _atomic_npz(
         forced_path,
         **concatenated,
@@ -632,7 +686,9 @@ def _run_offline_audit(
         if values
     ]
     if not episode_rows:
-        raise RuntimeError("held-out forced audit produced no valid episode correlation")
+        raise RuntimeError(
+            "held-out forced audit produced no valid episode correlation"
+        )
     episode_values = np.asarray(
         [row["mean_query_spearman"] for row in episode_rows], dtype=np.float64
     )
@@ -647,7 +703,7 @@ def _run_offline_audit(
     means = episode_values[draws].mean(axis=1)
     utility = {
         "format_version": UTILITY_FORMAT,
-        "round_id": "s4-r7",
+        "round_id": ROUND_ID,
         "candidate_id": candidate_id,
         "model_kind": model_kind,
         "checkpoint_sha256": checkpoint_sha256,
@@ -746,12 +802,16 @@ def _run_or_reuse_gate(
             "LPD_GATE_MODE": "gate",
             "LPD_EPISODES": "20",
             "LPD_SEED_START": "900",
-            "LPD_EXPERIMENT_SLUG": f"s4_r7_{candidate_id.lower()}_{condition}",
-            "LPD_RUN_ID": f"s4_r7_{candidate_id.lower()}_{condition}",
+            "LPD_EXPERIMENT_SLUG": (
+                f"{ROUND_ID.replace('-', '_')}_{candidate_id.lower()}_{condition}"
+            ),
+            "LPD_RUN_ID": (
+                f"{ROUND_ID.replace('-', '_')}_{candidate_id.lower()}_{condition}"
+            ),
             "LPD_OUTPUT_ROOT": str(output_root),
-            "S4_R7_INTERVENTION": condition,
-            "S4_R7_EVIDENCE_BANK_DIR": str(evidence_bank),
-            "S4_R7_ROLLOUT_PROGRESS": str(progress_log),
+            f"{ENV_PREFIX}_INTERVENTION": condition,
+            f"{ENV_PREFIX}_EVIDENCE_BANK_DIR": str(evidence_bank),
+            f"{ENV_PREFIX}_ROLLOUT_PROGRESS": str(progress_log),
         }
     )
     result = subprocess.run(
@@ -761,9 +821,7 @@ def _run_or_reuse_gate(
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            f"Gate20 condition {condition} exited {result.returncode}"
-        )
+        raise RuntimeError(f"Gate20 condition {condition} exited {result.returncode}")
     summary = _validate_gate_summary(
         _read_json(summary_path),
         condition=condition,
@@ -804,11 +862,18 @@ def _validate_gate_summary(
     candidate = _mapping(value, "candidate")
     client = _mapping(candidate, "client")
     policy = _mapping(client, "policy")
-    expected_action_source = (
-        "s4_r7_token_preserving_world_flow"
-        if candidate_id == "P0"
-        else "s4_r7_world_utility_coupled_flow"
-    )
+    if ROUND_ID == "s4-r8":
+        expected_action_source = (
+            "s4_r8_horizon_prefix_mean_world_flow"
+            if candidate_id == "P0"
+            else "s4_r8_causal_prefix_attention_world_flow"
+        )
+    else:
+        expected_action_source = (
+            "s4_r7_token_preserving_world_flow"
+            if candidate_id == "P0"
+            else "s4_r7_world_utility_coupled_flow"
+        )
     if (
         candidate.get("policy_kind") != "s4_flow"
         or candidate.get("checkpoint_sha256") != checkpoint_sha256
@@ -823,9 +888,9 @@ def _validate_gate_summary(
     for task in TASKS:
         row = _mapping(value, task)
         episodes = row.get("episodes")
-        if not isinstance(episodes, list) or [item.get("seed") for item in episodes] != list(
-            range(900, 920)
-        ):
+        if not isinstance(episodes, list) or [
+            item.get("seed") for item in episodes
+        ] != list(range(900, 920)):
             raise ValueError(f"Gate20 {condition}/{task} episodes are not paired")
     return value
 
@@ -864,10 +929,9 @@ def _per_team_flow_error(
     per_agent = torch.where(valid, squared, 0).sum(dim=-1) / valid.sum(
         dim=-1
     ).clamp_min(1)
-    return (
-        torch.where(valid_agents, per_agent, 0).sum(dim=-1)
-        / valid_agents.sum(dim=-1).clamp_min(1)
-    )
+    return torch.where(valid_agents, per_agent, 0).sum(dim=-1) / valid_agents.sum(
+        dim=-1
+    ).clamp_min(1)
 
 
 def _spearman(left: np.ndarray, right: np.ndarray) -> float:
@@ -951,7 +1015,7 @@ def _progress(
         path,
         {
             "event": event,
-            "program": "evaluate_s4_r7_causal.py",
+            "program": PROGRAM_NAME,
             "condition": condition,
             "task": task,
             "episode": episode,

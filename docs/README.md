@@ -16,6 +16,7 @@
 - [Phase M1 外部终端指令](runbooks/20260722_FE_PC_WAM_M1_COMMANDS_ZH.md)
 - [Phase M2 外部终端指令](runbooks/20260722_FE_PC_WAM_M2_COMMANDS_ZH.md)
 - [RoboFactory LiftBarrier M1 闭环 Rollout](runbooks/20260722_ROBOFACTORY_M1_CLOSED_LOOP_ROLLOUT_ZH.md)
+- [S4-R8 并行双卡部署、监控与验收](runbooks/20260803_S4_R8_PARALLEL_2X5090_RUNBOOK_ZH.md)
 
 ## 数据与验收记录（`reports/`）
 

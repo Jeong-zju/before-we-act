@@ -25,10 +25,16 @@ S4_R8_MODEL_KINDS: dict[str, tuple[str, str]] = {
         "causal_prefix_attention",
     ),
 }
+S4_R8_BUDGET_MODES: dict[str, tuple[int, int, int]] = {
+    "fast_selection_30k": (30_000, 6_400, 1_152_000),
+}
+S4_R8_FUTURE_FEATURE_CACHE_MODE = "shared_float32_projected_next_view"
+S4_R8_TRAINING_SPLIT = "all"
+S4_R8_FUTURE_HORIZONS = (1, 25, 50, 100)
+S4_R8_ACTION_PREFIX_RANK = 32
+S4_R8_UTILITY_COUPLING_WEIGHT = 0.0
 
-S4_MODEL_KINDS = frozenset(S4_R7_MODEL_KINDS) | frozenset(
-    S4_R8_MODEL_KINDS
-)
+S4_MODEL_KINDS = frozenset(S4_R7_MODEL_KINDS) | frozenset(S4_R8_MODEL_KINDS)
 S4_ZERO_AUXILIARY_WEIGHTS = (
     "relation_weight",
     "specialization_weight",
@@ -72,9 +78,7 @@ def _field(
     expected = observed[0][1]
     if any(candidate != expected for _, candidate in observed[1:]):
         locations = [location for location, _ in observed]
-        raise ValueError(
-            f"S4 duplicate field {key!r} disagrees across {locations!r}"
-        )
+        raise ValueError(f"S4 duplicate field {key!r} disagrees across {locations!r}")
     return expected
 
 
@@ -125,8 +129,7 @@ def validate_s4_r7_candidate(
     model_kind = str(_field(value, "model_kind", sections=("round",)))
     if round_id != "s4-r7" or model_kind not in S4_R7_MODEL_KINDS:
         raise ValueError(
-            f"S4-R7 model kind is not in the train/evaluation allowlist: "
-            f"{model_kind!r}"
+            f"S4-R7 model kind is not in the train/evaluation allowlist: {model_kind!r}"
         )
     expected_candidate, expected_utility = S4_R7_MODEL_KINDS[model_kind]
     utility = _finite_weight(
@@ -146,9 +149,9 @@ def validate_s4_r7_candidate(
         raise ValueError(
             f"S4-R7 budget mode is not in the training allowlist: {budget_mode!r}"
         )
-    expected_updates, expected_unfreeze, expected_agent_windows = (
-        S4_R7_BUDGET_MODES[budget_mode]
-    )
+    expected_updates, expected_unfreeze, expected_agent_windows = S4_R7_BUDGET_MODES[
+        budget_mode
+    ]
     observed_budget = (
         int(_field(value, "updates", sections=("training",))),
         int(_field(value, "flow_unfreeze_update", sections=("training",))),
@@ -162,9 +165,7 @@ def validate_s4_r7_candidate(
         raise ValueError(
             "S4-R7 budget fields disagree with the registered fast-selection mode"
         )
-    cache_mode = str(
-        _field(value, "future_feature_cache_mode", sections=("data",))
-    )
+    cache_mode = str(_field(value, "future_feature_cache_mode", sections=("data",)))
     if cache_mode != S4_R7_FUTURE_FEATURE_CACHE_MODE:
         raise ValueError(
             "S4-R7 future feature cache mode is not in the training allowlist"
@@ -186,8 +187,7 @@ def validate_s4_r8_candidate(
     model_kind = str(_field(value, "model_kind", sections=("round",)))
     if round_id != "s4-r8" or model_kind not in S4_R8_MODEL_KINDS:
         raise ValueError(
-            f"S4-R8 model kind is not in the train/evaluation allowlist: "
-            f"{model_kind!r}"
+            f"S4-R8 model kind is not in the train/evaluation allowlist: {model_kind!r}"
         )
     expected_candidate, expected_aggregator = S4_R8_MODEL_KINDS[model_kind]
     aggregator = str(
@@ -201,6 +201,53 @@ def validate_s4_r8_candidate(
         raise ValueError(
             "S4-R8 candidate identity disagrees with the model-kind allowlist"
         )
+    rank = int(_field(value, "action_prefix_rank", sections=("model", "round")))
+    horizons = tuple(
+        int(item)
+        for item in _field(
+            value,
+            "future_horizons",
+            sections=("model", "round", "world_model"),
+        )  # type: ignore[union-attr]
+    )
+    if rank != S4_R8_ACTION_PREFIX_RANK or horizons != S4_R8_FUTURE_HORIZONS:
+        raise ValueError("S4-R8 causal-prefix architecture is not in the allowlist")
+    utility = _finite_weight(
+        _field(
+            value,
+            "utility_coupling_weight",
+            sections=("training", "round"),
+        ),
+        name="utility_coupling_weight",
+    )
+    if utility != S4_R8_UTILITY_COUPLING_WEIGHT:
+        raise ValueError(
+            "parallel S4-R8 isolates the aggregator axis and requires "
+            "utility_coupling_weight=0"
+        )
+    budget_mode = str(_field(value, "budget_mode", sections=("training",)))
+    if budget_mode not in S4_R8_BUDGET_MODES:
+        raise ValueError(
+            f"S4-R8 budget mode is not in the training allowlist: {budget_mode!r}"
+        )
+    expected_budget = S4_R8_BUDGET_MODES[budget_mode]
+    observed_budget = (
+        int(_field(value, "updates", sections=("training",))),
+        int(_field(value, "flow_unfreeze_update", sections=("training",))),
+        int(_field(value, "agent_window_budget", sections=("training",))),
+    )
+    if observed_budget != expected_budget:
+        raise ValueError(
+            "S4-R8 budget fields disagree with the registered fast-selection mode"
+        )
+    cache_mode = str(_field(value, "future_feature_cache_mode", sections=("data",)))
+    if cache_mode != S4_R8_FUTURE_FEATURE_CACHE_MODE:
+        raise ValueError(
+            "S4-R8 future feature cache mode is not in the training allowlist"
+        )
+    split = str(_field(value, "training_split", sections=("data",)))
+    if split != S4_R8_TRAINING_SPLIT:
+        raise ValueError("S4-R8 training split allowlist requires all 750 episodes")
     _validate_disabled_auxiliary_weights(value)
     return candidate_id, model_kind, aggregator
 
@@ -269,18 +316,14 @@ def _canonical_without_paths(
     return value
 
 
-def _first_difference(
-    left: object, right: object, *, path: str = "<root>"
-) -> str:
+def _first_difference(left: object, right: object, *, path: str = "<root>") -> str:
     if isinstance(left, Mapping) and isinstance(right, Mapping):
         left_keys = set(left)
         right_keys = set(right)
         if left_keys != right_keys:
             return f"{path} keys {sorted(left_keys)!r} != {sorted(right_keys)!r}"
         for key in sorted(left_keys):
-            child = _first_difference(
-                left[key], right[key], path=f"{path}.{key}"
-            )
+            child = _first_difference(left[key], right[key], path=f"{path}.{key}")
             if child:
                 return child
         return ""
@@ -290,9 +333,7 @@ def _first_difference(
         for index, (left_child, right_child) in enumerate(
             zip(left, right, strict=True)
         ):
-            child = _first_difference(
-                left_child, right_child, path=f"{path}[{index}]"
-            )
+            child = _first_difference(left_child, right_child, path=f"{path}[{index}]")
             if child:
                 return child
         return ""
@@ -329,30 +370,21 @@ def validate_s4_candidate_pair(
     if {identity[0] for identity in identities} != {"P0", "P1"}:
         raise ValueError("S4 pair must contain exactly one registered P0 and P1")
 
-    canonical_left = _canonical_without_paths(
-        left, ignored_paths=ignored_paths
-    )
-    canonical_right = _canonical_without_paths(
-        right, ignored_paths=ignored_paths
-    )
+    canonical_left = _canonical_without_paths(left, ignored_paths=ignored_paths)
+    canonical_right = _canonical_without_paths(right, ignored_paths=ignored_paths)
     difference = _first_difference(canonical_left, canonical_right)
     if difference:
         raise ValueError(
-            f"{expected_round} pair drifts beyond its pre-registered axis: "
-            f"{difference}"
+            f"{expected_round} pair drifts beyond its pre-registered axis: {difference}"
         )
     return expected_round
 
 
-def validate_s4_r7_pair(
-    p0: Mapping[str, object], p1: Mapping[str, object]
-) -> str:
+def validate_s4_r7_pair(p0: Mapping[str, object], p1: Mapping[str, object]) -> str:
     return validate_s4_candidate_pair(p0, p1, round_id="s4-r7")
 
 
-def validate_s4_r8_pair(
-    p0: Mapping[str, object], p1: Mapping[str, object]
-) -> str:
+def validate_s4_r8_pair(p0: Mapping[str, object], p1: Mapping[str, object]) -> str:
     return validate_s4_candidate_pair(p0, p1, round_id="s4-r8")
 
 
@@ -368,6 +400,12 @@ __all__ = [
     "S4_R7_BUDGET_MODES",
     "S4_R7_MODEL_KINDS",
     "S4_R8_MODEL_KINDS",
+    "S4_R8_ACTION_PREFIX_RANK",
+    "S4_R8_BUDGET_MODES",
+    "S4_R8_FUTURE_FEATURE_CACHE_MODE",
+    "S4_R8_FUTURE_HORIZONS",
+    "S4_R8_TRAINING_SPLIT",
+    "S4_R8_UTILITY_COUPLING_WEIGHT",
     "S4_ZERO_AUXILIARY_WEIGHTS",
     "validate_s4_candidate",
     "validate_s4_candidate_pair",

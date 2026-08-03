@@ -9,6 +9,7 @@ from train.s4_model_registry import (
     S4_R7_BUDGET_MODES,
     S4_R7_MODEL_KINDS,
     S4_R8_MODEL_KINDS,
+    S4_R8_BUDGET_MODES,
     validate_s4_candidate,
     validate_s4_r7_candidate,
     validate_s4_r7_pair,
@@ -24,9 +25,7 @@ def _r7(candidate: str) -> dict[str, object]:
             "round_id": "s4-r7",
             "candidate_id": candidate,
             "model_kind": (
-                "s4_r7_world_utility_coupling"
-                if p1
-                else "s4_r7_token_preserving"
+                "s4_r7_world_utility_coupling" if p1 else "s4_r7_token_preserving"
             ),
         },
         "model": {
@@ -58,9 +57,7 @@ def _r8(candidate: str) -> dict[str, object]:
             "round_id": "s4-r8",
             "candidate_id": candidate,
             "model_kind": (
-                "s4_r8_causal_prefix_attention"
-                if p1
-                else "s4_r8_horizon_prefix_mean"
+                "s4_r8_causal_prefix_attention" if p1 else "s4_r8_horizon_prefix_mean"
             ),
         },
         "model": {
@@ -70,10 +67,17 @@ def _r8(candidate: str) -> dict[str, object]:
             ),
             "action_prefix_rank": 32,
         },
+        "data": {
+            "future_feature_cache_mode": "shared_float32_projected_next_view",
+            "training_split": "all",
+        },
         "training": {
             "seed": 808,
-            "updates": 125000,
-            "utility_coupling_weight": 0.05,
+            "budget_mode": "fast_selection_30k",
+            "updates": 30000,
+            "flow_unfreeze_update": 6400,
+            "agent_window_budget": 1152000,
+            "utility_coupling_weight": 0.0,
             "relation_weight": 0.0,
             "specialization_weight": 0.0,
             "anchor_weight": 0.0,
@@ -86,9 +90,7 @@ def test_s4_model_kind_allowlists_are_exact_and_fail_closed() -> None:
         "s4_r7_token_preserving": ("P0", 0.0),
         "s4_r7_world_utility_coupling": ("P1", 0.05),
     }
-    assert S4_R7_BUDGET_MODES == {
-        "fast_selection_30k": (30_000, 6_400, 1_152_000)
-    }
+    assert S4_R7_BUDGET_MODES == {"fast_selection_30k": (30_000, 6_400, 1_152_000)}
     assert S4_R8_MODEL_KINDS == {
         "s4_r8_horizon_prefix_mean": ("P0", "prefix_mean"),
         "s4_r8_causal_prefix_attention": (
@@ -96,6 +98,7 @@ def test_s4_model_kind_allowlists_are_exact_and_fail_closed() -> None:
             "causal_prefix_attention",
         ),
     }
+    assert S4_R8_BUDGET_MODES == {"fast_selection_30k": (30_000, 6_400, 1_152_000)}
     assert len(S4_MODEL_KINDS) == 4
     assert validate_s4_r7_candidate(_r7("P0")) == (
         "P0",
@@ -172,5 +175,17 @@ def test_r8_pair_allows_only_registered_action_aggregator_axis() -> None:
 
     drifted = copy.deepcopy(p1)
     drifted["model"]["action_prefix_rank"] = 64  # type: ignore[index]
-    with pytest.raises(ValueError, match="pre-registered axis"):
+    with pytest.raises(ValueError, match="allowlist"):
         validate_s4_r8_pair(p0, drifted)
+
+
+def test_r8_registry_rejects_serial_dependency_or_budget_drift() -> None:
+    utility = _r8("P1")
+    utility["training"]["utility_coupling_weight"] = 0.05  # type: ignore[index]
+    with pytest.raises(ValueError, match="isolates the aggregator axis"):
+        validate_s4_r8_candidate(utility)
+
+    budget = _r8("P0")
+    budget["training"]["updates"] = 125000  # type: ignore[index]
+    with pytest.raises(ValueError, match="budget fields"):
+        validate_s4_r8_candidate(budget)

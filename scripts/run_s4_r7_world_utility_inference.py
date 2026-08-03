@@ -39,10 +39,13 @@ from scripts.run_static_rgb_act_moe_inference import (  # noqa: E402
     _vision,
 )
 from scripts.s4_r7_model_io import build_s4_r7_model  # noqa: E402
-from scripts.train_s4_r7_world_utility import CHECKPOINT_FORMAT  # noqa: E402
+from scripts.s4_r8_model_io import build_s4_r8_model  # noqa: E402
 from scripts.train_static_rgb_act_moe import _append_jsonl  # noqa: E402
 from train.s2_future_prediction import load_s2_artifact  # noqa: E402
-from train.s4_model_registry import validate_s4_r7_candidate  # noqa: E402
+from train.s4_model_registry import (  # noqa: E402
+    validate_s4_r7_candidate,
+    validate_s4_r8_candidate,
+)
 
 
 INTERVENTIONS = (
@@ -56,6 +59,8 @@ INTERVENTIONS = (
     "shuffle_shared",
 )
 EVIDENCE_BANK_FORMAT = "wam.robofactory.s4_r7.predicted_future_donor_bank/1"
+R7_CHECKPOINT_FORMAT = "wam.robofactory.s4_r7.world_utility.checkpoint/1"
+R8_CHECKPOINT_FORMAT = "wam.robofactory.s4_r8.horizon_causal.checkpoint/1"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -82,25 +87,53 @@ def main(argv: Sequence[str] | None = None) -> int:
     config_path = args.config.expanduser().resolve(strict=True)
     checkpoint_sha256 = _sha256(checkpoint_path)
     saved = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if not isinstance(saved, Mapping) or saved.get("format_version") != CHECKPOINT_FORMAT:
-        raise ValueError("checkpoint is not an S4-R7 world-utility Flow")
+    if not isinstance(saved, Mapping) or saved.get("format_version") not in {
+        R7_CHECKPOINT_FORMAT,
+        R8_CHECKPOINT_FORMAT,
+    }:
+        raise ValueError("checkpoint is not a registered S4-R7/R8 world Flow")
     raw = _load_yaml(config_path)
-    candidate_id, model_kind, utility_weight = validate_s4_r7_candidate(raw)
+    round_id = str(_mapping(raw, "round").get("round_id", ""))
+    if round_id == "s4-r7":
+        candidate_id, model_kind, utility_weight = validate_s4_r7_candidate(raw)
+        expected_format = R7_CHECKPOINT_FORMAT
+        model_builder = build_s4_r7_model
+        environment_prefix = "S4_R7"
+        action_source = (
+            "s4_r7_token_preserving_world_flow"
+            if candidate_id == "P0"
+            else "s4_r7_world_utility_coupled_flow"
+        )
+    elif round_id == "s4-r8":
+        candidate_id, model_kind, _ = validate_s4_r8_candidate(raw)
+        utility_weight = float(_mapping(raw, "training")["utility_coupling_weight"])
+        expected_format = R8_CHECKPOINT_FORMAT
+        model_builder = build_s4_r8_model
+        environment_prefix = "S4_R8"
+        action_source = (
+            "s4_r8_horizon_prefix_mean_world_flow"
+            if candidate_id == "P0"
+            else "s4_r8_causal_prefix_attention_world_flow"
+        )
+    else:
+        raise ValueError(f"unsupported S4 runtime round: {round_id!r}")
     method = _mapping(saved, "method")
     if (
-        method.get("round_id") != "s4-r7"
+        saved.get("format_version") != expected_format
+        or method.get("round_id") != round_id
         or method.get("candidate_id") != candidate_id
         or method.get("model_kind") != model_kind
         or float(method.get("utility_coupling_weight", -1.0)) != utility_weight
     ):
         raise ValueError("runtime config and S4-R7 checkpoint identities differ")
-    model, legacy_reference, parent_identity = build_s4_r7_model(raw, device=device)
+    model, legacy_reference, parent_identity = model_builder(raw, device=device)
     if dict(_mapping(saved, "parent_identity")) != parent_identity:
         raise ValueError("S4-R7 runtime ancestor identities differ from checkpoint")
     model.load_state_dict(saved["model"], strict=True)
     model.eval()
     intervention = args.intervention or os.environ.get(
-        "S4_R7_INTERVENTION", str(_mapping(raw, "inference").get("world_intervention", "normal"))
+        f"{environment_prefix}_INTERVENTION",
+        str(_mapping(raw, "inference").get("world_intervention", "normal")),
     )
     if intervention not in INTERVENTIONS:
         raise ValueError(f"unsupported S4-R7 intervention: {intervention}")
@@ -109,9 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     vision = _vision(raw).to(device).eval()
     artifact = load_s2_artifact(
-        (ROOT / str(_mapping(raw, "artifacts")["pca_statistics"])).resolve(
-            strict=True
-        ),
+        (ROOT / str(_mapping(raw, "artifacts")["pca_statistics"])).resolve(strict=True),
         device=device,
     )
     generation = _validated_generation(
@@ -128,15 +159,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     progress_log = (
         args.progress_log.expanduser().resolve()
         if args.progress_log is not None
-        else Path(os.environ["S4_R7_ROLLOUT_PROGRESS"]).expanduser().resolve()
-        if os.environ.get("S4_R7_ROLLOUT_PROGRESS")
+        else Path(os.environ[f"{environment_prefix}_ROLLOUT_PROGRESS"])
+        .expanduser()
+        .resolve()
+        if os.environ.get(f"{environment_prefix}_ROLLOUT_PROGRESS")
         else None
     )
     bank_root = (
         args.evidence_bank_dir.expanduser().resolve()
         if args.evidence_bank_dir is not None
-        else Path(os.environ["S4_R7_EVIDENCE_BANK_DIR"]).expanduser().resolve()
-        if os.environ.get("S4_R7_EVIDENCE_BANK_DIR")
+        else Path(os.environ[f"{environment_prefix}_EVIDENCE_BANK_DIR"])
+        .expanduser()
+        .resolve()
+        if os.environ.get(f"{environment_prefix}_EVIDENCE_BANK_DIR")
         else None
     )
     if intervention.startswith("shuffle_") and bank_root is None:
@@ -154,7 +189,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if task_id not in runtime:
             raise ValueError(f"checkpoint does not contain task {task_id!r}")
         if bool(contract.get("future_path")):
-            raise ValueError("S4 uses predicted futures, never environment future input")
+            raise ValueError(
+                "S4 uses predicted futures, never environment future input"
+            )
         task = runtime[task_id]
         agent_count = int(contract["agent_count"])
         if (
@@ -181,11 +218,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             checkpoint_sha256=checkpoint_sha256,
             intervention=intervention,
             device=device,
-        )
-        action_source = (
-            "s4_r7_token_preserving_world_flow"
-            if candidate_id == "P0"
-            else "s4_r7_world_utility_coupled_flow"
         )
         send_message(
             connection,
@@ -239,8 +271,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     values["proprioception"], device=device, dtype=torch.float32
                 )
                 normalized = (
-                    (state - state_mean[: state.numel()])
-                    / state_std[: state.numel()]
+                    (state - state_mean[: state.numel()]) / state_std[: state.numel()]
                 ).reshape(agent_count, 18)
                 padded_state = torch.zeros(1, 4, 18, device=device)
                 padded_state[0, :agent_count] = normalized
@@ -402,8 +433,7 @@ def _integrate_s4(
             current,
             tau,
             valid,
-            force_world_evidence_gate_zero=intervention
-            == "world_evidence_gate_zero",
+            force_world_evidence_gate_zero=intervention == "world_evidence_gate_zero",
             force_all_world_gates_zero=intervention == "all_world_gates_zero",
             future_intervention=transform,
         )
@@ -439,7 +469,9 @@ class PredictedFutureDonorBank:
             assert self.root is not None
             for episode in (0, 1):
                 path = self.root / f"episode_{episode:03d}.pt"
-                payload = torch.load(path.resolve(strict=True), map_location="cpu", weights_only=False)
+                payload = torch.load(
+                    path.resolve(strict=True), map_location="cpu", weights_only=False
+                )
                 if (
                     not isinstance(payload, Mapping)
                     or payload.get("format_version") != EVIDENCE_BANK_FORMAT
@@ -454,9 +486,7 @@ class PredictedFutureDonorBank:
         self.current_episode = episode
         self.current_steps = []
 
-    def capture_step(
-        self, episode: int, futures: list[PredictedFutureLatents]
-    ) -> None:
+    def capture_step(self, episode: int, futures: list[PredictedFutureLatents]) -> None:
         if self.mode == "normal" and self.root is not None and episode in {0, 1}:
             if len(futures) != 4:
                 raise RuntimeError("normal donor capture requires all four Euler reads")
@@ -505,7 +535,9 @@ class PredictedFutureDonorBank:
                 own_visual=value.own_visual if replace_own else current.own_visual,
                 peer_state=value.peer_state if replace_peer else current.peer_state,
                 peer_visual=value.peer_visual if replace_peer else current.peer_visual,
-                shared_visual=value.shared_visual if replace_shared else current.shared_visual,
+                shared_visual=value.shared_visual
+                if replace_shared
+                else current.shared_visual,
             )
 
         return transform

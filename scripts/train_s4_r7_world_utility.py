@@ -28,6 +28,7 @@ if str(ROOT) not in sys.path:
 
 from models.wam_multimodal import EvidenceTokens  # noqa: E402
 from scripts.s4_r7_model_io import build_s4_r7_model  # noqa: E402
+from scripts.s4_r8_model_io import build_s4_r8_model  # noqa: E402
 from scripts.train_s2_r4_future_predictor import (  # noqa: E402
     _dataset,
     _validate_artifact_dataset,
@@ -62,7 +63,10 @@ from train.s4_future_feature_cache import (  # noqa: E402
     S4ProjectedFutureFeatureCache,
 )
 from train.s4_joint_losses import s4_joint_losses  # noqa: E402
-from train.s4_model_registry import validate_s4_r7_candidate  # noqa: E402
+from train.s4_model_registry import (  # noqa: E402
+    validate_s4_r7_candidate,
+    validate_s4_r8_candidate,
+)
 from train.world_action_flow_training import grouped_flow_matching_batch  # noqa: E402
 
 
@@ -76,6 +80,50 @@ FAST_SELECTION_UPDATES = 30_000
 FAST_SELECTION_FLOW_UNFREEZE = 6_400
 FAST_SELECTION_AGENT_WINDOW_BUDGET = 1_152_000
 SUPPORTED_BATCH_RECIPES = {(4, 3), (2, 6), (1, 12)}
+ROUND_ID = "s4-r7"
+ROUND_LABEL = "S4-R7"
+PROGRAM_NAME = "train_s4_r7_world_utility.py"
+ENV_PREFIX = "S4_R7"
+
+
+def _configure_round(raw: Mapping[str, Any]) -> tuple[str, str, float, str]:
+    """Select the fail-closed R7 or R8 contract for this process."""
+
+    global CHECKPOINT_FORMAT, RESUME_FORMAT, PREFLIGHT_FORMAT
+    global GRADIENT_AUDIT_FORMAT, EXPOSURE_FORMAT
+    global ROUND_ID, ROUND_LABEL, PROGRAM_NAME, ENV_PREFIX
+    round_section = _mapping(raw, "round")
+    observed = str(round_section.get("round_id", ""))
+    if observed == "s4-r7":
+        candidate, model_kind, utility = validate_s4_r7_candidate(raw)
+        aggregator = "trajectory_mean_legacy_r7"
+        return candidate, model_kind, utility, aggregator
+    if observed != "s4-r8":
+        raise ValueError(f"unsupported S4 training round: {observed!r}")
+    candidate, model_kind, aggregator = validate_s4_r8_candidate(raw)
+    ROUND_ID = "s4-r8"
+    ROUND_LABEL = "S4-R8"
+    PROGRAM_NAME = "train_s4_r8_horizon_causal.py"
+    ENV_PREFIX = "S4_R8"
+    CHECKPOINT_FORMAT = "wam.robofactory.s4_r8.horizon_causal.checkpoint/1"
+    RESUME_FORMAT = "wam.robofactory.s4_r8.horizon_causal.resume/1"
+    PREFLIGHT_FORMAT = "wam.robofactory.s4_r8.preflight/1"
+    GRADIENT_AUDIT_FORMAT = "wam.robofactory.s4_r8.gradient_audit/1"
+    EXPOSURE_FORMAT = "wam.robofactory.s4_r8.module_exposure/1"
+    utility = float(_mapping(raw, "training")["utility_coupling_weight"])
+    return candidate, model_kind, utility, aggregator
+
+
+def _round_environment(name: str) -> str:
+    return os.environ.get(f"{ENV_PREFIX}_{name}", "")
+
+
+def _build_round_model(
+    raw: Mapping[str, Any], *, device: torch.device
+) -> tuple[torch.nn.Module, torch.nn.Module, dict[str, Any]]:
+    if ROUND_ID == "s4-r8":
+        return build_s4_r8_model(raw, device=device)
+    return build_s4_r7_model(raw, device=device)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -114,23 +162,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _main_impl(args: argparse.Namespace) -> int:
     config_path = args.config.expanduser().resolve(strict=True)
     raw = _load_yaml(config_path)
-    candidate_id, model_kind, utility_weight = validate_s4_r7_candidate(raw)
-    training = _mapping(raw, "training")
-    shared_hdf5_receipt_sha256 = os.environ.get(
-        "S4_R7_SHARED_HDF5_RECEIPT_SHA256", ""
+    candidate_id, model_kind, utility_weight, action_prefix_aggregator = (
+        _configure_round(raw)
     )
+    training = _mapping(raw, "training")
+    shared_hdf5_receipt_sha256 = _round_environment("SHARED_HDF5_RECEIPT_SHA256")
     if len(shared_hdf5_receipt_sha256) != 64 or any(
-        character not in "0123456789abcdef"
-        for character in shared_hdf5_receipt_sha256
+        character not in "0123456789abcdef" for character in shared_hdf5_receipt_sha256
     ):
         raise ValueError("S4-R7 requires the shared HDF5 receipt SHA256 identity")
-    future_feature_cache_root = os.environ.get("S4_R7_FUTURE_FEATURE_CACHE", "")
-    future_feature_cache_sha256 = os.environ.get(
-        "S4_R7_FUTURE_FEATURE_CACHE_SHA256", ""
-    )
-    if not future_feature_cache_root or len(future_feature_cache_sha256) != 64 or any(
-        character not in "0123456789abcdef"
-        for character in future_feature_cache_sha256
+    future_feature_cache_root = _round_environment("FUTURE_FEATURE_CACHE")
+    future_feature_cache_sha256 = _round_environment("FUTURE_FEATURE_CACHE_SHA256")
+    if (
+        not future_feature_cache_root
+        or len(future_feature_cache_sha256) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in future_feature_cache_sha256
+        )
     ):
         raise ValueError("S4-R7 requires the shared future feature cache identity")
     configured_updates = int(training.get("updates", 0))
@@ -157,9 +206,7 @@ def _main_impl(args: argparse.Namespace) -> int:
     run_end_update = updates
     if not args.preflight_only and args.stop_after_update is not None:
         run_end_update = int(args.stop_after_update)
-        registered_milestones = {
-            int(value) for value in training.get("milestones", ())
-        }
+        registered_milestones = {int(value) for value in training.get("milestones", ())}
         if run_end_update not in registered_milestones:
             raise ValueError(
                 "--stop-after-update must be a preregistered S4-R7 milestone"
@@ -185,7 +232,7 @@ def _main_impl(args: argparse.Namespace) -> int:
     torch.cuda.reset_peak_memory_stats(device)
 
     _emit_stage("parent_load", "loading exact R6L-P1/R5-P0 active clones")
-    model, legacy_reference, parent_identity = build_s4_r7_model(raw, device=device)
+    model, legacy_reference, parent_identity = _build_round_model(raw, device=device)
     initial_model_sha256 = state_dict_sha256(model)
     artifact_path = (ROOT / str(_mapping(raw, "artifacts")["pca_statistics"])).resolve(
         strict=True
@@ -219,8 +266,7 @@ def _main_impl(args: argparse.Namespace) -> int:
         raise ValueError("S4-R7 requires micro*accum == effective team batch 12")
     if (micro, accumulation) not in SUPPORTED_BATCH_RECIPES:
         raise ValueError(
-            "S4-R7 supports paired micro4/accum3, micro2/accum6, or "
-            "micro1/accum12"
+            "S4-R7 supports paired micro4/accum3, micro2/accum6, or micro1/accum12"
         )
     flow_unfreeze = int(training.get("flow_unfreeze_update", 0))
     if flow_unfreeze != FAST_SELECTION_FLOW_UNFREEZE:
@@ -253,7 +299,11 @@ def _main_impl(args: argparse.Namespace) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
         raise FileExistsError(f"refusing to overwrite completed checkpoint {output}")
-    if args.preflight_only and preflight_report is not None and preflight_report.exists():
+    if (
+        args.preflight_only
+        and preflight_report is not None
+        and preflight_report.exists()
+    ):
         raise FileExistsError(f"refusing to overwrite preflight {preflight_report}")
 
     flow_parameters = tuple(model.active_parent.base_flow.parameters())
@@ -266,10 +316,11 @@ def _main_impl(args: argparse.Namespace) -> int:
         fused=True,
     )
     identity = {
-        "round_id": "s4-r7",
+        "round_id": ROUND_ID,
         "candidate_id": candidate_id,
         "model_kind": model_kind,
         "utility_coupling_weight": utility_weight,
+        "action_prefix_aggregator": action_prefix_aggregator,
         "config_sha256": _sha256(config_path),
         "parent_identity": parent_identity,
         "artifact_sha256": artifact_sha256,
@@ -347,7 +398,9 @@ def _main_impl(args: argparse.Namespace) -> int:
     pca = _mapping(raw, "pca")
     _emit_stage("first_batch", "running bit-exact legacy/scaled/new-gate audits")
     first_grouped = grouped_s2_batch(next(iterator), require_future_images=False)
-    first_inputs = _model_inputs(vision, first_grouped, artifact, device=device, pca=pca)
+    first_inputs = _model_inputs(
+        vision, first_grouped, artifact, device=device, pca=pca
+    )
     structural = _structural_audit(
         model,
         legacy_reference,
@@ -408,23 +461,18 @@ def _main_impl(args: argparse.Namespace) -> int:
     log_interval = int(training.get("log_interval", 20))
     gradient_clip = float(training.get("gradient_clip_norm", 1.0))
     tracked_categories = tuple(
-        name
-        for name in parameter_names
-        if not (args.preflight_only and name == "flow")
+        name for name in parameter_names if not (args.preflight_only and name == "flow")
     )
     restored_categories = restored_audit_state.get("normal_categories_seen", {})
     if not isinstance(restored_categories, Mapping):
         raise ValueError("resume normal category audit must be a mapping")
     normal_categories_seen: dict[str, bool] = {
-        name: bool(restored_categories.get(name, False))
-        for name in tracked_categories
+        name: bool(restored_categories.get(name, False)) for name in tracked_categories
     }
     flow_frozen_gradient_exact_zero = bool(
         restored_audit_state.get("flow_frozen_gradient_exact_zero", True)
     )
-    flow_frozen_observed = bool(
-        restored_audit_state.get("flow_frozen_observed", False)
-    )
+    flow_frozen_observed = bool(restored_audit_state.get("flow_frozen_observed", False))
     flow_unfrozen_gradient_nonzero = bool(
         restored_audit_state.get("flow_unfrozen_gradient_nonzero", False)
     )
@@ -467,9 +515,7 @@ def _main_impl(args: argparse.Namespace) -> int:
             update_valid_agents = 0
             audit_row: dict[str, Any] | None = None
             for accumulation_index in range(accumulation):
-                grouped = grouped_s2_batch(
-                    next(iterator), require_future_images=False
-                )
+                grouped = grouped_s2_batch(next(iterator), require_future_images=False)
                 indices = [int(value) for value in grouped["dataset_index"].tolist()]
                 dataset_indices.extend(indices)
                 dataset_chain = _extend_dataset_chain(dataset_chain, indices)
@@ -479,7 +525,9 @@ def _main_impl(args: argparse.Namespace) -> int:
                 for count in counts:
                     agent_histogram[str(int(count))] += 1
                     update_valid_agents += int(count)
-                inputs = _model_inputs(vision, grouped, artifact, device=device, pca=pca)
+                inputs = _model_inputs(
+                    vision, grouped, artifact, device=device, pca=pca
+                )
                 targets = _future_targets(
                     grouped,
                     artifact,
@@ -491,7 +539,9 @@ def _main_impl(args: argparse.Namespace) -> int:
                 actions = grouped["candidate_actions"].to(
                     device=device, dtype=torch.float32, non_blocking=True
                 )
-                action_inputs, target_velocity, tau = grouped_flow_matching_batch(actions)
+                action_inputs, target_velocity, tau = grouped_flow_matching_batch(
+                    actions
+                )
                 valid_action = grouped["action_valid_mask"].to(
                     device=device, dtype=torch.bool
                 )
@@ -501,8 +551,10 @@ def _main_impl(args: argparse.Namespace) -> int:
                 selected_item = (update // 4) % effective
                 selected_accumulation = selected_item // micro
                 selected_offset = selected_item % micro
-                if update % int(training.get("counterfactual_every", 4)) == 0 \
-                   and accumulation_index == selected_accumulation:
+                if (
+                    update % int(training.get("counterfactual_every", 4)) == 0
+                    and accumulation_index == selected_accumulation
+                ):
                     forced_started = time.perf_counter()
                     audit_row, wuc_loss, wuc_scope = _forced_audit(
                         model,
@@ -561,10 +613,7 @@ def _main_impl(args: argparse.Namespace) -> int:
                     )
                     # WUC is one preregistered team sample per four optimizer
                     # updates, not one sixth of a micro-batch objective.
-                    total_loss = (
-                        losses.total
-                        + utility_weight * accumulation * wuc_loss
-                    )
+                    total_loss = losses.total + utility_weight * accumulation * wuc_loss
                     scaled_loss = total_loss / accumulation
                 scaled_loss.backward()
                 update_losses.append(
@@ -579,7 +628,11 @@ def _main_impl(args: argparse.Namespace) -> int:
 
             gradient_norm = float(
                 torch.nn.utils.clip_grad_norm_(
-                    [parameter for parameter in model.parameters() if parameter.requires_grad],
+                    [
+                        parameter
+                        for parameter in model.parameters()
+                        if parameter.requires_grad
+                    ],
                     gradient_clip,
                 )
             )
@@ -591,14 +644,12 @@ def _main_impl(args: argparse.Namespace) -> int:
             if update < flow_unfreeze:
                 flow_frozen_observed = True
                 flow_frozen_gradient_exact_zero = (
-                    flow_frozen_gradient_exact_zero
-                    and category_norms["flow"] == 0.0
+                    flow_frozen_gradient_exact_zero and category_norms["flow"] == 0.0
                 )
             else:
                 flow_unfrozen_observed = True
                 flow_unfrozen_gradient_nonzero = (
-                    flow_unfrozen_gradient_nonzero
-                    or category_norms["flow"] > 0.0
+                    flow_unfrozen_gradient_nonzero or category_norms["flow"] > 0.0
                 )
             for name, counters in module_exposure.items():
                 if name != "flow" or update >= flow_unfreeze:
@@ -613,11 +664,7 @@ def _main_impl(args: argparse.Namespace) -> int:
                 _emit_stage(
                     "optimizer_training", f"joint update {update}/{configured_updates}"
                 )
-            if (
-                update == 1
-                or update % log_interval == 0
-                or update == run_end_update
-            ):
+            if update == 1 or update % log_interval == 0 or update == run_end_update:
                 elapsed = max(time.perf_counter() - started, 1e-9)
                 averaged = {
                     key: sum(row[key] for row in update_losses) / len(update_losses)
@@ -625,12 +672,14 @@ def _main_impl(args: argparse.Namespace) -> int:
                 }
                 progress = {
                     "event": "optimizer_step",
-                    "program": "train_s4_r7_world_utility.py",
-                    "round_id": "s4-r7",
+                    "program": PROGRAM_NAME,
+                    "round_id": ROUND_ID,
                     "candidate_id": candidate_id,
                     "model_kind": model_kind,
                     "update": update,
-                    "updates": configured_updates if not args.preflight_only else updates,
+                    "updates": configured_updates
+                    if not args.preflight_only
+                    else updates,
                     "segment_end_update": run_end_update,
                     **averaged,
                     "gradient_norm": gradient_norm,
@@ -661,7 +710,9 @@ def _main_impl(args: argparse.Namespace) -> int:
                     "flow_unfreeze_update": flow_unfreeze,
                     "flow_trainable": update >= flow_unfreeze,
                     "flow_unfreeze_state": (
-                        "unfrozen" if update >= flow_unfreeze else f"frozen->{flow_unfreeze}"
+                        "unfrozen"
+                        if update >= flow_unfreeze
+                        else f"frozen->{flow_unfreeze}"
                     ),
                     "grad_norm": gradient_norm,
                     "learning_rate": {
@@ -722,9 +773,10 @@ def _main_impl(args: argparse.Namespace) -> int:
                 {
                     "format_version": PREFLIGHT_FORMAT,
                     "identity": {
-                        "round_id": "s4-r7",
+                        "round_id": ROUND_ID,
                         "candidate_id": candidate_id,
                         "model_kind": model_kind,
+                        "action_prefix_aggregator": action_prefix_aggregator,
                     },
                     "updates": 200,
                     "completed": False,
@@ -755,8 +807,8 @@ def _main_impl(args: argparse.Namespace) -> int:
             )
         pause = {
             "event": "milestone_pause",
-            "program": "train_s4_r7_world_utility.py",
-            "round_id": "s4-r7",
+            "program": PROGRAM_NAME,
+            "round_id": ROUND_ID,
             "candidate_id": candidate_id,
             "model_kind": model_kind,
             "update": run_end_update,
@@ -772,13 +824,9 @@ def _main_impl(args: argparse.Namespace) -> int:
         print(json.dumps(pause, sort_keys=True), flush=True)
         return 0
     gradient_audit["normal_group_nonzero"] = normal_categories_seen
-    gradient_audit["flow_frozen_gradient_exact_zero"] = (
-        flow_frozen_gradient_exact_zero
-    )
+    gradient_audit["flow_frozen_gradient_exact_zero"] = flow_frozen_gradient_exact_zero
     gradient_audit["flow_frozen_observed"] = flow_frozen_observed
-    gradient_audit["flow_unfrozen_gradient_nonzero"] = (
-        flow_unfrozen_gradient_nonzero
-    )
+    gradient_audit["flow_unfrozen_gradient_nonzero"] = flow_unfrozen_gradient_nonzero
     gradient_audit["flow_unfrozen_observed"] = flow_unfrozen_observed
     gradient_audit["normal_expected_flow_frozen"] = args.preflight_only
     gradient_audit["passed"] = (
@@ -796,13 +844,11 @@ def _main_impl(args: argparse.Namespace) -> int:
     )
     exposure_report = {
         "format_version": EXPOSURE_FORMAT,
-        "round_id": "s4-r7",
+        "round_id": ROUND_ID,
         "candidate_id": candidate_id,
         **exposure.summary(
             agent_window_budget=int(
-                training.get(
-                    "agent_window_budget", FAST_SELECTION_AGENT_WINDOW_BUDGET
-                )
+                training.get("agent_window_budget", FAST_SELECTION_AGENT_WINDOW_BUDGET)
             )
         ),
         "hierarchy": hierarchy_summary,
@@ -815,8 +861,7 @@ def _main_impl(args: argparse.Namespace) -> int:
     }
     non_flow_complete = all(
         counters["team_windows_seen"] == exposure.team_windows_seen
-        and counters["valid_agent_windows_seen"]
-        == exposure.valid_agent_windows_seen
+        and counters["valid_agent_windows_seen"] == exposure.valid_agent_windows_seen
         for name, counters in module_exposure.items()
         if name != "flow"
     )
@@ -828,8 +873,7 @@ def _main_impl(args: argparse.Namespace) -> int:
     exposure_report["non_flow_exposure_exact"] = non_flow_complete
     exposure_report["flow_team_windows_expected"] = expected_flow_team_windows
     exposure_report["flow_exposure_exact"] = (
-        module_exposure["flow"]["team_windows_seen"]
-        == expected_flow_team_windows
+        module_exposure["flow"]["team_windows_seen"] == expected_flow_team_windows
     )
     exposure_report["formal_budget_complete"] = (
         not args.preflight_only
@@ -838,10 +882,7 @@ def _main_impl(args: argparse.Namespace) -> int:
     exposure_report["passed"] = (
         non_flow_complete
         and exposure_report["flow_exposure_exact"]
-        and (
-            args.preflight_only
-            or exposure_report["formal_budget_complete"]
-        )
+        and (args.preflight_only or exposure_report["formal_budget_complete"])
     )
 
     if args.preflight_only:
@@ -865,15 +906,14 @@ def _main_impl(args: argparse.Namespace) -> int:
                 seed=seed,
             )
         )
-        resume_next_exact = (
-            uninterrupted_batches[accumulation:] == resumed_batches
-        )
+        resume_next_exact = uninterrupted_batches[accumulation:] == resumed_batches
         report = {
             "format_version": PREFLIGHT_FORMAT,
             "identity": {
-                "round_id": "s4-r7",
+                "round_id": ROUND_ID,
                 "candidate_id": candidate_id,
                 "model_kind": model_kind,
+                "action_prefix_aggregator": action_prefix_aggregator,
             },
             "updates": 200,
             "completed": True,
@@ -899,12 +939,8 @@ def _main_impl(args: argparse.Namespace) -> int:
             "vision_inference_batch_size": int(
                 _mapping(raw, "vision")["inference_batch_size"]
             ),
-            "shared_hdf5_receipt_sha256": identity[
-                "shared_hdf5_receipt_sha256"
-            ],
-            "future_feature_cache_sha256": identity[
-                "future_feature_cache_sha256"
-            ],
+            "shared_hdf5_receipt_sha256": identity["shared_hdf5_receipt_sha256"],
+            "future_feature_cache_sha256": identity["future_feature_cache_sha256"],
             "learning_rate_curve_sha256": _lr_curve_hash(training),
             "peak_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
             "gpu_total_memory_bytes": int(
@@ -1044,16 +1080,13 @@ def _forced_audit(
     valid = forced.valid_query_mask[..., None] & forced.group_mask[:, :, None]
     denominator = valid.sum(dim=(0, 1, 2)).clamp_min(1)
     error_mean = (
-        torch.where(valid, forced.velocity_errors, 0).sum(dim=(0, 1, 2))
-        / denominator
+        torch.where(valid, forced.velocity_errors, 0).sum(dim=(0, 1, 2)) / denominator
     )
     utility_mean = (
-        torch.where(valid, forced.utility_target, 0).sum(dim=(0, 1, 2))
-        / denominator
+        torch.where(valid, forced.utility_target, 0).sum(dim=(0, 1, 2)) / denominator
     )
     route_mean = (
-        torch.where(valid, routed.pi.detach(), 0).sum(dim=(0, 1, 2))
-        / denominator
+        torch.where(valid, routed.pi.detach(), 0).sum(dim=(0, 1, 2)) / denominator
     )
     offset = selected_offset
     row = {
@@ -1176,10 +1209,10 @@ def _structural_audit(
     result: dict[str, bool | float] = {
         "token_contract_exact": True,
         "dense_router_train_inference_identical": True,
-        "legacy_reference_elementwise_exact": legacy_diff == 0.0,
         "legacy_reference_file_unchanged": file_sha256(
             str(parent_identity["legacy_r6l_policy_path"])
-        ) == parent_identity["legacy_r6l_policy_sha256"],
+        )
+        == parent_identity["legacy_r6l_policy_sha256"],
         "active_gate_zero_elementwise_exact": gate_diff == 0.0,
         "active_gate_zero_without_provider_elementwise_exact": executed_diff == 0.0,
         "dino_optimizer_excluded": True,
@@ -1191,8 +1224,29 @@ def _structural_audit(
         "active_gate_zero_max_abs_diff": gate_diff,
         "active_gate_zero_executed_max_abs_diff": executed_diff,
     }
-    if not all(value is True for key, value in result.items() if not key.endswith("diff")):
-        raise RuntimeError("S4-R7 structural audit failed")
+    if ROUND_ID == "s4-r7":
+        result["legacy_reference_elementwise_exact"] = legacy_diff == 0.0
+    else:
+        aggregator = model.active_parent.future_predictor.action_prefix_aggregator
+        aggregator_audit = aggregator.audit()
+        result.update(
+            {
+                "legacy_reference_elementwise_exact_not_required": True,
+                "r7_candidate_checkpoint_not_consumed": bool(
+                    parent_identity.get("r7_candidate_checkpoint_consumed") is False
+                ),
+                "strict_horizon_prefix_mask": bool(
+                    aggregator_audit.get("strict_prefix_mask") is True
+                ),
+                "p1_output_projection_zero_initialized_or_p0": bool(
+                    aggregator_audit.get("output_projection_zero_initialized") is True
+                ),
+            }
+        )
+    if not all(
+        value is True for key, value in result.items() if not key.endswith("diff")
+    ):
+        raise RuntimeError(f"{ROUND_LABEL} structural audit failed")
     return result
 
 
@@ -1220,7 +1274,11 @@ def _parameter_groups(
         if name.startswith("active_parent.base_flow."):
             group = "flow"
         elif name.startswith("active_parent.future_predictor."):
-            group = "future_heads" if any(marker in name for marker in head_markers) else "future_body"
+            group = (
+                "future_heads"
+                if any(marker in name for marker in head_markers)
+                else "future_body"
+            )
         elif name.startswith("active_parent.legacy_adapter."):
             group = "legacy_adapter"
         elif name.startswith("router.") or name.startswith("residual.query_gate."):
@@ -1232,7 +1290,9 @@ def _parameter_groups(
         ):
             group = "evidence"
         else:
-            raise RuntimeError(f"S4-R7 optimizer encountered unregistered parameter {name}")
+            raise RuntimeError(
+                f"S4-R7 optimizer encountered unregistered parameter {name}"
+            )
         names[group].append(name)
         parameters[group].append(parameter)
     if any(not value for value in parameters.values()):
@@ -1327,7 +1387,7 @@ def _checkpoint_payload(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "update": update,
         "method": {
-            "round_id": "s4-r7",
+            "round_id": ROUND_ID,
             "candidate_id": candidate_id,
             "model_kind": model_kind,
             "utility_coupling_weight": float(identity["utility_coupling_weight"]),
@@ -1335,7 +1395,8 @@ def _checkpoint_payload(
             "route_mode": "dense",
             "future_target_input": False,
             "trainable_modules": list(parameter_names),
-            "action_prefix_aggregator": "trajectory_mean_legacy_r7",
+            "action_prefix_aggregator": identity["action_prefix_aggregator"],
+            "r7_candidate_checkpoint_consumed": ROUND_ID != "s4-r8",
         },
         "model": model.state_dict(),
         "model_config": model.config.to_dict(),
@@ -1484,10 +1545,14 @@ def _lr_curve_hash(training: Mapping[str, Any]) -> str:
         row = {"update": update}
         for name, base in bases.items():
             if name == "flow":
-                factor = 0.0 if update < flow_unfreeze else _warmup_cosine(
-                    update - flow_unfreeze + 1,
-                    total_updates - flow_unfreeze + 1,
-                    flow_warmup,
+                factor = (
+                    0.0
+                    if update < flow_unfreeze
+                    else _warmup_cosine(
+                        update - flow_unfreeze + 1,
+                        total_updates - flow_unfreeze + 1,
+                        flow_warmup,
+                    )
                 )
             else:
                 factor = _warmup_cosine(update, total_updates, warmup)
@@ -1515,7 +1580,7 @@ def _write_terminal_oom_preflight(args: argparse.Namespace) -> None:
         return
     config_path = args.config.expanduser().resolve(strict=True)
     raw = _load_yaml(config_path)
-    candidate_id, model_kind, _ = validate_s4_r7_candidate(raw)
+    candidate_id, model_kind, _, action_prefix_aggregator = _configure_round(raw)
     training = _mapping(raw, "training")
     micro = int(training["micro_team_batch"])
     accumulation = int(training["gradient_accumulation"])
@@ -1536,9 +1601,10 @@ def _write_terminal_oom_preflight(args: argparse.Namespace) -> None:
         {
             "format_version": PREFLIGHT_FORMAT,
             "identity": {
-                "round_id": "s4-r7",
+                "round_id": ROUND_ID,
                 "candidate_id": candidate_id,
                 "model_kind": model_kind,
+                "action_prefix_aggregator": action_prefix_aggregator,
             },
             "updates": 200,
             "completed": False,
@@ -1553,11 +1619,11 @@ def _write_terminal_oom_preflight(args: argparse.Namespace) -> None:
             "peak_memory_bytes": peak,
             "gpu_total_memory_bytes": total,
             "config_sha256": _sha256(config_path),
-            "shared_hdf5_receipt_sha256": os.environ.get(
-                "S4_R7_SHARED_HDF5_RECEIPT_SHA256", ""
+            "shared_hdf5_receipt_sha256": _round_environment(
+                "SHARED_HDF5_RECEIPT_SHA256"
             ),
-            "future_feature_cache_sha256": os.environ.get(
-                "S4_R7_FUTURE_FEATURE_CACHE_SHA256", ""
+            "future_feature_cache_sha256": _round_environment(
+                "FUTURE_FEATURE_CACHE_SHA256"
             ),
             "failure_scope": "whole_preflight_gpu_lifecycle",
             "created_at": datetime.now(timezone.utc).isoformat(),

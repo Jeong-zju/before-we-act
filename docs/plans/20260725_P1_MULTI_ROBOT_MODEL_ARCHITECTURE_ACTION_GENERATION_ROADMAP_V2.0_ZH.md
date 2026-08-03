@@ -1599,6 +1599,21 @@ training:
 
 ### 9.3 新 R8 / Round 2：Horizon-Causal Action Conditioning
 
+#### 9.3.0 2026-08-03 并行执行覆盖（正式启动前冻结）
+
+本节覆盖 9.3、9.4、9.5 以及时间表中所有“R8 必须等待 R7 winner”“继承 R7 winner 的 WUC 设置”“125k/update 26668”描述；未冲突的模型结构、因果门槛和 winner 规则继续有效。覆盖原因是新增一台独立双卡 5090 服务器，目标是并行验证两个互相正交的方法轴，而不是融合 checkpoint 权重。
+
+- R7 继续在原服务器比较 `utility_coupling_weight: 0 vs 0.05`，使用 legacy trajectory mean；R8 在新服务器比较 `prefix_mean vs causal_prefix_attention`，两个 R8 候选都固定 `utility_coupling_weight=0`。因此 R8 不读取 R7 候选 checkpoint，也不依赖 R7 winner 才能启动。
+- R8-P0/P1 都从完全相同的 R6L-P1 Flow/R6L legacy adapter、R4-P0 local future、R5-P0 team future 与 PCA ancestors 创建 fresh active clone。`parent_identity.r7_candidate_checkpoint_consumed=false` 是硬门槛。
+- 本轮把 R7 与 R8 看成两个独立方法轴。若二者各有通过者，S5-R9 从共同 ancestors **重新训练**组合后的方法配方；不做 checkpoint averaging、parameter interpolation、state-dict 拼接或任何权重融合。R8 结论只证明 `WUC=0` 条件下的 horizon aggregator 主效应；WUC×aggregator 交互只允许由 R9 正式组合训练或额外预注册 factorial ablation 支持。
+- R8 使用已在 R7 冻结的 fast-selection 配方：`30000` optimizer updates、`micro_team_batch=4`、`gradient_accumulation=3`、effective team batch `12`、Flow 在 update `6400` 解冻、milestones `5k/10k/15k/20k/25k/30k`、全 `750` episodes、DINO inference batch `16`、fused AdamW、workers `8`、prefetch `4`，200-step paired preflight 吞吐门槛 `>=0.75 update/s`。如显存门槛触发，只允许 P0/P1 成对修改配方并重新启动新 run。
+- `train/s4_model_registry.py` 对 R8 fail closed：只接受两个已注册 `model_kind`、上述 30k/cache/split 配方、`future_horizons=[1,25,50,100]`、rank `32` 与 `utility_coupling_weight=0`；未知 loss weight 或候选轴漂移直接拒绝启动。
+- P1 的 rank-32 attention residual output projection/bias 在 step 0 精确为零。paired preflight 必须产出 `p0_p1_step0_exact.json`，证明公共 state-dict tensor 与 FP32/eval own、peer、shared 输出逐元素相同，P1 只多出已注册 attention 参数。
+- 正式验收除共同 Gate20 外，必须产出 `prefix_suffix_exact.json` 与 `prefix_shuffle_by_source_horizon.json`。12 个 `source×horizon` 组均要求 suffix 最大绝对差 `==0`、合法 prefix 改动造成非零输出差、跨 episode 合法 prefix replacement 的 future-loss delta 以 episode 为 bootstrap 单位且 95% 下界 `>0`。任一组失败即淘汰该候选；两者均合格时 normal Gate20 macro 较高者胜，精确持平选 P0。
+- R8 两候选均失败时，不影响 R7 独立结论，最终方法只保留 R7 通过轴；R7 两候选均失败但 R8 有通过者时，最终方法使用 `WUC=0` 与 R8 winner；两轮均失败则保持 R6L 方法。所有情形都只组合方法，不融合权重。
+
+一键部署、永久 tmux、心跳/进度监控、退出和结果回填路径见 `docs/runbooks/20260803_S4_R8_PARALLEL_2X5090_RUNBOOK_ZH.md`。本覆盖在任何 R8 optimizer update 发生前写入，用于防止看结果后改变依赖关系或验收规则。
+
 R8 只在 R7 至少一个候选通过后启动。它修复两处已经在代码中定位的 action 信息压缩：
 
 - `local_future_predictor.py::LocalActionConditionedFuturePredictor.encode_context()` 当前以 `action_tokens.mean(dim=2)` 把 100 步压成一个 token，再让四个 future horizons 共用同一个 context；

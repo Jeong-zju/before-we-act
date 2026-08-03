@@ -33,6 +33,11 @@ from models.wam_multimodal.local_future_predictor import (
     LocalActionConditionedFuturePredictor,
     LocalFuturePredictorConfig,
 )
+from models.wam_multimodal.horizon_causal_future_predictor import (
+    HorizonCausalActionAggregator,
+    HorizonCausalActiveTeamFutureProvider,
+    R8_ACTION_PREFIX_AGGREGATORS,
+)
 from models.wam_multimodal.protected_hybrid_future_predictor import (
     ProtectedHybridFuturePrediction,
     ProtectedHybridFuturePredictor,
@@ -132,6 +137,8 @@ __all__ = [
     "FrozenResNet18Encoder",
     "FutureLatentHeadConfig",
     "FutureEvidenceRouter",
+    "HorizonCausalActionAggregator",
+    "HorizonCausalActiveTeamFutureProvider",
     "IMAGENET_RGB_MEAN",
     "IMAGENET_RGB_STD",
     "LatentWAM",
@@ -150,6 +157,7 @@ __all__ = [
     "ProtectedHybridFuturePredictor",
     "ProtectedTeamFuturePredictor",
     "ProtectedTeamFuturePredictorConfig",
+    "R8_ACTION_PREFIX_AGGREGATORS",
     "S4ActiveTeamFutureProvider",
     "S4WorldEvidenceProvider",
     "ScaleAlignedActiveWorldFlow",
