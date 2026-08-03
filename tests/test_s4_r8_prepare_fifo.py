@@ -8,6 +8,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PREPARE = ROOT / "scripts/prepare_s4_r8_shared.sh"
+S0_ASSETS = ROOT / "scripts/prepare_s4_r8_assets_from_s0.sh"
 
 
 def test_s4_prepare_bridge_is_valid_bash_without_errexit_bundle() -> None:
@@ -25,7 +26,28 @@ def test_s4_prepare_bridge_is_valid_bash_without_errexit_bundle() -> None:
     assert "set -euo pipefail" not in source
 
 
-def test_s4_prepare_passes_complete_s3_fifo_environment_without_token_leak(
+def test_s4_asset_bootstrap_keeps_s0_download_and_secret_contract() -> None:
+    result = subprocess.run(
+        ["bash", "-n", str(S0_ASSETS)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    source = S0_ASSETS.read_text(encoding="utf-8")
+    assert 'chmod 600' not in source  # launcher creates the mode-0600 FIFO
+    assert 'IFS= read -r HF_TOKEN_INPUT <"${S4_R8_HF_TOKEN_FIFO}"' in source
+    assert 'HF_TOKEN="${HF_TOKEN_INPUT}" hf_download_with_retry' in source
+    assert '"${slug} training dataset" 0 "${repo}"' in source
+    assert "--max-workers" not in source.split("status dinov3", maxsplit=1)[0]
+    assert "prepare_dinov3_encoder.py" in source
+    assert "run_lpd_single_5090.sh prepare" in source
+    assert "snapshot_download" not in source
+
+
+def test_s4_prepare_passes_complete_asset_fifo_environment_without_token_leak(
     tmp_path: Path,
 ) -> None:
     run_root = tmp_path / "run"
@@ -38,15 +60,15 @@ def test_s4_prepare_passes_complete_s3_fifo_environment_without_token_leak(
     fake_bash = fake_bin / "bash"
     fake_bash.write_text(
         "#!/bin/sh\n"
-        "for name in S3_R6_RUN_ROOT S3_R6_HF_TOKEN_FIFO UV_CACHE_DIR "
-        "UV_PROJECT_ENVIRONMENT ROBOFACTORY_ROOT RF_PYTHON S3_R6_P0_CONFIG; do\n"
+        "for name in S4_R8_RUN_ROOT S4_R8_HF_TOKEN_FIFO UV_CACHE_DIR "
+        "UV_PROJECT_ENVIRONMENT S4_R8_ROBOFACTORY_ROOT S4_R8_RF_PYTHON; do\n"
         '  if printenv "${name}" >/dev/null 2>&1; then\n'
         "    printf '%s=set\\n' \"${name}\"\n"
         "  else\n"
         "    printf '%s=missing\\n' \"${name}\"\n"
         "  fi\n"
         "done\n"
-        'if [ "${S3_R6_RUN_ROOT:-}" = "${S4_TEST_EXPECTED_ROOT:-}" ]; then\n'
+        'if [ "${S4_R8_RUN_ROOT:-}" = "${S4_TEST_EXPECTED_ROOT:-}" ]; then\n'
         "  printf 'run_root_match=yes\\n'\n"
         "else\n"
         "  printf 'run_root_match=no\\n'\n"
@@ -110,13 +132,12 @@ def test_s4_prepare_passes_complete_s3_fifo_environment_without_token_leak(
     assert result.returncode != 0  # The fake bridge does not prepare parent artifacts.
     observed = capture.read_text(encoding="utf-8")
     for name in (
-        "S3_R6_RUN_ROOT",
-        "S3_R6_HF_TOKEN_FIFO",
+        "S4_R8_RUN_ROOT",
+        "S4_R8_HF_TOKEN_FIFO",
         "UV_CACHE_DIR",
         "UV_PROJECT_ENVIRONMENT",
-        "ROBOFACTORY_ROOT",
-        "RF_PYTHON",
-        "S3_R6_P0_CONFIG",
+        "S4_R8_ROBOFACTORY_ROOT",
+        "S4_R8_RF_PYTHON",
     ):
         assert f"{name}=set" in observed
     assert "run_root_match=yes" in observed

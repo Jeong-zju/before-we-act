@@ -1614,6 +1614,8 @@ training:
 
 一键部署、永久 tmux、心跳/进度监控、退出和结果回填路径见 `docs/runbooks/20260803_S4_R8_PARALLEL_2X5090_RUNBOOK_ZH.md`。本覆盖在任何 R8 optimizer update 发生前写入，用于防止看结果后改变依赖关系或验收规则。
 
+空服务器部署的 S0 路径采用 R8 专用 asset-only bootstrap：五个 dataset 继续固定 revision、官方 `hf download`、Xet 开启和默认 8 workers，DINOv3/RoboFactory 继续关闭 Xet且单 worker，token 仍只经 mode-0600 FIFO 交付并原位复用 `.incomplete`。该路径只准备数据、DINO 与仿真环境，不触发 S1/R3/R4 等旧阶段补训；R6L-P1 policy/五任务 Flow、R4-P0 local future、R5-P0 team future 和 R4 PCA 必须从已验收服务器复制或显式提供，并由固定 SHA256 拒绝任何身份漂移。existing-server wrapper 同时检查五个 manifest、DINO 与 RoboFactory，不再只凭 RoboFactory 是否存在决定是否进入 S0 准备。
+
 R8 只在 R7 至少一个候选通过后启动。它修复两处已经在代码中定位的 action 信息压缩：
 
 - `local_future_predictor.py::LocalActionConditionedFuturePredictor.encode_context()` 当前以 `action_tokens.mean(dim=2)` 把 100 步压成一个 token，再让四个 future horizons 共用同一个 context；

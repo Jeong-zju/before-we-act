@@ -68,19 +68,16 @@ if [[ "${S4_R8_USE_S0_PREP:-0}" == "1" ]]; then
       exit 3
     fi
   done
-  status s0_prepare prepare_s3_r6_from_s0.sh \
+  status s0_prepare prepare_s4_r8_assets_from_s0.sh \
     "S0 mode-0600 FIFO; pinned hf download; datasets use Xet, DINO/RoboFactory do not"
   env -u HF_TOKEN -u HUGGING_FACE_HUB_TOKEN \
-    S3_R6_RUN_ROOT="${S4_R8_RUN_ROOT}" \
-    S3_R6_HF_TOKEN_FIFO="${S4_R8_HF_TOKEN_FIFO}" \
-    S3_R6_ROBOFACTORY_ROOT="${S4_R8_ROBOFACTORY_ROOT}" \
-    S3_R6_RF_PYTHON="${S4_R8_RF_PYTHON}" \
-    S3_R6_P0_CONFIG="${FE_ROOT}/configs/wam_flow/s2_r5_protected_team.yaml" \
+    S4_R8_RUN_ROOT="${S4_R8_RUN_ROOT}" \
+    S4_R8_HF_TOKEN_FIFO="${S4_R8_HF_TOKEN_FIFO}" \
+    S4_R8_ROBOFACTORY_ROOT="${S4_R8_ROBOFACTORY_ROOT}" \
+    S4_R8_RF_PYTHON="${S4_R8_RF_PYTHON}" \
     UV_CACHE_DIR="${UV_CACHE_DIR}" \
     UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT}" \
-    ROBOFACTORY_ROOT="${S4_R8_ROBOFACTORY_ROOT}" \
-    RF_PYTHON="${S4_R8_RF_PYTHON}" \
-    bash "${FE_ROOT}/scripts/prepare_s3_r6_from_s0.sh"
+    bash "${FE_ROOT}/scripts/prepare_s4_r8_assets_from_s0.sh"
   prep_code=$?
   if (( prep_code != 0 )); then
     printf >&2 'S0-compatible preparation failed with code %d\n' "${prep_code}"

@@ -26,7 +26,7 @@ cd /workspace/fe-pc-wam
 bash scripts/launch_s4_r8_existing_server.sh --run-id s4-r8-parallel-fast30k-round1 --focus-monitor
 ```
 
-若 datasets、RoboFactory、DINO 或公共 ancestors 缺失，入口自动追加 `--prepare-from-s0`，并通过 S0 的 mode-0600 FIFO 在终端隐藏读取 Hugging Face token。token 不进入 argv、environment、tmux command、manifest 或日志。已有共享资产时不会再次索取 token。
+若 datasets、RoboFactory 或 DINO 缺失，入口自动追加 `--prepare-from-s0`，并通过 S0 的 mode-0600 FIFO 在终端隐藏读取 Hugging Face token。dataset 固定 revision、官方 `hf download`、Xet 开启且使用默认 8 workers；DINO/RoboFactory 关闭 Xet 且单 worker；失败后复用原位 `.incomplete`。token 不进入 argv、持久 environment、tmux command、manifest 或日志。已有共享资产时不会再次索取 token。这个 asset-only bootstrap 不重训任何旧阶段模型；R6L-P1、R5-P0、R4-P0 和五任务 Flow 必须来自已验收服务器或显式路径，并继续由固定 SHA256 fail closed。
 
 底层一键入口等价于：
 
