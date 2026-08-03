@@ -213,10 +213,54 @@ def test_r7_monitor_reports_live_beijing_training_and_full_run_eta(
     assert "(0.95 update/s); P1-train=" in rendered
     assert "(1 update/s)" in rendered
     assert "paired-train=" in rendered
-    assert "normal≈" in rendered
-    assert "core4≈" in rendered
-    assert "full-R7≈" in rendered
+    assert "normal=≈" in rendered
+    assert "core4=≈" in rendered
+    assert "full-R7=≈" in rendered
     assert "validation=historical S3-R6 five-task Gate20 5h52m/condition" in rendered
+
+
+def test_r7_monitor_recalibrates_validation_eta_from_live_episode_durations(
+    tmp_path: Path,
+) -> None:
+    root = _initialize(tmp_path)
+    for candidate in ("P0", "P1"):
+        candidate_root = root / "candidates" / candidate.lower()
+        _write_json(candidate_root / "status.json", {"phase": "validating"})
+        progress = candidate_root / "train" / "progress.jsonl"
+        progress.parent.mkdir(parents=True, exist_ok=True)
+        progress.write_text(
+            json.dumps(
+                {
+                    "event": "optimizer_step",
+                    "update": 30_000,
+                    "updates": 30_000,
+                    "updates_per_second": 1.0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        rollout = (
+            candidate_root
+            / "validation/gate20/normal/lift_barrier/rollout_episodes.jsonl"
+        )
+        rollout.parent.mkdir(parents=True, exist_ok=True)
+        rollout.write_text(
+            json.dumps(
+                {
+                    "episode_index": 0,
+                    "duration_seconds": 140.0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    rendered = render_monitor(root)
+    assert "validation=live Gate20 episode durations" in rendered
+    assert "P0:samples=1,scale=" in rendered
+    assert "P1:samples=1,scale=" in rendered
+    assert "normal=≈" in rendered
 
 
 def test_r7_monitor_uses_named_pair_checks_not_expected_false_observations(

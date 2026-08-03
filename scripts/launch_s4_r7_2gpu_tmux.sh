@@ -398,7 +398,7 @@ for index in "${!CANDIDATES[@]}"; do
 done
 
 monitor_command="$(shell_join python3 "${RUNTIME_REL}" monitor \
-  --run-root "${RUN_ROOT}" --interval 5)"
+  --run-root "${RUN_ROOT}" --interval 60)"
 start_or_repair_window "${MONITOR_WINDOW}" "${FE_ROOT}" "${monitor_command}" >/dev/null \
   || fail "could not start monitor window"
 

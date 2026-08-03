@@ -32,11 +32,19 @@ FLOW_UNFREEZE_UPDATE = 6_400
 HEARTBEAT_SECONDS = 20
 STALE_SECONDS = 75
 # The latest completed five-task Gate20 reference on the same server/model
-# family took 21,161 seconds for one 5-task x 20-seed condition.  This is only
-# an initial wall-time estimate.  The monitor labels it as historical and the
-# validation-time estimate can be replaced by live rollout timing once normal
-# starts producing this run's episode records.
-HISTORICAL_GATE20_CONDITION_SECONDS = 21_161
+# family provides a task-aware initial wall-time estimate.  These are the sums
+# of 20 episode ``duration_seconds`` values per task.  The monitor labels this
+# as historical and replaces its scale with this run's live rollout durations.
+HISTORICAL_GATE20_TASK_SECONDS = {
+    "lift_barrier": 1_400.88,
+    "long_pipeline_delivery": 4_097.85,
+    "take_photo": 7_248.68,
+    "three_robots_stack_cube": 4_115.55,
+    "camera_alignment": 4_298.28,
+}
+HISTORICAL_GATE20_CONDITION_SECONDS = round(
+    sum(HISTORICAL_GATE20_TASK_SECONDS.values())
+)
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), name="UTC+08:00")
 MILESTONES = (5_000, 10_000, 15_000, 20_000, 25_000, 30_000)
 TERMINAL_PHASES = {"complete", "failed", "stopped"}
@@ -58,6 +66,13 @@ DIAGNOSTIC_CONDITIONS = (
     "shuffle_own",
     "shuffle_peer",
     "shuffle_shared",
+)
+VALIDATION_ORDER = (
+    "normal",
+    "legacy_reference",
+    "world_evidence_gate_zero",
+    "shuffle_all",
+    *DIAGNOSTIC_CONDITIONS,
 )
 
 
@@ -94,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     monitor_parser = commands.add_parser("monitor", help="render the persistent monitor")
     monitor_parser.add_argument("--run-root", type=Path, required=True)
-    monitor_parser.add_argument("--interval", type=float, default=5.0)
+    monitor_parser.add_argument("--interval", type=float, default=60.0)
     monitor_parser.add_argument("--once", action="store_true")
     return parser
 
@@ -491,24 +506,54 @@ def _beijing_timeline_lines(root: Path) -> list[str]:
         return lines
 
     paired_train = max(candidate_etas.values())
-    normal = paired_train + timedelta(seconds=HISTORICAL_GATE20_CONDITION_SECONDS)
-    core = paired_train + timedelta(
-        seconds=4 * HISTORICAL_GATE20_CONDITION_SECONDS
+    validation, completed, samples, scales = _validation_eta(
+        root,
+        now=now,
+        train_etas=candidate_etas,
     )
-    full = paired_train + timedelta(
-        seconds=8 * HISTORICAL_GATE20_CONDITION_SECONDS
+    normal = max(validation[candidate]["normal"] for candidate in CANDIDATES)
+    core = max(validation[candidate]["shuffle_all"] for candidate in CANDIDATES)
+    full = max(validation[candidate]["shuffle_shared"] for candidate in CANDIDATES)
+    normal_text = (
+        "complete"
+        if all("normal" in completed[candidate] for candidate in CANDIDATES)
+        else f"≈{_beijing_datetime(normal)}"
+    )
+    core_text = (
+        "complete"
+        if all(
+            set(CORE_CONDITIONS).issubset(completed[candidate])
+            for candidate in CANDIDATES
+        )
+        else f"≈{_beijing_datetime(core)}"
+    )
+    full_text = (
+        "complete"
+        if all(
+            set(VALIDATION_ORDER).issubset(completed[candidate])
+            for candidate in CANDIDATES
+        )
+        else f"≈{_beijing_datetime(full)}"
     )
     lines.extend(
         (
             "Beijing ETA | "
             f"paired-train={_beijing_datetime(paired_train)} "
-            f"normal≈{_beijing_datetime(normal)} "
-            f"core4≈{_beijing_datetime(core)} "
-            f"full-R7≈{_beijing_datetime(full)}",
+            f"normal={normal_text} core4={core_text} full-R7={full_text}",
             "ETA basis | training=live cumulative update/s; "
-            f"validation=historical S3-R6 five-task Gate20 "
-            f"{_duration(HISTORICAL_GATE20_CONDITION_SECONDS)}/condition; "
-            "recalibrate from this run after normal starts",
+            + (
+                "validation=live Gate20 episode durations with historical "
+                "task baselines for pending episodes; "
+                + " ".join(
+                    f"{candidate}:samples={samples[candidate]},"
+                    f"scale={scales[candidate]:.3f}"
+                    for candidate in CANDIDATES
+                )
+                if sum(samples.values())
+                else "validation=historical S3-R6 five-task Gate20 "
+                f"{_duration(HISTORICAL_GATE20_CONDITION_SECONDS)}/condition; "
+                "recalibrate from this run after normal starts"
+            ),
         )
     )
     return lines
@@ -516,6 +561,107 @@ def _beijing_timeline_lines(root: Path) -> list[str]:
 
 def _beijing_datetime(value: datetime) -> str:
     return value.astimezone(BEIJING_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S UTC+08:00")
+
+
+def _validation_eta(
+    root: Path,
+    *,
+    now: datetime,
+    train_etas: Mapping[str, datetime],
+) -> tuple[
+    dict[str, dict[str, datetime]],
+    dict[str, set[str]],
+    dict[str, int],
+    dict[str, float],
+]:
+    schedules: dict[str, dict[str, datetime]] = {}
+    completed_by_candidate: dict[str, set[str]] = {}
+    sample_counts: dict[str, int] = {}
+    scales: dict[str, float] = {}
+    for candidate in CANDIDATES:
+        candidate_root = _candidate_root(root, candidate)
+        completed = set(_gate20_from_disk(candidate_root))
+        completed_by_candidate[candidate] = completed
+        observed_seconds = 0.0
+        historical_seconds = 0.0
+        observed_count = 0
+        for condition in VALIDATION_ORDER:
+            for task in TASKS:
+                rows = _rollout_duration_rows(
+                    candidate_root
+                    / "validation"
+                    / "gate20"
+                    / condition
+                    / task
+                    / "rollout_episodes.jsonl"
+                )
+                observed_seconds += sum(rows.values())
+                observed_count += len(rows)
+                historical_seconds += len(rows) * (
+                    HISTORICAL_GATE20_TASK_SECONDS[task] / 20.0
+                )
+        # A few early episodes can terminate unusually quickly or slowly.  Blend
+        # their ratio with the historical scale until one full task (20 seeds)
+        # has been observed, then let this run's measured durations dominate.
+        raw_scale = (
+            observed_seconds / historical_seconds
+            if historical_seconds > 0
+            else 1.0
+        )
+        weight = min(observed_count / 20.0, 1.0)
+        scale = min(max(1.0 + weight * (raw_scale - 1.0), 0.25), 4.0)
+        sample_counts[candidate] = observed_count
+        scales[candidate] = scale
+
+        cursor = max(now, train_etas[candidate])
+        schedule: dict[str, datetime] = {}
+        for condition in VALIDATION_ORDER:
+            if condition not in completed:
+                remaining = 0.0
+                for task in TASKS:
+                    rows = _rollout_duration_rows(
+                        candidate_root
+                        / "validation"
+                        / "gate20"
+                        / condition
+                        / task
+                        / "rollout_episodes.jsonl"
+                    )
+                    remaining_episodes = max(20 - len(rows), 0)
+                    remaining += (
+                        remaining_episodes
+                        * HISTORICAL_GATE20_TASK_SECONDS[task]
+                        / 20.0
+                        * scale
+                    )
+                cursor += timedelta(seconds=remaining)
+            schedule[condition] = cursor
+        schedules[candidate] = schedule
+    return schedules, completed_by_candidate, sample_counts, scales
+
+
+def _rollout_duration_rows(path: Path) -> dict[int, float]:
+    """Return one finite non-negative duration per episode, last record wins."""
+
+    if not path.is_file():
+        return {}
+    rows: dict[int, float] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(value, Mapping):
+            continue
+        episode = _integer(value.get("episode_index"))
+        duration = _number(value.get("duration_seconds"))
+        if episode is not None and 0 <= episode < 20 and duration is not None and duration >= 0:
+            rows[episode] = duration
+    return rows
 
 
 def _future_cache_progress_lines(root: Path) -> list[str]:
