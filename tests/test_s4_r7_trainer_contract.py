@@ -108,6 +108,8 @@ round:
   model_kind: s4_r7_token_preserving
 vision:
   inference_batch_size: 16
+data:
+  future_feature_cache_mode: shared_float32_projected_next_view
 training:
   budget_mode: fast_selection_30k
   updates: 30000

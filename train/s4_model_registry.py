@@ -15,6 +15,7 @@ S4_R7_BUDGET_MODES: dict[str, tuple[int, int, int]] = {
     # (optimizer updates, Flow unfreeze update, nominal valid-agent windows)
     "fast_selection_30k": (30_000, 6_400, 1_152_000),
 }
+S4_R7_FUTURE_FEATURE_CACHE_MODE = "shared_float32_projected_next_view"
 
 S4_R8_MODEL_KINDS: dict[str, tuple[str, str]] = {
     "s4_r8_horizon_prefix_mean": ("P0", "prefix_mean"),
@@ -159,6 +160,13 @@ def validate_s4_r7_candidate(
     ):
         raise ValueError(
             "S4-R7 budget fields disagree with the registered fast-selection mode"
+        )
+    cache_mode = str(
+        _field(value, "future_feature_cache_mode", sections=("data",))
+    )
+    if cache_mode != S4_R7_FUTURE_FEATURE_CACHE_MODE:
+        raise ValueError(
+            "S4-R7 future feature cache mode is not in the training allowlist"
         )
     _validate_disabled_auxiliary_weights(value)
     return candidate_id, model_kind, utility

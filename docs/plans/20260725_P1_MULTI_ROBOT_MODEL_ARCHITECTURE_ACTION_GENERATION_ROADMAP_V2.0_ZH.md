@@ -1864,6 +1864,12 @@ pair exact 通过后，P0/P1 已分别在物理 GPU0/GPU1 从各自精确 resume
 
 加速实现不改变监督定义：同一 micro-batch 内，部署输入路径已经算出的 current local/shared FP32 PCA grid 直接复用于 future delta target，避免当前帧重复 DINO；current local/shared 图像合成一次冻结 DINO 调用，future local/shared 图像也合成一次调用；DINO/PCA/legacy reference 继续永久冻结且 optimizer-excluded。测试会逐元素比较合并前后的 local/shared target，并要求 `rtol=0, atol=0`。同时启用 `micro=4`、DINO internal batch 16、fused AdamW 和 DataLoader prefetch。200-step paired preflight 除原有 dataset-index、agent histogram、trainable-name、LR、resume-next-batch、显存与 OOM 检查外，新增两路最低吞吐和预计训练小时数；任一路低于 `0.75 update/s` 时 `pair_exact.passed=false`，runner 不进入 30k。
 
+共享数据初始化也纳入 fast-selection：旧实现会在 P0/P1 的 preflight、formal training 和 validation 初始化时分别重读并计算全部 `750` 个 HDF5（约 `754,719,954,926 bytes`）的 SHA256，导致同一不可变共享数据被重复扫描。新实现以 exact accepted R6L-P1 policy `5f3a0562...18fc9` 为密码学校验证据：该 checkpoint 内嵌五个 manifest SHA256，且其生成路径使用 fail-closed HDF5 SHA256 loader；prepare 阶段逐一要求当前 manifest hash 与 proof 相同、manifest 声明 size 与实际 size 相同、750 个文件的 mtime 均早于 proof，并把 `device/inode/size/mtime_ns/path/manifest-declared SHA256` 写入 run-local receipt。P0/P1 启动前必须共同验证 receipt 自身 SHA256 与全部 stat 身份；任一变化立即 fail closed。只有 receipt 完整通过时，loader 才跳过重复 payload hash，HDF5 schema/normalization 检查仍照常执行。checkpoint、preflight pair 和 monitor 都记录同一个 receipt SHA256，从而在不弱化不可变数据证据的前提下去掉 preflight/formal/eval 的约 `4–6` 次 707GiB 重扫。
+
+第一次 fast30k 性能探针 `s4-r7-fast30k-round1` 证明仅合并在线 DINO 调用还不足以达到 12 小时：P0/P1 的全量 HDF5 初始化从 `02:15:57Z` 到 `02:34:53Z`，约 19 分钟；稳定到 update 120 时吞吐仅 `0.288766/0.292560 update/s`，峰值显存 `3,121,837,056/3,122,508,800 bytes`，30k 仅训练段估算约 `28.9/28.5 h`。该探针于 `2026-08-03T02:42:09Z` 按 exact run identity 收到外部 `SIGINT`、`exit=130`；不是训练错误，产物保留，未生成 pair-exact，绝不进入 formal training。
+
+第二层加速因此固定为 **shared future-feature cache**：prepare 独占 GPU0/GPU1，把五任务 750 episodes 的 `next_observation` 按真实 row/camera 通过同一冻结 DINOv3-L/16、同一 2×2 adaptive grid 和同一 PCA-256 投影一次，保存 float32 memory-map；缓存身份绑定五个 manifest、DINO weights/config、preprocess、PCA artifact 和 binary SHA256。P0/P1 使用相同 cache SHA；训练 DataLoader 不再解码 raw future RGB，future target 不再在线运行 DINO，只保留部署路径必须的 current local/shared DINO。`future_feature_cache_mode=shared_float32_projected_next_view` 加入训练/验证白名单，未知模式、cache hash/shape/dtype/episode offset 漂移全部 fail closed；preflight、checkpoint 与 monitor 同时记录 cache SHA。缓存生成不计入 30k optimizer budget，但从一键启动开始计入 wall time；只有新一轮 200-step 实测两路均 `>=0.75 update/s` 才允许正式训练。
+
 验证仍最终产出八条件完整报告，但执行优先级固定为：
 
 1. `normal`：先独立完成五任务各 20 episodes，立即落盘 `validation/gate20/normal/gate_summary.json`，同时建立 predicted-future donor bank；
@@ -1886,13 +1892,13 @@ git switch feat/model-improvements
 git merge --ff-only origin/feat/model-improvements
 
 bash scripts/launch_s4_r7_2gpu_tmux.sh \
-  --run-id s4-r7-fast30k-round1 --dry-run
+  --run-id s4-r7-fast30k-round2 --dry-run
 bash scripts/launch_s4_r7_existing_server.sh \
-  --run-id s4-r7-fast30k-round1 --no-focus-monitor
+  --run-id s4-r7-fast30k-round2 --no-focus-monitor
 
 python3 scripts/s4_r7_runtime.py monitor --once \
-  --run-root /workspace/fe-pc-wam/outputs/s4_r7_runs/s4-r7-fast30k-round1
-tmux select-window -t ssh_tmux:s4-r7-fast30k-round1-monitor
+  --run-root /workspace/fe-pc-wam/outputs/s4_r7_runs/s4-r7-fast30k-round2
+tmux select-window -t ssh_tmux:s4-r7-fast30k-round2-monitor
 ```
 
 默认继续复用 S0 已下载的数据、Hub cache、固定 revision DINO/PCA 和 ancestors，不请求或导出 HF token；只有缺资产时才沿用 S0 的隐藏输入、mode-0600 FIFO、固定 revision、断点续传和 Xet/worker 规则。一键停止仍为：
@@ -1900,9 +1906,9 @@ tmux select-window -t ssh_tmux:s4-r7-fast30k-round1-monitor
 ```bash
 cd /workspace/fe-pc-wam
 bash scripts/stop_s4_r7_2gpu_tmux.sh \
-  --run-id s4-r7-fast30k-round1 --dry-run
+  --run-id s4-r7-fast30k-round2 --dry-run
 bash scripts/stop_s4_r7_2gpu_tmux.sh \
-  --run-id s4-r7-fast30k-round1
+  --run-id s4-r7-fast30k-round2
 tmux has-session -t ssh_tmux
 ```
 

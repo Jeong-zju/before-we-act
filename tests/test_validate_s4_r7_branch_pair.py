@@ -41,6 +41,8 @@ def _preflight(candidate: str) -> dict[str, object]:
         "update_1_trainable_name_sha256": "b" * 64,
         "flow_unfreeze_update": 6400,
         "flow_unfreeze_trainable_name_sha256": "c" * 64,
+        "shared_hdf5_receipt_sha256": "9" * 64,
+        "future_feature_cache_sha256": "8" * 64,
         "vision_inference_batch_size": 16,
         "learning_rate_curve_sha256": "d" * 64,
         "resume_next_batch_exact": True,

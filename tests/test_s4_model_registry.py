@@ -33,6 +33,9 @@ def _r7(candidate: str) -> dict[str, object]:
             "evidence_rank": 32,
             "route_mode": "dense",
         },
+        "data": {
+            "future_feature_cache_mode": "shared_float32_projected_next_view"
+        },
         "training": {
             "seed": 707,
             "budget_mode": "fast_selection_30k",

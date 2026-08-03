@@ -41,6 +41,8 @@ class S2GroupedTrajectoryDataset(Dataset[dict[str, Tensor]]):
         split: str,
         stride: int = 1,
         hdf5_cache_size: int = 4,
+        verify_hdf5_sha256: bool = True,
+        use_projected_future_cache: bool = False,
     ) -> None:
         self.source = RoboFactoryMultitaskDataset(
             manifests,
@@ -57,6 +59,14 @@ class S2GroupedTrajectoryDataset(Dataset[dict[str, Tensor]]):
             max_text_tokens=16,
             stride=stride,
             hdf5_cache_size=hdf5_cache_size,
+            sample_keys=(
+                RoboFactoryMultitaskDataset.BASE_SAMPLE_KEYS.difference(
+                    {"future_images", "future_image_novelty_mask"}
+                )
+                if use_projected_future_cache
+                else None
+            ),
+            verify_hdf5_sha256=verify_hdf5_sha256,
         )
         self.contracts = self.source.contracts
         self.task_vocabulary = self.source.task_vocabulary
@@ -200,6 +210,9 @@ class S2GroupedTrajectoryDataset(Dataset[dict[str, Tensor]]):
                 ],
                 "future_horizons": list(S2_FUTURE_HORIZONS),
                 "global_view_is_separate": True,
+                "raw_future_images_materialized": (
+                    "future_images" in self.source.sample_keys
+                ),
                 "hierarchical_sampling": {
                     "order": ["task", "episode", "time", "all_valid_agent"],
                     "tasks": len(self._hierarchical_indices_cache),
@@ -218,14 +231,16 @@ class S2GroupedTrajectoryDataset(Dataset[dict[str, Tensor]]):
         return value
 
 
-def grouped_s2_batch(batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
+def grouped_s2_batch(
+    batch: Mapping[str, Tensor], *, require_future_images: bool = True
+) -> dict[str, Tensor]:
     """Convert padded flat slots to the explicit ``[B,A,...]`` S2 contract."""
 
     states = batch["states"]
     actions = batch["action_targets"]
     images = batch["images"]
     future_states = batch["future_states"]
-    future_images = batch["future_images"]
+    future_images = batch.get("future_images")
     if states.ndim != 3 or states.shape[1:] != (
         1,
         S2_MAX_AGENTS * S2_STATE_DIM,
@@ -243,11 +258,15 @@ def grouped_s2_batch(batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
         S2_MAX_AGENTS * S2_STATE_DIM,
     ):
         raise ValueError("S2 future state path must be [B,100,72]")
-    if future_images.ndim != 6 or future_images.shape[1:3] != (
-        len(S2_FUTURE_HORIZONS),
-        5,
-    ):
-        raise ValueError("S2 future RGB must be [B,F,5,3,H,W]")
+    if require_future_images:
+        if (
+            not isinstance(future_images, Tensor)
+            or future_images.ndim != 6
+            or future_images.shape[1:3] != (len(S2_FUTURE_HORIZONS), 5)
+        ):
+            raise ValueError("S2 future RGB must be [B,F,5,3,H,W]")
+    elif future_images is not None:
+        raise ValueError("projected-future-cache batches must omit raw future RGB")
 
     batch_size = states.shape[0]
     current_state = states[:, -1].reshape(
@@ -332,14 +351,15 @@ def grouped_s2_batch(batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
         "agent_global_fallback_mask": global_fallback_valid,
         "future_state_delta": future_state_delta,
         "future_state_valid_mask": future_state_valid,
-        "future_agent_observations": future_images[:, :, 1:5].permute(
-            0, 2, 1, 3, 4, 5
-        ).contiguous(),
-        "future_shared_observations": future_images[:, :, 0],
         "future_agent_visual_valid_mask": agent_future_visual_valid,
         "future_shared_visual_valid_mask": shared_future_visual_valid,
         "future_horizons": batch["future_horizons"],
     }
+    if isinstance(future_images, Tensor):
+        output["future_agent_observations"] = future_images[:, :, 1:5].permute(
+            0, 2, 1, 3, 4, 5
+        ).contiguous()
+        output["future_shared_observations"] = future_images[:, :, 0]
     validate_grouped_s2_contract(output)
     return output
 

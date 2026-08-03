@@ -103,6 +103,15 @@ def test_grouped_adapter_preserves_agent_global_and_future_masks():
     assert not bool(grouped["future_state_valid_mask"][:, 3].any())
 
 
+def test_grouped_adapter_projected_future_cache_omits_raw_future_rgb():
+    raw = _raw_grouped_batch()
+    raw.pop("future_images")
+    grouped = grouped_s2_batch(raw, require_future_images=False)
+    assert "future_agent_observations" not in grouped
+    assert "future_shared_observations" not in grouped
+    assert grouped["future_agent_visual_valid_mask"].shape == (2, 4, 4)
+
+
 def test_grouped_adapter_uses_global_context_without_faking_local_targets():
     raw = _raw_grouped_batch()
     raw = {

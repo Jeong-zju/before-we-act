@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -47,7 +48,6 @@ from scripts.train_static_rgb_act_moe import (  # noqa: E402
     _vision,
 )
 from train.s2_future_prediction import (  # noqa: E402
-    encode_future_visual_targets,
     file_sha256,
     load_s2_artifact,
     normalized_state_delta,
@@ -57,6 +57,9 @@ from train.s2_grouped_trajectory import grouped_s2_batch  # noqa: E402
 from train.s4_hierarchical_team_sampler import (  # noqa: E402
     S4ExposureCounter,
     S4HierarchicalTeamBatchSampler,
+)
+from train.s4_future_feature_cache import (  # noqa: E402
+    S4ProjectedFutureFeatureCache,
 )
 from train.s4_joint_losses import s4_joint_losses  # noqa: E402
 from train.s4_model_registry import validate_s4_r7_candidate  # noqa: E402
@@ -113,6 +116,23 @@ def _main_impl(args: argparse.Namespace) -> int:
     raw = _load_yaml(config_path)
     candidate_id, model_kind, utility_weight = validate_s4_r7_candidate(raw)
     training = _mapping(raw, "training")
+    shared_hdf5_receipt_sha256 = os.environ.get(
+        "S4_R7_SHARED_HDF5_RECEIPT_SHA256", ""
+    )
+    if len(shared_hdf5_receipt_sha256) != 64 or any(
+        character not in "0123456789abcdef"
+        for character in shared_hdf5_receipt_sha256
+    ):
+        raise ValueError("S4-R7 requires the shared HDF5 receipt SHA256 identity")
+    future_feature_cache_root = os.environ.get("S4_R7_FUTURE_FEATURE_CACHE", "")
+    future_feature_cache_sha256 = os.environ.get(
+        "S4_R7_FUTURE_FEATURE_CACHE_SHA256", ""
+    )
+    if not future_feature_cache_root or len(future_feature_cache_sha256) != 64 or any(
+        character not in "0123456789abcdef"
+        for character in future_feature_cache_sha256
+    ):
+        raise ValueError("S4-R7 requires the shared future feature cache identity")
     configured_updates = int(training.get("updates", 0))
     if (
         training.get("budget_mode") != FAST_SELECTION_BUDGET_MODE
@@ -174,6 +194,16 @@ def _main_impl(args: argparse.Namespace) -> int:
     artifact_sha256 = file_sha256(artifact_path)
     dataset = _dataset(raw, split="train")
     _validate_artifact_dataset(artifact, dataset)
+    manifests = [contract.manifest_path for contract in dataset.contracts]
+    future_feature_cache = S4ProjectedFutureFeatureCache(
+        future_feature_cache_root,
+        manifests=manifests,
+        expected_features_sha256=future_feature_cache_sha256,
+        expected_pca_sha256=str(_mapping(raw, "parent")["expected_pca_sha256"]),
+        expected_vision_weights_sha256=str(
+            _mapping(raw, "vision")["expected_weights_sha256"]
+        ),
+    )
     hierarchy_summary = dataset.summary()["hierarchical_sampling"]
     vision = _vision(raw).to(device).eval()
     if any(parameter.requires_grad for parameter in vision.parameters()):
@@ -246,6 +276,8 @@ def _main_impl(args: argparse.Namespace) -> int:
         "gradient_accumulation": accumulation,
         "effective_team_batch": effective,
         "updates": configured_updates,
+        "shared_hdf5_receipt_sha256": shared_hdf5_receipt_sha256,
+        "future_feature_cache_sha256": future_feature_cache_sha256,
     }
     start_update = 0
     exposure = S4ExposureCounter()
@@ -311,7 +343,7 @@ def _main_impl(args: argparse.Namespace) -> int:
     iterator = iter(loader)
     pca = _mapping(raw, "pca")
     _emit_stage("first_batch", "running bit-exact legacy/scaled/new-gate audits")
-    first_grouped = grouped_s2_batch(next(iterator))
+    first_grouped = grouped_s2_batch(next(iterator), require_future_images=False)
     first_inputs = _model_inputs(vision, first_grouped, artifact, device=device, pca=pca)
     structural = _structural_audit(
         model,
@@ -432,7 +464,9 @@ def _main_impl(args: argparse.Namespace) -> int:
             update_valid_agents = 0
             audit_row: dict[str, Any] | None = None
             for accumulation_index in range(accumulation):
-                grouped = grouped_s2_batch(next(iterator))
+                grouped = grouped_s2_batch(
+                    next(iterator), require_future_images=False
+                )
                 indices = [int(value) for value in grouped["dataset_index"].tolist()]
                 dataset_indices.extend(indices)
                 dataset_chain = _extend_dataset_chain(dataset_chain, indices)
@@ -444,13 +478,12 @@ def _main_impl(args: argparse.Namespace) -> int:
                     update_valid_agents += int(count)
                 inputs = _model_inputs(vision, grouped, artifact, device=device, pca=pca)
                 targets = _future_targets(
-                    vision,
                     grouped,
                     artifact,
+                    future_feature_cache=future_feature_cache,
                     current_local=inputs["local_visual"],
                     current_shared=inputs["shared_visual"],
                     device=device,
-                    pca=pca,
                 )
                 actions = grouped["candidate_actions"].to(
                     device=device, dtype=torch.float32, non_blocking=True
@@ -610,6 +643,8 @@ def _main_impl(args: argparse.Namespace) -> int:
                     "vision_inference_batch_size": int(
                         _mapping(raw, "vision")["inference_batch_size"]
                     ),
+                    "shared_hdf5_receipt_sha256": shared_hdf5_receipt_sha256,
+                    "future_feature_cache_sha256": future_feature_cache_sha256,
                     "effective_batch": effective,
                     "team_windows_seen": exposure.team_windows_seen,
                     "valid_agent_windows_seen": exposure.valid_agent_windows_seen,
@@ -698,6 +733,8 @@ def _main_impl(args: argparse.Namespace) -> int:
                     "vision_inference_batch_size": int(
                         _mapping(raw, "vision")["inference_batch_size"]
                     ),
+                    "shared_hdf5_receipt_sha256": shared_hdf5_receipt_sha256,
+                    "future_feature_cache_sha256": future_feature_cache_sha256,
                     "peak_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
                     "gpu_total_memory_bytes": int(
                         torch.cuda.get_device_properties(device).total_memory
@@ -859,6 +896,12 @@ def _main_impl(args: argparse.Namespace) -> int:
             "vision_inference_batch_size": int(
                 _mapping(raw, "vision")["inference_batch_size"]
             ),
+            "shared_hdf5_receipt_sha256": identity[
+                "shared_hdf5_receipt_sha256"
+            ],
+            "future_feature_cache_sha256": identity[
+                "future_feature_cache_sha256"
+            ],
             "learning_rate_curve_sha256": _lr_curve_hash(training),
             "peak_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
             "gpu_total_memory_bytes": int(
@@ -915,24 +958,20 @@ def _main_impl(args: argparse.Namespace) -> int:
 
 
 def _future_targets(
-    vision: torch.nn.Module,
     grouped: Mapping[str, Tensor],
     artifact: Mapping[str, Any],
     *,
+    future_feature_cache: S4ProjectedFutureFeatureCache,
     current_local: Tensor,
     current_shared: Tensor,
     device: torch.device,
-    pca: Mapping[str, Any],
 ) -> dict[str, Tensor]:
-    local_visual, shared_visual = encode_future_visual_targets(
-        vision,
+    local_visual, shared_visual = future_feature_cache.normalized_targets(
         grouped,
         artifact,
         current_local=current_local,
         current_shared=current_shared,
         device=device,
-        grid_height=int(pca["grid_height"]),
-        grid_width=int(pca["grid_width"]),
     )
     return {
         "state": normalized_state_delta(grouped, artifact, device=device),
@@ -1331,6 +1370,14 @@ def _checkpoint_payload(
         "inference": dict(_mapping(raw, "inference")),
         "task_runtime": _task_runtime(dataset.source),
         "data": {
+            "hdf5_verification": {
+                "mode": "accepted_checkpoint_stat_bound_receipt",
+                "receipt_sha256": identity["shared_hdf5_receipt_sha256"],
+            },
+            "future_feature_cache": {
+                "mode": "shared_float32_projected_next_view",
+                "features_sha256": identity["future_feature_cache_sha256"],
+            },
             "summary": dataset.summary(),
             "manifests": [
                 {
@@ -1503,6 +1550,12 @@ def _write_terminal_oom_preflight(args: argparse.Namespace) -> None:
             "peak_memory_bytes": peak,
             "gpu_total_memory_bytes": total,
             "config_sha256": _sha256(config_path),
+            "shared_hdf5_receipt_sha256": os.environ.get(
+                "S4_R7_SHARED_HDF5_RECEIPT_SHA256", ""
+            ),
+            "future_feature_cache_sha256": os.environ.get(
+                "S4_R7_FUTURE_FEATURE_CACHE_SHA256", ""
+            ),
             "failure_scope": "whole_preflight_gpu_lifecycle",
             "created_at": datetime.now(timezone.utc).isoformat(),
         },

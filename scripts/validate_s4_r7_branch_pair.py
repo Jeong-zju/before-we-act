@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 from typing import Any
@@ -23,6 +24,7 @@ from train.s4_model_registry import validate_s4_r7_pair  # noqa: E402
 
 FORMAT_VERSION = "wam.robofactory.s4_r7.pair_exact/1"
 PREFLIGHT_FORMAT = "wam.robofactory.s4_r7.preflight/1"
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 TASKS = (
     "lift_barrier",
     "long_pipeline_delivery",
@@ -219,6 +221,8 @@ def validate_preflights(
         "update_1_trainable_name_sha256",
         "flow_unfreeze_trainable_name_sha256",
         "vision_inference_batch_size",
+        "shared_hdf5_receipt_sha256",
+        "future_feature_cache_sha256",
         "learning_rate_curve_sha256",
     )
     checks = {
@@ -244,6 +248,18 @@ def validate_preflights(
         == p1.get("vision_inference_batch_size")
         == int(_mapping(p0_config, "vision")["inference_batch_size"])
         == int(_mapping(p1_config, "vision")["inference_batch_size"]),
+        "same_shared_hdf5_receipt": p0.get("shared_hdf5_receipt_sha256")
+        == p1.get("shared_hdf5_receipt_sha256")
+        and SHA256_PATTERN.fullmatch(
+            str(p0.get("shared_hdf5_receipt_sha256", ""))
+        )
+        is not None,
+        "same_future_feature_cache": p0.get("future_feature_cache_sha256")
+        == p1.get("future_feature_cache_sha256")
+        and SHA256_PATTERN.fullmatch(
+            str(p0.get("future_feature_cache_sha256", ""))
+        )
+        is not None,
         "same_learning_rate_curves": p0.get("learning_rate_curve_sha256")
         == p1.get("learning_rate_curve_sha256"),
         "same_micro_accum_effective_batch": all(

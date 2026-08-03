@@ -219,7 +219,8 @@ validate_launch_read_only() {
 
   local script
   for script in "${PREPARE_REL}" "${CANDIDATE_REL}" "${RUNTIME_REL}" \
-    "${PAIR_VALIDATOR_REL}"; do
+    "${PAIR_VALIDATOR_REL}" scripts/prepare_shared_hdf5_receipt.py \
+    scripts/prepare_s4_future_feature_cache.py; do
     if [[ ! -f "${FE_ROOT}/${script}" ]]; then
       fail "missing S4-R7 public-slice script: ${script}"
     fi
@@ -247,7 +248,7 @@ print_plan() {
     "${CANDIDATE_WINDOWS[1]}" "${MONITOR_WINDOW}"
   printf 'GPU0=%s GPU1=%s; independent candidates, no DDP\n' "${BRANCHES[0]}" "${BRANCHES[1]}"
   printf 'training=30k fast-selection; micro4/accum3/effective12; target 1152000 agent windows; Flow unfreezes at 6400\n'
-  printf 'speed=DINO inference batch 16 + fused AdamW + reused current/combined visual encodes; paired preflight requires >=0.75 update/s\n'
+  printf 'speed=two-GPU shared future DINO-PCA cache + current-view-only online DINO + fused AdamW; paired preflight requires >=0.75 update/s\n'
   printf 'validation=normal first; then legacy/gate-zero/shuffle-all core; four diagnostic conditions last\n'
   printf 'shared=%s/datasets/robofactory_multitask and %s/artifacts; candidate outputs remain isolated\n' \
     "${FE_ROOT}" "${FE_ROOT}"

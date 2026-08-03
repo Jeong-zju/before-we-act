@@ -80,6 +80,8 @@ def test_minimal_oom_preflight_is_terminal_but_not_a_pass(tmp_path: Path) -> Non
                 "effective_team_batch": 12,
                 "flow_unfreeze_update": 6400,
                 "vision_inference_batch_size": 16,
+                "shared_hdf5_receipt_sha256": "9" * 64,
+                "future_feature_cache_sha256": "8" * 64,
                 "peak_memory_bytes": 0,
                 "gpu_total_memory_bytes": 32 * 1024**3,
             }

@@ -246,11 +246,67 @@ sha256sum "${parent_dir}/legacy_r6l_policy.pt" \
   "${FE_ROOT}/artifacts/s2_r4/dino_pca_statistics.pt" > "${manifest_tmp}" || exit $?
 mv "${manifest_tmp}" "${S4_R7_RUN_ROOT}/shared_artifact_sha256.txt" || exit $?
 
+status dataset_receipt prepare_shared_hdf5_receipt.py \
+  "binding 750 shared HDF5 identities to the exact accepted R6L-P1 proof; no 707GB rescan"
+dataset_receipt="${S4_R7_RUN_ROOT}/shared_hdf5_verification_receipt.json"
+receipt_args=()
+for manifest in "${required[@]:0:5}"; do
+  receipt_args+=(--manifest "${manifest}")
+done
+( cd "${FE_ROOT}" && uv run --frozen python \
+    scripts/prepare_shared_hdf5_receipt.py \
+    "${receipt_args[@]}" \
+    --proof-checkpoint "${parent_dir}/legacy_r6l_policy.pt" \
+    --expected-proof-sha256 "${LEGACY_SHA}" \
+    --output "${dataset_receipt}" ) || exit $?
+receipt_sha="$(sha256sum "${dataset_receipt}" | awk '{print $1}')" || exit $?
+printf '%s\n' "${receipt_sha}" > "${dataset_receipt}.sha256" || exit $?
+
+status future_feature_cache prepare_s4_future_feature_cache.py \
+  "precomputing/reusing float32 next-view DINO-PCA grids on GPU0+GPU1; candidates wait"
+run_manifest="${S4_R7_RUN_ROOT}/run_manifest.json"
+p0_worktree="$(jq -er '.worktrees.P0 | strings' "${run_manifest}")" || exit $?
+p0_config="$(realpath -e -- "${p0_worktree}/configs/wam_flow/s4_r7.yaml")" || exit $?
+future_cache_root="${FE_ROOT}/artifacts/s4_fast_selection/dinov3_vitl16_lvd_pca256_next_v1"
+future_cache_lock="${FE_ROOT}/outputs/s4_r7_runs/.future_feature_cache.lock"
+exec {FUTURE_CACHE_LOCK_FD}>"${future_cache_lock}" || exit $?
+flock -x "${FUTURE_CACHE_LOCK_FD}" || exit $?
+( cd "${FE_ROOT}" && uv run --frozen python \
+    scripts/prepare_s4_future_feature_cache.py \
+    --config "${p0_config}" \
+    --receipt "${dataset_receipt}" \
+    --receipt-sha256 "${receipt_sha}" \
+    --output-root "${future_cache_root}" \
+    --gpus 0,1 --batch-rows 24 ) || exit $?
+flock -u "${FUTURE_CACHE_LOCK_FD}" || exit $?
+future_cache_sha="$(tr -d '[:space:]' < \
+  "${future_cache_root}/features.npy.sha256")" || exit $?
+python3 - "${S4_R7_RUN_ROOT}/shared_future_feature_cache.json" \
+  "${future_cache_root}" "${future_cache_sha}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+output, root, sha256 = sys.argv[1:]
+path = Path(output)
+temporary = path.with_name(path.name + ".tmp")
+temporary.write_text(
+    json.dumps(
+        {"root": str(Path(root).resolve(strict=True)), "features_sha256": sha256},
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+temporary.replace(path)
+PY
+
 ready_tmp="${S4_R7_READY_FILE}.tmp.$$"
 printf '%s\n' "s4-r7 shared inputs verified at $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   > "${ready_tmp}" || exit $?
 mv "${ready_tmp}" "${S4_R7_READY_FILE}" || exit $?
 status complete prepare_s4_r7_shared.sh \
-  "one-copy data plus exact R6L-P1/Flow/R4-P0/R5-P0/PCA hashes verified"
+  "one-copy data receipt/future-feature cache plus exact parent/PCA hashes verified"
 COMPLETED=1
 printf 'S4-R7 shared preparation complete.\n'

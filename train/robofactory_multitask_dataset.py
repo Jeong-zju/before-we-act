@@ -196,8 +196,14 @@ class RoboFactoryMultitaskDataset(Dataset[dict[str, Tensor]]):
             "future_visual_valid_mask",
             "future_horizons",
         }
-        if requested != required:
-            raise ValueError("M2 currently requires the complete world-action sample contract")
+        cached_future_contract = required.difference(
+            {"future_images", "future_image_novelty_mask"}
+        )
+        if requested not in {frozenset(required), frozenset(cached_future_contract)}:
+            raise ValueError(
+                "M2 requires the complete world-action contract or the exact "
+                "projected-future-cache contract"
+            )
         maximum_action_horizon = int(action_horizon)
         if maximum_action_horizon <= 0:
             raise ValueError("M2 maximum action horizon must be positive")
@@ -380,6 +386,7 @@ class RoboFactoryMultitaskDataset(Dataset[dict[str, Tensor]]):
         self._state_stds = torch.stack(state_stds)
         self._action_means = torch.stack(action_means)
         self._action_stds = torch.stack(action_stds)
+        self.sample_keys = requested
         self._offsets = [0]
         for dataset in self.datasets:
             self._offsets.append(self._offsets[-1] + len(dataset))
@@ -527,7 +534,9 @@ class RoboFactoryMultitaskDataset(Dataset[dict[str, Tensor]]):
 
     def __getitem__(self, index: int) -> dict[str, Tensor]:
         task_index, local_index = self.resolve_index(index)
-        raw = self.datasets[task_index][local_index]
+        raw = self.datasets[task_index]._projected_item(
+            local_index, self.sample_keys
+        )
         contract = self.contracts[task_index]
         state_mask = torch.arange(self.max_state_dim) < contract.state_dim
         action_mask = torch.arange(self.max_action_dim) < contract.action_dim
@@ -565,16 +574,19 @@ class RoboFactoryMultitaskDataset(Dataset[dict[str, Tensor]]):
             len(self.camera_order),
             axis=1,
         )
-        future_images = self._pad_camera_axis(
-            raw["future_images"],
-            len(self.camera_order),
-            axis=1,
-        )
-        future_novelty = self._pad_camera_axis(
-            raw["future_image_novelty_mask"].bool(),
-            len(self.camera_order),
-            axis=1,
-        )
+        future_images = None
+        future_novelty = None
+        if "future_images" in raw:
+            future_images = self._pad_camera_axis(
+                raw["future_images"],
+                len(self.camera_order),
+                axis=1,
+            )
+            future_novelty = self._pad_camera_axis(
+                raw["future_image_novelty_mask"].bool(),
+                len(self.camera_order),
+                axis=1,
+            )
         raw_future_valid = raw["future_visual_valid_mask"].bool()
         if raw_future_valid.ndim == 1:
             raw_future_valid = raw_future_valid[:, None].expand(
@@ -591,7 +603,7 @@ class RoboFactoryMultitaskDataset(Dataset[dict[str, Tensor]]):
         future_visual_valid = (
             future_visual_valid & future_visual_task_mask[:, None]
         )
-        return {
+        result = {
             "dataset_index": torch.tensor(index, dtype=torch.long),
             "states": states,
             "state_valid_mask": raw["state_valid_mask"].bool(),
@@ -614,11 +626,13 @@ class RoboFactoryMultitaskDataset(Dataset[dict[str, Tensor]]):
             "future_state_valid_mask": (
                 raw["future_state_valid_mask"].bool() & task_horizon_mask
             ),
-            "future_images": future_images,
-            "future_image_novelty_mask": future_novelty,
             "future_visual_valid_mask": future_visual_valid,
             "future_horizons": raw["future_horizons"],
         }
+        if future_images is not None and future_novelty is not None:
+            result["future_images"] = future_images
+            result["future_image_novelty_mask"] = future_novelty
+        return result
 
     @staticmethod
     def _pad_last(value: Tensor, width: int) -> Tensor:

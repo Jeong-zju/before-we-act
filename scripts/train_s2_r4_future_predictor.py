@@ -7,6 +7,7 @@ import argparse
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -57,6 +58,7 @@ from train.s2_grouped_trajectory import (  # noqa: E402
     S2GroupedTrajectoryDataset,
     grouped_s2_batch,
 )
+from train.shared_hdf5_receipt import validate_shared_hdf5_receipt  # noqa: E402
 from train.s2_model_registry import (  # noqa: E402
     require_trainable_s2_r4_model_kind,
     validate_s2_r4_candidate,
@@ -542,11 +544,34 @@ def _dataset(
         (ROOT / str(value)).resolve(strict=True)
         for value in data["manifests"]  # type: ignore[index]
     ]
+    verify_hdf5_sha256 = True
+    receipt = os.environ.get("S4_R7_SHARED_HDF5_RECEIPT")
+    if receipt:
+        expected_receipt_sha256 = os.environ.get(
+            "S4_R7_SHARED_HDF5_RECEIPT_SHA256"
+        )
+        if not expected_receipt_sha256:
+            raise ValueError("shared HDF5 receipt path lacks a runner SHA256 identity")
+        validate_shared_hdf5_receipt(
+            receipt,
+            manifests,
+            expected_proof_sha256=str(
+                _mapping(config, "parent").get(
+                    "expected_legacy_r6l_policy_sha256", ""
+                )
+            ),
+            expected_receipt_sha256=expected_receipt_sha256,
+        )
+        verify_hdf5_sha256 = False
     return S2GroupedTrajectoryDataset(
         manifests,
         split=split,
         stride=int(data.get("stride", 1)),
         hdf5_cache_size=int(data.get("hdf5_cache_size", 4)),
+        verify_hdf5_sha256=verify_hdf5_sha256,
+        use_projected_future_cache=bool(
+            os.environ.get("S4_R7_FUTURE_FEATURE_CACHE")
+        ),
     )
 
 

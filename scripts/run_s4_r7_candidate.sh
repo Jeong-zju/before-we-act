@@ -643,6 +643,8 @@ for key in (
     "dataset_index_sequence_sha256",
     "update_1_trainable_name_sha256",
     "flow_unfreeze_trainable_name_sha256",
+    "shared_hdf5_receipt_sha256",
+    "future_feature_cache_sha256",
     "learning_rate_curve_sha256",
 ):
     if re.fullmatch(r"[0-9a-f]{64}", str(value.get(key, ""))) is None:
@@ -1006,6 +1008,55 @@ fi
 if ! sha256sum --check --strict "${SHARED_HASHES}"; then
   abort "one or more shared ancestor hashes changed after shared.ready"
 fi
+SHARED_DATA_RECEIPT="${RUN_ROOT}/shared_hdf5_verification_receipt.json"
+SHARED_DATA_RECEIPT_DIGEST="${SHARED_DATA_RECEIPT}.sha256"
+if [[ ! -f "${SHARED_DATA_RECEIPT}" || \
+      ! -f "${SHARED_DATA_RECEIPT_DIGEST}" ]]; then
+  abort "shared.ready exists without the shared HDF5 verification receipt"
+fi
+SHARED_DATA_RECEIPT_SHA256="$(tr -d '[:space:]' < \
+  "${SHARED_DATA_RECEIPT_DIGEST}")" || \
+  abort "could not read shared HDF5 receipt identity"
+if [[ ! "${SHARED_DATA_RECEIPT_SHA256}" =~ ^[0-9a-f]{64}$ || \
+      "$(sha256sum "${SHARED_DATA_RECEIPT}" | awk '{print $1}')" != \
+        "${SHARED_DATA_RECEIPT_SHA256}" ]]; then
+  abort "shared HDF5 receipt hash differs after shared.ready"
+fi
+receipt_args=()
+for task in lift_barrier long_pipeline_delivery take_photo \
+  three_robots_stack_cube camera_alignment; do
+  receipt_args+=(--manifest \
+    "${BASE_REPO}/datasets/robofactory_multitask/${task}/training_manifest.json")
+done
+if ! ( cd "${BASE_REPO}" && uv run --frozen python \
+    scripts/prepare_shared_hdf5_receipt.py --verify \
+    "${receipt_args[@]}" \
+    --expected-proof-sha256 \
+      "5f3a05628563a0b2e26ea62941cda6ae49a6f161739d26abb351cdc483a18fc9" \
+    --expected-receipt-sha256 "${SHARED_DATA_RECEIPT_SHA256}" \
+    --output "${SHARED_DATA_RECEIPT}" ); then
+  abort "shared HDF5 receipt/stat identity validation failed"
+fi
+export S4_R7_SHARED_HDF5_RECEIPT="${SHARED_DATA_RECEIPT}"
+export S4_R7_SHARED_HDF5_RECEIPT_SHA256="${SHARED_DATA_RECEIPT_SHA256}"
+FUTURE_CACHE_POINTER="${RUN_ROOT}/shared_future_feature_cache.json"
+if [[ ! -f "${FUTURE_CACHE_POINTER}" ]]; then
+  abort "shared.ready exists without the future feature cache pointer"
+fi
+S4_R7_FUTURE_FEATURE_CACHE="$(jq -er '.root | strings' \
+  "${FUTURE_CACHE_POINTER}")" || abort "future feature cache root is invalid"
+S4_R7_FUTURE_FEATURE_CACHE="$(realpath -e -- \
+  "${S4_R7_FUTURE_FEATURE_CACHE}")" || abort "future feature cache is unavailable"
+S4_R7_FUTURE_FEATURE_CACHE_SHA256="$(jq -er \
+  '.features_sha256 | strings' "${FUTURE_CACHE_POINTER}")" || \
+  abort "future feature cache SHA256 is invalid"
+if [[ ! "${S4_R7_FUTURE_FEATURE_CACHE_SHA256}" =~ ^[0-9a-f]{64}$ || \
+      ! -f "${S4_R7_FUTURE_FEATURE_CACHE}/features.npy" || \
+      "$(sha256sum "${S4_R7_FUTURE_FEATURE_CACHE}/features.npy" | awk '{print $1}')" != \
+        "${S4_R7_FUTURE_FEATURE_CACHE_SHA256}" ]]; then
+  abort "future feature cache binary differs after shared.ready"
+fi
+export S4_R7_FUTURE_FEATURE_CACHE S4_R7_FUTURE_FEATURE_CACHE_SHA256
 
 link_shared_read_only() {
   local target="$1"

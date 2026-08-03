@@ -369,6 +369,11 @@ def monitor(root: Path, *, interval: float, once: bool) -> None:
 def render_monitor(root: Path) -> str:
     manifest = _maybe_json(root / "run_manifest.json")
     shared = _maybe_json(root / "shared_status.json")
+    data_receipt = _maybe_json(root / "shared_hdf5_verification_receipt.json")
+    data_receipt_sha256 = _digest_text(
+        root / "shared_hdf5_verification_receipt.json.sha256"
+    )
+    future_cache = _maybe_json(root / "shared_future_feature_cache.json")
     shared_heartbeat = _terminal_heartbeat(
         str(shared.get("phase", "pending")),
         _maybe_json(root / "shared_heartbeat.json").get("updated_at"),
@@ -385,6 +390,17 @@ def render_monitor(root: Path) -> str:
             f"program={shared.get('program', '-')} "
             f"pid={shared.get('pid', '-')} child={shared.get('child_pid', '-')} "
             f"detail={_compact(shared.get('detail', ''), 88)}"
+        ),
+        (
+            "shared data | verification=accepted-checkpoint/stat-bound-receipt "
+            f"sha256={data_receipt_sha256} "
+            f"manifests={len(data_receipt.get('manifests', ())) if data_receipt else 0}/5 "
+            f"hdf5={len(data_receipt.get('files', ())) if data_receipt else 0}/750"
+        ),
+        (
+            "future target cache | mode=shared-float32-DINO-PCA "
+            f"sha256={str(future_cache.get('features_sha256', 'pending'))[:12]} "
+            f"root={future_cache.get('root', 'pending')}"
         ),
         (
             "schedule | GPU0=P0 token-preserving/no-WUC; "
@@ -406,6 +422,16 @@ def render_monitor(root: Path) -> str:
         f"{manifest.get('tmux_monitor_window', '<window>')}"
     )
     return "\n".join(lines)
+
+
+def _digest_text(path: Path) -> str:
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "pending"
+    if len(value) == 64 and all(character in "0123456789abcdef" for character in value):
+        return value[:12]
+    return "INVALID"
 
 
 def _candidate_lines(
