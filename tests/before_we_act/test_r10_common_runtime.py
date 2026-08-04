@@ -111,3 +111,10 @@ def test_short_hdf5_windows_preserve_duplicate_indices(tmp_path):
     with h5py.File(path, "r") as handle:
         observed = take_hdf5_rows(handle["rows"], [0, 0, 4, 9, 9])
     np.testing.assert_array_equal(observed, values[[0, 0, 4, 9, 9]])
+
+
+def test_latency_acceptance_uses_stable_sample_budget():
+    audit = (ROOT / "scripts/before_we_act/audit_r10_gate_zero.py").read_text()
+    runner = (ROOT / "scripts/before_we_act/run_r10_candidate.sh").read_text()
+    assert "args.latency_repeats < 1000" in audit
+    assert runner.count("--latency-repeats 1000") == 3

@@ -68,9 +68,11 @@ def main() -> None:
     parser.add_argument("--parent-checkpoint", required=True)
     parser.add_argument("--extension-checkpoint", required=True)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--latency-repeats", type=int, default=40)
+    parser.add_argument("--latency-repeats", type=int, default=1000)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+    if args.latency_repeats < 1000:
+        raise ValueError("R10 latency acceptance requires at least 1000 samples per path")
 
     device = torch.device(args.device)
     parent = torch.load(args.parent_checkpoint, map_location="cpu", weights_only=False)

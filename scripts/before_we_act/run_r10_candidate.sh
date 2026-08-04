@@ -180,7 +180,7 @@ run_child ACCEPTING preflight_gate_zero audit_r10_gate_zero.py "real-parent exac
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" BWA_R10_RUN_ROOT="$RUN_ROOT" \
   "$PYTHON" "$GATE_AUDIT" --parent-checkpoint "$PARENT_CHECKPOINT" \
     --extension-checkpoint "$PREFLIGHT/checkpoints/checkpoint_latest.pt" \
-    --device cuda:0 --latency-repeats 40 --output "$PREFLIGHT/gate_zero_latency.json"
+    --device cuda:0 --latency-repeats 1000 --output "$PREFLIGHT/gate_zero_latency.json"
 
 SCREEN="$CANDIDATE_ROOT/train/screen"
 run_child TRAINING screen train_bwa_perception.py "locked 10k screen" 10000 \
@@ -192,7 +192,7 @@ mkdir -p "$CANDIDATE_ROOT/validation/screen"
 run_child ACCEPTING screen_gate_zero audit_r10_gate_zero.py "trained gate-zero and latency audit" 10000 \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" BWA_R10_RUN_ROOT="$RUN_ROOT" \
   "$PYTHON" "$GATE_AUDIT" --parent-checkpoint "$PARENT_CHECKPOINT" \
-    --extension-checkpoint "$SCREEN_CKPT" --device cuda:0 --latency-repeats 80 \
+    --extension-checkpoint "$SCREEN_CKPT" --device cuda:0 --latency-repeats 1000 \
     --output "$CANDIDATE_ROOT/validation/screen/gate_zero_latency.json"
 evaluate_phase screen "$SCREEN_CKPT"
 set +e
@@ -225,7 +225,7 @@ mkdir -p "$CANDIDATE_ROOT/validation/formal"
 run_child ACCEPTING formal_gate_zero audit_r10_gate_zero.py "formal trained gate-zero and latency audit" 30000 \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" BWA_R10_RUN_ROOT="$RUN_ROOT" \
   "$PYTHON" "$GATE_AUDIT" --parent-checkpoint "$PARENT_CHECKPOINT" \
-    --extension-checkpoint "$FINAL_CKPT" --device cuda:0 --latency-repeats 80 \
+    --extension-checkpoint "$FINAL_CKPT" --device cuda:0 --latency-repeats 1000 \
     --output "$CANDIDATE_ROOT/validation/formal/gate_zero_latency.json"
 evaluate_phase formal "$FINAL_CKPT"
 set +e
