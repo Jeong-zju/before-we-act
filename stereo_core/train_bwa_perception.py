@@ -153,16 +153,18 @@ class BWAFrameDataset(NoWristFrameDataset):
         return result
 
 
-def _encode_pooled_history(model, global_rgb, local_rgb, device, chunk: int = 16):
+def _encode_pooled_history(model, global_rgb, local_rgb, device, chunk: int = 64):
     batch, steps = global_rgb.shape[:2]
     global_rgb = global_rgb.reshape(batch * steps, *global_rgb.shape[2:])
     local_rgb = local_rgb.reshape(batch * steps, *local_rgb.shape[2:])
     rows = []
-    with torch.no_grad():
+    with torch.no_grad(), torch.autocast(
+        "cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"
+    ):
         for start in range(0, len(global_rgb), chunk):
             stop = min(start + chunk, len(global_rgb))
-            global_part = global_rgb[start:stop].float().div(255).to(device)
-            local_part = local_rgb[start:stop].float().div(255).to(device)
+            global_part = global_rgb[start:stop].to(device, non_blocking=True).float().div_(255)
+            local_part = local_rgb[start:stop].to(device, non_blocking=True).float().div_(255)
             local_tokens = model._vision_tokens(local_part) + model.local_view
             global_tokens = model._vision_tokens(global_part) + model.global_view
             rows.append(torch.stack((local_tokens.mean(1), global_tokens.mean(1)), dim=1))

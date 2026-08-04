@@ -99,6 +99,8 @@ def test_future_targets_are_not_put_in_deployment_context():
     assert "future_view_features" not in deployment_block
     assert "future_qpos_horizons" in source
     assert "future_feature_horizons" in source
+    assert "chunk: int = 64" in source
+    assert 'torch.autocast(\n        "cuda", dtype=torch.bfloat16' in source
 
 
 def test_short_hdf5_windows_preserve_duplicate_indices(tmp_path):
