@@ -49,6 +49,15 @@ class CoreDeploymentContext:
         present = forbidden.intersection(metadata)
         if present:
             raise ValueError(f"privileged deployment metadata is forbidden: {sorted(present)}")
+        allowed = {
+            "global_view_mask",
+            "local_view_mask",
+            "diagnostic_intervention",
+            "calibration_sha256",
+        }
+        unknown = set(metadata) - allowed
+        if unknown:
+            raise ValueError(f"unknown deployment metadata is forbidden: {sorted(unknown)}")
 
 
 @dataclass(frozen=True)

@@ -84,6 +84,9 @@ run_sync parent_metadata \
 run_sync parent_normalization \
   /workspace/runs/no_wrist_stereo_core_120k/normalization.pt \
   "$DEST_ROOT/bwa_runs/shared/parent/"
+run_sync baseline_frozen100 \
+  /workspace/runs/no_wrist_stereo_core_120k/frozen100/ \
+  "$DEST_ROOT/bwa_runs/shared/frozen100/"
 run_sync dino \
   /workspace/artifacts/dinov3-vitb16-pretrain-lvd1689m/ \
   "$DEST_ROOT/artifacts/dinov3-vitb16-pretrain-lvd1689m/"

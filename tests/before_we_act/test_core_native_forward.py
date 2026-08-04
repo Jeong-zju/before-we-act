@@ -194,3 +194,12 @@ def test_default_deployment_context_is_exact_and_privileged_keys_fail_closed():
     _assert_tuple_exact(default, explicit)
     with pytest.raises(ValueError, match="privileged"):
         CoreDeploymentContext(fixed_camera_metadata={"simulator_state": object()})
+    with pytest.raises(ValueError, match="unknown deployment metadata"):
+        CoreDeploymentContext(fixed_camera_metadata={"sim_hint": 1})
+    legal = CoreDeploymentContext(
+        fixed_camera_metadata={
+            "diagnostic_intervention": "normal",
+            "calibration_sha256": "fixed",
+        }
+    )
+    assert legal.fixed_camera_metadata["diagnostic_intervention"] == "normal"
