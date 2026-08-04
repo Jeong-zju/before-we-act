@@ -137,3 +137,14 @@ def test_monitor_reports_eta_checkpoint_alerts_and_real_acceptance_rules():
     assert "latest_checkpoint(root)" in source
     assert "alerts={alerts or ['NONE']}" in source
     assert 'output.append("acceptance rules:")' in source
+
+
+def test_latency_waived_diagnostic_never_rewrites_official_acceptance():
+    source = (
+        ROOT / "scripts/before_we_act/run_r10_closed_loop_diagnostic.sh"
+    ).read_text(encoding="utf-8")
+    assert '"official_status_unchanged": True' in source
+    assert '"official_status": "FAILED"' in source
+    assert "official_latency_result_retained" in source
+    assert "closed_loop_passed_ignoring_latency" in source
+    assert "validation/screen/gate_zero_latency.json" in source
