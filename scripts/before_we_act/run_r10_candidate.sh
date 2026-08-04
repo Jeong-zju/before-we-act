@@ -72,10 +72,14 @@ fi
 CHILD_PID=0
 HEARTBEAT_PID=0
 STOP_REQUESTED=0
+TERMINAL_STATUS_WRITTEN=0
 status() {
   "$PYTHON" "$RUNTIME" status --run-root "$RUN_ROOT" --candidate "$CANDIDATE" \
     --state "$1" --stage "$2" --program "$3" --detail "$4" --pid "$$" \
     --child-pid "$CHILD_PID" --log "$MAIN_LOG" ${5:+--total-updates "$5"}
+  case "$1" in
+    PASSED|FAILED|STOPPED) TERMINAL_STATUS_WRITTEN=1 ;;
+  esac
 }
 heartbeat_loop() {
   while kill -0 "$$" 2>/dev/null; do
@@ -96,7 +100,7 @@ cleanup() {
   wait "$HEARTBEAT_PID" 2>/dev/null || true
   if ((STOP_REQUESTED)); then
     status STOPPED stopped run_r10_candidate.sh "graceful stop requested; artifacts preserved" || true
-  elif ((code != 0)); then
+  elif ((code != 0 && TERMINAL_STATUS_WRITTEN == 0)); then
     status FAILED failed run_r10_candidate.sh "candidate pipeline exited with code $code" || true
   fi
 }
@@ -110,10 +114,12 @@ run_child() {
   status "$state" "$stage" "$program" "$detail" "$total"
   "$@" & CHILD_PID=$!
   status "$state" "$stage" "$program" "$detail" "$total"
-  set +e
-  wait "$CHILD_PID"
-  local code=$?
-  set -e
+  local code
+  if wait "$CHILD_PID"; then
+    code=0
+  else
+    code=$?
+  fi
   CHILD_PID=0
   if ((code != 0)); then
     return "$code"

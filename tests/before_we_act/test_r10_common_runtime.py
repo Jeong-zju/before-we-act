@@ -145,6 +145,77 @@ def test_monitor_reports_eta_checkpoint_alerts_and_real_acceptance_rules():
     assert 'output.append("acceptance rules:")' in source
 
 
+def test_monitor_uses_formal_acceptance_and_lists_real_failures(tmp_path):
+    runtime = _load_runtime()
+    candidate_root = tmp_path / "candidates/p2"
+    acceptance_path = candidate_root / "validation/formal/acceptance.json"
+    acceptance_path.parent.mkdir(parents=True)
+    acceptance_path.write_text(
+        json.dumps(
+            {
+                "passed": False,
+                "status": "FAILED",
+                "acceptance": [
+                    {"id": "gate_zero_exact", "passed": True},
+                    {"id": "paired_gate20", "passed": False},
+                    {"id": "camera_stack_and_other_tasks", "passed": False},
+                    {"id": "causal_intervention", "passed": False},
+                    {"id": "latency_and_inputs", "passed": True},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runtime.acceptance_result(candidate_root)
+    summary = runtime.acceptance_summary(result, "FAILED")
+    assert summary["status"] == "FAILED"
+    assert summary["progress"] == "5/5"
+    assert summary["passed_count"] == 2
+    assert summary["failed"] == [
+        "paired_gate20",
+        "camera_stack_and_other_tasks",
+        "causal_intervention",
+    ]
+    assert summary["source"] == str(acceptance_path)
+
+
+def test_monitor_uses_gate_audit_when_latency_fail_closed_skips_gate20(tmp_path):
+    runtime = _load_runtime()
+    candidate_root = tmp_path / "candidates/p1"
+    gate_path = candidate_root / "validation/screen/gate_zero_latency.json"
+    gate_path.parent.mkdir(parents=True)
+    gate_path.write_text(
+        json.dumps(
+            {
+                "passed": False,
+                "gate_zero_passed": True,
+                "latency_passed": False,
+                "privileged_inputs": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runtime.acceptance_result(candidate_root)
+    summary = runtime.acceptance_summary(result, "FAILED")
+    assert summary["status"] == "FAILED"
+    assert summary["progress"] == "2/5"
+    assert summary["failed"] == ["latency_and_inputs"]
+    assert summary["not_evaluated"] == [
+        "paired_gate20",
+        "camera_stack_and_other_tasks",
+        "causal_intervention",
+    ]
+
+
+def test_runner_preserves_acceptance_exit_code_for_terminal_artifacts():
+    source = (ROOT / "scripts/before_we_act/run_r10_candidate.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'if wait "$CHILD_PID"; then' in source
+    assert "TERMINAL_STATUS_WRITTEN=1" in source
+    assert 'cp "$CANDIDATE_ROOT/validation/formal/acceptance.json"' in source
+
+
 def test_latency_waived_diagnostic_never_rewrites_official_acceptance():
     source = (
         ROOT / "scripts/before_we_act/run_r10_closed_loop_diagnostic.sh"

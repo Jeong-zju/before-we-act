@@ -168,15 +168,19 @@ def pid_alive(pid):
 
 
 def gpu_rows():
-    result = subprocess.run(
-        [
-            "nvidia-smi",
-            "--query-gpu=index,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
-            "--format=csv,noheader,nounits",
-        ],
-        text=True,
-        capture_output=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
     rows = {}
     if result.returncode == 0:
         for line in result.stdout.splitlines():
@@ -202,6 +206,72 @@ def latest_checkpoint(root: Path):
     if not candidates:
         return "-"
     return str(max(candidates, key=lambda item: item.stat().st_mtime))
+
+
+def acceptance_result(root: Path):
+    """Return the authoritative completed acceptance, or a fail-closed gate result."""
+    for relative in (
+        "acceptance.json",
+        "validation/formal/acceptance.json",
+        "validation/screen/acceptance.json",
+    ):
+        path = root / relative
+        payload = read_json(path)
+        if payload:
+            payload["_monitor_source"] = str(path)
+            return payload
+
+    # A hard gate-zero/latency failure intentionally prevents Gate20 from running.
+    # Preserve that official decision without pretending the three skipped checks ran.
+    for relative in (
+        "validation/formal/gate_zero_latency.json",
+        "validation/screen/gate_zero_latency.json",
+    ):
+        path = root / relative
+        gate = read_json(path)
+        if not gate:
+            continue
+        exact = bool(gate.get("gate_zero_passed"))
+        latency_inputs = bool(gate.get("latency_passed")) and not bool(
+            gate.get("privileged_inputs")
+        )
+        return {
+            "passed": False,
+            "status": "FAILED" if not gate.get("passed") else "PENDING",
+            "acceptance": [
+                {"id": "gate_zero_exact", "passed": exact},
+                {"id": "latency_and_inputs", "passed": latency_inputs},
+            ],
+            "not_evaluated": [
+                "paired_gate20",
+                "camera_stack_and_other_tasks",
+                "causal_intervention",
+            ],
+            "_monitor_source": str(path),
+        }
+    return {}
+
+
+def acceptance_summary(acceptance, terminal_state):
+    checks = acceptance.get("acceptance", [])
+    failed = [item["id"] for item in checks if not item.get("passed")]
+    passed_count = sum(bool(item.get("passed")) for item in checks)
+    if acceptance.get("passed"):
+        status = "PASSED"
+    elif acceptance:
+        status = acceptance.get("status") or (
+            "FAILED" if terminal_state in TERMINAL else "PENDING"
+        )
+    else:
+        status = "FAILED_NO_RESULT" if terminal_state == "FAILED" else "PENDING"
+    return {
+        "status": status,
+        "progress": f"{len(checks)}/5",
+        "passed_count": passed_count,
+        "failed": failed,
+        "not_evaluated": acceptance.get("not_evaluated", []),
+        "source": acceptance.get("_monitor_source", "-"),
+    }
 
 
 def runtime_alerts(state, alive, beat_age, stale_after, recent):
@@ -232,7 +302,7 @@ def render(run_root: Path, selected):
         root = root_for(run_root, candidate)
         status = read_json(root / "status.json")
         beat = read_json(root / "heartbeat.json")
-        acceptance = read_json(root / "acceptance.json") or read_json(root / "screen_acceptance.json")
+        acceptance = acceptance_result(root)
         beat_epoch = parse_time(beat.get("updated_at"))
         beat_age = current_epoch - beat_epoch if beat_epoch else None
         started_epoch = parse_time(status.get("created_at"))
@@ -245,6 +315,7 @@ def render(run_root: Path, selected):
         gpu = gpus.get(GPU_MAP[candidate], ["?", "?", "?", "?", "?"])
         recent = tail(status.get("log"), lines=20)
         alerts = runtime_alerts(state, alive, beat_age, stale_after, recent)
+        acceptance_view = acceptance_summary(acceptance, state)
         progress = "-"
         if status.get("update") is not None:
             progress = f"update={status['update']}/{status.get('total_updates', '?')}"
@@ -280,9 +351,12 @@ def render(run_root: Path, selected):
                 f"  detail={status.get('detail', '-')}",
                 f"  alerts={alerts or ['NONE']}",
                 (
-                    f"  acceptance={'PASSED' if acceptance.get('passed') else 'FAILED/PENDING'} "
-                    f"progress={status.get('acceptance_progress', '-')} "
-                    f"reasons={[item['id'] for item in acceptance.get('acceptance', []) if not item.get('passed')]}"
+                    f"  acceptance={acceptance_view['status']} "
+                    f"progress={acceptance_view['progress']} "
+                    f"passed={acceptance_view['passed_count']} "
+                    f"reasons={acceptance_view['failed']} "
+                    f"not_evaluated={acceptance_view['not_evaluated']} "
+                    f"source={acceptance_view['source']}"
                 ),
             ]
         )
