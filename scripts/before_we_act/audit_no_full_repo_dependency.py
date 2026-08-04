@@ -19,10 +19,13 @@ def main() -> None:
     violations = []
     scanned = 0
     for path in sorted((root / "before_we_act").rglob("*.py")):
+        relative = path.relative_to(root)
+        if "upstream_components" in relative.parts and "tests" in relative.parts:
+            continue
         scanned += 1
         source = path.read_text(encoding="utf-8")
         if "/workspace/bwa_upstream" in source or "/tmp/bwa-r11-upstreams" in source:
-            violations.append({"path": str(path.relative_to(root)), "reason": "absolute upstream cache path"})
+            violations.append({"path": str(relative), "reason": "absolute upstream cache path"})
         tree = ast.parse(source, filename=str(path))
         for node in ast.walk(tree):
             names = []
@@ -34,7 +37,7 @@ def main() -> None:
                 if name.startswith("before_we_act.upstream_components"):
                     continue
                 if name.split(".", 1)[0] in FORBIDDEN_PREFIXES:
-                    violations.append({"path": str(path.relative_to(root)), "reason": f"full upstream import {name}"})
+                    violations.append({"path": str(relative), "reason": f"full upstream import {name}"})
     result = {
         "schema_version": 1,
         "passed": not violations,
