@@ -101,6 +101,10 @@ class TrainablePerceptionExtension(CorePerceptionExtension):
     def future_feature_horizons(self) -> tuple[int, ...]:
         return ()
 
+    @property
+    def future_qpos_horizons(self) -> tuple[int, ...]:
+        return ()
+
     def clamp_gate_(self) -> None:
         bound = float(torch.atanh(torch.tensor(self.gate_max)).item())
         with torch.no_grad():

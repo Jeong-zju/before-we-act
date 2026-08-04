@@ -94,3 +94,5 @@ def test_future_targets_are_not_put_in_deployment_context():
     deployment_block = source[context_start:context_end]
     assert "future_qpos" not in deployment_block
     assert "future_view_features" not in deployment_block
+    assert "future_qpos_horizons" in source
+    assert "future_feature_horizons" in source

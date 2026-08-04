@@ -72,13 +72,15 @@ class BWAFrameDataset(NoWristFrameDataset):
         history_steps: int,
         history_stride: int,
         include_history_views: bool,
-        future_horizons: tuple[int, ...],
+        future_qpos_horizons: tuple[int, ...],
+        future_feature_horizons: tuple[int, ...],
     ):
         super().__init__(episodes, horizon, stats)
         self.history_steps = int(history_steps)
         self.history_stride = int(history_stride)
         self.include_history_views = bool(include_history_views)
-        self.future_horizons = tuple(int(value) for value in future_horizons)
+        self.future_qpos_horizons = tuple(int(value) for value in future_qpos_horizons)
+        self.future_feature_horizons = tuple(int(value) for value in future_feature_horizons)
         if self.history_steps < 0 or self.history_stride < 1:
             raise ValueError("invalid history window")
 
@@ -97,7 +99,7 @@ class BWAFrameDataset(NoWristFrameDataset):
             "actions": actions,
             "action_mask": action_mask,
         }
-        if not self.history_steps and not self.future_horizons:
+        if not self.history_steps and not self.future_qpos_horizons and not self.future_feature_horizons:
             return result
         with h5py.File(episode["path"], "r") as handle:
             data = handle["data"]
@@ -126,20 +128,25 @@ class BWAFrameDataset(NoWristFrameDataset):
                     result["history_local_rgb"] = self._image_tensor(
                         [np.asarray(images[f"agent_{arm}"][index]) for index in indices]
                     )
-            if self.future_horizons:
-                future_indices = [
+            if self.future_qpos_horizons:
+                qpos_indices = [
                     min(time_index + value, episode["length"] - 1)
-                    for value in self.future_horizons
+                    for value in self.future_qpos_horizons
                 ]
-                future_qpos = np.asarray(agent["qpos"][future_indices], dtype=np.float32)
+                future_qpos = np.asarray(agent["qpos"][qpos_indices], dtype=np.float32)
                 result["future_qpos"] = torch.from_numpy(
                     (future_qpos - self.stats["q_mean"]) / self.stats["q_std"]
                 )
+            if self.future_feature_horizons:
+                feature_indices = [
+                    min(time_index + value, episode["length"] - 1)
+                    for value in self.future_feature_horizons
+                ]
                 result["future_global_rgb"] = self._image_tensor(
-                    [np.asarray(images["global"][index]) for index in future_indices]
+                    [np.asarray(images["global"][index]) for index in feature_indices]
                 )
                 result["future_local_rgb"] = self._image_tensor(
-                    [np.asarray(images[f"agent_{arm}"][index]) for index in future_indices]
+                    [np.asarray(images[f"agent_{arm}"][index]) for index in feature_indices]
                 )
         return result
 
@@ -245,7 +252,8 @@ def main() -> None:
     bridge = config["bridge"]
     history_steps = int(bridge.get("history_steps", 0))
     history_stride = int(bridge.get("history_stride", 1))
-    future_horizons = tuple(int(value) for value in extension.future_feature_horizons)
+    future_qpos_horizons = tuple(int(value) for value in extension.future_qpos_horizons)
+    future_feature_horizons = tuple(int(value) for value in extension.future_feature_horizons)
     dataset = BWAFrameDataset(
         episodes,
         parent_config.get("horizon", 100),
@@ -253,7 +261,8 @@ def main() -> None:
         history_steps=history_steps,
         history_stride=history_stride,
         include_history_views=extension.requires_history_views,
-        future_horizons=future_horizons,
+        future_qpos_horizons=future_qpos_horizons,
+        future_feature_horizons=future_feature_horizons,
     )
     resume = torch.load(args.resume, map_location="cpu", weights_only=False) if args.resume else None
     start_update = int(resume["update"]) if resume else 0
@@ -370,8 +379,9 @@ def main() -> None:
                 history_actions=history_actions,
                 history_mask=history_mask,
             )
-        if future_horizons:
+        if future_qpos_horizons:
             targets["future_qpos"] = batch["future_qpos"].to(device, non_blocking=True)
+        if future_feature_horizons:
             targets["future_view_features"] = _encode_pooled_history(
                 model, batch["future_global_rgb"], batch["future_local_rgb"], device
             ).detach()
