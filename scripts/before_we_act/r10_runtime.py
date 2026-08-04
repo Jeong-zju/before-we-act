@@ -156,6 +156,19 @@ def parse_time(value):
         return None
 
 
+def runtime_duration(status, current_epoch):
+    started_epoch = parse_time(status.get("created_at"))
+    if started_epoch is None:
+        return None
+    state = status.get("state", "NOT_STARTED")
+    ended_epoch = (
+        parse_time(status.get("updated_at")) if state in TERMINAL else current_epoch
+    )
+    if ended_epoch is None:
+        ended_epoch = current_epoch
+    return max(0.0, ended_epoch - started_epoch)
+
+
 def pid_alive(pid):
     try:
         pid = int(pid)
@@ -305,8 +318,7 @@ def render(run_root: Path, selected):
         acceptance = acceptance_result(root)
         beat_epoch = parse_time(beat.get("updated_at"))
         beat_age = current_epoch - beat_epoch if beat_epoch else None
-        started_epoch = parse_time(status.get("created_at"))
-        duration = current_epoch - started_epoch if started_epoch else None
+        duration = runtime_duration(status, current_epoch)
         state = status.get("state", "NOT_STARTED")
         alive = pid_alive(status.get("pid")) or pid_alive(status.get("child_pid"))
         stale_after = manifest.get("stale_after_seconds", 75)

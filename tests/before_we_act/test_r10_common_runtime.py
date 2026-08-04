@@ -96,6 +96,19 @@ def test_runtime_does_not_treat_zero_pid_sentinel_as_alive():
     assert runtime.pid_alive(-1) is False
 
 
+def test_runtime_duration_freezes_when_candidate_is_terminal():
+    runtime = _load_runtime()
+    status = {
+        "state": "FAILED",
+        "created_at": "2026-08-04T07:36:20Z",
+        "updated_at": "2026-08-04T23:04:26Z",
+    }
+    much_later = runtime.parse_time("2026-08-05T23:04:26Z")
+    assert runtime.runtime_duration(status, much_later) == 55_686
+    status["state"] = "TRAINING"
+    assert runtime.runtime_duration(status, much_later) == 142_086
+
+
 def test_future_targets_are_not_put_in_deployment_context():
     source = (ROOT / "stereo_core/train_bwa_perception.py").read_text(encoding="utf-8")
     context_start = source.index("deployment_context = CoreDeploymentContext(")
