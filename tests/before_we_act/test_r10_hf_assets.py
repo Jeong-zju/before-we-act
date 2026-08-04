@@ -4,10 +4,15 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+
+import h5py
+import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[2]
 DOWNLOADER = ROOT / "scripts/before_we_act/download_r10_hf_assets.sh"
+AUDITOR = ROOT / "scripts/before_we_act/audit_r10_hdf5_assets.py"
 
 
 def test_hf_asset_dry_run_uses_s0_contract_and_fixed_revisions(tmp_path):
@@ -68,3 +73,42 @@ def test_hf_asset_downloader_requires_fifo_without_anonymous(tmp_path):
     )
     assert result.returncode == 3
     assert "protected token FIFO" in result.stderr
+
+
+def test_hdf5_asset_auditor_reads_both_endpoints_and_fails_closed(tmp_path):
+    task_root = tmp_path / "data/lift_barrier/hdf5"
+    task_root.mkdir(parents=True)
+    episode = task_root / "episode_000000.hdf5"
+    with h5py.File(episode, "w") as handle:
+        data = handle.create_group("data")
+        action = data.create_group("action/agents/panda_0")
+        action.create_dataset("commanded", data=np.zeros((2, 8), dtype=np.float32))
+        observation = data.create_group("observation")
+        agent = observation.create_group("agents/panda_0")
+        agent.create_dataset("qpos", data=np.zeros((2, 8), dtype=np.float32))
+        images = observation.create_group("images")
+        images.create_dataset("global", data=np.zeros((2, 480, 640, 3), dtype=np.uint8))
+        images.create_dataset("agent_0", data=np.zeros((2, 480, 640, 3), dtype=np.uint8))
+    output = tmp_path / "audit.json"
+    result = subprocess.run(
+        [
+            sys.executable, str(AUDITOR), "--data-root", str(tmp_path / "data"),
+            "--expected-files", "1", "--output", str(output),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(output.read_text(encoding="utf-8"))["passed"] is True
+    result = subprocess.run(
+        [
+            sys.executable, str(AUDITOR), "--data-root", str(tmp_path / "data"),
+            "--expected-files", "2", "--output", str(output),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 1
+    assert json.loads(output.read_text(encoding="utf-8"))["passed"] is False
