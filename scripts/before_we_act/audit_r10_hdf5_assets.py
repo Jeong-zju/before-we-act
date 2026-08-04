@@ -47,13 +47,13 @@ def audit_file(path: Path) -> tuple[int, int]:
             if image_key not in images:
                 raise ValueError(f"missing RGB {image_key}")
             lengths.update((len(commanded), len(qpos), len(images[image_key])))
-            if commanded.shape[1:] != (8,) or qpos.shape[1:] != (8,):
+            if commanded.shape[1:] != (8,) or qpos.shape[1:] != (9,):
                 raise ValueError(
                     f"invalid state/action shape for {agent}: "
                     f"qpos={qpos.shape}, action={commanded.shape}"
                 )
             for sample in (0, -1):
-                if qpos[sample].shape != (8,) or commanded[sample].shape != (8,):
+                if qpos[sample].shape != (9,) or commanded[sample].shape != (8,):
                     raise ValueError(f"unreadable state/action endpoint for {agent}")
                 if images[image_key][sample].shape != (480, 640, 3):
                     raise ValueError(f"invalid RGB endpoint for {image_key}")
@@ -111,13 +111,24 @@ def main() -> None:
             "global and matching agent RGB streams exist",
             "time dimensions agree and are non-empty",
             "first and last state/action/RGB samples are readable",
-            "qpos/action are 8-D and RGB is 480x640x3",
+            "qpos/action are 9-D/8-D and RGB is 480x640x3",
         ],
         "errors": errors,
         "passed": passed,
     }
     atomic_json(args.output, payload)
-    print(json.dumps(payload, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "passed": passed,
+                "observed_files": len(paths),
+                "expected_files": args.expected_files,
+                "error_count": len(errors),
+                "output": str(args.output.resolve()),
+            },
+            sort_keys=True,
+        )
+    )
     raise SystemExit(0 if passed else 1)
 
 

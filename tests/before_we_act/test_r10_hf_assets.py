@@ -85,7 +85,7 @@ def test_hdf5_asset_auditor_reads_both_endpoints_and_fails_closed(tmp_path):
         action.create_dataset("commanded", data=np.zeros((2, 8), dtype=np.float32))
         observation = data.create_group("observation")
         agent = observation.create_group("agents/panda_0")
-        agent.create_dataset("qpos", data=np.zeros((2, 8), dtype=np.float32))
+        agent.create_dataset("qpos", data=np.zeros((2, 9), dtype=np.float32))
         images = observation.create_group("images")
         images.create_dataset("global", data=np.zeros((2, 480, 640, 3), dtype=np.uint8))
         images.create_dataset("agent_0", data=np.zeros((2, 480, 640, 3), dtype=np.uint8))
