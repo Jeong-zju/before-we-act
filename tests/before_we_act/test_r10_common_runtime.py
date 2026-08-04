@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import h5py
+import numpy as np
 import pytest
 import yaml
 
@@ -13,6 +15,7 @@ from stereo_core.bwa_perception import (
     build_perception_extension,
     load_r10_config,
 )
+from stereo_core.bwa_data import take_hdf5_rows
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -96,3 +99,13 @@ def test_future_targets_are_not_put_in_deployment_context():
     assert "future_view_features" not in deployment_block
     assert "future_qpos_horizons" in source
     assert "future_feature_horizons" in source
+
+
+def test_short_hdf5_windows_preserve_duplicate_indices(tmp_path):
+    path = tmp_path / "rows.hdf5"
+    values = np.arange(30, dtype=np.float32).reshape(10, 3)
+    with h5py.File(path, "w") as handle:
+        handle.create_dataset("rows", data=values)
+    with h5py.File(path, "r") as handle:
+        observed = take_hdf5_rows(handle["rows"], [0, 0, 4, 9, 9])
+    np.testing.assert_array_equal(observed, values[[0, 0, 4, 9, 9]])

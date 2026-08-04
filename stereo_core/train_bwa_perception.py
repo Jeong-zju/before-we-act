@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 
 try:
     from .bwa_contracts import CoreContext, CoreDeploymentContext
+    from .bwa_data import take_hdf5_rows
     from .bwa_perception import (
         EXPECTED_PARENT_SHA256,
         FORMAL_BATCH,
@@ -35,6 +36,7 @@ try:
     )
 except ImportError:
     from bwa_contracts import CoreContext, CoreDeploymentContext
+    from bwa_data import take_hdf5_rows
     from bwa_perception import (
         EXPECTED_PARENT_SHA256,
         FORMAL_BATCH,
@@ -112,8 +114,8 @@ class BWAFrameDataset(NoWristFrameDataset):
                     raw = time_index - offset * self.history_stride
                     valid.append(raw >= 0)
                     indices.append(max(0, raw))
-                history_qpos = np.asarray(agent["qpos"][indices], dtype=np.float32)
-                history_action = np.asarray(commanded[indices], dtype=np.float32)
+                history_qpos = take_hdf5_rows(agent["qpos"], indices)
+                history_action = take_hdf5_rows(commanded, indices)
                 result["history_qpos"] = torch.from_numpy(
                     (history_qpos - self.stats["q_mean"]) / self.stats["q_std"]
                 )
@@ -133,7 +135,7 @@ class BWAFrameDataset(NoWristFrameDataset):
                     min(time_index + value, episode["length"] - 1)
                     for value in self.future_qpos_horizons
                 ]
-                future_qpos = np.asarray(agent["qpos"][qpos_indices], dtype=np.float32)
+                future_qpos = take_hdf5_rows(agent["qpos"], qpos_indices)
                 result["future_qpos"] = torch.from_numpy(
                     (future_qpos - self.stats["q_mean"]) / self.stats["q_std"]
                 )
