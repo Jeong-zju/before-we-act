@@ -1922,6 +1922,12 @@ P0/P1 normal `gate_summary.json` SHA256 分别为 `5e15bc5c45c314510df4002bcc5a6
 
 服务器更新后只 respawn 永久 tmux 的 P0/P1 失败窗格，window 0 与 30 分钟 monitor 未动；runner 重新校验 750 文件 receipt、parent hashes、pair-exact、checkpoint/config/source identity，复用 normal，将两份不完整 legacy task 原样保留为 `lift_barrier.superseded_20260803T222848Z` 后重跑。北京时间 `2026-08-04 06:29:33`，P0/P1 均已通过修复后的 M2 direct-control 握手，legacy seed 900 均 `success=true, steps=71`，正在 episode `2/20`，心跳存活。此时动态 ETA 为核心四条件约 `2026-08-05 01:21:46`、完整 R7 约 `2026-08-06 02:33:03`（北京时间）；仍为运行中估计，不是验收结论。
 
+北京时间 `2026-08-04 09:31`，operator 根据已经完整取得的 normal 结果判断本轮性能不尽如人意并明确要求终止训练和验证。正式 30k 训练此前已经结束，因此本次实际停止的是两路进行中的 `legacy_reference` 验证、永久 monitor，以及服务器上遗留的四个高频只读轮询进程；`2026-08-04 09:32:14` 的停止后审计显示 `ssh_tmux` 仅保留 window 0、匹配本 run 的进程为 0、GPU compute process 为 0。checkpoint、normal 完整产物和 legacy 部分产物均原样保留，未删除或覆盖。同事服务器同期不存在 S4-R7/R8 训练或验证进程，其无关 GPU 任务未触碰。
+
+终止点的 legacy 证据只允许作为 **partial / non-acceptance** 记录：P0 已完整得到 LiftBarrier `7/20`、LongPipelineDelivery `11/20`，TakePhoto 完成 `16/20` 且成功 `2` 次，另一个 episode 在 step 300 被人工中断；P1 已完整得到 LiftBarrier `6/20`、LongPipelineDelivery `12/20`，TakePhoto 完成 `15/20` 且成功 `1` 次，另一个 episode 在 step 1025 被人工中断。`legacy_reference` 五任务未完成，因而不存在有效的 condition-level `gate_summary.json`；`world_evidence_gate_zero`、`shuffle_all` 及四个诊断条件均未开始。不能用这些部分结果补齐缺失回合、外推完整 macro 或执行预注册因果门槛。
+
+本轮最终状态固定为 **operator-stopped / no winner / no merge**：P0 normal `34/100` 虽暂高于 P1 的 `32/100`，但没有证据证明 `normal >= legacy_reference`、`normal > world_evidence_gate_zero` 和 `normal > shuffle_all`；P1 还已明确违反 utility calibration 门槛。因此两个候选都不得声明通过，P0/P1 分支均不合并到 `feat/model-improvements`。在 operator 给出新的书面启动决定前，不再恢复 round4、不启动依赖 R7 winner 的串行 R8；模型修改主线继续保留已验收的 R6L-P1（merge `7308f5e`）作为回退方法。
+
 R7 新 run 使用独立 root，禁止复用旧 125k 配置绑定的 preflight/resume：
 
 ```bash
@@ -2227,6 +2233,6 @@ configs/wam_flow/
 10. **已完成并部分通过：** S3-R6 旧 run 已终止且不得复用；新 run 四候选均完成 fresh 五任务 Flow 80k，两个 P1 均完成 adapter/gate 10k。R6L-P1 以宏平均 `39% > 29%` 通过；R6J-P1 在四个完整任务及 CameraAlignment 6 回合后可证明最终上界 `38% < 40%`，经 operator 授权停止剩余 eval，不晋级并保留 R6J-P0。
 11. **已完成工程晋级：** `s3/r6l-p1-protected-local-gated` 通过 merge commit `7308f5e` 合并到 `feat/model-improvements`；R6L-P0、R6J-P0、R6J-P1 均不合并，只保留分支与远程产物供审计。
 12. **旧路线已关闭：** 旧 R7a/R7b/R7m 与旧 R8 future-dropout 不运行，不再沿失败 R6J checkpoint 解冻 team/Flow。
-13. **下一步 R7：** 在公共 scale-aligned active clone + token-preserving adapter 上建立 `P0 no-WUC / P1 WUC` 两卡候选；先实现层级 sampler、逐模块 exposure、legacy/active 双回退和 forced-evidence audit，再启动 `effective team batch 12 × 125k` 上限训练。
-14. **条件下一步 R8：** 根据 R7 winner 冻结 WUC 方法设置，从共同 ancestors 独立建立 `P0 horizon-prefix-mean / P1 causal-prefix-attention` 并各自重训 125k，不复用 R7 的 125k weights；验证 action-prefix 因果性。
-15. **最终 R9：** 冻结最后一个通过的 recipe，用两张 GPU 分两批从共同 ancestors 独立训练 seeds `101/202/303/404` 的 active clones，完成五任务闭环、scale-matched intervention 与统计；R7/R8 都失败则正式复现 R6L-P1。
+13. **已完成训练但由 operator 中止验证、未通过：** 新 R7 `s4-r7-fast30k-round4` 两候选均完成全量 750 episodes、配对 preflight、30k 训练和 normal Gate20；P0/P1 normal 分别为 `34/100`、`32/100`，P1 utility calibration 失败。operator 于北京时间 `2026-08-04 09:31` 因性能不尽如人意终止剩余验证；核心因果条件不完整，因此 no winner、no merge。
+14. **当前不启动串行 R8：** R7 没有合格 winner，不能从 `feat/model-improvements` 创建依赖 R7 晋级结果的新 R8。停止状态已核验，两台服务器均无 S4-R7/R8 训练或验证进程；除非 operator 重新给出明确书面启动决定，否则不得自动恢复。
+15. **下游保持回退：** 当前模型方法继续以已验收的 R6L-P1（merge `7308f5e`）为准；R9 或任何正式多种子训练同样暂停，不得把 R7 partial 结果当作通过证据。
