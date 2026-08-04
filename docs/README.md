@@ -22,6 +22,7 @@
 
 - [Phase M0 数据集卡](reports/20260721_FE_PC_WAM_PHASE_M0_DATASET_CARD_V1.0_ZH.md)
 - [M2 双任务多视角模型闭环失败记录](reports/20260727_M2_MULTIVIEW_CLOSED_LOOP_FAILURE_ZH.md)
+- [S10 `core` 用户数据复现与接入记录](reports/20260804_S10_CORE_USER_DATA_REPRODUCTION_ZH.md)
 
 ## 实验与消融（`experiments/`）
 

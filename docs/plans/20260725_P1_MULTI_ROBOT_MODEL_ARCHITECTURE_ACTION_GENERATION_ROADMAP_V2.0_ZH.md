@@ -1,9 +1,9 @@
-# P1 多机器人 World-Action Flow Matching 技术路线 V3.3（ICRA Fast Track）
+# P1 多机器人 World-Action Flow Matching 技术路线 V3.4（ICRA Fast Track）
 
-> 文档更新：2026-08-02
+> 文档更新：2026-08-04
 > 工程起点：当前 `feat/model-improvements` 分支
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：M0、M1、S0、S1-R1、S2、S3-R6 已完成；R1 选择 `rectified_flow_cold` F1，R3 选择 own-action-conditioned W1，R5 选择 Protected Shared P0；R6L-P1 五任务宏平均 `39% > 29%` 通过并经 merge commit `7308f5e` 晋级 `feat/model-improvements`，R6J-P1 在可证明上界 `38% < 40%` 后提前停止且不合并；旧 R7a/R7b/R7m 的原设置、`closed/not-run` 结果和关闭报告完整冻结于 8.4，旧 R8 保留于 8.5；执行编号由新 R7（Round 1：Token-Preserving World Utility Coupling）和新 R8（Round 2：Horizon-Causal Action Conditioning）接续，正式多种子复现顺延为 S5-R9
+> 当前状态：M0、M1、S0、S1-R1、S2、S3-R6 已完成；原 R7/R8/R9 方案冻结为历史计划且不再作为 S10 起点执行。S10 已直接接入用户自有服务器完成的 `core` 用户五任务复现：120k updates、500 回合冻结评测、宏平均 71.4%，后续改进从该提交开始
 > 评测原则：闭环成功率是最终质量指标；新 R7/R8 还必须用 gate-zero/future-shuffle/action-prefix 干预证明改进确实来自 world branch；S2 predictor 严格 off-path，因此按预测能力与因果门槛推进
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -25,6 +25,14 @@ ICRA 截稿临近，后续不再按旧版 M3–M11 的长串行路线推进。�
 8. **完整吸收 Stereo-CoRE 的有效/无效结论，不移植其策略。** 保留 capability-only 路由、每 4 步强制分支反事实、router-only stop-gradient teacher、rank-32 低秩容量、层级均衡采样和正式优化规模；同时按其最终消融把 `relation/specialization/anchor` 永久设为 0，并修复 forced-train/top-2-test 错配。不复制代码、权重、腕部 RGB-D、深度分支或 policy expert；我们的路由对象是 world future evidence，不是动作专家。
 9. **扩大训练以有效机器人样本为单位。** 同事正式配置的事实预算是 `batch 40 × 120,000 = 4.8M` 个本地机器人窗口；我们的一个 team window 平均含 `3.2` 台有效机器人，严格对齐预算定为 `effective team batch 12 × 125,000 updates × 3.2 = 4.8M`。禁止把 team batch 40 直接当作“持平”，因为那相当于约 128 个机器人窗口/更新并会改变比较口径。
 10. **扩大预算时不能冻结欠训练的任务模块。** DINOv3、数据/PCA contract 与一份不可变 R6L 回退模型继续冻结；但正式 R7/R8 候选必须从已验收 checkpoint 创建 trainable clone，对 Flow、local/team future predictor 和旧 R6 adapter 做分阶段低学习率续训。`10k×team batch 1` 的 world modules 不能只因已经验收就永久冻结，再让新 router 单独吃满 4.8M 样本。
+
+### 1.1 S10 起点覆盖决策（2026-08-04）
+
+用户最终决定：**S10 直接以 `core` 为起点，并继续使用用户自己的五任务数据集。** 该决定覆盖本节第 2、8 项中“ACT 仅作历史基线”和“不复制 Stereo-CoRE 代码”的 S10 执行边界，也覆盖第 9–10 节原 R7/R8/R9 的后续执行顺序；这些内容继续保留为既有研究证据和历史计划，不改写成已执行结果。
+
+工程上已将官方 Stereo-CoRE `f60995c082a18cc849fcf3537ac4b89f1ac9b19f` 及用户服务器完成的 no-wrist 适配直接接入 `feat/model-improvements`。该适配用用户数据完成 `batch 40 × 120,000 updates = 4.8M` local action chunks，并在五任务 frozen100 上得到 `100/60/0/100/97`、宏平均 `71.4%`。这不是原 R9 四种子方案的完成结果，也不与同事的腕部 RGB-D 结果作同条件横比；详细来源、manifest/checkpoint/result hashes 见 [S10 `core` 用户数据复现与接入记录](../reports/20260804_S10_CORE_USER_DATA_REPRODUCTION_ZH.md)。
+
+本次接入不创建 S10 候选分支、不预选改进方向。代码和结果提交后，由用户从该单一起点自行开展多分支渐进修改。
 
 ## 2. 论文目标与边界
 
@@ -2227,6 +2235,7 @@ configs/wam_flow/
 10. **已完成并部分通过：** S3-R6 旧 run 已终止且不得复用；新 run 四候选均完成 fresh 五任务 Flow 80k，两个 P1 均完成 adapter/gate 10k。R6L-P1 以宏平均 `39% > 29%` 通过；R6J-P1 在四个完整任务及 CameraAlignment 6 回合后可证明最终上界 `38% < 40%`，经 operator 授权停止剩余 eval，不晋级并保留 R6J-P0。
 11. **已完成工程晋级：** `s3/r6l-p1-protected-local-gated` 通过 merge commit `7308f5e` 合并到 `feat/model-improvements`；R6L-P0、R6J-P0、R6J-P1 均不合并，只保留分支与远程产物供审计。
 12. **旧路线已关闭：** 旧 R7a/R7b/R7m 与旧 R8 future-dropout 不运行，不再沿失败 R6J checkpoint 解冻 team/Flow。
-13. **下一步 R7：** 在公共 scale-aligned active clone + token-preserving adapter 上建立 `P0 no-WUC / P1 WUC` 两卡候选；先实现层级 sampler、逐模块 exposure、legacy/active 双回退和 forced-evidence audit，再启动 `effective team batch 12 × 125k` 上限训练。
-14. **条件下一步 R8：** 根据 R7 winner 冻结 WUC 方法设置，从共同 ancestors 独立建立 `P0 horizon-prefix-mean / P1 causal-prefix-attention` 并各自重训 125k，不复用 R7 的 125k weights；验证 action-prefix 因果性。
-15. **最终 R9：** 冻结最后一个通过的 recipe，用两张 GPU 分两批从共同 ancestors 独立训练 seeds `101/202/303/404` 的 active clones，完成五任务闭环、scale-matched intervention 与统计；R7/R8 都失败则正式复现 R6L-P1。
+13. **已由 S10 起点覆盖（未执行）：** 原 R7 的 `P0 no-WUC / P1 WUC` 两卡候选保留为历史计划。
+14. **已由 S10 起点覆盖（未执行）：** 原 R8 的 `P0 horizon-prefix-mean / P1 causal-prefix-attention` 保留为历史计划。
+15. **已由 S10 起点覆盖（未执行）：** 原 R9 四种子正式复现没有执行，不把 S10 单种子 `core` 复现改写为 R9 结果。
+16. **已完成 S10 起点接入：** 官方 Stereo-CoRE 与用户数据 no-wrist 复现代码已直接进入 `feat/model-improvements`；冻结 checkpoint SHA256 为 `061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d`，五任务 frozen100 为 `100/60/0/100/97`。本次不创建候选分支，后续渐进改进由用户开始。
