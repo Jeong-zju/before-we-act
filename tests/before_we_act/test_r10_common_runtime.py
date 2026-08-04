@@ -27,10 +27,10 @@ def _load_runtime():
     return module
 
 
-def test_parent_registry_contains_no_candidate_and_fails_closed():
-    assert BRIDGE_REGISTRY == {}
+def test_each_branch_registers_at_most_one_candidate_and_fails_closed():
+    assert len(BRIDGE_REGISTRY) <= 1
     with pytest.raises(ValueError, match="not registered"):
-        build_perception_extension({"kind": "calibrated_crossview"})
+        build_perception_extension({"kind": "definitely_unknown"})
 
 
 def test_common_config_locks_budget_seed_precision_and_unknown_keys(tmp_path):
