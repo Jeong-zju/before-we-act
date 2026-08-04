@@ -1,30 +1,60 @@
-# P1 多机器人 World-Action Flow Matching 技术路线 V4.3-R10（ICRA Fast Track）
+# P1 多机器人 Before-We-Act 技术路线 V4.5（S10 冻结 / 上游组件代码移植优先 / Benchmark-First Gate20）
 
-> 文档更新：2026-08-05
-> 工程起点：`feat/model-improvements@f37c68a`，新执行主线为 `bwa/main`
+> 文档更新：2026-08-05（V4.5：S10 之后逐轮退出 CoRE 内核；官方开源组件代码移植优先，不全量部署上游模型）
+> 工程起点：`bwa/r9-core-native@06ba780`；R10 四路已全部失败并固定 `no winner`，因此 `W10=B9-CoreNative`；用户于 2026-08-05 显式启动 R11
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：历史阶段结论不变；S10 `core` 已以 SHA256 `061b7a4a…` 冻结，R9 CoRE-native exact 前置已通过；R10 四路无腕 Predictive Perception / State Repair 已于 2026-08-05 完成，四路均未通过特殊验收，`no winner`、`W10=B9-CoreNative`，不创建 R11
-> 评测原则：闭环成功率是最终质量指标；新 R7/R8 还必须用 gate-zero/future-shuffle/action-prefix 干预证明改进确实来自 world branch；S2 predictor 严格 off-path，因此按预测能力与因果门槛推进
+> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R10 于 2026-08-05 终态审计为四路 FAILED / no winner。R11 现按 10.13–10.14 执行，CoRE 只作冻结 teacher/baseline
+> 评测原则：S10 原样完成；R11/R13 保持 off-path，R12/R14 会改变动作轨迹。任何候选只要可能改变最终执行动作、候选选择、动作后处理或策略权重，就必须在同一五任务、同一 seeds 上完成**每任务 20 回合**闭环（简称 `Gate20`，即每候选共 `5×20=100` episodes）后才有 winner 资格；其它表征、排序、校准、因果和 oracle 指标降为可选诊断，不再挡住 benchmark 更优候选
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
+
+> **V4.5 最高优先级执行覆盖：** 用户所称正在运行的 `S10` 视为当前第 10 轮及其最终产物 `W10`；无论远程 run ID 写作 `S10` 还是文档旧编号 `R10`，其代码、配置、数据、训练、评测、候选、选择规则和运行进程一律不改、不停、不重启。第 10.2 节完整保留为冻结执行账本。V4.5 只从 `W10` 之后开始，活动路线以第 10.13–10.18 节为准；第 10.3–10.12 节及被本版替换的“由 AI 按论文自写算法/多重研究 hard gate”条款均降为历史预案。冲突时按以下优先级执行：`S10 冻结 > 安全/许可证/数据合法性 > 上游组件来源与 commit parity > 动作影响判定 > Gate20 benchmark > 可选研究诊断`。
 
 ## 1. 本次路线调整的结论
 
-ICRA 截稿临近，后续不再按旧版 M3–M11 的长串行路线推进。当前分支直接作为工程起点，压缩成一条可以在约七周内形成论文闭环的主线：
+这次不是在 R7/R8 上继续调参，而是更换**方法父节点、代码基座和搜索制度**。已有闭环证据已经足够说明：把同事的 capability-routing 原理映射到旧 World-to-Flow 主干，不能保留 Stereo-CoRE 的动作能力；反过来，直接保留同事的 ACT/CoRE 主干并只替换无腕感知输入，已经得到明显更强的 `71.4%`。V4.3 先将 `NoWristPAIRRoute` 作为 S10 的直接代码父节点；V4.5 不回滚这一步，也不改正在运行的 S10，而是把 `W10` 限定为**性能教师、数据生成器和公平基线**。R11 起不再让 AI 根据论文描述重写核心算法，而是优先锁定作者/机构官方仓库的 commit、许可证、官方配置与可复现实验，再通过最薄的无腕多机器人 adapter 迁移；AI 只负责兼容层、配置、测试和运行编排。新的活动主线固定为：
 
-> 按机器人组织固定第三人称 RGB 上下文，用 Rectified Flow / Flow Matching 生成每台机器人的动作；以已经验收合并的 R6L-P1 为可精确回退的父方案，先保留 future 的 source/horizon/spatial token 并用下游 Flow 误差校准其效用，再把 world predictor 的动作条件从“整段 100 步平均”改为严格 horizon-causal 的动作前缀。R6J 的直接 peer/shared 平均注入仍是失败消融；只有经 utility routing 重新证明有用的 future evidence 才能恢复为正向主张。
+> **冻结完成 S10 → 迁移官方 Team Belief/World Representation 代码 → 迁移官方 Flow/DiT/Consistency action policy → 迁移官方 latent world model → 迁移官方 world-guided planner/post-training。CoRE 在过渡期提供教师动作和对照，但最终模型的 forward、backbone、loss 与部署依赖均不得包含 ACT/ARCA、PAIR router、role adapters、forced-role bank 或 CoRE checkpoint。**
 
-本次调整包含十项硬决策：
+### 1.1 触发转向的闭环证据
 
-1. **当前分支就是起点。** 不重写已经验证的数据接口、DINOv3、按机器人视图、共享解码器、dense/MoE、时间集成、checkpoint 和闭环评测基础；现有 task-balanced sampler 保留为回归基线，新轮次只把其采样分布升级为层级均衡。
-2. **最终目标是 World Action Model 与 Flow Matching。** 旧的 CVAE 动作分块模型仅保留为历史基线；论文标题、方法名和主张不以 ACT 为目标。
-3. **每个候选只回答一个可归因问题。** R7/R8 允许先落一个两候选共用的公共垂直切片，再让两卡候选只沿一个轴分叉；公共切片、候选差异和 R6 parent reference 必须分别记录，不能把两项共同改动伪装成 P1 的单变量收益。
-4. **使用两卡训练真正的备选路线。** R7 固定 `GPU0=token routing without WUC`、`GPU1=token routing + WUC`；R8 固定 `GPU0=horizon prefix mean`、`GPU1=causal prefix cross-attention`。每个候选独占一张卡并使用相同有效 batch、updates、sampler 和评测协议；候选被预注册止损规则淘汰后，释放的 GPU 立即转做 causal intervention、正式复现准备或保底分支评测，不把两卡绑成一个候选的 DDP。
-5. **暂时舍弃 active-agent loss weighting。** 训练目标不再根据动作幅度、active/inactive 标签或机器人活跃比例调整权重。所有 agent 使用相同损失规则，activity 最多保留为 debugging log，不参与反向传播或候选选择。
-6. **闭环成功率决定质量，因果干预决定 claim 是否成立。** R6 继续服从已经冻结的五任务宏平均规则；R7/R8 的 normal 闭环必须不低于 parent，同时严格优于 gate-zero/shuffled future，避免再次出现“有 world branch 但动作并不依赖它”。S2 predictor 严格 off-path，仍只用 held-out prediction、action/peer-action shuffle 与 action-equivalence smoke。
-7. **own predictor 从软约束改为硬保护。** 旧 R4 已证明 multi-head、own residual gate、分组梯度裁剪和随机数流隔离都不能保证逐任务 own no-regression。新 R5 固定从同一个合格 P0 own checkpoint 出发，own tower 以 `eval + frozen + optimizer-excluded` 方式保持函数不变；peer/shared 只能单向读取 detached own 表示，不能反向改写 own 输出。
-8. **完整吸收 Stereo-CoRE 的有效/无效结论，不移植其策略。** 保留 capability-only 路由、每 4 步强制分支反事实、router-only stop-gradient teacher、rank-32 低秩容量、层级均衡采样和正式优化规模；同时按其最终消融把 `relation/specialization/anchor` 永久设为 0，并修复 forced-train/top-2-test 错配。不复制代码、权重、腕部 RGB-D、深度分支或 policy expert；我们的路由对象是 world future evidence，不是动作专家。
-9. **扩大训练以有效机器人样本为单位。** 同事正式配置的事实预算是 `batch 40 × 120,000 = 4.8M` 个本地机器人窗口；我们的一个 team window 平均含 `3.2` 台有效机器人，严格对齐预算定为 `effective team batch 12 × 125,000 updates × 3.2 = 4.8M`。禁止把 team batch 40 直接当作“持平”，因为那相当于约 128 个机器人窗口/更新并会改变比较口径。
-10. **扩大预算时不能冻结欠训练的任务模块。** DINOv3、数据/PCA contract 与一份不可变 R6L 回退模型继续冻结；但正式 R7/R8 候选必须从已验收 checkpoint 创建 trainable clone，对 Flow、local/team future predictor 和旧 R6 adapter 做分阶段低学习率续训。`10k×team batch 1` 的 world modules 不能只因已经验收就永久冻结，再让新 router 单独吃满 4.8M 样本。
+所有任务列统一按 `LiftBarrier / CameraAlignment / ThreeRobotsStackCube / LongPipelineDelivery / TakePhoto` 排列：
+
+| 方案 | 输入/协议 | 五任务成功率 | macro | 阶段结论 |
+|---|---|---|---:|---|
+| 同事 `Peer-Exact Stereo-CoRE` | 单机腕部 RGB-D + own qpos；frozen-100 SR@1 | `99/100/99/94/29` | `84.2%` | 方法来源上界；与无腕协议不作同协议 SOTA 比较 |
+| `Peer-NoWrist Stereo-CoRE` | 当前全局固定 RGB + 对应 agent 固定 RGB + own qpos；同一 frozen-100 seeds | `100/60/0/100/97` | `71.4%` | **S10 冻结父节点；S10 后只作 teacher/baseline**；相对同事数值差 `12.8pp` |
+| 历史 R6L-P1 | 第三人称 RGB 的 local-future gated Flow；Gate20 | 见 8.1.2 | `39%` | 历史正结果，不再是新方法 parent |
+| R7-P0 / no-WUC | 全量拟合后 normal Gate20 | `20/70/0/70/10` | `34%` | 未通过，no merge |
+| R7-P1 / WUC | 全量拟合后 normal Gate20 | `5/65/0/80/10` | `32%` | utility calibration 亦失败，no merge |
+| R8 两候选 | 用户确认已完成验证 | 逐任务互有优劣，整体显著低于 Stereo-CoRE | 不写入未经 hash 绑定的数字 | 方法方向关闭；完整 per-task/hash 仍须回填档案 |
+
+这里有两条必须分开的事实：第一，`84.2%` 使用腕部 RGB-D，不能被当成当前无腕部署协议的公平 baseline；第二，`Peer-NoWrist=71.4%` 与当前环境、数据和 frozen seeds 对齐，已经足以证明“保留同事 action trunk”比“继续扩写旧 WAM trunk”更接近项目目标。
+
+任务级差异同样决定了下一步：无腕迁移相对同事在 LiftBarrier、LPD、TakePhoto 分别为 `+1pp/+6pp/+68pp`，但 CameraAlignment、StackCube 为 `-40pp/-99pp`。macro 会掩盖这种两极化，后续任何候选都必须同时报告五任务，不能用 TakePhoto 的巨大提升抵消 StackCube 的完全失败。
+
+### 1.2 V4.3/S10 冻结硬决策（仅约束 S10 及历史复现）
+
+以下十七项保留用于解释正在运行的S10为什么采用CoRE-native bank，不得在S10运行中追改；其中关于R11–R14继续扩展`stereo_core`、forced-role/Flow bank、由AI自写核心或以CoRE为最终parent的表述，均不是V4.5执行指令。S10结束后只执行第10.13–10.18节的组件级移植路线。
+
+1. **方法 parent 改为 `Peer-NoWrist`。** 新模块从其冻结 checkpoint `54cb21e7…f19f34d` 加载；旧 R6L-P1 只作论文历史对照和工程参考。
+2. **CoRE 源码成为直接工程父节点。** 新路线不再把 CoRE 复制到 `third_party` 后包一层 `StereoCoREParentAdapter`；R9 直接以 `no_wrist_stereo_core/stereo_core/no_wrist_pair_model.py`、`train_no_wrist_pair.py`、`evaluate_no_wrist_pair.py` 的原代码结构建立 Git 管理的 CoRE-native 基线。冻结 DINOv3、ACT posterior/decoder、100-step chunk、四个 rank-32 role adapters、top-2 PAIR router、capability-only teacher、normalization、temporal aggregation和评测契约仍原样继承。
+3. **R7/R8 正式关闭。** 不组合其 checkpoint，不再追加 125k 扩训，不把 `34%/32%` 包装成潜力结果；其中可复用的 dataset、causal-audit、monitor 工具迁移到新主线，模型路径不迁移。
+4. **Before-We-Act 保护 parent，而不是拒绝生成式动作模型。** 原 Stereo-CoRE 的 top-2 sparse router 混合后只产生**一个** native base chunk，并非两个动作候选；R9 新增 CoRE-native inference API 后，才会额外得到四个 forced-role chunks。R11 允许 Flow Matching 作为增量 proposal/refinement branch 扩大候选集，但 candidate 0/base 永远保留。world model 不直接驱动电机，只预测候选后果，planner 决定是否偏离原动作。
+5. **先证明候选集合有闭环上限，再训练 world model。** 若真实短期后果 oracle 都不能靠现有 role candidates 恢复 CameraAlignment/StackCube，任何 scorer 都不可能大幅提分；此时先修 proposal/perception，不允许用更大 world model 掩盖候选无解。
+6. **把无腕感知错配列为 P0 根因。** 原 `RGBDPatchFusion` 假设同一腕部传感器的 RGB/depth patch 几何对齐；当前无腕实现却将不同相机外参的 local/global RGB 送入同一 aligned-fusion 归纳偏置。新路线必须通过 view-shuffle、单视角、相机标定/射线特征和 unaligned cross-view adapter 消融验证该嫌疑。
+7. **感知修复也必须精确回退。** 无腕 predictive-state extension 以 zero-init residual 挂到 CoRE-native 冻结 tokens 上；`perception_gate=0` 必须逐元素复现 `B9-CoreNative/Peer-NoWrist`，不能先破坏 71.4% 再指望 world branch 补救。
+8. **world model 先 off-path。** 在不改变任何动作的情况下训练 action-conditioned future latent、progress、failure-risk 与 uncertainty；只有 action-shuffle、prefix-causality、candidate ranking 和校准门槛都通过，才允许 selector 上线。
+9. **原动作永远在候选集合中。** uncertainty 过高、候选分差过小、输入越界或 evaluator 失效时，必须选择 bit-exact parent action；不允许 silent fallback 到零动作、随机动作或另一个 checkpoint。
+10. **数据从“只模仿成功演示”升级为“成功演示 + parent 成败 rollout + 候选分支后果”。** sampler 只在训练分布上平衡 task/outcome/stage，task ID 不进入部署模型；CameraAlignment 与 StackCube 的失败数据优先补齐，但评测种子永久隔离。
+11. **论文边界改为 base-preserving consequence planning。** base proposer 仍是同事的共享 per-agent policy，R11 只额外增加有界的 centralized joint Flow proposals；team consequence evaluator 可读取全局固定视角及全体候选动作，因此最终系统不得再声称严格去中心化，而应准确写成“共享 per-agent base proposer + centralized Flow proposal/world-model planner”。
+12. **以“接近同事”预注册目标。** 当前部署 parent 为 `71.4%`，同事数值锚点为 `84.2%`；正式目标为无腕 frozen-100 macro `>=80%`（闭合至少 `67%` 的 12.8pp 差距），同时 CameraAlignment `>=80%`、StackCube `>=50%`，其余三任务相对 parent 下降不超过 `5pp`。达不到就不能宣称“大幅提升”或“贴近同事”。
+13. **每个模型修改轮固定四路。** R11–R14 都从上一轮唯一 merged winner 的同一个代码提交、checkpoint、数据receipt和normalization克隆P0/P1/P2/P3，一张GPU负责一个组件的抽取、parity、适配、训练和评测；冻结parent/control只评测、不占候选名额。
+14. **每个候选先过 recent-first Paper Evidence Card。** 论文组合仍须覆盖经官方页面核验的获奖论文、oral/plenary、发表至少三年且有独立后续工作的经典论文，以及本轮 citation snapshot 达阈值的高引用论文；同时每张卡至少有一篇与候选直接对应的 2024–2026 年 target-venue 正式论文。优先级为 RSS/ICLR/ICML/CoRL/RA-L 最新 award/oral → 最新正式接收 → 经典根源，spotlight 不冒充 oral。
+15. **arXiv-only 论文必须高引用才具备准入资格。** 未达到 `cited_by_count>=80` 或同子领域 top-quartile 的最新预印本只能进入 frontier watchlist，供碰撞检查和灵感参考，不能替代 award/oral/accepted/high-citation anchor；每篇入选论文都必须写清“吸收什么、落到哪个 symbol/test、如何被反证”。
+16. **V4.3 的“AI直接改核心算法”只解释S10历史，不适用于R11+。** R11–R14的P0–P3必须先冻结`component_lock.yaml + adaptation_card.yaml`，绑定官方仓库、commit、许可证、复制进本项目的最小源文件/符号、原生parity结果和本地replacement site。不是全量部署上游模型。AI不得按论文重写backbone/loss/solver/scheduler/attention/memory/planner objective；只允许复制已实现组件并完成raw observation/dataset/action schema、mask、normalization、checkpoint和evaluator适配，以及逐行登记的兼容性补丁与测试。
+17. **每轮只合并一个胜者。** 只有相对该轮冻结 baseline 取得预注册进步且无灾难性回归的候选才有资格；多路通过时按预注册排序选唯一胜者，将其代码、配置、权重和报告组成 winner pack 合并为下一轮 baseline。四路全失败时保留原 baseline 并重写下一轮，不得为了赶进度强行合并，也不得把两个独立训练权重用 Git merge 假装成可加和收益。
+
+V4.5 从 `W10` 起只保留其中的实验治理原则：同父节点四路、先锁上游再做组件级移植、唯一胜者、失败不合并、数据与评测隔离。模型原则改为：`R11=Belief/Representation Component Transplants`、`R12=Action-Generator Component Transplants`、`R13=Latent-World Component Transplants`、`R14=World-Guided Decision Component Transplants`。不是全量部署开源模型：只把所需源文件、类或函数复制到本项目的 `before_we_act/upstream_components/`，保留逐文件来源/许可证，再用 `before_we_act/adapters/` 接入现有数据、训练、评测和整体计算图；不得继续把 CoRE 内部张量接入新方法。
 
 ### 1.1 S10 起点覆盖决策（2026-08-04）
 
@@ -241,70 +271,168 @@ bash -n scripts/before_we_act/run_r10_candidate.sh \
 
 **行动之前：从预测后果学习多机器人策略**
 
-项目与论文统一使用 **Before We Act**。该名称描述稳定的研究问题，不绑定 R7/R8 的具体 winner：当前已验收方法仍固定为 `s3_r6l_protected_local_gated`，也是 R7 的不可变回退点；`utility-calibrated`、`token-preserving` 与 `horizon-causal` 只在相应实验通过后作为正文中的组件或变体名称。若 R7/R8 未通过，正文主张按证据回退，但不再更换项目标题。
+项目与论文统一使用 **Before We Act**。V4.5 中该名称表示：本项目从合法无腕多视角历史形成 team belief，由组件级移植的动作内核生成联合候选，由组件级移植的 latent world core 在执行前预测候选后果，再由移植的 decision core选择或退回 W12 base。`Stereo-CoRE-BWA` 名称永久停用；**LT-WADiT 仅当 R12 winner确为DiT/Flow组件时才可保留**，否则按真实winner冻结中性方法名。CoRE在正文结构图中只能作为灰色teacher/baseline方框；每个上游组件必须在图注、正文和代码中准确署名，不把移植写成我方原创算法。
 
 ### 2.2 核心研究问题
 
-论文在 R6 已回答的问题上追加两个递进问题：
+V4.5 的论文问题不再围绕 CoRE 的角色候选，也不预设某个动作backbone必胜，而是：
 
-> （1）不再平均 future token，并让路由权重与每组 future evidence 在强制单组条件下的下游 Flow 误差对齐，能否稳定超过 R6L-P1？（2）让每个预测 horizon 只读取对应动作前缀并进行有限联合微调，能否进一步提升 world model 的 action-awareness 与闭环成功率？
+> **在无腕多机器人操作中，能否把经公开代码验证的 predictive representation、动作生成、latent dynamics与planning组件，以最小代码移植接入一个新的team-belief→candidate-action→predicted-consequence→decision流向，并在不依赖CoRE推理内核的条件下显著提高闭环benchmark？**
 
-目标计算图为：
+最终活动计算图为：
 
 $$
-\hat{\mathbf z}_{t+1:t+H}^{i}
+\underbrace{o_{\le t}^{\mathrm{team}}}_{\text{legal fixed views/qpos/history}}
+\xrightarrow{E_\eta}
+\underbrace{b_t=(z_t^{\mathrm{ego}},z_t^{\mathrm{object}},z_t^{\mathrm{consensus}},z_t^{\mathrm{intent}})}_{\text{team belief}}
+\xrightarrow{A_{\psi}^{\mathrm{transplant}}}
+\{\mathbf a_t^{(k)}\}_{k=0}^{K}
+\xrightarrow{W_\phi(b_t,\mathbf a_t^{(k)})}
+\{\hat b_{t+h}^{(k)},\hat p_{\mathrm{progress}}^{(k)},\hat p_{\mathrm{fail}}^{(k)},\hat\sigma^{(k)}\}
+\xrightarrow{\Pi_\omega}
+\mathbf a_t^*.
+$$
+
+这里的 `intent` 不是 task ID、robot ID 或人工角色标签，而是从同步轨迹中预测的伙伴未来动作分布、共享对象转移和团队进度 latent。`E_\eta`、`A_\psi^{\mathrm{transplant}}`、`W_\phi` 与 `\Pi_\omega` 的**复制组件和我方adapter**均位于 `before_we_act/`；正式 `core_free=true` forward只允许读取原始合法观测、qpos、已执行动作历史和固定标定。CoRE仅可在训练数据生成、可选蒸馏和对照评测中离线调用。
+
+动作生成的具体目标不在文档中提前自创：若W12 winner来自OpenPI/SmolVLA，则保留其官方Flow Matching path/loss/sampler；若来自RDT则保留官方diffusion objective/scheduler；若来自Consistency Policy则保留官方consistency objective。共同创新接口是`TeamBeliefState → ActionProposalBatch`和多机器人joint-action codec，而不是宣称重新发明上游动作算法。
+
+world model 不追求像素生成质量，而学习候选条件的 team-belief 转移、进度、失败风险、伙伴动作/意图一致性和 epistemic uncertainty。planner 的公共效用为：
+
+$$
+J_k=
+\hat p_{\mathrm{progress}}^{(k)}
+-\lambda_f\hat p_{\mathrm{fail}}^{(k)}
+-\lambda_u\hat\sigma^{(k)}
++\lambda_i\operatorname{Align}(\hat z_{t+h}^{\mathrm{intent},(k)},\hat z_{t+h}^{\mathrm{consensus},(k)}).
+$$
+
+最终 fallback 是W12 winner自身的base proposal，而不是CoRE action。投稿模型必须同时通过：删除`stereo_core/`和CoRE checkpoint后输出hash不变；移走所有临时上游完整clone后仍可import/train-smoke/eval-smoke；每个本地复制文件可回溯到官方commit/license。
+
+#### 2.2A V4.3 CoRE-bank 研究问题（历史，已由 V4.4 覆盖）
+
+以下公式保留用于解释 S10 之前的设计演化与失败/迁移证据，不再定义最终论文模型。论文不再问“怎样把更多 future token 注入 Flow”，而问一个更直接、也更贴合当时证据的问题：
+
+> **当高性能 Stereo-CoRE 已经给出可靠 base 和若干能力反事实时，能否用 Flow Matching 扩大局部可执行候选、用 world model 预测它们的多机器人后果，并只在证据充分时选择比 base 更好的动作？**
+
+对第 $i$ 个机器人，冻结的 CoRE proposer 产生原生 top-2 mixture 与四个 forced-role 动作块：
+
+$$
+\mathcal C_t^i
 =
-W_{\phi,\mathrm{own}}
+\left\{
+\mathbf a_{t:t+H}^{i,\mathrm{base}},
+\mathbf a_{t:t+H}^{i,(1)},\ldots,
+\mathbf a_{t:t+H}^{i,(4)}
+\right\}
+=
+\operatorname{CoRE}_{\theta_0}(o_t^i, q_t^i).
+$$
+
+部署时不枚举 $5^A$ 个组合。对 $A\le4$ 台机器人，继承候选集合固定包含 base joint tuple，以及每次只替换一个 agent role 的 unilateral deviations，因而最多 `1 + 4A <= 17` 个联合候选：
+
+$$
+\mathcal H_t^{\mathrm{CoRE}}
+=
+\left\{\mathbf a_t^{\mathrm{base}}\right\}
+\cup
+\left\{
+\mathbf a_t^{\mathrm{base}}[i\leftarrow e]
+\mid i\in[1,A],e\in[1,4]
+\right\}.
+$$
+
+R11 以后，Flow Matching branch 以 base、上一动作块和当前合法观测为条件，最多再生成 $K_{\mathrm{flow}}\le8$ 个 joint residual proposals；它不能删除、覆盖或原地修改 CoRE bank：
+
+$$
+\mathcal H_t
+=
+\mathcal H_t^{\mathrm{CoRE}}
+\cup
+\left\{
+\operatorname{ProjectSafe}
 \left(
-\mathbf h_t^{i},
-\mathbf x_\tau^{i},
-\tau
-\right),
+\mathbf a_t^{\mathrm{base}}+
+F_\psi(\epsilon_k,o_t,\mathbf a_{t-1})
+\right)
+\right\}_{k=1}^{K_{\mathrm{flow}}},
+\qquad |\mathcal H_t|\le25.
 $$
 
+`ProjectSafe` 只做动作范围、速度、mask 与 prefix continuity 投影；任何 Flow 数值异常都丢弃该 proposal，而不是影响 candidate 0。R11 的胜者由真实后果 oracle headroom 与动作可执行性选择，R12/R13 才学习预测和在线选择。
+
+Before-We-Act consequence model 只读取当前合法部署观测与一个联合候选动作，预测多 horizon 未来 latent、团队进度、失败风险与 epistemic uncertainty：
+
 $$
-\mathbf v_\theta^i
+(\hat{\mathbf z}_{t+h},\hat p_{\mathrm{progress}},
+\hat p_{\mathrm{fail}},\hat\sigma)
 =
-F_\theta
-\left(
-\mathbf x_\tau^i,
-\tau,
-\mathbf h_t^i,
-\hat{\mathbf z}_{t+1:t+H}^{i}
-\right),
+W_\phi(o_t^{\mathrm{team}},\mathbf a_{t:t+H}),
+\quad h\in\{5,15,30,60\}.
 $$
 
-R7/R8 将上述标量式注入扩展为：
+候选效用为：
 
 $$
-\mathbf v_{\mathrm{UC}}^{i,j}
+J_\phi(\mathbf a)
 =
-\mathbf v_{\mathrm{R6}}^{i,j}
-+
-g^{i,j}
-\sum_{m}\pi_{m}^{i,j}\,
-\Delta\mathbf v_{m}^{i,j},
-\qquad
-m=(\mathrm{source},\mathrm{horizon}),
+\hat p_{\mathrm{progress}}
+-\lambda_r\hat p_{\mathrm{fail}}
+-\lambda_u\hat\sigma.
 $$
 
-其中 spatial token 不在 $m$ 内先行池化，而是在每个 source/horizon 组内由第 $j$ 个 action query 直接 cross-attend。这里：
+只有当最佳候选相对 base 的效用 margin 超过预注册阈值、uncertainty 低于阈值且所有输入审计通过时，selector 才允许改变 parent decision；否则严格返回 base：
 
-- $\mathbf h_t^i$ 是第 $i$ 台机器人的视觉、状态、动作历史和任务上下文；
-- $\mathbf x_\tau^i$ 是 Flow 中间状态或候选动作；
-- $W_{\phi,\mathrm{own}}$ 根据第 $i$ 台机器人的候选动作预测其受保护本地未来 latent；
-- $F_\theta$ 预测第 $i$ 台机器人的速度场，R6 通过有界、零初始化 gate 显式读取自己的预测未来；
-- $\pi_m^{i,j}$ 是 R7 新增的 future-evidence dense routing，不是 policy expert 的 top-2 router；
-- $g^{i,j}=0$ 时动作必须逐元素退化为已合并 R6L-P1，而不是只近似退化到另一个重训基线；
-- 推理时只能向动作路径输入**预测未来**，不能输入真实未来。
+$$
+\mathbf a_t^*
+=
+\begin{cases}
+\arg\max_{\mathbf a\in\mathcal H_t}J_\phi(\mathbf a),
+& \Delta J>\tau_J\land\hat\sigma<\tau_\sigma,\\
+\mathbf a_t^{\mathrm{base}}, & \text{otherwise}.
+\end{cases}
+$$
 
-如果未来分支只作为辅助损失、没有回到速度场，它只能叫 `Flow + auxiliary future prediction`，不能作为最终 WAM 主张。R6J 已经说明“加入 peer/shared future”本身不保证闭环收益：其五任务最好上界仍低于控制，因此跨智能体 future coupling 不进入最终正向主张。
+系统保持原 Stereo-CoRE 的 action-query 频率、100-step chunk、temporal aggregation 与实际执行前缀；world model 不直接输出机器人动作。其训练目标由 future latent prediction、progress/failure calibration、paired candidate ranking 和 uncertainty calibration 组成：
 
-### 2.3 截至 2026-08-02 的新颖性研判
+$$
+\mathcal L_{\mathrm{BWA}}
+=
+\lambda_z\mathcal L_{\mathrm{latent}}
++\lambda_p\mathcal L_{\mathrm{progress}}
++\lambda_f\mathcal L_{\mathrm{failure}}
++\lambda_r\mathcal L_{\mathrm{rank}}
++\lambda_c\mathcal L_{\mathrm{calibration}}.
+$$
 
-**结论：宽泛的 cross-agent world-to-flow 目标未被 R6 的直接平均注入支持；收紧后的 protected local-future gated residual 已获得单轮五任务正向证据。新 R7/R8 不推翻这个结论，而是检验失败是否来自 token/horizon 平均与缺乏下游效用监督；最终仍需 S5-R9 多种子复现才能形成论文结论。**
+训练和评测中的真实未来只生成监督标签，永远不进入部署 forward。`planner_gate=0` 时不仅结构上旁路 evaluator，还必须逐元素复现 `Peer-NoWrist` 的 action chunk、temporal aggregation 和控制输出。
 
-代码已经通过通用 `CrossAgentWorldConditionedFlow` backend 实现 local/team 两种 future scope 和 gated velocity residual；但“实现了接口”不等于“实验支持主张”。五任务闭环只支持 local scope，team/shared scope 的最好上界低于控制。因此当前主线只能把 `s3_r6l_protected_local_gated` 称为晋级方法，cross-agent scope 必须作为失败消融，不能用类名或 capability 指标替代闭环证据。
+### 2.3 截至 2026-08-04 的新颖性研判
+
+**V4.5 结论：** DiT、Flow Matching、latent world model、team belief、intent prediction、MPC以及本版复制的各个组件均已有直接先例，任何一个词或上游算法都不能单独成为我方贡献。可投稿的方法边界必须来自完整的 `no-wrist team interface → transplanted belief component → transplanted action component → candidate-conditioned latent consequence component → transplanted decision component` 新流向、组件间我方contract、多机器人数据/训练适配和闭环benchmark，以及最终对CoRE runtime与上游完整仓库runtime的完全删除。
+
+| 审计面 | Stereo-CoRE | V4.5 Before We Act |
+|---|---|---|
+| 动作 backbone | ACT posterior/decoder + ARCA role adapters | R12 Gate20胜出的复制动作组件；按真实结果可能为Flow/DiT/Consistency |
+| 表示 | 单机器人局部 observation/state | R11复制predictive组件 + 我方无腕team contract/readout |
+| 训练信号 | forced-expert action error → capability-router KL | 原样保留各复制组件的核心loss；我方只增加contract允许的监督/readout |
+| 推理流向 | local input → top-2 role mixture → one action chunk | team history → K joint proposals → predicted consequences → planner → one action chunk |
+| 信息边界 | 严格去中心化局部策略 | 无腕合法固定视角下的集中式 team policy/planner |
+| CoRE 依赖 | 方法本体 | 仅 S10 教师/对照；正式 runtime 为零 |
+
+论文只有在以下三项同时由实验支持时才能成立：
+
+1. **组件组合形成不同于CoRE和任一单独上游仓库的新系统流向。** 任一上游完整模型都不包含本项目全部的无腕多机器人team interface、候选后果接口和benchmark protocol。
+2. **闭环是主证据。** R12/R14每个动作影响候选五任务各跑20回合，winner严格提高直接父baseline；R15四seed复现。shuffle、oracle和calibration只辅助解释，不再作为晋级硬门。
+3. **方法同时独立于CoRE和上游完整runtime。** `core_free=true`不加载CoRE源码/checkpoint，`full_repo_runtime_dependency=false`，复制文件逐个有官方commit/license/SOURCE_MAP/parity receipt。
+
+即使满足上述边界，也不得泛称“首次使用 world model/Flow/intent”。[ICLR 2026 World-In-World](https://iclr.cc/virtual/2026/oral/10006575) 已强调 closed-loop controllability 与 inference-time compute，[ICLR 2026 MAC-Flow](https://iclr.cc/virtual/2026/poster/10011753) 已将联合多智能体行为建模为 Flow 并蒸馏到快速策略，[CoRL 2025 LatentToM](https://proceedings.mlr.press/v305/he25a.html) 已学习协作机器人的 consensus/partner belief，[ICLR 2026 LPWM](https://iclr.cc/virtual/2026/poster/10007676) 已做 object-centric stochastic latent dynamics。本文必须以无腕多机器人闭环、候选条件team-belief dynamics、组件级而非全量模型迁移、来源透明和CoRE-free系统证据区分。
+
+#### 2.3A V4.3 新颖性研判（历史，已由上文覆盖）
+
+**历史结论：R6–R8 已经否定“不断增强 future-to-Flow 注入即可获得高闭环性能”的工程假设。V4.3 当时不把 Flow Matching、world-model scoring、multi-view prediction 或 MoE routing单独声称为新颖；其旧前提是完整证明 `CoRE-native protected base → Flow-augmented executable proposals → joint multi-robot consequence prediction → uncertainty-gated planning → exact parent fallback`。该 CoRE-bank 中心叙事已由 V4.4 撤销。**
+
+旧 `CrossAgentWorldConditionedFlow` backend、R6L 的 `+10pp` 与 R6J/R7/R8 的负结果进入方法演化和失败分析，不再作为新方法实现父节点。当前主线的可发表性必须来自“保留强 proposer 后，用可证伪的后果选择改善决策”，而不是从类名、预测 loss 或参数规模推断。
 
 以下组件不能单独作为论文贡献：
 
@@ -314,23 +442,57 @@ $$
 | previous-chunk warm start | [Streaming Flow Policy](https://arxiv.org/abs/2505.21851) 从上一动作附近的窄高斯出发并流式积分 | 只作为工程候选 |
 | latent future 进入 action generation | [LaWAM](https://arxiv.org/abs/2606.15768) 已用动作条件 latent world model 预测视觉 subgoal 并条件化动作生成；[AGRA](https://arxiv.org/abs/2606.12217) 已研究 world-action 表示接口并使用因果干预诊断 | 直接碰撞，不能泛称首创 |
 | 只在训练期使用未来表示 | [Being-H0.7](https://arxiv.org/abs/2605.00078) 以未来 posterior 对齐部署 prior；[Fast-WAM](https://arxiv.org/abs/2603.16666) 质疑测试时显式未来预测的必要性 | auxiliary future 不足以支撑 WAM 主张 |
-| 生成候选并由 world model 评分 | [Cortex 2.0](https://arxiv.org/abs/2604.20246) 在视觉 latent 空间生成、评分并选择候选未来 | 移出 ICRA 主线 |
+| 生成候选并由 world model 评分 | [Cortex 2.0](https://arxiv.org/abs/2604.20246) 在视觉 latent 空间生成、评分并选择候选未来 | 是基础机制而非独立贡献；必须靠 CoRE 反事实 action bank、多机器人联合选择、uncertainty abstention 与 exact fallback 区分 |
 | 多机器人 Flow 轨迹/动作协同 | [GCo](https://arxiv.org/abs/2511.10874) 已做多机器人接触与轨迹 Flow co-generation；[Flow-Opt](https://arxiv.org/abs/2510.09204) 已做带置换不变编码的集中式多机器人 Flow 轨迹优化 | “multi-robot + Flow” 本身不新颖 |
 | action-conditioned multiview world model | [A2World](https://arxiv.org/abs/2606.29501) 已建模动作驱动的多视角场景演化 | 多视角预测不是核心贡献 |
 
-在本轮检索到的最接近工作中，原计划关注以下完整机制：
+V4.3 预注册的完整机制为：
 
-> **对联合候选 action chunk 建模其跨 agent 与共享对象的后果，再将“自己的未来 + peer 后果 + shared-object 后果”逐 Flow step 注入共享参数、按 agent 分解的速度场，并以跨 agent 因果干预证明该耦合改善闭环协作。**
+> **冻结高性能 CoRE action proposer，把其原生 top-2 与 forced-role counterfactuals 作为受保护 bank，再由 Flow Matching 只在该 bank 外产生少量安全 joint residual proposals；在执行前预测每个候选对本地机器人、伙伴和共享对象的后果，并以 calibrated uncertainty 决定选择、规划或退回 base。**
 
-R6J 的闭环验收没有支持上述完整 cross-agent 机制，因此不能再把它作为已经成立的论文贡献。截至 R6，已成立的贡献收敛为：
+只有正式实验通过后，正文才允许写三项条件贡献：
 
-1. **方法贡献：** `candidate action → protected local future → zero-init gated velocity residual`，并在 gate 为零或 future 无效时精确回退到 base Flow；
-2. **受保护耦合证据：** 在 R6 阶段 own predictor 始终冻结、optimizer-excluded 且逐元素等价，只有 adapter/gate 改变动作路径；
-3. **闭环证据：** R6L-P1 在相同五任务、seeds 与 pair-exact fresh Flow 下宏平均提高 `10pp`，同时完整披露 LongPipelineDelivery 的 `-15pp` 与 R6J team/shared 注入失败，避免把负结果包装成 cross-agent 提升。
+1. **base-preserving 架构：** Before-We-Act 不覆盖主动作分布，而是在 `flow_gate=0`、`world_gate=0` 或 `planner_gate=0` 时 bit-exact 保留 Stereo-CoRE parent；
+2. **CoRE/Flow-to-consequence 接口：** policy 内已有的 capability roles 提供受保护 counterfactual bank，Flow Matching 只补充受动作投影和数量预算约束的 proposals，world model 对两种来源使用同一个因果后果接口；
+3. **多机器人因果闭环证据：** oracle headroom、action shuffle、candidate ranking、uncertainty fallback、planner-zero 和 paired frozen-100 共同证明增益来自预测后果后的选择。
 
-若新轮次通过，再追加两项条件贡献：R7 的 token-preserving future-evidence utility coupling，以及 R8 的 horizon-causal、有限联合微调 world model；未通过就不写入正向贡献。投稿前不得使用 “first” 或 “首次”。R7/R8 的因果干预既约束工程验收，也约束最终 claim，不能用更低的训练 loss 替代。
+在这些门槛通过之前，`Before We Act` 只是项目假设，不是已成立方法。投稿前不得使用 “first” 或“首次”；`Peer-Exact=84.2%` 也只能作为不同输入协议下的数值锚点。
 
-### 2.4 Stereo-CoRE 的吸收边界与证据等级
+### 2.4 V4.5 对 Stereo-CoRE 与上游组件的吸收边界
+
+V4.5把继承分成两个时间段：S10及以前仍按原CoRE-native契约执行；从R11起，CoRE只允许以冻结teacher/baseline process存在，不得把`CoreContext`、route probability、role ID、forced-role chunks、ARCA feature或capability target输入任何新模块。R12允许离线action distillation；teacher-removal是可选论文诊断，但R14/R15正式部署不得加载`stereo_core`或CoRE checkpoint。上游论文代码只允许按10.13复制最小组件；完整仓库、launcher、demo、dataset和evaluator不得成为最终依赖。
+
+活动边界按轮次固定：R11 只从原始合法 observation/history 学 team belief，CoRE 最多生成对照动作与 rollout；R12 只可读取带来源 hash 的离线 teacher action cache，且蒸馏权重在训练后半程退火到 0；R13 只读取冻结 W11/W12 的 belief 与 action candidates；R14/R15 的训练、评测和导出包均不得存在 teacher handle。吸收的是数据、评测、公平对照和可选动作监督，不是 CoRE 的模型结构或内部表示。
+
+#### 2.4.1 V4.3/S10 的 CoRE-native 继承账本（历史）
+
+以下 anchor、继承表和“bit-exact parent fallback”只解释S10的来源与复现责任；R11后的active fallback已改为W12胜出动作组件的base proposal。
+
+V4.3 使用两个不能混写的 anchor：
+
+| Anchor | 证据身份 | 冻结结果/哈希 | 用途 |
+|---|---|---|---|
+| `Peer-Exact` | 同事 release；腕部 RGB-D + own qpos | config SHA256 `a424f5a0423d186a6bab2246ea1052d127e9fbafedc6c733750dab0efcdf8a4a`；frozen-100 `99/100/99/94/29` | 代码祖先、方法事实与跨协议数值上界 |
+| `Peer-NoWrist` | 基于同事源码的当前无腕迁移；global RGB + matching-agent RGB + own qpos | checkpoint `54cb21e7dd7c9a7fdab0a28e62cda1ca64fbe1a2346199a3a070495b2f19f34d`；config `cb330d494a3a20e4108f1e68859d0ef96805d8afd9392ae5a06c81efde3a4f96`；summary `2e44e2fbf54c86b7884c2234de86a0095e27651fdcf7bf8c65529d6aa46458af`；frozen-100 `100/60/0/100/97` | 唯一公平部署 parent 与所有新候选的 bit-exact fallback |
+
+同事 release 的事实入口仍为本仓库 `docs/peer/` 两份报告，以及同级 `peer_stereo_core_release` 中的 `docs/METHOD.md`、`docs/RESULTS.md`、最终 config、五任务 raw JSON 和源码。无腕 parent 的事实入口为同级 `no_wrist_stereo_core/docs/NO_WRIST_DEPLOYMENT.md`、`stereo_core/no_wrist_pair_model.py`、训练/评测脚本与本地 `remote_backups/no_wrist_stereo_core_120k/` 冻结产物。任何迁入本仓库的代码都必须附 `upstream_path`、原文件 SHA256、许可证和本地 diff manifest；禁止复制后失去 provenance。
+
+V4.3 的继承边界如下：
+
+| 处理 | 组件 | 具体约束 |
+|---|---|---|
+| **原样继承** | 冻结 DINOv3-B/16、ACT 4-layer posterior / 7-layer decoder、100-step query、四个 rank-32 ARCA role adapters、PAIR top-2 router、forced-role counterfactual、capability-only KL、qpos/action contract、normalization、temporal aggregation | 第一阶段全部 frozen + optimizer-excluded；必须能加载 parent checkpoint 并复现 frozen-100 输出 |
+| **保留当前无腕实现** | global fixed RGB、matching-agent fixed RGB、own qpos；不使用 wrist/depth/task ID/agent ID/language/peer state | 这是当前部署协议，不能为追分偷偷恢复腕部或 privileged state |
+| **受控修复** | R10 predictive perception/state 的四种 gated extensions | 只读 parent tokens；只用 deployment 合法的相机/history/action prefix；zero-init residual，gate-zero 精确回退 |
+| **新增候选** | forced-role bank 与 R11 Safe Flow proposal bank | Flow 只能追加通过投影的 joint residual proposals，不覆盖或删除 base |
+| **新增旁路** | R12 consequence world model 与 R13 planner | 训练真实未来只作 label；world 不直接输出动作；planner/OOD/超时失效必回 base |
+| **明确禁用** | relation/spec/anchor auxiliary、team action teacher、route-entropy winner、task/agent ID、旧 R7/R8 world-evidence router、R6/R7/R8 checkpoint 拼接 | 同事消融或本项目闭环证据已否定；不得在新名字下复活 |
+
+最重要的代码复用原则不再是“模仿同事的训练思想”，而是：**先把可复现的 peer policy 当作不可变产品接口，再在接口外做最小增量。** 新模块只有在关闭时严格等价 parent、开启后通过逐任务闭环门槛，才能进入下一阶段。
+
+### 2.4A V3.3 的“只吸收原理、不移植策略”记录（历史，已被 V4.3 覆盖）
+
+以下内容完整保留，用于解释 R7/R8 当时为何把 CoRE 从 policy expert 映射到 world evidence。该映射现已被闭环结果否定；其中所有“R7/R8 应继续执行”的措辞只具有历史预注册含义，不是当前操作指令。
 
 以下事实来自同事冻结代码、`docs/METHOD.md`、`docs/RESULTS.md`、最终 `configs/stereo_core/checkpoint_120000.json` 与对应评测 JSON，而不是从腕部视角结果反推机制。最终 Stereo-CoRE 是 **Stereo-ACT + Local-ARCA + capability-only CoRE**；FFN-MoE 只完成了容量验证，没有叠加进最终方法。正式训练使用单机器人本地样本 `batch_size=40`、`updates=120000`、总预算 `4,800,000`；输入严格是单机腕部 RGB-D 与 own qpos，不含 task/agent ID、语言、通信、global/peer view 或 peer action。其冻结 SR@1 为 `99/100、100/100、99/100、94/100、29/100`，宏平均 `84.2%`；这些数字只证明同事路线在其输入协议下有效，与本路线的固定第三人称 RGB 结果不作数值横比。
 
@@ -384,11 +546,58 @@ R6J 的闭环验收没有支持上述完整 cross-agent 机制，因此不能再
 - 5B/14B 模型扩展；
 - 自建大量新任务或重新采集大规模数据。
 
-本次使用低维、可验证的未来目标：未来 proprioceptive state、未来 DINO latent、物体或团队进度。论文价值来自“world prediction 如何进入 action flow”，不是视频生成规模。
+本次使用低维、可验证的未来目标：未来 proprioceptive state、未来 DINO/team-belief latent、伙伴动作分布、共享对象转移与团队进度。论文价值来自“显式 team belief 如何连接 joint Action-DiT 与候选条件 latent dynamics，并在 CoRE-free 闭环中安全决策”，不是视频生成规模，也不是把某个生成式 backbone 名称当贡献。
 
-## 3. 当前分支：保留什么，替换什么
+## 3. 当前分支：独立 `before_we_act/` 主线，CoRE 只作冻结 teacher/baseline
 
-### 3.1 直接保留
+S10 结束后，活动代码图只允许 `raw legal observations → TeamBeliefState → JointActionDiT → TeamConsequencePrediction → PlannerDecision`。新参数、optimizer、checkpoint 和 runtime imports 全部位于 `before_we_act/`；`stereo_core/` 只保留为带 hash/许可证的只读来源和单独评测 process。W10 teacher action 必须先离线缓存并带 provenance，训练后半程蒸馏权重归零，R14/R15 导出包不包含 teacher loader。
+
+### 3.1 V4.3/S10 的 CoRE-native 分支账本（历史，不再扩展）
+
+V4.3 不再建立 `third_party/stereo_core_parent`，也不再用 `StereoCoREParentAdapter` 把 CoRE 当黑盒。新主线把无腕 CoRE 的原代码布局作为活动代码基座：在 `before-we-act` 的 Git 管理范围内建立顶层 `stereo_core/`，逐字导入完整 `no_wrist_stereo_core/stereo_core/` 发布目录，再直接修改/扩展 `NoWristPAIRRoute`。这仍是“直接使用 CoRE 代码”，而不是重写一个相似模型；之所以需要纳入当前 Git 仓库，是因为本地 `no_wrist_stereo_core` 与 `peer_stereo_core_release` 都只是无 `.git` 的发布目录，无法支持四路 worktree、唯一 winner merge 和逐提交审计。
+
+R9 导入时必须记录以下已核对的源身份；若正式执行前文件变化则重新计算，不沿用旧值：
+
+| 直接源文件 | 当前 SHA256 | V4.3 身份 |
+|---|---|---|
+| `no_wrist_stereo_core/stereo_core/no_wrist_pair_model.py` | `056fae41…ae8673` | `NoWristPAIRRoute` 原生模型、唯一 policy source |
+| `no_wrist_stereo_core/stereo_core/train_no_wrist_pair.py` | `ba9d07fa…99b20` | 600 demonstrations、batch40、120k 的训练真值 |
+| `no_wrist_stereo_core/stereo_core/evaluate_no_wrist_pair.py` | `be474a41…19b6` | 相机预处理、反归一化、temporal ensemble 与 frozen evaluator 真值 |
+| `no_wrist_stereo_core/LICENSE` | `19e67a9e…293f` | MIT 许可证；导入后原样保留 |
+
+| 来源 | V4.3 保留内容 | 身份 |
+|---|---|---|
+| `no_wrist_stereo_core` | 完整 `NoWristPAIRRoute`、原训练器/evaluator、normalization、checkpoint | **直接代码父节点**；R9 后形成 `B9-CoreNative` |
+| `peer_stereo_core_release` | 原版 wrist RGB-D `StereoPAIRRoute`、PAIR/ARCA 实现、capability training、消融和 raw results | 上游方法与跨协议 provenance reference，不作部署 parent |
+| `before-we-act` 当前分支 | Git/worktree、RoboFactory grouped HDF5、causal audit、Gate20/frozen seeds、远程 launcher/monitor/stop | 承载 CoRE-native 活动代码与实验基础设施 |
+| R6–R8 模型代码 | future target builder、action shuffle、prefix-causal tests 中与新 evaluator 通用的部分 | 只移植工具；不加载旧策略权重，不反向依赖旧 `models/wam` policy |
+
+必须在 CoRE 原生代码中建立五个稳定接口：
+
+1. `CoreViewTokens/CoreDeploymentContext/CoreContext/CoreCandidateBank`：`encode_view_tokens()` 保留融合前 local/global tokens 和原 `RGBDPatchFusion` 的 `parent_fused`，typed deployment context 只容纳当前/过去观测、qpos、已执行动作与固定标定，`encode_context()` 只编码一次，`decode_with_gates()` 按 native/forced gate 解码，`propose_core_bank()` 在**无训练 actions/future label**的推理模式对全 batch 返回一个 base chunk、四个 forced-role chunks、dense/sparse routes 与 provenance；原 `forward()` 仅委托这些函数且输出 bit-exact；
+2. `CorePerceptionExtension`：承载 R10 四种无腕表征候选；它可读取 `CoreViewTokens` 与合法 history/qpos，但新 observation 只能通过 `parent_fused + tanh(g)Δx` 进入原 route/decoder，`g=0` 回到 `_paired_tokens()` 的原输出；
+3. `SafeFlowProposalBank`：承载 R11 四种 Flow proposal/refinement 候选，只 append 到 `CoreCandidateBank`，输出 masks、provenance 与投影报告，绝不覆盖 candidate 0；
+4. `JointConsequenceWorldModel`：承载 R12 四种 world-model 候选，直接读取 detached `CoreContext` 与不超过 25 个 joint candidates，批量预测 future latent、progress、failure 与 uncertainty；
+5. `BeforeWeActPlanner`：承载 R13 四种有限预算 planner，返回 bank 内 candidate ID；选出的 joint chunk 在原 evaluator 的 temporal history append 之前替换“本次新 chunk”，之后仍使用原 exponential temporal ensemble，任何异常都 append 原 base chunk。
+
+以下路径退出新主线：Rectified Flow **取代** Stereo-CoRE 的做法、World-to-Flow residual 直接改写 base、future-evidence dense router、R7 WUC、R8 causal-prefix adapter、R6/R7/R8 active clone 续训。Flow Matching 只以“新增有界候选”的身份重新进入；历史实现与结果继续保留在本文 5–9 节，不删除、不改写。
+
+#### 3.1.1 V4.3/S10 的冻结与可训练边界（历史）
+
+| 阶段 | 本轮四路共同冻结 | 四路唯一允许的可训练增量 |
+|---|---|---|
+| R9 CoRE-native refactor/headroom audit | checkpoint 参数、normalization、相机/动作/temporal contract全部冻结 | 只允许无参数 API 拆分、全 batch forced-role inference、provenance/tests；不训练、不改变 state dict key/value |
+| R10 predictive perception | `B9-CoreNative` DINO/ACT/ARCA/router/out head/normalization/temporal ensembler | 各自的 bridge/slot/recurrent/JEPA `CorePerceptionExtension` 与 gate |
+| R11 Flow proposals | merged R10 winner 全部 | 各自的 Flow action proposal/refinement head；base action 只读 |
+| R12 consequence world model | merged R11 winner 全部 | 各自的 action-conditioned latent dynamics、outcome 与 uncertainty heads |
+| R13 Before-We-Act planner | merged R12 winner 的 proposer/world encoder | 各自的有限预算 selector/planner 与 calibration；不得回训 proposer |
+| R14 formal reproduction | R13 recipe、阈值算法和代码全部冻结 | seeds `101/202/303/404` 独立重训已选新模块；不得再选结构 |
+
+active-agent weighting、task label conditioning、router entropy 正则和 task-specific action head 均不进入新主线。数据 sampler 可以按 task/outcome/stage 平衡，但这些 label 不进入 deployment forward。R10 开始后，`NoWristPAIRRoute.forward()`、`encode_view_tokens()`、`encode_context()`、`decode_with_gates()`、`propose_core_bank()`、normalization 与 temporal ensembler 都是冻结公共 API；候选只能通过注册式 extension 扩展，不能各自改 native 行为。
+
+## 3A. V3.3 当前分支取舍记录（历史）
+
+### 3A.1 直接保留
 
 | 当前能力 | 快线中的位置 |
 |---|---|
@@ -403,7 +612,7 @@ R6J 的闭环验收没有支持上述完整 cross-agent 机制，因此不能再
 
 当前静态候选的初步闭环结果可以证明这条分支适合继续改，但不能直接作为论文结果。已有不同提交间的结果变化还混合了多项改动，正式表格必须从冻结的数据、评测种子和候选父提交重新跑。
 
-### 3.2 必须替换
+### 3A.2 必须替换
 
 - CVAE posterior、KL 目标和直接动作 MSE 不再是最终动作生成目标；
 - 旧类名及 `static_act` 路径只作为 legacy baseline，不作为新方法命名空间；
@@ -411,7 +620,7 @@ R6J 的闭环验收没有支持上述完整 cross-agent 机制，因此不能再
 - 固定拼接整队动作的单头输出要改成按 agent slot 组织、共享参数的 Flow expert；
 - 旧 M2 不再因“还没完整跑完”阻塞论文快线。
 
-### 3.3 active-agent loss weighting 决策
+### 3A.3 active-agent loss weighting 决策
 
 从 2026-07-28 起，所有快线训练使用与 activity 无关的损失约定：
 
@@ -436,7 +645,61 @@ $$
 - teacher-context 的 active/inactive 拆分最多保留为 debugging log，不进入 evidence board；
 - ICRA 截稿前不把该机制重新加回主线。若以后重启，必须作为单独、受控且多随机种子的消融。
 
-## 4. 快线总览
+## 4. V4.5 快线总览：组件移植与 Benchmark-First
+
+```mermaid
+flowchart LR
+    PE["Peer-Exact<br/>84.2%, wrist RGB-D anchor"]
+    S10["S10 / W10<br/>CoRE frozen run"]
+    R11["R11 Belief components<br/>four transplants, off-path"]
+    W11["W11 belief winner"]
+    R12["R12 Action components<br/>four transplants, Gate20"]
+    W12["W12 action winner"]
+    R13["R13 World components<br/>four transplants, off-path"]
+    W13["W13 world winner"]
+    R14["R14 Decision components<br/>four transplants, Gate20"]
+    W14["W14 method winner"]
+    R15["R15 Formal reproduction<br/>four independent seeds"]
+    P["Paper freeze"]
+
+    PE -. different-input anchor .-> S10
+    S10 -. teacher / baseline only .-> R11
+    R11 --> W11 --> R12 --> W12 --> R13 --> W13 --> R14 --> W14
+    W14 -->|four-seed Gate20 + source audit| R15 --> P
+```
+
+这条快线有一个不可绕过的逻辑顺序：
+
+1. **freeze first**：S10 按原进程结束，任何新路线不得污染其代码、数据或 winner decision；
+2. **copy proven component**：R11从V-JEPA2/LPWM/DINO-WM/LeRobot只复制belief相关最小代码闭包，action hash不变，离线诊断不设强门；
+3. **benchmark action core**：R12从OpenPI/SmolVLA/RDT/Consistency Policy复制动作内核，接入本项目统一接口，每路五任务各20回合；
+4. **copy latent dynamics**：R13从TD-MPC2/LPWM/V-JEPA2-AC/DINO-WM复制world核心，保持off-path，ranking/calibration只作screen与解释；
+5. **benchmark decision core**：R14从World-In-World/DINO-WM/TD-MPC2/mbrl-lib复制决策组件，每路五任务各20回合；
+6. **separation/source proof**：R15用相同seeds/协议证明闭环收益、物理删除CoRE、无需完整上游仓库且逐文件来源/许可证可追溯。
+
+四卡服务器在R11–R14固定为`GPU0=P0、GPU1=P1、GPU2=P2、GPU3=P3`。四路共享父提交、数据split和评测协议，但允许保留各上游组件的官方optimizer/solver；必须完整报告GPU-hours、updates、batch、precision和peak memory。R11/R13按冻结screen score选一个有效组件；R12/R14只有完整Gate20且macro严格高于父baseline才有winner资格。任一轮只合并唯一胜者的最小复制组件、来源/许可证、adapter和权重；不合并上游完整仓库。
+
+```mermaid
+flowchart LR
+    B["Round k merged baseline<br/>commit + checkpoint + receipt"]
+    C0["P0 / GPU0"]
+    C1["P1 / GPU1"]
+    C2["P2 / GPU2"]
+    C3["P3 / GPU3"]
+    G["source/parity + action effect<br/>Gate20 only if action-affecting"]
+    W["unique winner pack"]
+    N["Round k+1 merged baseline"]
+
+    B --> C0 --> G
+    B --> C1 --> G
+    B --> C2 --> G
+    B --> C3 --> G
+    G --> W --> N
+```
+
+R11/R13没有可运行且合规的组件，或R12/R14没有任何候选提高benchmark时，箭头返回原baseline，记录`no winner/no merge`。若两个以上候选合格，按11.2预注册排序只选一个；互补组件必须成为下一轮一个显式组合候选重新训练和验证。详细复制/替换边界以10.13–10.18为准。
+
+## 4A. V3.3 快线总览（历史，已被上图覆盖）
 
 ```mermaid
 flowchart LR
@@ -498,7 +761,7 @@ R9 第二批 GPU 0/1：E3 / E4
 - 公共垂直切片、P0/P1 唯一差异与冻结 parent reference 分开记录；
 - S2 采用 prediction/shuffle capability gate；R6 使用已经冻结的五任务宏平均规则；R7/R8 同时要求闭环不低于 parent 和 world branch 的 causal intervention 有效。主动停止的候选直接退出比较，不阻塞另一候选。
 
-## 5. S0：冻结工程起点与协作任务（07-28）
+## 5. V3 历史 S0：冻结工程起点与协作任务（07-28，已完成）
 
 ### 5.1 四个并行参考方案
 
@@ -682,7 +945,7 @@ S0 不再设置协作必要性审计或额外准入清单。B0 直接作为 R1 �
 
 使用 `round/s0-b0-legacy-moe-ensemble` 作为 R1 工程父方案即可。除能够完成闭环并输出成功率外，不增加其他进入条件。
 
-## 6. S1：Per-Agent Rectified Flow Action Expert（07-29）
+## 6. V3 历史 S1：Per-Agent Rectified Flow Action Expert（07-29，已完成）
 
 统一 Flow 目标：
 
@@ -888,7 +1151,7 @@ R2a 不改变 source prior；R2b 不改变 decoder。每个 P1 只要各任务�
 
 S2 固定从当前 `feat/model-improvements` 上的 F1 `rectified_flow_cold` 父方案进入；模型修改父提交为 `caa5ed3`，Flow checkpoint 优先采用已经完成 Gate20 的 R1-F1 checkpoint。S2 不再等待 R2a/R2b。正常情况下不增加 Flow 训练；若租用的新实例和持久盘都已经没有该 checkpoint，则 S2 launcher 会按已经晋升的冻结 F1 配方自动重建，而不是因缺文件永久阻塞。
 
-## 7. S2：Agent-Factorized Action-Conditioned World Model（07-30 至 08-01，已完成）
+## 7. V3 历史 S2：Agent-Factorized Action-Conditioned World Model（07-30 至 08-01，已完成）
 
 本阶段冻结 F1 Flow 与 DINOv3，future predictor 严格保持在动作路径之外。S2 回答三个能力问题：local predictor 是否真正读取自己的候选 action chunk，team predictor 是否真正读取 peer action 并预测跨机器人/共享场景后果，以及 team capability 能否在结构上不改写合格的 own predictor。因为 predictor off-path 时不可能改变策略动作，S2 不用闭环成功率比较 W0/W1 或 P0/P1；只运行一次 predictor-disabled action-equivalence smoke，world-to-action 收益统一留到 S3。
 
@@ -1399,7 +1662,7 @@ S2 必须产出 R3-W1、旧 R4-P0 protected-own、R4 hybrid 诊断和 R5 protect
 
 以下任一情况直接判 S2 无效：predictor disabled 后动作不再与 F1 等价；Flow/DINO/protected-own 任一参数或 buffer 改变；future target 泄漏进输入；action shuffle 不增大 local error；peer-action shuffle 不增大 peer/shared error；R5 own 输出不能逐元素复现 P0。S2 不声称闭环提升，也不因 off-path 闭环持平而晋升模型；S3 才检验预测未来是否改善动作。
 
-## 8. S3：让受保护的联合未来真正调制 Flow（08-01 至 08-02，已完成）
+## 8. V3 历史 S3：让受保护的联合未来真正调制 Flow（08-01 至 08-02，已完成）
 
 本阶段固定数据、Flow、world target、future representation、R5 protected-own 与 R5 team predictor，先只增加一个可关闭的 world-to-flow 接口。S3 可以改变动作生成，但永远不能解冻或旁路 protected own predictor。注入必须是基础 Flow 的受控残差，而不是替换原有动作路径：
 
@@ -1610,9 +1873,11 @@ $$
 
 Future dropout 原本是 R6/旧 R7 冻结后、仍有余量时的可选微轮次。当前正向证据只支持 R6L-P1，且 LongPipelineDelivery 已有 `-15pp` 单任务代价；继续增加这一正则化变量不能补足 world model 的 action-awareness。因此旧 R8 状态为 `closed/not-run`，future dropout 移回 ICRA 后研究列表；下文新 R8 专指 Horizon-Causal Action Conditioning。
 
-## 9. S4：Utility-Calibrated WAM 两轮改进（新 R7–R8，08-03 至 08-22）
+## 9. S4：Utility-Calibrated WAM 两轮实验档案（R7/R8 已关闭）
 
-R7/R8 只从 merge commit `7308f5e` 对应的 R6L-P1 出发，不读取 R6J-P1 权重，不改变固定第三人称 RGB、DINOv3、无深度、4-step Euler、100-step action chunk 和 temporal ensemble。两轮的目标不是把 Stereo-CoRE policy 移进现有系统，而是把它最有价值的训练原则改写成 world-model 语言：**future evidence 只有在能降低下游 action-flow error 时才应获得更大权重。**
+> **V4.3 覆盖声明：** 9.1–9.6 保留 R7/R8 的预注册设计、远程账本、失败恢复和实际结果，供论文负结果与工程审计使用。用户已确认 R7/R8 均验证完成且总体显著落后 Stereo-CoRE；因此其中所有“继续训练、启动下一轮、创建 R9”的将来时措辞均已失效，不得作为当前执行指令。当前路线从 9.7 与第 10 节接续。
+
+R7/R8 当时只从 merge commit `7308f5e` 对应的 R6L-P1 出发，不读取 R6J-P1 权重，不改变固定第三人称 RGB、DINOv3、无深度、4-step Euler、100-step action chunk 和 temporal ensemble。历史目标不是把 Stereo-CoRE policy 移进现有系统，而是把它最有价值的训练原则改写成 world-model 语言：**future evidence 只有在能降低下游 action-flow error 时才应获得更大权重。** 闭环结果表明这次映射没有保住同事策略的总体能力。
 
 ### 9.1 两轮共用的数据、表示与回退契约
 
@@ -2165,11 +2430,1278 @@ bash scripts/stop_s4_r7_2gpu_tmux.sh \
 tmux has-session -t ssh_tmux
 ```
 
-R7 核心与完整验收通过后，仍须把 checkpoint/report hashes、五任务八条件结果、utility CI、winner 和 merge commit 写回本节，再把胜出分支合并到 `feat/model-improvements`。R8 随后从更新后的模型修改分支创建两个分支，重复同一 `30k fast-selection → normal-first core validation → diagnostics → 特殊验收 → 文档回写 → winner merge` 流程；R8 不载入 R7 的 30k model/optimizer state。R7/R8 都结束后，R9 再从共同 ancestors 按胜出 recipe 进行 125k 四种子正式训练。
+R7 核心与完整验收通过后，仍须把 checkpoint/report hashes、五任务八条件结果、utility CI、winner 和 merge commit 写回本节，再把胜出分支合并到 `feat/model-improvements`。R8 随后从更新后的模型修改分支创建两个分支，重复同一 `30k fast-selection → normal-first core validation → diagnostics → 特殊验收 → 文档回写 → winner merge` 流程；R8 不载入 R7 的 30k model/optimizer state。R7/R8 都结束后，R9 再从共同 ancestors 按胜出 recipe 进行 125k 四种子正式训练。**本段是 V3.3 历史计划，已由下述 9.7 覆盖。**
 
-## 10. S5-R9：正式训练、评测与统计（08-23 至 09-04）
+### 9.7 R7/R8 关闭结论与 V4.3 迁移边界（2026-08-04）
 
-### 10.1 双卡两两正式复现
+R7 已有可审计 normal 结果：P0/P1 分别 `34/100`、`32/100`；P1 utility Spearman bootstrap 下界跨零；剩余 legacy/gate-zero/shuffle 条件因 operator stop 不完整，因此只能判 `no winner/no merge`，不能比较谁“更好”。用户进一步确认 R8 的验证已经完成：不同任务有相对优劣，但总体仍显著低于同事版本。由于当前仓库尚未出现绑定 R8 checkpoint SHA256、五任务逐项结果和 acceptance JSON 的冻结回填，本文不虚构 R8 数字；在证据状态上固定为“方向关闭、论文数值待归档”。
+
+关闭后的工程处理如下：
+
+1. R7/R8 分支、checkpoint、normal/partial 结果与日志永久保留，不删除、不合并；
+2. `feat/model-improvements` 继续承载历史 R6L-P1 与实验工具，但不再是新 policy parent；
+3. 可迁移资产仅限 dataset manifest/hash、future label builder、action/prefix shuffle、paired evaluator、monitor/ETA 和 fail-closed provenance；
+4. 不迁移 `CrossAgentWorldConditionedFlow`、token-preserving adapter、WUC router、horizon-causal predictor 或任何 active policy weights；
+5. 不把 R7-P0 暂高 2pp 解释为 token-preserving 有效，也不把 R8 的任务级互有优劣解释为可组合性；没有合格 parent 的两项改动不得相加。
+
+V4.3随后执行了“CoRE code first”：R9将无腕CoRE原码纳入主线并建立`B9-CoreNative`，S10/R10从该同一commit/checkpoint出发；这段既有provenance与gate-zero责任继续冻结。V4.5不追改这些运行事实，但撤销“后续各gate最终回到初始CoRE parent”的方法要求：R11只做off-path belief，R12起的fallback与gate-zero必须回到**W12胜出动作组件自身的base proposal**，最终runtime删除CoRE后输出不变。
+
+## 10. V4.5 实验主线：S10 原样完成 → Belief/Action/World/Decision 组件移植 → Benchmark-First Before-We-Act（R9–R15）
+
+### 10.0 S10 冻结协议与旧 AI 改码协议（S10账本保留；R11+由10.13覆盖）
+
+正在运行的S10继续使用其已经冻结的implementation cards、代码、选择规则和进程；本节不得被用来重建或纠正S10。以下“implementation card交给AI自写symbol/loss”的内容只保留为V4.4历史协议，**不适用于R11+**。S10结束后只执行10.13–10.18：先复制官方最小组件，再用`component_lock + adaptation_card`做接口适配；不得按10.8–10.11的旧卡生成新算法。
+
+下方 10.0.1–10.6 中出现的 `stereo_core/**`、R9/R10 perception、CoreCandidateBank、forced-role 或旧 R11–R13 编号，只是 S10/V4.3 的冻结账本。可复用的是 card/diff/parameter/test/winner-pack 机制，不可复用的是 CoRE 内核、旧模块流向和旧候选定义。后续 AI 提示词必须将“保持 CoRE native forward”替换为“禁止读取或加载 CoRE runtime”，并将 `allowed_paths` 限定到 10.7 的新代码树。
+
+#### 10.0.1 S10 账本中的 AI 固定输入、输出与权力边界（后续只复用治理形式）
+
+| 项目 | 必须提供给 AI | AI 必须产出 | AI 不得做 |
+|---|---|---|---|
+| parent 身份 | `baseline_merge_commit`、checkpoint/config/normalization SHA256、输入输出 schema | `change_manifest.json` 再次记录并校验这些 hash | 改 parent snapshot、归一化、相机映射、动作维度或控制频率 |
+| 论文依据 | 已签核的 Paper Evidence Card、要吸收的公式/机制、反证条件 | 注释只引用真正实现的机制；报告 paper→symbol→test 映射 | 看到结果后换论文、用不相关 award/oral 装饰候选 |
+| 修改范围 | `allowed_paths`、`create_paths`、`trainable_parameter_regex` | 最小 patch、候选配置、单元/契约测试、迁移说明 | 修改兄弟候选、frozen seeds、公共 evaluator 或 selection rule |
+| 张量契约 | batch/agent/time/token/action shape、mask、dtype、device、causal boundary | dataclass/interface、shape assertion、mask/NaN/fallback 测试 | 偷读 task ID、future、privileged state 或 candidate outcome |
+| 优化契约 | loss 公式、系数范围、10k/30k budget、冻结表 | optimizer whitelist、参数量与 requires-grad 报告 | 解冻 parent、为单路增加数据/update/solver budget |
+| 验收契约 | 必跑命令、数值容差、延迟与反证阈值 | `pytest` 日志、dry-run、config dump、diff 白名单报告 | 自行宣布 winner、自动合并或删掉失败产物 |
+
+`implementation_card.yaml` 的最小 schema 固定为：
+
+```yaml
+round_id: r10
+candidate_id: r10-p0
+parent: {commit: null, checkpoint_sha256: null, config_sha256: null, normalization_sha256: null}
+paper_card: paper_ledger/cards/r10-p0.yaml
+failure_hypothesis: cross_view_patch_alignment_is_wrong
+existing_reuse: [stereo_core/no_wrist_pair_model.py, stereo_core/train_no_wrist_pair.py, stereo_core/evaluate_no_wrist_pair.py]
+allowed_paths: [stereo_core/bwa_perception.py, stereo_core/train_bwa_perception.py, configs/before_we_act/r10_perception/p0.yaml, tests/before_we_act/**]
+create_paths: []
+public_symbols: []
+tensor_contract: {inputs: {}, outputs: {}, masks: {}, causal_boundary: null}
+trainable_parameter_regex: '^perception_extension\\.r10_p0\\.'
+losses: []
+config_keys: []
+required_tests: []
+required_commands: []
+falsifier: null
+forbidden: [parent_mutation, privileged_deployment_input, future_at_inference, sibling_weight_read]
+```
+
+AI 完成后必须写出：
+
+```text
+experiments/before_we_act/<round>/<candidate>/change_manifest.json
+  parent hashes / touched files / created files / public symbols
+  trainable and frozen parameter names / config diff / test commands and status
+  paper mechanisms actually implemented / deviations / unresolved risks
+```
+
+若 `git diff --name-only <parent>...HEAD` 超出 `allowed_paths`，或 `requires_grad` 白名单、gate-zero、data receipt、seed list 任一不一致，候选在训练前即判 `implementation invalid`；AI 只能修复同一卡定义的实现，不能顺手扩展实验范围。
+
+#### 10.0.2 V4.3/S10 的七步流水线（R11+ 的路径与模块以 10.8–10.11 为准）
+
+1. **导入/冻结 parent。** R9 先根据 `UPSTREAM_CORE_MANIFEST.json` 完成 CoRE 源码导入、hash/许可证审计和 bit-exact API 重构；R10 开始后，`scripts/before_we_act/freeze_round_parent.py` 读取上一轮 `winner_pack.json`，生成 `round_manifest.yaml` 和四个只读 worktree，P0–P3 的 parent hash 必须相同。
+2. **先写卡再写代码。** 人或 AI 根据第 10.2–10.5 节候选表填满四张 `implementation_card.yaml`；`validate_implementation_card.py` 检查论文、路径、symbol、loss、config、test 与 falsifier 不为空。
+3. **AI 单路实现。** 每个 AI 会话只接收一个候选卡和必要源码；先回报计划修改的 symbol/shape，再只在白名单中实现。公共接口只允许在本轮开工前一次性落到 `stereo_core/bwa_contracts.py`；R9 冻结的 `NoWristPAIRRoute` 原生接口和 evaluator 时序集成契约在四路开始后不得由某一路单改。
+4. **静态与契约测试。** 先跑 import/shape/mask/causality/gate-zero/parent-frozen/forbidden-key 测试，再跑 32 batch overfit 和 200-step deterministic smoke；任何失败都不得启动 10k screen。
+5. **统一训练评测。** `launch_four_route_round.py` 只读取四张已经通过的 card；一张 GPU 对应一路，相同数据 receipt、有效 update、precision、seed 和 wall-time cutoff。
+6. **自动生成决策材料。** AI 可汇总日志并填 `candidate_report.json`，但只能调用预冻结的 `decide_unique_winner.py --selection-rule ...`；不得改阈值或主观挑 winner。
+7. **合并后重新证明 exact。** 只把唯一 winner 的 patch/config/report 引入 `bwa/main`，生成新 `winner_pack.json`；在创建下一轮四路前，重跑 parent exact、数据 receipt 与部署输入 schema。
+
+给 AI 的固定提示词必须包含以下硬指令，可由 launcher 自动填值：
+
+```text
+你只实现 {candidate_id}，父提交为 {baseline_merge_commit}。
+先读取 {implementation_card}、{paper_card} 和 listed existing_reuse；不得搜索或修改兄弟候选。
+严格实现 public_symbols、tensor_contract、losses 与 config_keys，只能触碰 allowed_paths。
+保持 CoRE native forward 的冻结参数/buffer、normalization 和 temporal ensembler 只读；gate=0 必须逐元素回退；推理禁止 future/privileged keys。
+先补 required_tests，再实现最小代码；运行 required_commands。
+最后输出 change_manifest.json，列出 diff、trainable/frozen 参数、测试结果、偏离和风险；不要宣布 winner，不要 merge。
+```
+
+#### 10.0.3 S10 原最低测试命令（R11+ 不执行 CoRE 专用项）
+
+```bash
+python scripts/before_we_act/validate_implementation_card.py --card <implementation_card.yaml>
+python scripts/before_we_act/audit_candidate_diff.py --parent <baseline_merge_commit> --card <implementation_card.yaml>
+pytest -q tests/before_we_act/test_contract_shapes.py tests/before_we_act/test_round_parent_and_budget_exact.py
+pytest -q tests/before_we_act/test_core_native_forward.py tests/before_we_act/test_core_bank_inference.py
+pytest -q tests/before_we_act/test_parent_bit_exact.py tests/before_we_act/test_action_denormalization_exact.py tests/before_we_act/test_temporal_ensemble_exact.py tests/before_we_act/test_no_privileged_deployment_inputs.py
+python scripts/before_we_act/smoke_candidate.py --card <implementation_card.yaml> --steps 200 --seed 17
+python scripts/before_we_act/audit_trainable_parameters.py --card <implementation_card.yaml>
+git diff --check <baseline_merge_commit>...HEAD
+```
+
+轮次专用测试在各候选改码表中追加；这些命令是计划中的实现目标，必须先由 R9 建立脚本和测试入口，不能在当前仓库尚不存在时假装已经通过。
+
+### 10.1 R9：已完成的 CoRE-native 前置账本（历史，不重做）
+
+R9 不再建 parent adapter，而是将已验证的 `NoWristPAIRRoute`、原训练器与原 evaluator 直接作为活动代码基座。目标是在**不改变任何权重或部署行为**的前提下，将共用编码、指定 route 解码、候选生成和时序集成拆成可测的 CoRE-native API。R9 产物 `B9-CoreNative` 是 R10 的唯一 parent commit/checkpoint，不是新模型或性能候选。
+
+#### 10.1.1 Direct-source import gate
+
+上游两个发布目录都没有 Git 历史，因此 R9 必须先将无腕版完整 `stereo_core/` 发布目录逐字导入本仓库顶层 `stereo_core/`，而不是放入 `third_party` 或重写一个相似模型。`UPSTREAM_CORE_MANIFEST.json` 必须覆盖全部导入文件的 source path、SHA256、导入时间、MIT 许可证和本地 commit；下表单独列出直接影响新主线的关键 hash：
+
+| 源文件 | SHA256 |
+|---|---|
+| `no_wrist_pair_model.py` | `056fae41f2da17767c3b6af54fc0373324fec4972fc8a7ffa0fae07a95ae8673` |
+| `train_no_wrist_pair.py` | `ba9d07fa5c3a69ca2deb344b43dcd6788ef4f0a5c15cb77086e54aef33a99b20` |
+| `evaluate_no_wrist_pair.py` | `be474a410bb40bd116942997592e279942a2f8f200347ee4b5c48fdc418519b6` |
+| `LICENSE` | `19e67a9e6c8954565bcb686542cc866420be912337a29d8945809966a831293f` |
+
+导入 gate 必须同时满足：checkpoint `strict=True` 加载；`state_dict` 键/值 hash 不变；不增加参数或 persistent buffer；原 `evaluate_no_wrist_pair.py` 的 frozen-100 JSON 与 action trace 可复现。若任一源文件 hash 或许可证不一致，必须先更新 manifest 并重做验证，不允许静默混入另一版 CoRE。
+
+`test_core_native_forward.py` 必须同时覆盖两种模式：① `actions=None/eval` 的 prediction、route cache 和 tuple 签名 exact；②固定 CPU/CUDA RNG state 后 `actions!=None/train` 的 posterior latent、`mu/logvar`、prediction、counterfactual/target 形状与 RNG-after-state exact。只验证部署 forward 而改变训练随机数消耗顺序，也属于 R9 失败。
+
+#### 10.1.2 CoRE-native inference API 重构
+
+源码审查确认了两个不能忽略的边界：
+
+1. `NoWristPAIRRoute.forward()` 的 top-2 sparse gate 是对两个 role decoder 加权，最终只返回**一个 base action chunk**，不是两个候选；
+2. 现有 forced-role counterfactual 只在 `counterfactual=True and actions is not None` 时生成，且只对 `query[:1]/memory[:1]/observation[:1]` 执行，因而不是合法的全 batch 部署候选 API。
+
+R9 直接在 `stereo_core/no_wrist_pair_model.py` 内做无参数的结构化拆分，公共 dataclass 落在 `stereo_core/bwa_contracts.py`：
+
+```python
+CoreViewTokens(
+    local_tokens, global_tokens, parent_fused
+)
+CoreDeploymentContext(
+    view_token_history, qpos_history, executed_action_history,
+    history_mask, episode_reset, fixed_camera_metadata
+)
+CoreContext(
+    views, observation, state_vec, latent, memory, query,
+    dense_routes, sparse_routes, provenance
+)
+CoreCandidateBank(
+    chunks,          # normalized [B, 5, H, D] = base + four forced roles
+    source, routes, valid_mask, provenance
+)
+
+NoWristPAIRRoute._sample_training_latent(actions) -> (latent, mu, logvar)
+NoWristPAIRRoute.encode_view_tokens(global_rgb, local_rgb) -> CoreViewTokens
+NoWristPAIRRoute.encode_context(
+    global_rgb, local_rgb, qpos, *, latent=None, deployment_context=None
+) -> CoreContext
+NoWristPAIRRoute.decode_with_gates(context, gates) -> Tensor  # [B, H, D]
+NoWristPAIRRoute.propose_core_bank(
+    global_rgb, local_rgb, qpos, *, deployment_context=None
+) -> CoreCandidateBank
+```
+
+`encode_view_tokens()` 必须只计算一次冻结 DINO local/global tokens，然后调原 `RGBDPatchFusion` 产生 `parent_fused`；原 `_paired_tokens()` 改为只返回该 `parent_fused`。R10 extension 可以读融合前两路 token 计算 residual，却不能绕过 `parent_fused + tanh(g)·Δ` 边界。
+
+`forward()` 必须改为调用上述公共路径，不再保留两套解码逻辑。训练时仍由 `_sample_training_latent(actions)` 使用原 posterior、clamp 和 `torch.randn_like` 顺序，再把 latent 显式交给 `encode_context()`；推理时 `latent=None` 严格等价于原 zero latent。`CoreDeploymentContext` 只允许当前/过去观测 token、qpos、已执行动作、mask/reset 和固定相机标定；默认 `None` 必须等价原 forward。`propose_core_bank()` 不得接收 demonstration/candidate target actions、future target、task ID 或 simulator state；必须覆盖全部 `B` 样本，除与一次 base `forward()` 完全相同的 legacy `last_dense_routes/last_sparse_routes` 更新外不改任何状态/随机数流，且 bank 的 candidate 0 与同次 `forward()` 输出逐元素一致。原训练调用、tuple 签名和 loss 保持不变；旧 `forward(counterfactual=True, actions=...)` 仍只返回 batch 首样本的四个反事实以保持训练等价，但其解码必须复用 `decode_with_gates()`；只有新部署 `propose_core_bank()` 扩展为无标签全 batch bank。
+
+`evaluate_no_wrist_pair.py` 只做等价拆分：把相机取值/qpos normalization 固化为 `prepare_no_wrist_batch()`，把 normalized chunk 乘 `a_std` 加 `a_mean` 固化为 `denormalize_action_chunks()`，把原“每次新的**反归一化 chunk**追加到每臂历史后指数加权”固化为 `TemporalChunkEnsembler`。原 evaluator 必须调用这三个接口且输出 bit-exact；R10 开始后禁止候选修改 normalization/反归一化、history append 顺序、衰减系数或 action cadence。
+
+#### 10.1.3 无腕多视角 forensic
+
+当前 `NoWristPAIRRoute._paired_tokens()` 复用了原本服务于**同一腕部 RGB/depth 对齐 `30×40` 网格**的 `RGBDPatchFusion`，但输入变为不同外参的 local/global RGB。R9 用冻结权重运行以下 paired intervention，判断 CameraAlignment/StackCube 是否被伪对齐拖累：
+
+| 条件 | 改动 | 回答的问题 |
+|---|---|---|
+| normal | 原 global + matching local | parent 行为 |
+| local-only | global token 置为训练均值，并保留 shape | global context 是否必要 |
+| global-only | local token 置为训练均值 | local geometry 是否必要 |
+| shuffle-global | 同任务、不同 episode 的 global view | policy 是否真正利用 global context |
+| shuffle-local | 同任务、不同 episode/agent 的 local view | matching local 是否被正确绑定 |
+| patch-permute | 只置换 global patch 空间位置 | “对齐 patch”归纳偏置是否脆弱 |
+| no-relbias diagnostic | 关闭 cross-view relative bias，其他不变 | 原 RGB-D 相对偏置是否对跨相机有害 |
+
+这些条件只做归因，不直接选方法；结果必须按任务拆分。无论 forensic 是否显著，R10-P0 都保留并升为默认优先验证路线，因为“不对齐相机被强制按 patch 对齐融合”已由源码直接证实；intervention 决定的是改动强度和反证门槛，不是是否承认该风险。
+
+#### 10.1.4 CoRE action-bank oracle
+
+`propose_core_bank()` 对每个 agent/decision 生成 candidate 0/base 与四个 forced-role chunks。joint bank 固定为 base tuple 加每次只替换一个机器人 role 的候选，最多 `1+4A≤17` 个。R9 用模拟器真实后果建立不可部署 oracle：
+
+1. 优先使用环境 state snapshot/restore；使用前必须证明 restore 后观测、qpos 和连续 10 步 base action 逐元素或在冻结容差内一致；
+2. 若环境无可靠 snapshot，则从相同 seed 重置并严格 replay base prefix，只在预注册 decision points 分支；prefix state 不一致的样本丢弃并报告，不能当作候选失败；
+3. 每个分支必须保持过去 temporal history 完全相同，只把当前 normalized 新 chunk 替换为候选，经同一 `denormalize_action_chunks()` 后再写入历史，最后经原 `TemporalChunkEnsembler` 得到真正执行动作；不得绕过反归一化/时序集成直接执行 raw chunk；
+4. 每个候选只执行与真实 deployment cadence 相同的前缀，随后恢复由冻结 parent 控制到 episode 结束；记录未来 DINO latent、qpos、共享对象进度、碰撞/停滞和最终 episode success；
+5. oracle 只用于测 candidate-set ceiling 和训练 ranking label，绝不进入部署输入或最终成功率。
+
+R9 的 go/no-go 条件为：oracle 相对 parent 的 frozen Gate20 macro headroom 至少 `+10pp`；CameraAlignment 与 StackCube 成功数合计至少增加 `8/40`；至少 `80%` 的 oracle 改善来自有效 bank 候选；forced-role action 无 NaN/越界/超 range。
+
+#### 10.1.5 R9 对 R10–R13 的路线影响判断
+
+| 轮次 | 结论 | 必须修改的起点/代码落点 | 不变的核心假设 |
+|---|---|---|---|
+| **R10** | **保留四路，但实现需重写；P0 优先级升高** | 从 `B9-CoreNative` 出发；native `CorePerceptionExtension` 同时读取 `CoreViewTokens` 中的 pre-fusion local/global tokens 与 `parent_fused`，不再经 adapter 抽 feature；所有残差都用 `parent_fused+tanh(g)·Δ` | 跨视角非对齐桥、object slots、历史信念、JEPA predictive state 仍是四个可证伪方向 |
+| **R11** | **保留，但改为 native bank 的有界追加层** | 直接读 R9 `CoreCandidateBank`，Flow 只 append，不再重建 forced-role bank；若 R9/R10 bank 已有充分 headroom，R11 可 `no winner`原样进 R12；若不足，R11 必须先扩大 headroom | base-centered、rectified、streaming、joint-equivariant 四种 Flow proposal 机制保留 |
+| **R12** | **保留四路，输入契约改变** | world model 直接消费 `detach()` 的 `CoreContext` 和归一化 native/Flow joint chunks；数据收集优先复用 CoRE 原 trainer 的 manifest/dataset/sampler 和 branch receipt | ensemble RSSM、JEPA latent、object-factorized、value-aware 四种 consequence model 保留；仍先 off-path |
+| **R13** | **保留四路，闭环插入点必须改** | planner 先选完 joint chunk，再把选中 chunk 追加到各臂原历史并调原时序集成；fallback 追加 bit-exact base chunk | conservative rerank、CEM、MPPI、bounded tree 四种 selector 保留 |
+
+因此 R9 改变的不是 R10–R13 的研究问题，而是它们的**工程父节点、数据接口和闭环时序**。若 native refactor 不能通过 forward/chunk/route/normalization/temporal-output 精确等价，V4.3 在 R9 停止；若只是 CoRE bank headroom 不足，不停 R10，但 R11 由可选增强变为 R12 前的必须门。
+
+### 10.2 S10/R10：正在运行的四路无腕 Predictive Perception / State Repair（全文冻结）
+
+R10 四路都从 `B9-CoreNative` 的同一个 commit/checkpoint 克隆，只训练 zero-init `CorePerceptionExtension`；DINO、ACT posterior/decoder、ARCA、role adapters/prototypes、PAIR router、out head、normalization 与 temporal ensembler 全冻结。公共机制不是重新训练视觉 backbone，而是从 `CoreViewTokens` 同时保留 pre-fusion local/global tokens 与原 `RGBDPatchFusion` 输出 $\mathbf x_0$；每一路可用前两者计算残差，却只能输出 $\mathbf x=\mathbf x_0+\tanh(g)\Delta_\psi$，其中 gate 和最后投影 zero-init，`g=0` 逐元素回到 `B9-CoreNative`。
+
+本轮文献优先级改为“2025–2026 直接工作优先、经典机制只作根源”。[ICML 2025 MFSC](https://icml.cc/virtual/2025/poster/44691) 直接对应多视角控制表征，[ICLR 2026 Oral LPWM](https://iclr.cc/virtual/2026/oral/10007677) 直接对应 object-centric stochastic state，[ICLR 2025 Oral Seer/PIDM](https://iclr.cc/virtual/2025/events/oral) 直接对应 predicted visual state 与动作闭环，[CoRL 2025 award finalist LocoFormer](https://2025.corl.org/program/awards) 对应长历史适配。Perceiver IO、Slot Attention、PlaNet、I-JEPA、Transporter 仅作为已经受时间检验的机制根源。每张卡必须至少选择一篇上述近作并精确落到代码，不能只复制共同 BibTeX。
+
+| 候选 / GPU | 从 `B9-CoreNative` 增加的唯一机制 | 直接参考与吸收 | 主要假设与首要反证 |
+|---|---|---|---|
+| **R10-P0 / GPU0：Calibrated Unaligned Bridge** | local/global token 各自保留 2-D position、camera embedding 与可部署 ray feature；以 latent query cross-attend 两路视角 | MFSC 的 task-relevant multiview state 与 missing-view mask；Perceiver IO 的 latent-query cross-attention；Transporter 的 correspondence，不再把相同 patch index 当同一物理点 | 若 view/ray shuffle 不改变 bridge 输出，或 Camera+Stack 不升，跨视角错配假设被否定 |
+| **R10-P1 / GPU1：Object-Centric Slot Bridge** | 从两路冻结 token 形成共享 object slots，再把 object/goal/agent slot 的最小摘要残差注入 route observation | ICLR 2026 Oral LPWM 的无监督 object particles；[Slot Attention](https://proceedings.neurips.cc/paper/2020/hash/8511df98c02ab60aea1b2356c013bc0f-Abstract.html) 的迭代 binding | 若 slot permutation、object masking 不改变 Stack 输出，或 slot 在跨帧/跨视角不稳定，则 object-centric 假设失败 |
+| **R10-P2 / GPU2：Recurrent Predictive-State Observer** | 合法的最近观测、own qpos 与已执行 action prefix 进入小型 RSSM，当前 deterministic state 作为 gated residual | CoRL 2025 LocoFormer 的 long-context adaptation；[PlaNet](https://proceedings.mlr.press/v97/hafner19a.html) 的 latent belief；[DreamerV3](https://arxiv.org/abs/2301.04104) 的稳定 RSSM recipe | 若打乱历史顺序或 action prefix 不影响输出，或只改善离线预测不改善闭环，则部分可观测性假设失败 |
+| **R10-P3 / GPU3：JEPA Future-Feature Bridge** | 由当前多视角/history 预测 $h\in\{5,15,30\}$ 的冻结 DINO latent，只把 predictor state 的小残差给 policy | ICLR 2025 Oral Seer/PIDM 的 forecasted visual state→action闭环；[I-JEPA](https://arxiv.org/abs/2301.08243) 的 representation prediction；[A2World](https://arxiv.org/abs/2606.29501) 的 action-conditioned multiview consistency | 若 future-target shuffle 不降低能力、action-prefix shuffle 不敏感或预测更准但闭环不升，则 JEPA bridge 失败 |
+
+#### 10.2.1 R10 逐候选 AI 改码卡
+
+四路共享接口由 R9 冻结在 `stereo_core/bwa_contracts.py`：`CoreViewTokens`、`CoreContext`、`CoreCandidateBank`、`PerceptionOutput(tokens, auxiliary, diagnostics)` 和 `CorePerceptionExtension`。`NoWristPAIRRoute.encode_context()` 将 `CoreViewTokens` 和当前合法 qpos/history 交给注册的 extension，默认为 identity；`apply_perception_residual()` 只接受 `parent_fused + tanh(gate) * delta`。固定相机的 calibration/ray metadata 由 R10 配置显式提供并纳入 config hash，不改原 forward 输入 schema。AI 可在 `stereo_core/bwa_perception.py` 实现 extension，但不得复制或改写 R9 冻结的 encode/decode/forward 与 bank 逻辑。
+
+| 候选 | AI 必须新增/修改的 symbol | forward、loss 与配置怎么改 | 必须新增的专用测试 |
+|---|---|---|---|
+| R10-P0 | 在 `stereo_core/bwa_perception.py` 新建 `CalibratedUnalignedBridge`；只修改 `stereo_core/train_bwa_perception.py` 与 `r10_perception/p0.yaml` | `local/global tokens + camera_id + normalized_uv + optional ray Fourier feature → latent queries → cross-attention → zero-init projection`；输出注入 `parent_fused + tanh(g)·Δ` 的 native extension point；损失为 parent imitation + multiview masked reconstruction/bisimulation + gate L2；键：`bridge.kind=calibrated_crossview`、`num_latents`、`ray_fourier_bands`、`view_dropout`、`gate_max` | `test_crossview_not_patch_aligned.py`：extension 单测支持 local/global 不等 token 数（整合测试仍保留 parent 30×40）；ray/view shuffle 有非零 delta；missing-view mask 无 NaN；gate-zero 与 native base/bank bit exact |
+| R10-P1 | 在 `stereo_core/bwa_perception.py` 新建 `ObjectSlotBridge` 与 `IterativeSlotBinder`；只修改公共 trainer/本路 config | 两视角 token 共享 $K$ 个 slots，迭代 attention 后用 slot-to-route residual；损失为 action imitation + temporal slot consistency + masked-object prediction，匹配用 stop-gradient Sinkhorn/soft assignment；键：`num_slots`、`slot_iters`、`slot_dim`、`slot_consistency_weight`、`gate_max` | `test_object_slot_bridge.py`：slot permutation 等变、agent/view mask、全 mask fail closed、object occlusion 改变相关 slot、gate-zero/native-bank exact |
+| R10-P2 | 在 `stereo_core/bwa_perception.py` 新建 `RecurrentPredictiveStateBridge`，内部使用小型 `GRUCell`/RSSM；native dataset adapter 只扩展合法 history window | 最近 $L$ 步 `tokens/qpos/executed action` 经 causal RSSM 得当前 belief，再做 zero-init residual；损失为 action imitation + future qpos/latent prediction + KL free-bits；键：`history_steps`、`deter_dim`、`stoch_dim`、`kl_free_bits`、`overshoot_horizons` | `test_predictive_state_causality.py`：reset 清空、历史顺序/action-prefix shuffle 有效、未来 suffix 不可见、padding 与 variable-agent mask、gate-zero/native-bank exact |
+| R10-P3 | 在 `stereo_core/bwa_perception.py` 新建 `JEPAFutureFeatureBridge`、`EMATargetEncoderHandle`；通过新 cache adapter 可选复用历史 cache 语义 | online context predictor 预测 $h={5,15,30}$ 的冻结 DINO/EMA target，target 全 stop-grad；推理只保留 predictor state；损失为 action imitation + normalized cosine/Huber future feature + horizon consistency；键：`future_horizons`、`target_encoder=frozen_dino`、`ema_decay`、`feature_loss_weight` | `test_jepa_bridge_no_future_input.py`：deployment schema 拒绝 future key、EMA 不进 optimizer、target/action shuffle 降低对应能力、不同 horizon causal、gate-zero/native-bank exact |
+
+R10 公共训练入口只允许注册 `bridge.kind`，不得写四份复制的 train loop。AI 必须在 `stereo_core/train_bwa_perception.py` 直接复用 `stereo_core/train_no_wrist_pair.py` 的 `NoWristFrameDataset`、`ExactFiveTaskBatchSampler`、normalization 和 manifest 语义；历史 WAM 的 episode grouping/cache 只可作工具参考，不再是主训练入口。禁止为某一路直改 native dataset/split/sampler。
+
+四路统一 `10k screen → 最多 30k selection`，有效 optimizer updates、batch、数据、seed schedule、precision 与 cutoff 完全一致。若某一路显存更低，不能用额外 updates 奖励它；效率只在同等质量后的排序中使用。
+
+R10 晋级必须同时满足：
+
+1. `perception_gate=0` 与 `B9-CoreNative` 的 base/forced-role chunks、route 和 temporal output 逐元素一致；
+2. paired Gate20 macro **严格高于** `B9-CoreNative`，任一任务下降不超过 `1/20`；
+3. CameraAlignment + StackCube 合计至少增加 `4/40`，且 Lift/LPD/Photo 合计不下降；
+4. 候选自己的预注册 intervention 产生方向正确、episode-bootstrap 95% 下界 `>0` 的 causal delta；
+5. P95 control latency 不超过 `B9-CoreNative` 的 `1.15×`，无 privileged camera/state key。
+
+通过者按“硬门槛 → Camera+Stack 增量 → macro 增量 → causal delta → latency/参数量 → P0<P1<P2<P3”选唯一 `W10`。四路全失败则 `W10=B9-CoreNative`，R11 仍可从该 native parent 设计 Flow bank，但任何 R10 权重都不得进入下一轮。
+
+### 10.3 V4.3 旧 R11：四路 Safe Flow-Matching Action Proposal Bank（历史，不执行）
+
+R11 四路都从 merged `W10` 克隆，`W10` 的完整 CoRE-native 动作路径只读。Flow head 只输出相对 base 的 joint residual proposal，经过动作范围、速度、mask、prefix continuity 与 collision precheck 投影后追加到 R9 的 `CoreCandidateBank`；`flow_gate=0` 或 Flow 异常时 bank 精确退化为继承的 native CoRE bank。R11 不使用训练中的 world model 挑赢家，而用可复现 simulator branch 的真实后果测 proposal ceiling。
+
+R11 是“候选上限不足时必须、已足时可 `no winner`”的条件轮：若 R9/R10 的 native bank 已达到预注册 oracle headroom，四路仍按同预算验证是否还能安全扩展，全失败则原样进入 R12；若 native bank 不足，则 R11 至少有一路必须先达到新 headroom 门槛，否则禁止启动 R12，因为 world model 无法从无解候选中选出成功动作。
+
+本轮优先使用直接针对机器人动作表示和 Flow policy 的最新证据：[RSS 2025 Outstanding Paper finalist FAST](https://roboticsfoundation.org/awards/best-paper-award/) 约束动作 token/块表示，[CoRL 2025 award finalist $\pi_{0.5}$ 与 Steering Diffusion Policy](https://2025.corl.org/program/awards) 约束强 VLA action expert 与可控 proposal，[CoRL 2025 Oral Streaming Flow Policy](https://2025.corl.org/program/main-conference) 约束流式 warm start，[ICML 2026 official paper index](https://icml.cc/Downloads/2026) 中的 FocalPolicy 约束 locally anchored Flow 与跨 chunk coherence，[ICML 2025 Oral Inductive Moment Matching](https://icml.cc/virtual/2025/events/oral) 约束 few-step transport。Flow Matching、Rectified Flow、Diffusion Policy 与 Deep Sets作为经典/高引用根源；不再把 Neural ODE 或 Transporter 强行塞进所有候选。
+
+| 候选 / GPU | 从 `W10` 增加的唯一机制 | 直接参考与吸收 | 主要假设与首要反证 |
+|---|---|---|---|
+| **R11-P0 / GPU0：Base-Centered Conditional Flow Residual** | 从 base action 周围的窄高斯学习 observation-conditioned OT Flow，生成 $K\le8$ 个小残差 | [Flow Matching](https://openreview.net/pdf?id=PqvMRDCJT9t) 的 simulation-free vector-field regression；[$\pi_0$](https://arxiv.org/abs/2410.24164)/CoRL 2025 $\pi_{0.5}$ 的 flow action expert；FAST 的高效动作表示 | 若 proposal 只复制 base、需要大残差才有 oracle 收益或 projection 大量拒绝，则局部 residual 假设失败 |
+| **R11-P1 / GPU1：Rectified Few-Step Refiner** | 以 base/forced-role chunk 为 source、demonstration action 为 target 做 rectified flow，限制 2–4 个 Euler/Heun steps | [Rectified Flow](https://arxiv.org/abs/2209.03003) 的直线路径与 reflow；ICML 2025 Oral Inductive Moment Matching 的 few-step distribution matching | 若少步 solver 相比 8-step oracle headroom 显著损失，或轨迹曲率不降，则 few-step 假设失败 |
+| **R11-P2 / GPU2：Receding-Horizon Warm-Start Flow** | source distribution 以 parent 当前 chunk和上一已执行 chunk混合初始化，显式约束前缀连续 | CoRL 2025 Streaming Flow Policy 的 previous-chunk warm start；ICML 2026 FocalPolicy 的 locally anchored Flow/cross-chunk coherence；[Diffusion Policy](https://diffusion-policy.cs.columbia.edu/) 的 receding-horizon根源 | 若 chunk boundary jerk/重规划延迟不降，或历史 chunk shuffle 无影响，则 streaming 假设失败 |
+| **R11-P3 / GPU3：Permutation-Equivariant Joint Flow** | 共享 per-agent vector field + masked set aggregation，一次生成 team residual，机器人 slot 置换时输出同步置换 | [Deep Sets](https://arxiv.org/abs/1703.06114) 的集合等变/不变原则；[RSS 2025 multi-agent safe optimal control finalist](https://roboticsfoundation.org/awards/best-paper-award/) 的联合安全边界；[Flow-Opt](https://arxiv.org/abs/2510.09204) 与 [GCo](https://arxiv.org/abs/2511.10874) 的近作边界 | 若 agent permutation exact test 失败、joint proposal 不比 unilateral bank 增加 Stack oracle headroom，则联合 Flow 假设失败 |
+
+#### 10.3.1 R11 逐候选 AI 改码卡
+
+本轮公共接口由 AI 在四路分叉前一次性加入 `stereo_core/bwa_contracts.py`：`FlowCandidateBatch(actions[B,K,A,H,D], source, valid_mask, projection, diagnostics)`；`SafeFlowProposalBank.propose(context, base_chunk, previous_chunk, agent_mask, generator)` 只能返回新增 proposal。组装器先接收 R9 `NoWristPAIRRoute.propose_core_bank()` 的 candidate 0/base 与 forced-role bank，随后才 append Flow；`ProjectSafe` 统一处理 range、velocity、inactive-agent、executed-prefix 与 NaN。任一 Flow 类都不得重建 native bank 或持有可写 parent reference。
+
+| 候选 | AI 必须新增/修改的 symbol | forward、loss 与配置怎么改 | 必须新增的专用测试 |
+|---|---|---|---|
+| R11-P0 | 在 `stereo_core/bwa_flow_proposals.py` 新建 `BaseCenteredOTFlow`；在 `stereo_core/train_bwa_flow.py` 注册 `base_centered_ot` | 采样 $z_0\sim\mathcal N(0,\sigma^2I)$，OT path 学 residual velocity $v_t(z_t\mid x,a_{base})$，解算后 `a=ProjectSafe(a_base+r)`；损失 `L_fm + λ_res\|\|r\|\|² + λ_jerk L_jerk`；键：`source_sigma`、`ot_path`、`solver_steps`、`num_proposals<=8`、`residual_clip` | `test_base_centered_flow.py`：base 永远 index 0、固定 generator 可复现、zero residual/base exact、projection 后范围/速度/mask/prefix 均通过、target shuffle 降质 |
+| R11-P1 | 在 `stereo_core/bwa_flow_proposals.py` 新建 `RectifiedFlowRefiner`、`ReflowPairCache`; native trainer 只增加离线 teacher-cache phase | source 是 base/forced-role chunk，target 是同 prefix demonstration/更优 branch action；先一轮 rectification，再缓存 teacher pair，2/4/8-step 共用权重；损失 `L_velocity + λ_straight L_curvature + λ_boundary L_boundary`；键：`reflow_rounds=1`、`solver=euler\|heun`、`solver_steps` | `test_rectified_refiner.py`：2/4/8-step shape与预算、teacher cache 绑定 parent/data hash、曲率统计、无 cache fail closed、8-step 不得偷偷用于 2-step latency结果 |
+| R11-P2 | 在 `stereo_core/bwa_flow_proposals.py` 新建 `StreamingWarmStartFlow` 与 `PreviousChunkState`; 只读上一实际执行 chunk | source 均值为 parent current chunk 与 previous chunk 的 mask-aware blend，已经执行前缀硬 pin；训练加入 boundary velocity/acceleration penalty；键：`warm_start_alpha`、`prefix_pin_steps`、`history_reset_on_episode`、`solver_steps` | `test_streaming_flow_state.py`：episode reset、previous-chunk shuffle 有非零影响、prefix bit exact、replan boundary jerk、丢帧/空 history 回 base、并发 env state 不串线 |
+| R11-P3 | 在 `stereo_core/bwa_flow_proposals.py` 新建 `EquivariantJointFlow`、`MaskedAgentSetEncoder`; 复用 native valid-agent mask 语义 | 同一共享 per-agent field，masked set attention 聚合 team context；禁止 learned agent ID，agent permutation 同步置换输出；损失 `L_joint_fm + λ_collision L_pair + λ_equiv L_equiv`；键：`set_layers`、`shared_agent_field=true`、`pairwise_safety_margin`、`equivariance_weight` | `test_joint_flow_equivariance.py`：2/3/4 agent、agent permutation exact、inactive slot不影响 active、joint collision projection、unilateral-vs-joint oracle receipt 对齐 |
+
+四路只允许在 `configs/before_we_act/r11_flow/pY.yaml` 改自己的 `proposal.kind` 与超参。共同的 candidate 拼接、provenance 和投影代码必须在分叉前冻结；AI 若为某个候选单独改变 `ProjectSafe`，该候选直接无效。
+
+训练数据只允许使用原 demonstrations、`W10` on-policy rollout 与不含 frozen seeds 的安全局部 perturbation。四路使用相同有效 action windows 和 candidate count；不得因某一路 solver 更快而采更多样本。
+
+R11 晋级必须同时满足：
+
+1. `flow_gate=0`、空 bank 或全部 proposal 被拒绝时逐元素返回 `W10`；
+2. proposal NaN/越界为 `0`，安全投影接受率 `>=99.5%`，已执行 prefix 不被修改；
+3. 在同一 R9-style Gate20 branch points 上，相对继承 bank 的 **oracle macro headroom 增加至少 `+5pp`**，Camera+Stack 合计至少多 `4/40`；
+4. 非 base proposal 的有效覆盖率 `>=20%`，pairwise action distance 与 outcome diversity 同时报，不能用纯噪声制造“多样性”；
+5. Flow/action target shuffle 显著破坏 proposal quality，95% CI 下界 `>0`；
+6. 生成最多 8 个 proposals 后的 P95 延迟不超过 `W10` 的 `1.25×`，单个异常 candidate 不影响整批。
+
+按“硬门槛 → Camera+Stack oracle 增量 → macro oracle 增量 → 有效覆盖率 → latency → candidate ID”选唯一 `W11`。四路全失败则 `W11=W10`，不得保留任何失败 Flow head；仅当 R9/R10 的继承 native bank 已通过 oracle headroom 门槛时才可直接进入 R12，否则必须重写 R11 四张卡而不是训练 scorer。
+
+### 10.4 V4.3 旧 R12：四路 Off-Path Consequence World Model（历史，不执行）
+
+R12 四路都从 merged `W11` 克隆并完全不改变动作。输入改为 R9 原生 `CoreContext` 的 detached 合法字段、所有有效 agent qpos、经 CoRE normalization 契约统一表示的 native/Flow joint action chunks 与 masks；输出为多 horizon latent/state、progress、failure/stall/collision 与 epistemic uncertainty。模型不再自己建一套主视觉编码器，不接 task/agent ID，不读真实 future，不把 role/proposal ID 当语义标签；它们只用于 provenance 和分组统计。
+
+四路共享 action-prefix causal encoder、2–4 agent mask 与 `world_gate=0` exact fallback。最新直接证据优先使用 [ICLR 2026 Oral World-In-World](https://iclr.cc/virtual/2026/events/oral) 的 closed-loop/controllability-first 评测、[ICLR 2026 Oral LPWM](https://iclr.cc/virtual/2026/oral/10007677) 的 object-centric stochastic dynamics、[ICLR 2026 WorldGym](https://iclr.cc/virtual/2026/poster/10008029) 与 [WMPO](https://iclr.cc/virtual/2026/poster/10007263) 的 policy evaluation/optimization边界、[ICML 2026 official paper index](https://icml.cc/Downloads/2026) 中的 Learning Latent Action World Models in the Wild 与 RoboFlow4D、[ICML 2025 Oral TD-Flow](https://icml.cc/virtual/2025/oral/47200) 的 direct multi-horizon prediction，以及 [RSS 2024 Denoising World Model finalist](https://roboticsfoundation.org/awards/best-paper-award/) 的 award 证据。ICML 2026 论文借用 frozen feature/action interface 与实时 slow-fast 原理，不借其不可部署的额外输入；PlaNet、PETS、MuZero、I-JEPA、Slot Attention 只提供受时间检验的机制根源。
+
+| 候选 / GPU | 从 `W11` 增加的唯一机制 | 直接参考与吸收 | 主要假设与首要反证 |
+|---|---|---|---|
+| **R12-P0 / GPU0：Ensemble RSSM** | deterministic recurrent state + stochastic latent，3 个 bootstrap outcome heads | RSS 2024 Denoising World Model finalist；PlaNet/DreamerV3 的 robust RSSM；TD-Flow 的 direct-horizon对照 | 若 persistence 更好、ensemble variance 与错误无单调关系或 ranking 不过关，则 RSSM 假设失败 |
+| **R12-P1 / GPU1：JEPA/DINO Latent World Model** | 不重建像素，只预测多视角 DINO latent delta和跨视角一致性 | WorldGym 的 policy-ranking边界；ICML 2026 Learning Latent Action World Models 的 frozen JEPA/action interface；I-JEPA 的 target representation；A2World 仅作碰撞 watchlist | 若 latent loss 降但 candidate ranking/AUROC 不升，或 action shuffle 无影响，则视觉 latent 不是有效后果状态 |
+| **R12-P2 / GPU2：Object-Centric Factorized World Model** | object/agent slots 分别转移，再用共享-object interaction graph汇总 team progress | ICLR 2026 Oral LPWM；2026 preprint [OA-WAM](https://arxiv.org/abs/2605.06481) 的 persistent object address；Slot Attention/[C-SWM](https://arxiv.org/abs/1911.12247) 的根源 | 若 slot identity 在 rollout 中漂移，object permutation/occlusion test无响应或 Stack ranking不升，则 object-centric 假设失败 |
+| **R12-P3 / GPU3：Value-Aware Probabilistic World Model** | dynamics ensemble直接预测 progress/risk distribution与不确定性，不把最低 latent MSE 当唯一目标 | ICLR 2026 World-In-World/WMPO 的 closed-loop utility；ICML 2026 RoboFlow4D 的实时 slow-fast闭环边界；ICML 2025 Oral TD-Flow 的 direct horizon；PETS/MuZero/TD-MPC2 的 value-relevant latent | 若校准后仍过度自信、value target shuffle不影响结果或 latent-only baseline排名更好，则 value-aware 假设失败 |
+
+#### 10.4.1 R12 逐候选 AI 改码卡
+
+四路分叉前，AI 只在 `stereo_core/bwa_contracts.py` 增加统一接口：`JointConsequenceWorldModel.forward(context: CoreContext, candidate_actions, agent_mask, horizon_mask) -> ConsequencePrediction(latent_by_horizon, state_by_horizon, progress_dist, failure_logits, epistemic, aleatoric, valid_mask)`。入口立即断言 `CoreContext` 已 detach；该接口没有 `select()`、没有 actuator handle，也不能返回修改后的动作；`world_gate=0` 的含义是 planner 完全忽略 world 输出，动作链与 `W11` bit exact。
+
+| 候选 | AI 必须新增/修改的 symbol | forward、loss 与配置怎么改 | 必须新增的专用测试 |
+|---|---|---|---|
+| R12-P0 | 在 `stereo_core/bwa_world_models.py` 新建 `EnsembleRSSMWorldModel`、`BootstrapOutcomeHead`; `stereo_core/train_bwa_world.py` 注册 `ensemble_rssm` | 共享 deterministic state，3 个有独立 bootstrap mask 的 stochastic/outcome head；按 action prefix rollout并在固定 horizons readout；损失 `ELBO + latent/state Huber + progress CE + failure focal + diversity floor`；键：`ensemble_size=3`、`deter_dim`、`stoch_dim`、`kl_free_bits`、`horizons` | `test_ensemble_rssm_world.py`：bootstrap mask不同、suffix causality、persistence baseline、ensemble variance随人工 OOD 上升、candidate batch顺序不改变对应输出 |
+| R12-P1 | 在 `stereo_core/bwa_world_models.py` 新建 `JEPADinoWorldModel`、`MultiViewTargetProjector`; 可选复用 R10-P3 cache adapter 但不共享 trainable weight | 当前合法 tokens 与 candidate action 直接预测各 horizon 的冻结 DINO target delta，不自回归生成像素；损失 `cosine/Huber latent + cross-view consistency + progress/failure + calibration`；键：`target_encoder=frozen_dino`、`direct_horizons`、`view_consistency_weight`、`stop_gradient_target=true` | `test_jepa_world_model.py`：future key不进 forward、target encoder冻结、action/view shuffle增 loss、missing view mask、latent MSE 与 ranking 分开报告 |
+| R12-P2 | 在 `stereo_core/bwa_world_models.py` 新建 `ObjectFactorizedWorldModel`、`PersistentSlotAddress`、`SharedObjectInteractionGraph` | 由 `CoreContext` 抽取 agent/object slots，address slice每层重置/stop-grad，content由 candidate action转移；用 soft matching保持跨帧 identity；损失 `slot feature + address consistency + object motion + progress/failure + pair ranking`；键：`num_object_slots`、`address_dim`、`interaction_layers`、`soft_match_temp` | `test_object_world_model.py`：object/agent permutation、slot-swap causal intervention、遮挡后 uncertainty、2/3/4 agents、Stack shared-object ranking、地址不得编码 task/candidate ID |
+| R12-P3 | 在 `stereo_core/bwa_world_models.py` 新建 `ValueAwareConsequenceEnsemble`、`DirectHorizonHead`、`OutcomeCalibrator` | 不逐帧长 rollout；对每个 candidate 直接预测多 horizon progress/risk/value分布和 uncertainty，并用 latent consistency辅助；损失 `quantile/CE outcome + pairwise ranking + Brier/ECE surrogate + TD/value consistency`；键：`num_quantiles`、`direct_horizons`、`ranking_margin`、`risk_weight`、`calibration_temperature` | `test_value_world_model.py`：value/progress shuffle、horizon suffix因果、OOD bucket错误率单调、temperature只用 calibration split、WorldGym-style policy ranking与真实 branch receipt 对齐 |
+
+R12 的数据代码由 `stereo_core/bwa_candidate_dataset.py` **适配** `stereo_core/train_no_wrist_pair.py` 的 episode manifest、`NoWristFrameDataset`、`ExactFiveTaskBatchSampler` 和 normalization，再附加 R9/R11 branch receipt，不得改写原 receipt。历史 `train/s2_grouped_trajectory.py`、`train/s4_hierarchical_team_sampler.py` 与 `train/s4_future_feature_cache.py` 只可复用实现模式/cache 校验，不得取代 CoRE-native 数据主键。AI 必须让每个 batch 携带 `policy_sha/prefix_hash/candidate_sha/restore_error`，但 deployment `forward()` 对这些审计字段和 simulator state 明确报错。
+
+#### 10.4.2 共同训练数据
+
+| 数据 | 作用 | 约束 |
+|---|---|---|
+| 600 条成功 demonstrations | 常规 action-conditioned dynamics 与视觉/状态未来 | 原 train manifest；不混入 frozen eval seeds |
+| `W11` on-policy success/failure rollouts | 失败风险、停滞和分布内 uncertainty | 按 task/outcome/stage 平衡；保存 policy hash |
+| R9/R11 candidate branches | 同一 prefix 下候选相对排序 | 绑定 restore/replay audit、decision state 与 candidate source hash |
+| 安全局部 action perturbation | 扩展局部动力学支持 | 先过 range/velocity/collision 检查；不进入正式成功率 |
+
+#### 10.4.3 Off-path gates
+
+R12 晋级必须在同一 held-out episodes 上同时满足：
+
+1. 每个 horizon 的 latent/state prediction 优于 persistence，且四路使用同一 target normalization；
+2. within-task action-chunk shuffle 显著增加 loss，episode-bootstrap 95% 下界 `>0`；
+3. 修改 action suffix `h+1:H` 不得改变 horizon $h$ 输出，修改合法 prefix 必须产生非零变化；
+4. 同一 decision 的 candidate-pair ranking Spearman 95% 下界 `>0`，binary better/worse AUROC `>=0.70`；
+5. success/failure ECE `<=0.10`，高 uncertainty bucket 的实际错误率严格高于低 bucket；
+6. 离线 top-1 至少保留 `W11` oracle headroom 的 `50%`，Camera/Stack 分别报告；
+7. `world_gate=0`、日志开关、candidate 顺序或 batch size 变化不得改变 `W11` 动作；P95 25-candidate inference 不超过 `W11` 的 `1.50×`。
+
+按“硬门槛 → Camera/Stack ranking → 总体 AUROC/Spearman → ECE/uncertainty → oracle-headroom retention → latency → candidate ID”选唯一 `W12`。四路全失败时不得进入 R13；先补 outcome/candidate branch 数据或重写 R12 论文卡，不能用最低 future MSE 强行选 world model。
+
+### 10.5 V4.3 旧 R13：四路 Before-We-Act Planner / Selector（历史，不执行）
+
+R13 四路都从 merged `W12` 克隆，proposer、Flow bank与 world encoder 冻结。candidate 0/base 永远存在，tie、OOD、uncertainty 超阈、latency 超时或异常一律 base。四路只改变“如何在有限候选和有限模型调用预算内使用预测后果”，不能回训 R10–R12 来掩盖 planner 差异。与旧路线相比，关键工程改动是：planner 选择的对象是**当前尚未写入历史的新 joint chunk**，不是原 evaluator 时序集成后的单步动作。
+
+本轮优先吸收 [CoRL 2025 Best Paper Fabrica](https://2025.corl.org/program/awards) 的 integrated planning-and-learning、[RA-L 2026 Best Paper recipient: Should We Learn Contact-Rich Manipulation Policies From Sampling-Based Planners?](https://www.ieee-ras.org/awards-recognition/publications-awards/ieee-robotics-and-automation-letters-best-paper-award/) 对 sampling planner 数据价值的直接检验、[RSS 2025 multi-agent safe optimal control finalist](https://roboticsfoundation.org/awards/best-paper-award/) 的联合安全约束、CoRL 2025 award finalist/Oral Steering Diffusion Policy 的 latent steering，以及 ICLR 2026 Oral World-In-World 的 closed-loop utility-first原则。经典 PETS/MBOP/PlaNet/MPPI/MuZero 只定义算法根源与失败模式。
+
+| 候选 / GPU | 从 `W12` 增加的唯一机制 | 直接参考与吸收 | 主要假设与首要反证 |
+|---|---|---|---|
+| **R13-P0 / GPU0：Conservative One-Step Reranker** | 用 calibrated $J=progress-\lambda_r risk-\lambda_u uncertainty$ 排序；margin不足即弃权 | RSS 2024 Outstanding Paper 的 anomaly/reactive-planning边界；PETS 的 uncertainty；[MBOP](https://arxiv.org/abs/2008.05556) 的保守 planning | uncertainty-disabled 与 normal无差异、shuffle consequence仍保留收益或 intervention过低/过高即失败 |
+| **R13-P1 / GPU1：CEM Latent MPC** | 只在 `W11` bank 周围做 2–3 轮 CEM，短 horizon滚动评估；最终仍选可投影 candidate | RA-L 2026 award planner paper 对 sampling supervision 的检验；Fabrica 的 integrated planning；PlaNet 的 latent CEM | 额外 rollout 不增加 oracle retention、超时或模型误差随 horizon累积导致闭环下降即失败 |
+| **R13-P2 / GPU2：MPPI Flow Planner** | 以 Flow proposals 为控制分布中心，按 world cost做有限样本 path-integral weighting | CoRL 2025 Steering Diffusion Policy；RSS 2025 multi-agent safe optimal control finalist；[MPPI](https://arxiv.org/abs/1509.01149) 的 path-integral control | 权重退化、effective sample size过低、Flow shuffle无影响或实时预算超限即失败 |
+| **R13-P3 / GPU3：Bounded Value/Tree Search** | 在 action chunk前缀上做最大深度 3、固定 node budget 的 beam/tree search，并以 uncertainty剪枝 | ICLR 2026 World-In-World 的 inference-compute/closed-loop原则；ICML 2026 Mosaic 的 runtime-bounded multi-agent coordination；Fabrica；MuZero/TD-MPC2 的短 horizon value search | 搜索退化为常选同一 role、node budget增加无收益或 hallucinated branch使 paired losses增加即失败 |
+
+#### 10.5.1 R13 逐候选 AI 改码卡
+
+公共接口固定在 `stereo_core/bwa_contracts.py`：`BeforeWeActPlanner.select(candidate_batch, consequence, deadline_ms, generator) -> PlannerDecision(candidate_id, score, reason, fallback, latency_ms)`。`PlannerDecision` 必须引用 bank 内现有 candidate ID，不能携带新动作；`deadline_ms` 是绝对硬预算，异常、空集合、非有限 score、tie、OOD 或超时都返回 `candidate_id=0`。四路的 calibration split 和 threshold search grid 在训练前共同冻结。
+
+`stereo_core/evaluate_bwa.py` 必须只按以下顺序组装原生部署路径，不允许 planner 绕过或重实现时序集成：
+
+1. `NoWristPAIRRoute.propose_core_bank()` 生成 native base/forced-role bank；
+2. 可选 `SafeFlowProposalBank` 只 append 新 joint proposals；
+3. 冻结 world model 批量预测候选后果；
+4. planner 选择一个 bank 内 normalized joint chunk，fallback 必须是 candidate 0 的 bit-exact base chunk；
+5. 用 R9 冻结的 `denormalize_action_chunks()` 对选中 chunk 做且只做一次 `chunk*a_std+a_mean`；
+6. 将反归一化的 joint chunk 按 agent 追加到原 evaluator 的各臂 chunk history；
+7. 调用 R9 冻结的 `TemporalChunkEnsembler` 产生实际控制动作。
+
+`planner_gate=0` 必须使上述七步与原 `evaluate_no_wrist_pair.py` 在每步 normalized/denormalized chunk、history 长度、history 内容、权重和最终动作上逐元素一致。
+四路除自身 planner 测试外都必须通过 `test_action_denormalization_exact.py`、`test_temporal_ensemble_exact.py` 与 `test_planner_before_temporal_append.py`；最后一项要人工构造“同历史、不同当前候选”，断言只有选中 chunk 被追加，fallback 则追加 exact base，不得先 append base 再覆盖最终单步动作。
+
+| 候选 | AI 必须新增/修改的 symbol | 决策/校准与配置怎么改 | 必须新增的专用测试 |
+|---|---|---|---|
+| R13-P0 | 在 `stereo_core/bwa_planners.py` 新建 `ConservativeReranker`、`AbstentionCalibrator` | 对已有候选一次批量 world forward，计算 `progress - λ_r*risk - λ_u*uncertainty - λ_d*distance_from_base`；只有 margin 与校准置信度都过阈才介入；键：`risk_weight`、`uncertainty_weight`、`base_distance_weight`、`min_margin`、`max_uncertainty` | `test_conservative_reranker.py`：score tie/NaN/OOD/高不确定性回 base、candidate顺序不变、temperature不看 frozen seeds、planner-zero bit exact |
+| R13-P1 | 在 `stereo_core/bwa_planners.py` 新建 `CEMLatentMPCPlanner`、`ProjectSafeDistribution`; 不改 world/proposer | 以 bank action为初始 mixture，固定 2–3 iterations、每轮固定 samples；每轮 project 后批量 world evaluate，最终映射到最近的有效 bank candidate；键：`cem_iters`、`samples_per_iter`、`elite_fraction`、`horizon`、`deadline_ms` | `test_cem_planner_budget.py`：调用数/迭代硬上限、所有 intermediate safe、固定 generator可复现、timeout立即 base、不得执行 bank 外 action |
+| R13-P2 | 在 `stereo_core/bwa_planners.py` 新建 `MPPIFlowPlanner`、`StablePathIntegralWeights` | Flow proposal 为 sampling center，world cost 通过 log-sum-exp 计算权重；ESS 低于阈值或采样越界即 base；键：`num_samples`、`temperature`、`ess_min`、`noise_scale`、`deadline_ms` | `test_mppi_planner.py`：极端 cost 无 overflow、ESS fallback、agent permutation、Flow shuffle causal、采样预算/延迟、base candidate始终存在 |
+| R13-P3 | 在 `stereo_core/bwa_planners.py` 新建 `BoundedValueTreePlanner`、`SearchNodeBudget`; 不训练新 dynamics | depth≤3、node数固定；只扩展 bank chunk前缀，按 uncertainty剪枝和 value upper-confidence bound 排序；键：`max_depth=3`、`max_nodes`、`beam_width`、`uncertainty_prune`、`deadline_ms` | `test_bounded_tree_planner.py`：depth/node/world-call硬上限、cycle/duplicate去重、hallucinated高值高不确定分支被剪、任何异常/超时回 base |
+
+R13-P0 只训练/拟合 calibration 参数，P1–P3 若无新增可学习参数也只做 calibration；“四卡四路”在本轮表示同预算的 calibration + paired closed-loop evaluation，不得为了形式统一而回训 world model。AI 的改码重点是 selector、预算计数器、fail-closed 与 causal ablation，而不是增加隐藏的策略参数。
+
+四路必须运行相同 seeds 的 paired 条件：`planner_gate=0`、normal、shuffled consequence、uncertainty-disabled、base-removed diagnostic 与 oracle selector。Gate20 晋级要求：
+
+- normal macro 严格高于 `W12/planner_gate=0`，任一任务最多少 `1/20`；
+- Camera+Stack 合计至少多 `4/40`，paired wins 多于 losses；
+- shuffled consequence 不能保持 normal 的收益，且候选干预率在 `[1%,40%]` 内；
+- P95 control latency不超过 parent的 `1.75×`，超时 fallback `100%` 返回 base；
+- planner自己的反证实验通过，不能只靠 threshold事后调出一个数字。
+
+按“硬门槛 → Gate20 macro → Camera/Stack → paired win-loss → causal ablation gap → latency/fallback → candidate ID”选唯一 `W13`。随后对冻结 `W13` 跑 frozen-100，正式硬门槛为：
+
+- macro `>=80%`，即相对 `71.4%` 初始 parent 闭合至少 `67%` 的 12.8pp 数值差；
+- CameraAlignment `>=80/100`，ThreeRobotsStackCube `>=50/100`；
+- LiftBarrier `>=95/100`、LongPipelineDelivery `>=95/100`、TakePhoto `>=92/100`；
+- normal 严格优于 `planner_gate=0`，shuffled consequence 不能保持同等收益；
+- 每个任务报告 paired win/loss/tie、bootstrap CI、intervention/fallback、uncertainty bucket和 latency。
+
+Stretch goal 为 macro `>=82%`、Camera `>=90%`、Stack `>=75%`。这可以描述为“数值上接近同事 84.2%”，但仍不得写成相同输入协议下的直接超越。
+
+### 10.6 V4.3 旧 R14：冻结 Winner Recipe 的四种子正式复现（历史，不执行）
+
+R14 不是模型修改轮，不再产生四个结构候选；四张 GPU 分别承担同一 `W13` recipe 的 seeds `101/202/303/404`。Stereo-CoRE 初始 parent、winner commits、数据 receipts、candidate bank、threshold算法与所有代码完全冻结。
+
+资源与报告顺序：
+
+1. `GPU0/1/2/3` 同时完成四个 train seeds，不复用选型轮的 model/optimizer state；
+2. 四个 seed 都跑五任务 Gate20，报告均值、标准差与最差 seed；
+3. 在看到 frozen-100 结果前，按 Gate20 macro 的中位数规则预选 representative seed；
+4. representative seed 与初始 `Peer-NoWrist`、各轮 merged baselines 跑完整 paired frozen-100；时间允许则四 seed 全跑；
+5. 主表同时给出 `Peer-Exact`（不同输入 anchor）、`Peer-NoWrist`、W10/W11 oracle ceiling、W12 off-path、W13 normal、planner-zero、shuffled consequence 与 oracle ceiling。
+
+只要 representative frozen-100 未达到 10.5 的硬门槛，最终论文主张就降级为“安全后果选择的可行性与任务级分析”，不能用四 seed Gate20 的较高均值替代。
+
+### 10.7 V4.4 旧冻结边界（历史，执行边界已由 10.13 覆盖）
+
+本节开始才是 V4.4 的活动执行路线。用户所称 `S10` 与本文件旧编号 `R10` 按同一个正在运行的 round 处理。以下内容永久冻结：四路候选定义、代码、配置、数据、seed、optimizer、训练预算、checkpoint、评测顺序、winner 规则和远程进程。V4.4 不向 S10 worktree 写入任何文件，也不以新文献为理由重启或补跑。
+
+S10 结束后先生成只读 `w10_transition_pack.json`：
+
+```text
+w10_merge_commit / checkpoint_sha256 / config_sha256
+dataset_manifest / normalization_sha256 / frozen_seed_list
+five_task_gate20 / frozen100_if_available / latency
+teacher_action_cache_schema / legal_observation_schema
+```
+
+`W10` 从此只有三种合法身份：①性能 baseline；②R11/R12 训练期的离线 teacher；③收集成功/失败 rollout 和共同 prefix branch 的数据生成器。它不是 V4.4 的模型 backbone。R11 以后新增代码全部进入顶层 `before_we_act/`，禁止修改 `stereo_core/`；新模块不得读取 `CoreContext`、route probability、role ID、ARCA/adapter hidden state、forced-role action 或 capability target。
+
+V4.4 的逐步脱离图为：
+
+```mermaid
+flowchart LR
+    S10["S10 / W10<br/>原样完成，冻结"]
+    R11["R11 Team Belief<br/>独立表征，off-path"]
+    R12["R12 Joint Action-DiT Flow<br/>替换 ACT/ARCA 动作内核"]
+    R13["R13 Latent Team World Model<br/>候选条件后果预测"]
+    R14["R14 CoRE-Free Before-We-Act<br/>规划、选择、意图对齐"]
+    R15["R15 Formal<br/>四种子复现"]
+    S10 --> R11 --> R12 --> R13 --> R14 --> R15
+```
+
+每个模型修改轮 `R11–R14` 仍固定 `GPU0=P0、GPU1=P1、GPU2=P2、GPU3=P3`，从上一轮唯一 merged winner 出发；四路全失败则 `no winner/no merge`，重写本轮四张卡，不能跳过该层。R15 不是修改轮，只把四张 GPU 用于同一冻结 recipe 的四个独立 seed。
+
+文献身份审计同时纠正但不反向修改 S10：[Seer/PIDM](https://iclr.cc/virtual/2025/poster/28455) 是 ICLR 2025 Poster，不是 Oral；[LPWM](https://iclr.cc/virtual/2026/poster/10007676) 和 [World-In-World](https://iclr.cc/virtual/2026/oral/10006575) 的页面明确给出 Oral presentation；[CoRL 2025 awards](https://2025.corl.org/program/awards)、[RSS 2025 Outstanding Paper](https://roboticsfoundation.org/awards/best-paper-award/) 与 [RA-L 2026 Best Paper](https://www.ieee-ras.org/awards-recognition/publications-awards/ieee-robotics-and-automation-letters-best-paper-award/) 作为 award 身份真值源。运行中的 S10 卡保持 hash 不变，论文 ledger 在 S10 结束后按正确身份记账。
+
+### 10.8 V4.4 旧 R11：四路独立 Team Belief Encoder（历史，不执行）
+
+R11 的目的不是再给 CoRE perception 增加 residual，而是从合法原始观测重新学习一个与 CoRE 内核无关的团队状态。四路统一输出：
+
+```python
+TeamBeliefState(
+    ego_tokens,          # [B,A,Ne,D]
+    object_tokens,       # [B,No,D]
+    consensus_tokens,    # [B,Nc,D]
+    intent_tokens,       # [B,A,Ni,D]
+    belief_uncertainty,  # [B,A,Hb]
+    agent_mask,
+    time_mask,
+)
+```
+
+`intent_tokens` 只预测伙伴未来动作分布、共享对象转移和 team progress，不使用 task/robot ID 或人工角色标签。R11 完全 off-path，`W10` 继续产生所有控制动作；因此本轮 winner 由预注册的 belief sufficiency 与 causal intervention 决定，不用闭环波动伪造表征进步。
+
+本轮证据重点为：[V-JEPA 2](https://ai.meta.com/research/publications/v-jepa-2-self-supervised-video-models-enable-understanding-prediction-and-planning/) 的 video predictive representation 与 action-conditioned latent planning、[ICLR 2026 Oral LPWM](https://iclr.cc/virtual/2026/poster/10007676) 的 object-particle stochastic dynamics、[CoRL 2025 LatentToM](https://proceedings.mlr.press/v305/he25a.html) 的 ego/consensus/partner-belief分解、[ICLR 2026 MemoryVLA](https://iclr.cc/virtual/2026/poster/10011504) 的 working/episodic memory，以及 CoRL 2025 award finalist LocoFormer 的 long-context证据。I-JEPA、Slot Attention、Deep Sets、Perceiver IO、ToMnet 与 PlaNet/Dreamer 只作为高引用/时间检验根源。
+
+| 候选 / GPU | 从冻结 `W10` 之后新增的唯一机制 | 论文→实现映射 | 首要反证 |
+|---|---|---|---|
+| **R11-P0 / GPU0：Causal Video-JEPA Belief** | 冻结 video encoder + 小型 causal predictor，将 local/global 历史压成时序 team tokens | V-JEPA 2 的 feature prediction 与 action-conditioned predictor；World-In-World Oral 的 controllability-first评测；`CausalVideoJEPABelief` | history reverse、action-prefix shuffle 或 view dropout 对 next-latent/partner预测无影响即失败 |
+| **R11-P1 / GPU1：Object-Particle Interaction Belief** | agent/object particles + masked interaction graph，显式追踪共享对象 | LPWM Oral 的 object particles；Slot Attention/C-SWM 的 object factorization；Fabrica Best Paper 的 multi-part interaction需求；`ParticleInteractionBelief` | slot permutation/遮挡后 identity漂移，或 Stack shared-object probe不升即失败 |
+| **R11-P2 / GPU2：Consensus-Intent Belief** | 每台机器人 ego latent + 全队 consensus latent，解码伙伴未来 ego/action；不用 sheaf loss，采用 stop-grad symmetric alignment | LatentToM 的 ego/consensus/partner inference；RSS 2025 multi-agent safe-control award 的联合约束；ToMnet 根源；`ConsensusIntentBelief` | consensus collapse、partner-action shuffle无影响或删除 partner decoder性能不变即失败 |
+| **R11-P3 / GPU3：Perceptual-Cognitive Team Memory** | 短时 working memory + 容量受限 episodic/gist bank，检索决策相关历史 | MemoryVLA 的 memory分层；LocoFormer award finalist 的长上下文；Transformer memory根源；`PerceptualCognitiveTeamMemory` | memory timestamp/episode shuffle无影响、跨 episode泄漏或延迟超限即失败 |
+
+#### 10.8.1 R11 逐候选 AI 改码卡
+
+公共代码由四路分叉前一次性建立在 `before_we_act/contracts.py`、`before_we_act/team_belief/base.py` 和 `before_we_act/train_team_belief.py`。AI 不得修改 `stereo_core/**`；视觉 feature cache 必须由 raw legal observation hash 生成，不能缓存 CoRE hidden state。
+
+| 候选 | AI 允许新增的主要 symbol | loss / 配置 | 必须新增的测试 |
+|---|---|---|---|
+| P0 | `CausalVideoJEPABelief`, `FrozenVideoFeatureCache` | masked future-feature + next-qpos + partner-action Huber；`video_encoder`、`history_steps`、`predict_horizons`、`cache_sha` | `test_video_belief_prefix_causal.py`, `test_history_view_shuffle.py`, `test_no_core_feature_access.py` |
+| P1 | `ParticleInteractionBelief`, `AgentObjectGraph`, `SoftParticleTracker` | particle feature/motion + temporal assignment + shared-object progress；`num_particles`、`graph_layers`、`match_temp` | `test_particle_permutation.py`, `test_shared_object_intervention.py`, `test_occlusion_uncertainty.py` |
+| P2 | `ConsensusIntentBelief`, `PartnerEgoDecoder`, `StopGradConsensusAligner` | partner action/ego prediction + VICReg-style consensus + anti-collapse variance floor；`consensus_dim`、`intent_horizons`、`align_weight` | `test_consensus_no_identity_label.py`, `test_partner_shuffle.py`, `test_consensus_variance_floor.py` |
+| P3 | `PerceptualCognitiveTeamMemory`, `EpisodeMemoryBank`, `MaskedRetriever` | next latent/action + retrieval contrastive + redundancy penalty；`working_slots`、`episodic_slots`、`topk_retrieval` | `test_memory_episode_isolation.py`, `test_memory_order_causality.py`, `test_memory_capacity_bound.py` |
+
+四路使用同一 frozen raw-observation cache、同一 probe architecture 和同一有效 team-window 数。定义：
+
+$$
+I_{11}=\frac{1}{3}\sum_{m\in\{\text{future latent, partner action, shared progress}\}}
+\frac{E_m^{\mathrm{last-frame}}-E_m^{\mathrm{candidate}}}{E_m^{\mathrm{last-frame}}}.
+$$
+
+晋级要求：`I11>=5%` 且 paired bootstrap 95% 下界 `>0`；三个 target 无一相对 last-frame baseline 恶化超过 `2%`；agent permutation、prefix causality、view/history/partner shuffle全部通过；deployment schema拒绝 future、task ID、robot ID和 simulator state；P95 belief latency不超过预注册预算。通过者按 `I11 → Camera/Stack probe → uncertainty calibration → latency → parameter count` 选唯一 `W11`。四路全失败则不得启动 R12。
+
+### 10.9 V4.4 旧 R12：四路 Joint Action-DiT Flow Policy（历史，不执行）
+
+R12 是与 CoRE 结构分离的关键轮。四路都只读取 `W11 TeamBeliefState + normalized qpos/action history`，以 Transformer/DiT 生成 `K<=8` 个 joint action chunks。公共 `JointActionDiT` 使用 `agent × time` action patches、flow-time embedding、adaLN-Zero 和 masked cross-agent attention；禁止 ACT posterior、CVAE latent、ARCA、role adapter、PAIR router、top-2 gating、forced-role bank 和 capability KL。
+
+`W10` 只允许离线生成 teacher action cache。公共蒸馏项若启用，权重在四路开工前统一冻结并在训练后半程退火到 0；candidate 不能查询 teacher route/role，正式 forward 没有 teacher handle。candidate 0 是 Flow-DiT 的 deterministic source/mean proposal，不是 CoRE action。
+
+本轮直接依据包括 [DiT](https://openaccess.thecvf.com/content/ICCV2023/html/Peebles_Scalable_Diffusion_Models_with_Transformers_ICCV_2023_paper.html)、[Diffusion Policy](https://roboticsproceedings.org/rss19/p026.html)、ICLR 2025 [RDT-1B](https://openreview.net/pdf/29d56379d000b8c0e05906c5958e67e2e870ab0c.pdf)、CoRL 2025 award finalist $\pi_{0.5}$、RSS 2025 Outstanding Paper finalist FAST、[ICLR 2026 VITA](https://iclr.cc/virtual/2026/poster/10010946)、[ICLR 2026 ViPRA](https://iclr.cc/virtual/2026/poster/10006758) 与 [ICLR 2026 MAC-Flow](https://iclr.cc/virtual/2026/poster/10011753)。Flow Matching/Rectified Flow 是高引用根源；新近工作只吸收明确机制，不声称 DiT 或 FM 本身新颖。
+
+| 候选 / GPU | 唯一动作机制 | 论文→实现映射 | 首要反证 |
+|---|---|---|---|
+| **R12-P0 / GPU0：Direct Joint Flow-DiT** | 高斯→normalized joint action 的 conditional OT Flow；共享 agent block + set attention | DiT/RDT 的 scalable action transformer；$\pi_{0.5}$/Flow Matching；`DirectJointFlowDiT` | 退化成平均动作、joint oracle不增或agent permutation失败即否定 |
+| **R12-P1 / GPU1：Belief-to-Action Latent Flow-DiT** | 先把 team belief 对齐到 action latent，再由短 ODE 解码动作 | VITA 的 visual-latent→action-latent flow与flow-latent decoding；`BeliefActionAutoencoder`, `LatentFlowDiT` | latent collapse、重建好但闭环差或ODE反传不稳定即失败 |
+| **R12-P2 / GPU2：Intent-Factorized Hierarchical Flow-DiT** | consensus/intent token先生成 team plan latent，再由共享 per-agent DiT 解码联合动作 | LatentToM 的 consensus/partner belief边界；ViPRA 的motion latent→FM decoder；`IntentPlanDiT`, `AgentActionDiT` | intent shuffle无影响、plan latent无法解释伙伴动作或层级增加延迟无收益即失败 |
+| **R12-P3 / GPU3：One-Step Distilled Joint Flow** | 先训练相同多步 Flow teacher，再蒸馏为一步 joint policy | MAC-Flow 的joint behavior flow→fast policy；ICML 2025 Oral Inductive Moment Matching 的few-step稳定性；`JointFlowTeacher`, `OneStepFlowStudent` | 一步学生丢失joint diversity/critical-task headroom或teacher-student gap过大即失败 |
+
+#### 10.9.1 R12 逐候选 AI 改码卡
+
+公共接口位于 `before_we_act/action_dit/base.py`：
+
+```python
+ActionProposalBatch(
+    actions,          # [B,K,A,H,D]
+    base_index,       # always 0, owned by Flow-DiT
+    valid_mask,
+    log_density_proxy,
+    source,
+    diagnostics,
+)
+```
+
+| 候选 | AI 允许新增的主要 symbol | loss / 配置 | 必须新增的测试 |
+|---|---|---|---|
+| P0 | `DirectJointFlowDiT`, `AgentTimePatchEmbed`, `MaskedTeamAttention` | `L_flow + L_boundary + L_safety + optional L_distill`; `depth,width,heads,solver_steps,num_proposals` | `test_joint_dit_permutation.py`, `test_flow_time_conditioning.py`, `test_core_free_action_forward.py` |
+| P1 | `BeliefActionAutoencoder`, `LatentFlowDiT`, `FlowLatentDecoder` | latent reconstruction + FM + ODE-decoded action loss + anti-collapse；`action_latent_dim,solver_steps` | `test_latent_action_variance.py`, `test_ode_decode_gradient.py`, `test_belief_action_alignment.py` |
+| P2 | `IntentPlanDiT`, `AgentActionDiT`, `IntentActionAligner` | plan Flow + action Flow + partner-action contrastive alignment；`plan_tokens,intent_weight,cross_agent_layers` | `test_intent_action_shuffle.py`, `test_plan_agent_factorization.py`, `test_no_role_or_agent_id.py` |
+| P3 | `JointFlowTeacher`, `OneStepFlowStudent`, `MomentDistiller` | teacher FM + distribution/moment/endpoint distillation；`teacher_steps,student_steps=1,distill_temperature` | `test_student_one_step_exact.py`, `test_teacher_student_diversity.py`, `test_no_teacher_runtime.py` |
+
+R12 的正常 closed-loop condition 必须设置 `core_enabled=false`。运行时临时移走 CoRE checkpoint 和 `stereo_core` import path 后，forward 与 action hash 必须不变。共同晋级门槛：
+
+1. 所有 candidate action finite、范围/速度/mask/prefix合法，安全投影接受率 `>=99.5%`；
+2. core-free deterministic base 的 paired Gate20 macro 不低于 `W10-2pp`，Camera+Stack 合计最多下降 `2/40`；
+3. 在共同 branch points 上，`K<=8` 的真实后果 oracle 相对 candidate 0 增加至少 `+10pp`，Camera+Stack 至少多 `6/40`；
+4. action/intent/agent permutation等预注册干预通过，95% CI 下界 `>0`；
+5. P95 生成延迟不超过控制周期预算，所有候选使用相同 solver/world-call预算。
+
+按“硬门槛 → core-free Gate20 → Camera/Stack oracle → macro oracle → outcome diversity → latency”选唯一 `W12`。四路全失败时保留 `W11` 与 `W10` baseline，但不得用旧 CoRE bank直接进入 R13；必须重写 R12 四路，直到出现合格的独立动作内核。
+
+### 10.10 V4.4 旧 R13：四路 Candidate-Conditioned Latent Team World Model（历史，不执行）
+
+R13 从 `W12` 克隆，冻结 Team Belief Encoder 与 Action-DiT。world model 批量读取 `TeamBeliefState` 和不超过 8 个 joint action candidates，预测多 horizon `future belief / partner intent-action / shared-object transition / progress / fail-stall-collision / epistemic uncertainty`。真实未来只作 label，部署 forward 明确拒绝 future key。R13 完全 off-path，不改变 `W12` 动作。
+
+本轮以 [ICLR 2026 Oral World-In-World](https://iclr.cc/virtual/2026/oral/10006575) 的 closed-loop utility-first准则、[ICLR 2026 Oral LPWM](https://iclr.cc/virtual/2026/poster/10007676) 的 object-particle stochastic dynamics、[ICML 2025 Oral TD-Flow](https://icml.cc/virtual/2025/oral/47200) 的 direct-horizon flow、[ICML 2025 DINO-WM](https://icml.cc/virtual/2025/poster/46026) 的pretrained latent planning、V-JEPA 2-AC 和 RSS 2024 Denoising World Model finalist 为直接证据；PlaNet、DreamerV3、PETS、I-JEPA、MuZero、TD-MPC2 为成熟根源。
+
+| 候选 / GPU | 唯一 world-model 机制 | 论文→实现映射 | 首要反证 |
+|---|---|---|---|
+| **R13-P0 / GPU0：Ensemble RSSM Team World** | deterministic recurrent belief + stochastic latent + 3 bootstrap outcome heads | PlaNet/Dreamer + RSS24 Denoising WM；`EnsembleRSSMTeamWorld` | ensemble variance不随OOD/error上升或长horizon累积失真即失败 |
+| **R13-P1 / GPU1：Particle-Graph Team World** | agent/object/consensus particles在interaction graph上转移 | LPWM Oral + object-centric forward model；`ParticleGraphTeamWorld` | object identity漂移、agent/object permutation失败或Stack排序不升即失败 |
+| **R13-P2 / GPU2：JEPA Direct-Horizon Team World** | 不逐步生成像素，直接预测多个horizon的future belief delta | V-JEPA 2-AC、DINO-WM、World-In-World；`JEPADirectHorizonTeamWorld` | latent MSE下降但candidate ranking/闭环proxy不升即失败 |
+| **R13-P3 / GPU3：TD-Flow Outcome World** | 用Flow表示多模态future belief distribution，并以TD direct-horizon目标减少rollout误差 | TD-Flow Oral + Flow Matching；`TDFlowOutcomeWorld` | 生成多样性不对应真实outcome、长horizon ranking不优于direct MLP即失败 |
+
+#### 10.10.1 R13 逐候选 AI 改码卡
+
+公共接口位于 `before_we_act/world_model/base.py`：
+
+```python
+TeamConsequencePrediction(
+    future_belief,
+    partner_action_dist,
+    intent_alignment,
+    object_delta,
+    progress_dist,
+    failure_logits,
+    epistemic,
+    aleatoric,
+    valid_mask,
+)
+```
+
+| 候选 | AI 允许新增的主要 symbol | 主要 loss | 必须新增的测试 |
+|---|---|---|---|
+| P0 | `EnsembleRSSMTeamWorld`, `BootstrapOutcomeHead` | ELBO/free-bits + belief/qpos + outcome/ranking + diversity floor | `test_rssm_bootstrap.py`, `test_uncertainty_ood_monotonic.py` |
+| P1 | `ParticleGraphTeamWorld`, `PersistentObjectAddress` | particle feature/motion + address consistency + partner/object interaction + pair ranking | `test_world_particle_identity.py`, `test_agent_object_intervention.py` |
+| P2 | `JEPADirectHorizonTeamWorld`, `StopGradBeliefTarget` | normalized latent delta + horizon consistency + progress/failure/ranking | `test_world_future_not_input.py`, `test_direct_horizon_causality.py` |
+| P3 | `TDFlowOutcomeWorld`, `HorizonFlowHead` | flow velocity + TD path consistency + outcome/ranking/calibration | `test_tdflow_horizon.py`, `test_flow_outcome_diversity.py` |
+
+R13 共同 hard gates：action shuffle、within-task/different-episode belief shuffle、partner-action shuffle 和 prefix-suffix causality全部通过；held-out candidate pair accuracy `>=65%`、Spearman `>=0.35`、failure AUROC `>=0.75`、ECE `<=0.10`；按 uncertainty覆盖率曲线弃权后 ranking error 单调下降；对 R12 oracle headroom 的 retention `>=60%`；P95 批量8候选预测延迟在预算内。通过者按 `Camera/Stack pair ranking → overall ranking → calibration → oracle retention → latency` 选唯一 `W13`。全失败不启动 R14。
+
+### 10.11 V4.4 旧 R14：四路 CoRE-Free Before-We-Act Planner / Intent Alignment（历史，不执行）
+
+R14 冻结 `W11 TeamBelief + W12 Action-DiT + W13 world model`，只改变如何在有限候选、有限world调用和硬实时预算下作最终决策。所有候选使用统一效用 `progress - failure - uncertainty + intent_alignment`；`intent_alignment` 删除与 shuffle 必须作为因果条件。fallback 永远返回 W12 的 `base_index=0`，不能调用 CoRE。
+
+本轮证据来自 CoRL 2025 Best Paper Fabrica 的 integrated planning-and-learning、RA-L 2026 Best Paper “Should We Learn Contact-Rich Manipulation Policies From Sampling-Based Planners?”、RSS 2025 Outstanding Student Paper “Solving Multi-Agent Safe Optimal Control with Distributed Epigraph Form MARL”、ICLR 2026 Oral World-In-World 的 inference-time compute、CoRL 2025 award finalist Steering Diffusion Policy，以及 PETS/CEM、MPPI、MBOP、MuZero/TD-MPC2 等成熟规划根源。
+
+| 候选 / GPU | 唯一 planner 机制 | 论文→实现映射 | 首要反证 |
+|---|---|---|---|
+| **R14-P0 / GPU0：Calibrated Conservative Reranker** | 一次批量world forward；margin/uncertainty不足即W12 base | World-In-World + PETS/MBOP；`ConservativeTeamReranker` | consequence/intent shuffle后收益仍在或几乎从不/总是介入即失败 |
+| **R14-P1 / GPU1：CEM Latent Team MPC** | 在Action-DiT proposal latent周围2–3轮CEM，最终投影回有效bank | RA-L26 planner award + PlaNet/CEM + Fabrica；`CEMLatentTeamMPC` | 额外compute不提高oracle retention、误差随horizon累积或超时即失败 |
+| **R14-P2 / GPU2：Flow-MPPI Team Planner** | Flow proposal为采样中心，按world cost做path-integral weighting | Steering Diffusion finalist + RSS25 safe multi-agent + MPPI；`FlowMPPITeamPlanner` | ESS退化、joint safety/latency失败或Flow shuffle无影响即失败 |
+| **R14-P3 / GPU3：World-Guided DiT Steering** | 对DiT采样轨迹施加有界world-value/intent梯度，仅改变后续velocity | classifier/energy guidance、World-In-World、MAC-Flow；`WorldGuidedDiTSteering` | guidance关闭无差异、过度偏离数据流形或world exploitation导致闭环下降即失败 |
+
+#### 10.11.1 R14 逐候选 AI 改码卡与 CoRE 退休测试
+
+公共接口位于 `before_we_act/planner/base.py`：
+
+```python
+PlannerDecision(candidate_id, score, reason, fallback, latency_ms)
+```
+
+P0 只能新增 reranker/calibrator，P1 只能新增 CEM sampler/budget，P2 只能新增 MPPI weights/ESS guard，P3 只能新增有界 guidance hook；不得回训或单路修改 `W11–W13`。共同测试包括：
+
+- `test_planner_fail_closed_to_dit_base.py`；
+- `test_consequence_and_intent_shuffle.py`；
+- `test_planner_agent_permutation.py`；
+- `test_planner_world_call_budget.py`；
+- `test_no_core_import_or_checkpoint.py`；
+- `test_delete_stereo_core_output_hash_unchanged.py`；
+- `test_no_act_arca_pair_symbols_in_runtime_graph.py`。
+
+R14 晋级要求：
+
+1. `core_free=true` 的 import trace、checkpoint manifest、Torch graph 和 output provenance 中均无 CoRE；删除 `stereo_core/` 与 CoRE checkpoint 后输出逐元素一致；
+2. paired Gate20 macro 严格高于 `W12/core-free base` 且严格高于 `W10`，任一任务最多下降 `1/20`；
+3. Camera+Stack 合计至少相对 `W10` 增加 `6/40`；normal 的 win-loss 95% CI 下界 `>0`；
+4. consequence shuffle、intent shuffle、world gate-zero、planner gate-zero 均显著削弱对应收益；world-gate-zero必须回到 W12 base，不是 CoRE；
+5. intervention rate位于预注册 `[5%,60%]`，错误介入率、uncertainty coverage和fallback原因完整报告；
+6. P95 end-to-end latency、world-call/node/sample预算全部通过，异常/超时/NaN返回 W12 base。
+
+按“硬门槛 → Camera/Stack → macro → paired win-loss → causal gap → latency”选唯一 `W14`。最终 frozen-100 硬目标仍为 macro `>=80%`、Camera `>=80%`、Stack `>=50%`，Lift/LPD/Photo 相对 `W10`下降不超过 `5pp`。未达到时不能写“大幅提升/贴近同事”，但也不能退回 CoRE 作为论文方法。
+
+### 10.12 V4.4 旧 R15：冻结 `W14` 的四种子正式复现与论文分离审计（历史，不执行）
+
+R15 不是结构修改轮。四张 GPU 分别从同一 `W14` recipe 独立训练 seeds `101/202/303/404`，不得复用 R11–R14 选型权重。每个 seed 均设置 `core_free=true`，先做 Gate20，再按预注册 representative 规则做 frozen-100；资源允许时四 seed 全做 frozen-100。
+
+主表至少包括：`Peer-Exact`（不同输入协议锚点）、`Peer-NoWrist/W10`、`W12 core-free DiT base`、`W12 oracle`、`W13 world off-path ranking`、`W14 normal`、`world-zero`、`intent-shuffle`、`planner-zero` 与 oracle。投稿前额外生成 `method_separation_report.json`：
+
+```text
+runtime_imports_contain_stereo_core: false
+runtime_checkpoint_contains_core_keys: false
+act_arca_pair_symbols_present: false
+core_deleted_output_hash_equal: true
+teacher_used_only_in_training: true|false
+teacher_removal_ablation_report: <sha256>
+second_base_or_no_teacher_transfer_report: <sha256>
+main_figure_core_is_only_baseline_box: true
+contribution_text_contains_core_method_claim: false
+```
+
+若任何一项分离审计失败，Before We Act 不得作为与 CoRE 独立的方法投稿；应改为联合扩展工作并如实说明关系。代码许可证、来源、并行投稿/同期工作的引用方式和作者协作边界必须按目标 venue 最新规则由导师与作者组签核，不能用模块改名规避研究归属。
+
+### 10.13 V4.5 活动边界：组件级开源代码移植，不是全量模型部署
+
+本节及 10.14–10.18 是 `W10` 之后唯一活动路线。S10 继续零修改；V4.4 在 10.7–10.12 中自写 Team Belief、Action-DiT、World Model 和 Planner 的方案仅保留为设计推导，不再发给 AI 执行。
+
+这里的“迁移”严格定义为：**在上游作者/机构官方仓库中定位已经实现并测试过的最小组件，把所需源文件、类、函数和对应测试复制进本项目，替换现有同职责模块或新增显式旁路；本项目继续拥有数据读取、训练主循环、checkpoint、benchmark evaluator、远程监控和整体 Before-We-Act 计算图。** 禁止把上游完整仓库当作最终 runtime，禁止直接用其整套 demo/launcher/evaluator 替代本项目，也禁止仅包一层 RPC/subprocess 就声称完成迁移。
+
+#### 10.13.1 每个候选的六步移植流程
+
+1. **锁来源：** 临时只读 checkout 官方仓库的精确 commit，核对 paper/project page 回链、代码/权重/数据许可证。没有明确 LICENSE 的仓库只可 `reference_only`。
+2. **圈最小闭包：** 用 import graph 和上游单测列出需要复制的文件/符号；只复制完成该模块职责所需的最小传递依赖，不能先复制全仓再删。
+3. **原样落盘：** 放入 `before_we_act/upstream_components/<source>/<component>/`，保留原 LICENSE/NOTICE/copyright、目录相对关系和未修改文件 SHA256。
+4. **先做原生 parity：** 在任何适配前运行被复制组件的上游单测或最小输入，输出与固定 commit 在同 dtype/device/tolerance 下对齐。
+5. **再做薄适配：** `before_we_act/adapters/` 只转换本项目的 raw fixed-view RGB、qpos、agent/time mask、TeamBeliefState、joint action layout、normalization 和 checkpoint key；优先在 adapter 改 shape，避免修改复制的算法文件。
+6. **替换/旁路与回退：** `replacement_site` 必须指向本项目一个明确接口；配置关闭时逐元素回到本轮父节点。AI 只提交最小 patch、测试和 provenance，不选 winner、不自行合并。
+
+每路在开工前冻结 `component_lock.yaml`：
+
+```yaml
+candidate_id: rXX-pY
+official_repo: null
+paper_and_project_url: null
+upstream_commit_sha: null
+code_weight_data_license: {code: null, weight: null, data: null}
+license_sha256: null
+copied_upstream_files: []
+copied_symbols: []
+upstream_file_sha256_before_adaptation: {}
+local_destination: null
+replacement_site: null             # 本项目被替换模块或新增 hook
+adapter_files_whitelist: []
+copied_algorithm_files_edit_whitelist: []
+algorithmic_lines_changed: 0        # 默认必须为 0
+upstream_parity_command: null
+upstream_parity_result_sha256: null
+local_contract_tests: []
+full_repo_runtime_dependency: false
+rollback_config: null
+```
+
+允许对复制文件做的修改只包括 import path、namespace、device/dtype、静态 shape、配置读取和已确认的 upstream bugfix；每一行都进入 `component_patch.diff`。改变 block 方程、loss target、solver/scheduler、attention/memory 拓扑或 planner objective 属于新方法，不得混入“适配”。若最小闭包仍依赖上游完整训练框架/服务、需要复制过多无关代码或无法通过 parity，该候选在占 GPU 前判为 `extraction_infeasible`，并在结果产生前从本轮预注册 reserve pool 换入另一个有明确许可证的组件。
+
+截至本版核查：[V-JEPA 2](https://github.com/facebookresearch/vjepa2)、[LPWM](https://github.com/taldatech/lpwm)、[DINO-WM](https://github.com/gaoyuezhou/dino_wm)、[OpenPI](https://github.com/Physical-Intelligence/openpi)、[LeRobot](https://github.com/huggingface/lerobot)、[RDT-1B](https://github.com/thu-ml/RoboticsDiffusionTransformer)、[Consistency Policy](https://github.com/Aaditya-Prasad/Consistency-Policy)、[TD-MPC2](https://github.com/nicklashansen/tdmpc2)、[World-In-World](https://github.com/World-In-World/world-in-world)、[DynaGuide](https://github.com/MaxDu17/DynaGuide) 与 [mbrl-lib](https://github.com/facebookresearch/mbrl-lib) 均有可核验官方代码；具体许可证仍须以冻结 commit 中的文件为准。[LatentToM](https://stanfordmsl.github.io/LatentToM/)未提供可迁移代码链接；[MemoryVLA](https://github.com/shihao1895/MemoryVLA)与 [Streaming Flow Policy](https://github.com/siddancha/streaming-flow-policy) 的仓库页未显示明确 LICENSE，暂时只能用于思想与论文碰撞检查，不进入复制候选。
+
+#### 10.13.2 动作影响判定与 Benchmark-First 唯一质量强门
+
+训练前为每路写 `action_effect.yaml`。只要候选在任一合法输入上可能改变最终 action tensor，或改变候选选择、temporal aggregation、denormalization、安全投影、solver、guidance、prompt、策略权重或 fallback，即为 `action_affecting=true`。
+
+- `action_affecting=false`：必须在 canary 和五任务 dry-run 上证明父节点 action hash 逐元素不变；不强制闭环。future loss、probe、ranking、AUROC、ECE、shuffle、oracle 与 calibration 均为 `optional_diagnostic`。
+- `action_affecting=true`：完成许可证/来源、上游 parity、合法输入、action finite/range 和实时控制 preflight 后，必须使用同一五任务、同一 `seed_list[task]` 各跑 20 回合，即每候选 `5×20=100 episodes`。Gate5/Gate10、离线 loss、oracle 和视频观感不能替代 Gate20；除安全或基础设施故障外不得提前停止。
+- 动作轮 winner 第一指标固定为五任务 closed-loop success macro，必须严格高于相同 seeds 的父 baseline。并列时依次比较 paired wins、Camera+Stack、最差任务、P95 latency、GPU-hours、预注册 candidate ID。
+- 除安全、许可证/来源、数据合法性、上游 parity、action-effect 声明、Gate20 完整性和控制周期可执行性外，其它研究 gate 全部可选，不能淘汰 benchmark 更高的候选。
+
+```mermaid
+flowchart LR
+    W10["W10 frozen"]
+    R11["R11 belief components<br/>off-path"]
+    R12["R12 action components<br/>Gate20 mandatory"]
+    R13["R13 world components<br/>off-path"]
+    R14["R14 decision components<br/>Gate20 mandatory"]
+    R15["R15 four seeds<br/>Gate20 mandatory"]
+    W10 --> R11 --> R12 --> R13 --> R14 --> R15
+```
+
+### 10.14 R11：四路 Belief / Predictive Representation 组件移植（off-path）
+
+R11 只替换或新增 `before_we_act/team_belief/encoder`，控制动作仍由 W10 产生。复制组件只读取合法 fixed-view RGB、own qpos和已执行动作历史；task/robot ID、人工 role、simulator state、CoRE hidden/router/forced-role 信息全部禁止。统一输出仍是 `TeamBeliefState`，维度差异由 adapter 处理。
+
+| 候选 / GPU | 从官方仓库复制的最小组件 | 接入本项目的位置与允许适配 | 可选诊断 |
+|---|---|---|---|
+| **R11-P0 / GPU0：V-JEPA2 Predictor Transplant** | V-JEPA 2 的 video encoder wrapper、mask collator、predictor block及其直接依赖/测试；不复制完整训练器和机器人 demo | 替换 `team_belief/encoder`；fixed global/local views打包成 clip，缺腕部视角以 mask 表示，pooling adapter 输出 team tokens | future feature error、prefix shuffle、Camera/Stack probe |
+| **R11-P1 / GPU1：LPWM Particle Transplant** | LPWM 的 particle encoder、particle dynamics/aggregation 与对应 loss/测试 | 新增 `team_belief/particle_encoder`；adapter 只 pad/mask 2–4 agents并把 particles映射为 ego/object/consensus tokens | identity consistency、遮挡不确定性、shared-object probe |
+| **R11-P2 / GPU2：DINO-WM Feature-Dynamics Transplant** | DINO-WM 的 frozen feature extractor接口、latent dynamics核心和 patch reshape工具 | 替换 `team_belief/encoder`；只新增多相机 packer、joint history codec 与 readout | future patch error、object transition、吞吐 |
+| **R11-P3 / GPU3：LeRobot VLA-JEPA Transplant** | LeRobot 中 VLA-JEPA 的 predictive representation/policy encoder所需文件与测试；不得部署整个 LeRobot package | 新增 `team_belief/vla_jepa_encoder`；用 adapter 对齐 camera keys、state features 和 agent/time mask | next-state/partner-action probe、显存、延迟 |
+
+四路共享本项目 trainer、raw-observation cache、split和 checkpoint wrapper。R11 没有 `I11>=5%`、causal CI、AUROC/ECE 或 latency quality hard gate；这些只写 `optional_diagnostics.json`。唯一 W11 由训练前固定的 `representation_screen_score` 排名选择，默认按 held-out future feature、partner action、shared progress和吞吐排序，不设最低阈值；只有作业无法运行、数据泄漏、来源不合规或 action hash 改变才失去资格。action hash 一旦改变，必须重新分类并补 Gate20。
+
+### 10.15 R12：四路 Action Generator 组件移植（action-affecting，强制 Gate20）
+
+R12 从 W11 的 `TeamBeliefState → ActionProposalBatch` 现有接口出发，每路只替换 action generator 内核，继续使用本项目 dataset、trainer、checkpoint、temporal aggregation 和 evaluator。不是部署四个完整 VLA；vision-language backbone、demo server和上游 benchmark runner均不进入 runtime。若本 benchmark 没有合法 language instruction，所有需要文本条件的组件接收同一个冻结 null embedding，禁止用 task ID 生成提示词。
+
+| 候选 / GPU | 从官方仓库复制的最小组件 | 替换点与允许适配 | 主要风险 |
+|---|---|---|---|
+| **R12-P0 / GPU0：OpenPI Flow Action-Expert Transplant** | OpenPI 中 $\pi_0/\pi_{0.5}$ action expert、flow-matching loss/time sampler、ODE action sampler及必要 Transformer block；不复制完整 PaliGemma/VLM 与服务栈 | 替换 `action_generator/core`；adapter 把 W11 tokens 投影到官方 conditioning width，把 joint action flatten/unflatten；核心 flow path/loss不改 | 组件与 VLM 耦合过深时触发 extraction infeasible，不允许退回全量 OpenPI |
+| **R12-P1 / GPU1：LeRobot SmolVLA Action-Expert Transplant** | LeRobot SmolVLA policy中 action expert、flow sampler、必要 normalization/config和测试 | 替换 `action_generator/core`；相机、state、action schema及 agent mask只在 adapter转换 | checkpoint 部分加载与缺文本条件；所有 missing keys必须列清 |
+| **R12-P2 / GPU2：RDT-1B DiT Transplant** | RDT 的 action tokenizer/embedding、diffusion-transformer blocks、noise scheduler与 action sampler；不复制视觉/语言 encoders和部署脚本 | 替换 `action_generator/core`；W11 tokens作为 condition，缺 wrist 用 absent mask，不能伪造图像 | 1B block过大；允许按官方 depth/width config抽取已存在的小规格，不允许 AI 自创 mini-RDT |
+| **R12-P3 / GPU3：Consistency Policy Transplant** | 官方 Consistency Policy 的 consistency loss、time/noise sampling、teacher→student distillation和 few/one-step sampler；复用本项目已有 action backbone shell | 新增 `action_generator/consistency_head` 并替换 sampler；action horizon/dim、dataset键和 checkpoint由 adapter处理 | teacher/student差距；不得自行改 consistency objective |
+
+R12 的预注册 reserve pool 为 [Diffusion Policy](https://github.com/real-stanford/diffusion_policy) 的 policy/scheduler core（MIT）和 LeRobot `multi_task_dit` 的动作模块（Apache-2.0）。只有主候选在**任何训练结果产生前**因最小闭包过大、框架不兼容或许可证/权重限制被判 `extraction_infeasible` 时，才可按预注册顺序替换；不能因为预检loss不好而换路线。
+
+每路必须完成：复制前/后 component parity、mini-batch train→save→restore、action normalization round-trip、finite/range/mask、CoRE目录移除和控制周期 smoke。随后四路无条件跑五任务各 20 回合。唯一 W12 是 Gate20 macro 严格高于 W10 的最佳候选；oracle `+10pp`、diversity、shuffle、teacher-removal、solver steps和因果 CI均降为可选消融。四路均不提高时 `no winner/no merge`，保留 W10/W11并重新提出四个官方组件，不允许合并“最不差者”。
+
+### 10.16 R13：四路 Candidate-Conditioned Latent World 组件移植（off-path）
+
+R13 冻结 W12 动作生成器，仅替换 `world_model/core`，读取 W11 belief和 W12 action candidates，预测 latent consequence/progress/failure；planner和rerank关闭。以下候选都只复制 world-model核心及直接依赖，不部署其 agent、environment或完整 RL training stack。
+
+| 候选 / GPU | 从官方仓库复制的最小组件 | 接入方式 | 可选诊断 |
+|---|---|---|---|
+| **R13-P0 / GPU0：TD-MPC2 Latent Dynamics Transplant** | TD-MPC2 的 encoder、latent dynamics、reward/value heads与直接测试，MIT | 替换 `world_model/core`；adapter 展开/还原 candidate batch并映射 team belief/action | pair accuracy、Spearman、value calibration、OOD |
+| **R13-P1 / GPU1：LPWM Particle Dynamics Transplant** | LPWM particle transition/aggregation/uncertainty核心与 loss | 替换 `world_model/core`；agent/object masks和 progress labels由 adapter提供 | object identity、Stack ranking、uncertainty |
+| **R13-P2 / GPU2：V-JEPA2-AC Predictor Transplant** | V-JEPA 2 action-conditioned predictor与 multi-mask prediction必要文件 | 替换 `world_model/core`；action token codec和 multi-horizon query只在 wrapper中实现 | action shuffle、direct-horizon error、ranking |
+| **R13-P3 / GPU3：DINO-WM Dynamics Transplant** | DINO-WM feature dynamics、rollout和 scoring所需文件 | 替换 `world_model/core`；fixed views、joint actions和 candidate batch只做 schema适配 | rollout error、ranking、吞吐 |
+
+R13 仍要求来源/parity、future不进入input、action hash完全相同；`pair accuracy 65%`、`Spearman 0.35`、`AUROC 0.75`、`ECE 0.10`、oracle retention和各类 shuffle阈值全部改为可选诊断。W13 按冻结 `world_screen_score` 在有效候选中选最高者，不设研究阈值；四路均无法稳定 train/restore 时 `no winner/no merge`，不能让 AI 自写一个 world model 填位。
+
+### 10.17 R14：四路 World-Guided Decision 组件移植（action-affecting，强制 Gate20）
+
+R14 冻结 W11/W12/W13，只替换或新增 `planner/decision_core`。所有路都可能改变最终动作，因此必须五任务各跑 20 回合；异常、NaN或超时 fail-closed 回 W12 base，不调用 CoRE。
+
+| 候选 / GPU | 从官方仓库复制的最小组件 | 接入方式 | 备注 |
+|---|---|---|---|
+| **R14-P0 / GPU0：World-In-World Revision Transplant** | proposer→world prediction→revision loop、candidate batching和 closed-loop utility接口所需文件 | 新增 `planner/world_in_world_revision`；W12作为 proposer、W13作为 world backend，本项目 evaluator保持不变 | 最贴近 Before-We-Act “预测后再行动”的主叙事 |
+| **R14-P1 / GPU1：DINO-WM CEM Transplant** | DINO-WM 官方 CEM optimizer/planning loop和 scoring接口 | 替换 `planner/decision_core`；W13 dynamics/action codec由 adapter接入，CEM update不改 | 关注长 horizon和实时性 |
+| **R14-P2 / GPU2：TD-MPC2 MPC Transplant** | TD-MPC2 官方 latent planning/action sampling/value scoring组件 | 替换 `planner/decision_core`；belief、candidate和value heads通过 wrapper映射 | 与 P1 的视觉 feature CEM形成不同 latent/value路线 |
+| **R14-P3 / GPU3：mbrl-lib Trajectory Optimizer Transplant** | 归档 MIT commit中的 trajectory optimizer/CEM与 ensemble propagation必要文件 | 替换 `planner/decision_core`；隔离旧依赖，禁止为适配而大修上游源码 | 成熟低风险，但仓库归档状态必须写入风险表 |
+
+DynaGuide（MIT）作为 reserve：只有 W12 winner 是其官方 denoising hook可直接支持的 diffusion/consistency policy时，才可在 R14 任何结果产生前替换 extraction infeasible候选；若 W12 是 flow policy，不得让 AI 改写出“flow版DynaGuide”。
+
+R14 的唯一质量强门是 Gate20：normal macro 严格高于同 seeds 的 W12 即可合并最佳者。不再要求同时高于 W10、Camera+Stack `+6/40`、固定 intervention rate、world/intent shuffle CI、AUROC/ECE或oracle retention；这些保留为解释收益的可选论文实验。frozen-100 aspirational目标仍为 macro `>=80%`、Camera `>=80%`、Stack `>=50%`，未达到不得写“大幅提升/贴近同事”。
+
+### 10.18 R15：冻结组件组合的四种子正式复现
+
+R15 不改结构。四卡分别从同一 W14 recipe 独立训练 seeds `101/202/303/404`；所有复制文件 SHA、component patch、adapter配置和本项目 trainer/evaluator commit完全相同。每个 seed 的权重都会改变动作，因此每个 seed 都必须五任务各跑 20 回合，之后按 benchmark/投稿资源做 frozen-100。
+
+主表首先列闭环：W10、R12 四路 Gate20、W12、R14 四路 Gate20、W14、R15 四 seed及计算成本。R11/R13 的 loss、ranking、calibration、shuffle和oracle放辅助表。最终 `method_separation_report.json` 还必须证明：runtime无CoRE；runtime不依赖任何上游完整仓库；每个复制文件可回溯到官方 commit/license；`full_repo_runtime_dependency=false`；所有算法行改动均为 0 或有作者组书面批准。组件移植只降低实现风险，不自动构成新颖性，论文贡献仍需由本项目独立的模块流向、无腕多机器人问题定义、team belief/consequence接口和闭环 benchmark 证据支撑。
+
+## 11. 数据、评测与远程执行协议
+
+### 11.1 数据隔离
+
+- 原 600 demonstrations 沿用 manifest/hash，不因新路线重新划分；
+- 新 rollout 数据按 `policy_sha/task/seed/outcome/decision_t/candidate_id` 唯一标识；
+- candidate branch 必须保存共同 prefix hash、candidate source（`W12 transplanted action base / sampled / planner-refined`）、restore/replay 误差与安全投影报告；CoRE teacher/base 只在训练或对照 receipt 中单列，不能成为 R14 runtime candidate source；
+- frozen-100 seeds 永远不进入 training/threshold calibration；
+- task/outcome/stage 只控制 sampler，不进入模型输入；
+- 任何使用 simulator privileged state 计算的 progress label，都必须在部署模型中由合法 observation target 蒸馏或仅作训练标签，forward schema 明确拒绝该 key。
+
+### 11.2 V4.5 四卡四路 Component-Transplant Tournament Contract
+
+对任一 V4.5 修改轮 $k\in\{11,12,13,14\}$，唯一合法父节点定义为；正在运行的 S10/R10 不重新创建、不适用本覆盖后的候选卡：
+
+$$
+B_k=\left\{
+\text{merge commit},\text{checkpoint},\text{config},
+\text{normalization},\text{data receipt},\text{eval contract}
+\right\}.
+$$
+
+P0/P1/P2/P3 必须由同一 `B_k` 自动创建，preflight 先验证 parent forward、dataset-index sequence、evaluation seeds exact、上游 component lock 和 replacement site。冻结 baseline 直接复用 `B_k` 产物，不作为 P0，也不为了“公平”随机重训。
+
+| 契约面 | 四路共同要求 |
+|---|---|
+| parent | 同一 merge commit/checkpoint/config/normalization/input schema；父参数与 buffer 只读 |
+| paper/source | 启动前四张 Paper Evidence Card 与 Component Lock 均完成；官方仓库、精确 commit、许可证、复制文件/符号和本地替换点全部可追溯 |
+| data | 同一 manifest、sampler、rollout/candidate receipts、train/held-out/frozen seed lists |
+| compute | 一卡一路；共享四卡上限、训练截止和 wall-clock 记录；不同上游组件可沿用自己的 optimizer/solver，但必须公开 updates、batch、precision、GPU-hours和 peak memory |
+| delta | 只复制最小代码闭包；`full_repo_runtime_dependency=false`；component patch、adapter diff、trainable参数、关闭配置和回滚hash可审计 |
+| evaluation | R11/R13 action hash相同；R12/R14同一五任务各20回合、同 seeds/task顺序/control cadence/temporal aggregation/evaluator commit |
+| artifacts | 独立 worktree/run root/checkpoint/log；不得读取兄弟候选权重或未冻结结果 |
+
+“有进步”按层级而不是用同一个 loss 伪装：
+
+| 轮次 | 主要 improvement metric $I_k$ | 共同 no-regression gate |
+|---|---|---|
+| S10/R10 | **冻结既有 selection rule，不因 V4.5 改动** | 不写文件、不停、不重启、不补候选 |
+| R11 | 冻结的 `representation_screen_score` 仅作四个有效组件的相对排序，不设研究阈值 | off-path；W10动作逐元素不变；来源/parity/无泄漏 |
+| R12 | 五任务 Gate20 success macro | 每任务20回合完成；严格高于相同seed W10；动作安全、无CoRE runtime |
+| R13 | 冻结的 `world_screen_score` 仅作四个有效组件的相对排序，不设研究阈值 | off-path；W12 action hash不变；来源/parity/无future输入 |
+| R14 | 五任务 Gate20 success macro | 每任务20回合完成；严格高于相同seed W12；超时/异常回W12 |
+
+每轮在训练前冻结 `selection_rule.json`。R11/R13 在所有完成来源/parity/action-hash审计的候选中按 screen score选最高者，probe、shuffle、calibration只报告；R12/R14 只在完整 Gate20 且 macro 严格高于父 baseline的候选中选最高者。动作轮并列时依次比较 paired wins、Camera+Stack、最差任务、P95 latency、GPU-hours、candidate ID。禁止看完结果后增加新 quality gate、改分数权重或改排序。
+
+winner 不是一个口头结论，而是 `winner_pack.json`：
+
+```text
+round_id / baseline_merge_commit / baseline_checkpoint_sha256
+p0..p3 source_commit / component_lock / component_patch / adaptation_card / config / paper_card / data_receipt / checkpoint / report
+qualified_set / preregistered_metric_values / unique_winner / rejection_reasons
+winner_source_commit / winner_checkpoint_sha256 / merge_commit / rollback_commit
+```
+
+只允许把唯一 winner 的**复制组件、许可证/来源、adapter、配置、权重引用和报告**合并进 `bwa/main`；不能合并其上游完整仓库、demo、训练平台或 evaluator。其他三路保留分支和产物、不删除。若 qualified set 为空，`baseline_after == baseline_before`，本轮记录 `no winner/no merge`。若希望组合两个组件，只能在后续轮次把该组合注册为一个新候选，与另外三路从同一 merged baseline公平重训。
+
+### 11.3 Paper Evidence Card 与 citation snapshot
+
+每个候选启动前必须有独立 card；“引用了论文”只有在下列字段全部存在时才成立：
+
+```yaml
+candidate_id: rXX-pY
+round_freeze_date: YYYY-MM-DD
+award_anchor: {paper, year, status: winner_or_finalist, official_award_url, absorbed_mechanism}
+oral_anchor: {paper, year, official_program_url, absorbed_mechanism}
+recent_venue_direct: {paper, year, venue, official_status_url, exact_mechanism}
+time_tested_anchor: {paper, publication_year, independent_followups}
+high_citation_anchor: {paper, openalex_id, cited_by_count, snapshot_date}
+frontier_watchlist: {paper, date, status, citation_qualified: false, collision_with_our_claim}
+failure_mapping: current_task_or_metric_failure
+code_mapping: [upstream_file, upstream_symbol, local_copied_file, replacement_site, required_test]
+component_lock: experiments/before_we_act/component_locks/rXX-pY.yaml
+adaptation_card: experiments/before_we_act/adaptation_cards/rXX-pY.yaml
+minimal_delta: {copied_file_closure, adapter_whitelist, trainable_parameter_whitelist}
+falsifier: preregistered_intervention_and_threshold
+forbidden_borrowing: privileged_inputs_or_out_of_scope_components
+license_and_code: {official_repo, commit_sha, code_weight_data_license, notice_sha256}
+reviewer_signoff: null
+```
+
+类别定义在全项目固定：`award` 必须有会议/期刊官方 award 页面并区分 winner/finalist；`oral` 只接受 official oral/plenary program，spotlight 单列为 spotlight，不冒充 oral；`time-tested` 要求发表满 3 年且列出至少两项独立后续验证；`high-citation` 使用 round freeze 当日 OpenAlex snapshot，默认阈值 `cited_by_count>=80`，若覆盖异常只能用同子领域 top-quartile 的书面规则替代。一个论文可覆盖多类，但每张 card 至少包含一个获奖 anchor、一个 oral/plenary anchor、一个候选特有 direct paper和一个通过 snapshot 的高引用/时间检验根源。
+
+**新近性优先级固定为：** ① 2026/2025 target venue award/oral；② 2026/2025 target venue正式接收；③ 2024 target venue award/oral；④ 更早的经典高引用根源。target venue 指 RSS、ICLR、ICML、CoRL、RA-L，必要时才扩展到 NeurIPS/CVPR/ECCV。每张卡的 `recent_venue_direct` 原则上必须来自 2024–2026，且 paper→code 映射必须比旧经典工作更直接；不存在相关新作时才允许书面说明空缺，不能换一篇不相关的新论文凑年份。
+
+**arXiv-only 准入从严：** 只有 OpenAlex snapshot 达到上述 high-citation 阈值或同子领域 top-quartile，才可充当 qualifying anchor。A2World、OA-WAM、Flow-Opt、GCo、Cortex 2.0 等很新的预印本若尚未满足引用阈值，只进入 `frontier_watchlist`，用于新颖性碰撞检查与工程灵感，不能替代 award/oral/recent accepted/high-citation 四类证据。后续若有正式接收或引用阈值变化，下一轮 freeze 时再升级身份。
+
+所有 citation 数量都视为**可变元数据**，只写入 `paper_ledger/openalex_snapshot_YYYYMMDD.json`，正文不写会迅速过期的精确数字。官方 status、论文正文、代码/许可证和 citation snapshot 分开存证；任何无法官方核验的“oral/award”标签先降级为普通论文，不得靠搜索摘要补齐。每轮启动前重新搜索该轮 freeze 日之前的 target venues；若发现更新且更直接的获奖/oral论文，只允许在训练前更新四张 card 与 implementation card，训练一旦开始即冻结。
+
+### 11.4 远程运行与监控
+
+沿用现有永久 tmux、run-scoped launcher/stop、30 分钟 monitor、20 秒 producer heartbeat、checkpoint/resume/hash 和北京时间 ETA。新 run 必须使用独立 roots：
+
+```text
+outputs/bwa_runs/s10-frozen-<existing-id>/          # 只监控，不迁移、不重启
+outputs/bwa_runs/r11-belief-components-<id>/p0..p3/
+outputs/bwa_runs/r12-action-components-<id>/p0..p3/
+outputs/bwa_runs/r13-world-components-<id>/p0..p3/
+outputs/bwa_runs/r14-decision-components-<id>/p0..p3/
+outputs/bwa_runs/r15-formal-<id>/seed101..seed404/
+```
+
+monitor 每 30 分钟至少显示 baseline/winner hash、GPU0–3 的 candidate/seed、上游 repo/commit/许可证、已复制组件、parity状态、action-affecting标记、当前 stage、updates/s、北京时间 ETA、GPU/PID、20秒 producer heartbeat、R12/R14最新逐任务 Gate20、screen score或benchmark macro、fallback 与 P95 latency。R11/R13 明确显示 `Gate20=N/A (action hash equal)`；R12/R14 必须显示每任务 `x/20` 和总完成数 `x/100`。四路 ETA 以最慢候选为 round ETA，并区分“组件抽取/parity完成”“训练完成”“Gate20完成”“预计可做winner decision”。停止脚本只终止精确 run identity，绝不删除共享 dataset、parent、checkpoint、日志或永久 tmux session。
+
+## 12. 代码落地与分支顺序
+
+### 12.1 V4.5 活动代码树与 AI 产物
+
+`stereo_core/` 在 S10 后只读，正式 runtime 不把它加入 import path。上游完整仓库只允许在临时只读 cache 中用于抽取/parity，不进入 Git、PYTHONPATH或最终镜像；复制到本项目的最小组件才是 runtime 源码：
+
+```text
+before_we_act/
+  contracts.py
+  upstream_components/                   # 复制进本项目的最小代码闭包；逐文件保留来源/许可证
+    vjepa2/{encoder,predictor,masks,...}
+    lpwm/{particles,dynamics,...}
+    dino_wm/{features,dynamics,cem,...}
+    lerobot/{vla_jepa,smolvla_action,...}
+    openpi/{action_expert,flow_loss,sampler,...}
+    rdt/{action_tokenizer,dit,scheduler,...}
+    consistency_policy/{loss,distiller,sampler,...}
+    tdmpc2/{encoder,dynamics,heads,planner,...}
+    world_in_world/{revision,candidate_batch,...}
+    mbrl_lib/{trajectory_optimizer,propagation,...}
+  adapters/                              # 我方接口转换；优先在此改 shape/schema
+    observation.py
+    team_belief.py
+    action_generator.py
+    world_model.py
+    planner.py
+    checkpoint.py
+  team_belief/base.py                    # replacement hook，不自写候选算法
+  action_generator/base.py
+  world_model/base.py
+  planner/base.py
+  data/{raw_team_windows,teacher_action_cache,candidate_branch_dataset}.py
+  train_team_belief.py
+  train_action_generator.py
+  train_team_world.py
+  evaluate_benchmark.py
+
+LICENSES/upstream_components/<source>/{LICENSE,NOTICE,SOURCE_MAP.yaml}
+experiments/before_we_act/
+  component_locks/r11-p0.yaml ... r14-p3.yaml
+  adaptation_cards/r11-p0.yaml ... r14-p3.yaml
+  component_patches/r11-p0.diff ... r14-p3.diff
+  parity_receipts/<round>-<candidate>.json
+
+scripts/before_we_act/
+  fetch_upstream_readonly.py             # 临时 checkout exact commit，不写 runtime tree
+  compute_component_import_closure.py
+  copy_upstream_component.py             # 按 lock白名单复制并生成 SOURCE_MAP
+  verify_component_license.py
+  run_upstream_component_parity.py
+  audit_no_full_repo_dependency.py
+  audit_component_patch.py
+  classify_action_effect.py
+  launch_four_route_round.py
+  run_gate20_five_tasks.py
+  decide_benchmark_winner.py
+
+tests/before_we_act/
+  test_component_source_map.py
+  test_component_parity.py
+  test_no_full_upstream_repo_import.py
+  test_algorithmic_lines_unchanged.py
+  test_adapter_contracts.py
+  test_action_hash_offpath.py
+  test_gate20_exactly_20_per_task.py
+  test_no_core_import_or_checkpoint.py
+```
+
+不得把临时 clone 目录、上游 `.git`、完整 configs/assets/datasets、demo、web server或上游 evaluator复制进本项目。`copy_upstream_component.py` 必须拒绝未列入 `copied_upstream_files` 的文件；`audit_no_full_repo_dependency.py` 必须在临时 cache被移走后重跑 import、train smoke和eval smoke。
+
+#### 12.1A V4.4 自写模块目标树（历史，不执行）
+
+以下旧树仅用于理解上一版设计，不得作为 V4.5 代码生成清单：
+
+```text
+stereo_core/                              # R9/S10 冻结 teacher/baseline；R11 后禁止修改
+before_we_act/
+  contracts.py                           # TeamBeliefState/ActionProposalBatch/Consequence/Decision
+  observation_adapter.py                 # 只处理合法 raw views/qpos/history/calibration
+  team_belief/
+    base.py
+    video_jepa.py
+    particle_graph.py
+    consensus_intent.py
+    cognitive_memory.py
+  action_dit/
+    base.py
+    direct_joint_flow.py
+    latent_flow.py
+    intent_hierarchical.py
+    one_step_distill.py
+  world_model/
+    base.py
+    ensemble_rssm.py
+    particle_graph.py
+    jepa_direct_horizon.py
+    td_flow_outcome.py
+  planner/
+    base.py
+    conservative.py
+    cem.py
+    flow_mppi.py
+    world_guided_dit.py
+  data/
+    raw_team_windows.py
+    teacher_action_cache.py              # 训练期可选；runtime package不依赖
+    candidate_branch_dataset.py
+  train_team_belief.py
+  train_action_dit.py
+  train_team_world.py
+  evaluate_core_free.py
+
+configs/before_we_act/
+  r11_team_belief/{p0,p1,p2,p3}.yaml
+  r12_action_dit/{p0,p1,p2,p3}.yaml
+  r13_team_world/{p0,p1,p2,p3}.yaml
+  r14_core_free_planner/{p0,p1,p2,p3}.yaml
+  r15_formal.yaml
+
+tests/before_we_act/
+  test_no_core_feature_access.py
+  test_core_free_action_forward.py
+  test_no_core_import_or_checkpoint.py
+  test_delete_stereo_core_output_hash_unchanged.py
+  test_no_act_arca_pair_symbols_in_runtime_graph.py
+  test_team_belief_*.py
+  test_action_dit_*.py
+  test_team_world_*.py
+  test_planner_*.py
+```
+
+以下旧代码树仅记录 V4.3 CoRE-bank 预案，不再作为 R11 以后实现目标：
+
+```text
+UPSTREAM_CORE_MANIFEST.json              # source path/hash/license/import commit
+LICENSES/STEREO_CORE_MIT.txt
+
+stereo_core/                            # 活动 CoRE-native 代码基座
+  ...                                   # 完整导入其他上游 CoRE 模块/脚本，由 manifest 逐文件绑定
+  no_wrist_pair_model.py                # R9 拆分 encode/decode/bank，权重语义不变
+  train_no_wrist_pair.py                # 原 trainer/dataset/sampler
+  evaluate_no_wrist_pair.py             # 原 evaluator，等价拆分 prepare/denormalize/ensemble
+  bwa_contracts.py
+  bwa_perception.py
+  bwa_flow_proposals.py
+  bwa_world_models.py
+  bwa_planners.py
+  bwa_candidate_dataset.py
+  train_bwa_perception.py
+  train_bwa_flow.py
+  train_bwa_world.py
+  evaluate_bwa.py
+
+scripts/before_we_act/
+  freeze_round_parent.py
+  validate_implementation_card.py
+  audit_candidate_diff.py
+  audit_trainable_parameters.py
+  smoke_candidate.py
+  audit_parent_exact.py
+  collect_candidate_branches.py
+  evaluate_candidate_oracle.py
+  launch_four_route_round.py
+  decide_unique_winner.py
+  train_consequence_world_model.py
+  evaluate_before_we_act_planner.py
+  run_frozen100.py
+
+configs/before_we_act/
+  r9_core_native_oracle.yaml
+  r10_perception/{p0,p1,p2,p3}.yaml
+  r11_flow/{p0,p1,p2,p3}.yaml
+  r12_world/{p0,p1,p2,p3}.yaml
+  r13_planner/{p0,p1,p2,p3}.yaml
+  r14_formal.yaml
+
+experiments/before_we_act/
+  schemas/{implementation_card,round_manifest,winner_pack}.schema.yaml
+  implementation_cards/r10-p0.yaml ... r13-p3.yaml
+  <round>/<candidate>/change_manifest.json
+
+paper_ledger/
+  PAPERS.yaml
+  cards/r10-p0.yaml ... cards/r13-p3.yaml
+  openalex_snapshot_YYYYMMDD.json
+
+tests/before_we_act/
+  test_contract_shapes.py
+  test_core_native_forward.py
+  test_core_bank_inference.py
+  test_parent_bit_exact.py
+  test_action_denormalization_exact.py
+  test_temporal_ensemble_exact.py
+  test_planner_before_temporal_append.py
+  test_forced_role_isolation.py
+  test_candidate_bank_masks.py
+  test_perception_gate_zero.py
+  test_flow_gate_zero_and_projection.py
+  test_action_prefix_causality.py
+  test_world_gate_zero.py
+  test_planner_fail_closed.py
+  test_round_parent_and_budget_exact.py
+  test_no_privileged_deployment_inputs.py
+  test_crossview_not_patch_aligned.py
+  test_object_slot_bridge.py
+  test_predictive_state_causality.py
+  test_jepa_bridge_no_future_input.py
+  test_base_centered_flow.py
+  test_rectified_refiner.py
+  test_streaming_flow_state.py
+  test_joint_flow_equivariance.py
+  test_ensemble_rssm_world.py
+  test_jepa_world_model.py
+  test_object_world_model.py
+  test_value_world_model.py
+  test_conservative_reranker.py
+  test_cem_planner_budget.py
+  test_mppi_planner.py
+  test_bounded_tree_planner.py
+```
+
+当前仓库的真实复用入口已经核对，AI 必须先读后适配，不能按上面的目标树臆造既有 API：
+
+| 已存在文件 | V4.4 用法 | 禁止做法 |
+|---|---|---|
+| `no_wrist_stereo_core/stereo_core/no_wrist_pair_model.py` | S10 真值源；S10 后仅用于冻结 teacher/baseline receipt | 在 R11+ import、继承其 hidden state，或改 state-dict 语义 |
+| `no_wrist_stereo_core/stereo_core/train_no_wrist_pair.py` | S10 数据/归一化账本；R11+ 只读其 manifest 与 normalization receipt | 改 S10 manifest/split，或让某个候选改变共同样本顺序 |
+| `no_wrist_stereo_core/stereo_core/evaluate_no_wrist_pair.py` | S10 唯一部署对照；R11+ 仅作为独立 baseline process | 让新 evaluator import CoRE，或改 action cadence/history/时序聚合以制造差异 |
+| `models/static_rgb_act.py` | 仅作历史 observation/action 及 temporal aggregation 差异对照 | 让其成为 CoRE-native policy 依赖或在其中堆新实验类 |
+| `models/wam/api.py`、`models/wam/stateful_action_flow.py`、`models/wam/recurrent_dynamics.py`、`models/wam/heads.py` | 只复用 dataclass、mask、Flow/RSSM 实现模式 | 载入 R7/R8 active weights，或让旧 World-to-Flow 成为新 parent |
+| `train/s2_grouped_trajectory.py`、`train/s4_hierarchical_team_sampler.py`、`train/s4_future_feature_cache.py` | 仅复用 causal-window/cache/provenance 实现模式 | 取代 CoRE-native manifest/sampler/normalization 主键，或修改旧 receipt |
+| `scripts/launch_s0_4gpu_tmux.sh`、`scripts/s0_runtime.py` | 作为四卡隔离、heartbeat、resume、ETA 的已测试模板 | 原地改成只适合某轮、破坏 S0 历史可复现性 |
+| `tests/test_s0_runtime.py`、`tests/test_s4_*` | 复用 runtime/registry/sampler/cache 的断言风格 | 删除或放宽旧断言使新代码通过 |
+
+两个 CoRE 发布目录都不是 Git 仓库；R9/S10 已按 MIT 许可证导入并用 `UPSTREAM_CORE_MANIFEST.json` 绑定逐文件 hash。该目录在 S10 结束前保持当前运行语义，在 `W10` 交接后立即转为只读 teacher/baseline snapshot。R11–R14 不再向其中注册扩展点，也不得把它复制、改名或包装进最终 runtime；新的 manifest 只记录离线 teacher action 的来源 hash 与许可证。
+
+### 12.2 分支与落地顺序
+
+分支固定为：
+
+```text
+bwa/main
+bwa/r10-<existing-s10-branches>                  # 原样保留，不创建替代分支
+bwa/merge-r10-winner
+bwa/r11-p0-vjepa2-component
+bwa/r11-p1-lpwm-particle-component
+bwa/r11-p2-dinowm-feature-component
+bwa/r11-p3-lerobot-vlajepa-component
+bwa/merge-r11-winner
+bwa/r12-p0-openpi-action-expert-component
+bwa/r12-p1-smolvla-action-expert-component
+bwa/r12-p2-rdt-dit-component
+bwa/r12-p3-consistency-policy-component
+bwa/merge-r12-winner
+bwa/r13-p0-tdmpc2-world-component
+bwa/r13-p1-lpwm-world-component
+bwa/r13-p2-vjepa2ac-world-component
+bwa/r13-p3-dinowm-world-component
+bwa/merge-r13-winner
+bwa/r14-p0-worldinworld-revision-component
+bwa/r14-p1-dinowm-cem-component
+bwa/r14-p2-tdmpc2-mpc-component
+bwa/r14-p3-mbrllib-optimizer-component
+bwa/merge-r14-winner
+bwa/r15-formal-seed101
+bwa/r15-formal-seed202
+bwa/r15-formal-seed303
+bwa/r15-formal-seed404
+```
+
+每轮由 `bwa/main` 创建四个兄弟分支；`merge-rXX-winner` 只能包含 winner 的最小复制组件、LICENSE/NOTICE/SOURCE_MAP、component lock/patch、adapter、配置、paper/report/weight manifest和必要文档，不能包含上游完整仓库。随后 fast-forward/PR 到 `bwa/main`。V4.5 顺序固定为：**S10 原样结束并冻结 W10 → R11 belief组件 → R12 action组件与强制Gate20 → R13 world组件 → R14 decision组件与强制Gate20 → R15 formal**。R11 后不得再改 `stereo_core/**`；禁止让 AI 用论文描述补写缺失核心，也禁止因独立策略暂时较弱而恢复 CoRE forced-role bank。
+
+## 13. 论文主表、消融与 claim 边界
+
+### 13.1 主表
+
+1. `Peer-Exact Stereo-CoRE`：明确标注 wrist RGB-D / different protocol；
+2. `Peer-NoWrist Stereo-CoRE / W10`：`71.4%` 或 S10 结束后的冻结实测值，作为公平 teacher/baseline，不写成我方模型；
+3. R6L-P1 与 R7-P0/P1：历史 Before-We-Act/UC-WAM 路线及负结果；
+4. R11 四个 belief组件的 source/commit/复制文件、screen score与 action-hash-equal；不把 off-path 指标写成策略提升；
+5. R12 四个 action组件各自的五任务 `x/20`、macro、paired wins、P95、GPU-hours和 component patch规模；
+6. `W12`：唯一 benchmark winner及其相对 W10增量，明确动作内核来自哪个上游组件、哪些部分是我方 adapter；
+7. R13 四个 world组件的 source/commit、ranking/loss等可选诊断和 action-hash-equal；不把 off-path指标冒充闭环；
+8. R14 四个 decision组件各自的五任务 `x/20`、macro、paired wins、P95、fallback和计算预算；
+9. `W14`：最终组件流 `project observation/team interface → transplanted action core → transplanted world core → transplanted decision core`；
+10. `W15` 四 seed正式复现：逐seed五任务Gate20、macro、均值/标准差、P95和来源/CoRE分离审计；
+11. oracle、shuffle、calibration、planner-off和teacher-removal仅进辅助表，不抢占闭环主表。
+
+### 13.2 必做消融
+
+V4.5 不再把一长串研究消融设成晋级 hard gate。工程与可信性必做项只有：S10/W10 原样报告；逐候选上游 parity；复制文件/许可证/SOURCE_MAP审计；`full_repo_runtime_dependency=false`；R11/R13 action hash不变；R12/R14五任务各20回合；CoRE物理移除；R15四seed Gate20。
+
+以下均为资源允许时的**可选论文诊断**，不得反向改变 winner：belief/partner/intent shuffle，future leakage probe，teacher distillation on/off，候选数与 solver steps，world action/belief shuffle，ranking/AUROC/ECE，planner-off，uncertainty abstention，oracle selector，demonstration-only vs rollout/branch data，以及第二任务/机器人数量迁移。优先级固定为：先跑所有动作候选的完整 Gate20，再补 W12/W14 winner的关键消融，最后才补未胜候选的离线分析。
+
+### 13.3 V4.5 论文—上游组件—本地替换点矩阵
+
+Paper Evidence Card 的 award/oral/high-citation标准不变，但现在必须再回答“官方代码中具体复制什么”。论文理念不能代替可运行代码；许可证不明的最新工作只能作 reference。精确源文件/符号在 round freeze 时由真实 commit 的 import graph填写，下表不臆造尚未核对的类名。
+
+| Round | Candidate / 高质量论文与官方仓库 | 计划复制的组件职责 | 本项目 replacement site | 代码状态 |
+|---|---|---|---|---|
+| R11 | P0 V-JEPA 2 | encoder wrapper + masks + predictive blocks | `team_belief/encoder` | 官方仓库；MIT/逐文件Apache，commit时复核 |
+| R11 | P1 LPWM，ICLR 2026 Oral | particle encoder/dynamics/aggregation | `team_belief/particle_encoder` | 官方仓库；MIT |
+| R11 | P2 DINO-WM，ICML 2025 | frozen feature/dynamics/patch utils | `team_belief/encoder` | 官方仓库；MIT |
+| R11 | P3 LeRobot VLA-JEPA | predictive representation/encoder files | `team_belief/vla_jepa_encoder` | 官方仓库；Apache-2.0 |
+| R12 | P0 $\pi_0/\pi_{0.5}$ OpenPI | action expert + flow loss/time/ODE sampler | `action_generator/core` | 官方仓库；Apache-2.0 |
+| R12 | P1 LeRobot SmolVLA | action expert + flow sampler + normalization | `action_generator/core` | 官方仓库；Apache-2.0 |
+| R12 | P2 RDT-1B / DiT | action tokenizer + DiT + scheduler/sampler | `action_generator/core` | 官方仓库；MIT |
+| R12 | P3 Consistency Policy，RSS 2024 | consistency loss + distiller + few-step sampler | `action_generator/consistency_head` | 官方仓库；MIT |
+| R13 | P0 TD-MPC2 | encoder + latent dynamics + reward/value heads | `world_model/core` | 官方仓库；MIT、高引用/时间检验根源 |
+| R13 | P1 LPWM，ICLR 2026 Oral | particle transition + uncertainty | `world_model/core` | 官方仓库；MIT |
+| R13 | P2 V-JEPA 2-AC | action-conditioned predictive blocks | `world_model/core` | 官方仓库；MIT/逐文件Apache |
+| R13 | P3 DINO-WM，ICML 2025 | latent feature dynamics + rollout/scoring | `world_model/core` | 官方仓库；MIT |
+| R14 | P0 World-In-World，ICLR 2026 Oral | proposal/prediction/revision control loop | `planner/decision_core` | 官方仓库；MIT |
+| R14 | P1 DINO-WM | CEM optimizer + scoring loop | `planner/decision_core` | 官方仓库；MIT |
+| R14 | P2 TD-MPC2 | latent MPC/action sampling/value scoring | `planner/decision_core` | 官方仓库；MIT |
+| R14 | P3 mbrl-lib / PETS | trajectory optimizer + ensemble propagation | `planner/decision_core` | Meta官方仓库；MIT；已归档风险登记 |
+
+`LatentToM` 继续提供 team belief/partner intent 的论文定义，但因暂无可迁移官方代码不成为组件候选；`MemoryVLA`、Streaming Flow Policy 在许可证明确前同样降为 reference。DynaGuide 可作为 R14 reserve，但只有其官方 denoising hook与 W12 winner直接兼容才允许复制。每张卡仍需用 RSS/ICLR/ICML/CoRL/RA-L 的最新 award/oral/accepted工作解释“为什么选这个组件”，同时用经典/高引用论文说明时间检验；最终代码证据由 `component_lock + SOURCE_MAP + parity_receipt` 落地。
+
+### 13.3A V4.4 自写机制论文矩阵（历史，不执行）
+
+V4.4 不允许 16 张卡共同复用同一组装饰性引用。每个候选必须有与其具体代码改动直接相连的 recent direct paper、获奖/入围 anchor、oral anchor 和经过时间检验或 citation snapshot 达标的根源；一篇论文可以跨类别，但不能用与机制无关的 award 补卡。2026-08-04 可由官方页面核验的 status 池如下：
+
+- [CoRL 2025 Awards](https://2025.corl.org/program/awards)：Fabrica 为 Best Paper；LocoFormer、$\pi_{0.5}$、Steering Your Diffusion Policy 为 award finalists；
+- [CoRL 2025 Main Program](https://2025.corl.org/program/main-conference)：Streaming Flow Policy 与 Steering Your Diffusion Policy 有官方 Oral 时间；
+- [RSS Outstanding Paper](https://roboticsfoundation.org/awards/best-paper-award/)：2025 FAST 与 multi-agent safe optimal control 为 finalists；2024 anomaly/reactive-planning 为 winner，Denoising World Model 为 finalist；
+- [RA-L Best Paper](https://www.ieee-ras.org/awards-recognition/publications-awards/ieee-robotics-and-automation-letters-best-paper-award/)：2026 recipient “Should We Learn Contact-Rich Manipulation Policies From Sampling-Based Planners?” 直接服务 R14；
+- [ICLR 2026](https://iclr.cc/virtual/2026/events/oral)：World-In-World 与 Latent Particle World Models 的官方页面标有 Oral presentation；[Seer/PIDM](https://iclr.cc/virtual/2025/poster/28455) 是 ICLR 2025 Poster，不能再充当 oral anchor；
+- [ICML 2026 official paper index](https://icml.cc/Downloads/2026)：纳入 FocalPolicy、RoboFlow4D、Learning Latent Action World Models in the Wild 与 Mosaic 等 2026 direct papers；在 card 中只标 accepted/paper，不因出现在索引中擅自标 oral/award；
+- [ICML 2025 TD-Flow Oral](https://icml.cc/virtual/2025/oral/47200) 与 [ICML 2025 Oral Program](https://icml.cc/virtual/2025/events/oral) 中的 Inductive Moment Matching 分别服务 direct-horizon world model 和 few-step transport。
+
+ICLR 2026 Outstanding Papers 若与机器人机制无直接关系，不因“更新/获奖”被强行引用；相关性优先于 venue 装饰。16 张 card 的预注册组合与精确代码吸收如下，`classic/high-citation` 的资格仍需 round freeze 当日 snapshot：
+
+| Round | Candidate | 近年 award anchor → 代码吸收 | 近年 oral/accepted direct → 代码吸收 | Classic / high-citation root | arXiv frontier watchlist（不自动合格） |
+|---|---|---|---|---|---|
+| R11 | P0 Causal Video-JEPA Belief | RSS24 Denoising-WM-F：预测表征先于控制 → masked future-belief target | World-In-World-O + V-JEPA 2：闭环 utility、action-conditioned predictive feature → `CausalVideoJEPABelief` | I-JEPA + CPC | A2World |
+| R11 | P1 Object-Particle Belief | Fabrica-W：部件/对象状态服务规划 → shared object tracks | LPWM-O：persistent stochastic particles → `ObjectParticleBelief` | Slot Attention + C-SWM | OA-WAM |
+| R11 | P2 Consensus-Intent Belief | RSS25 Multi-Agent-Safe-F/W：联合约束与他体预测 → symmetric consensus/intent targets | CoRL25 Latent Theory of Mind：ego/consensus/partner-action prediction → `ConsensusIntentBelief`，不复制其完整 diffusion policy | ToMnet + Deep Sets | 新多智能体 ToM 预印本仅 watchlist |
+| R11 | P3 Perceptual-Cognitive Memory | LocoFormer-F：长时上下文适应 → bounded memory update | ICLR26 MemoryVLA accepted：perceptual/cognitive memory 分工 → `PerceptualCognitiveTeamMemory` | Transformer-XL + Perceiver IO | 新 memory-VLA 预印本仅 watchlist |
+| R12 | P0 Direct Joint Flow-DiT | FAST-F / $\pi_{0.5}$-F：高效 action chunk → joint chunk codec | RDT-1B accepted + DiT：agent×time patches、adaLN-Zero、conditional Flow → `DirectJointFlowDiT` | Flow Matching + DiT | $\pi_0$ 仅在 snapshot 合格后作高引用 anchor |
+| R12 | P1 Belief-to-Action Latent Flow-DiT | FAST-F：压缩高频动作生成 → action latent | ICLR26 VITA accepted：visual→intent→action 分解 → `BeliefActionLatentFlowDiT` | Diffusion Policy + DiT | 未正式接收的新 action tokenizer 仅 watchlist |
+| R12 | P2 Intent-Factorized Hierarchical Flow-DiT | Fabrica-W：感知/规划联合但结构分层 → slow intent/fast action | ICLR26 ViPRA + CoRL25 Latent ToM：intent latent 与 partner prediction → `IntentHierarchicalFlowDiT` | Options/HRL + Flow Matching | 新 hierarchical VLA 预印本仅 watchlist |
+| R12 | P3 One-Step Distilled Joint Flow | Steering-Diffusion-F：受约束 steering → joint safety projection | ICLR26 MAC-Flow accepted + ICML25 IMM-O：few-step/one-step matching → `OneStepDistilledJointFlow` | Consistency Models + Flow Matching | 最新 one-step flow 仅 watchlist |
+| R13 | P0 Ensemble RSSM Team World | RSS24 Denoising-WM-F：robust latent dynamics → stochastic ensemble | World-In-World-O：world model 必须提升 closed-loop utility → `EnsembleRSSMTeamWorld` | PlaNet + Dreamer | A2World |
+| R13 | P1 Particle-Graph Team World | Fabrica-W：多部件交互 → object-agent graph | LPWM-O：action-conditioned particles/uncertainty → `ParticleGraphTeamWorld` | Slot Attention + C-SWM | OA-WAM |
+| R13 | P2 JEPA Direct-Horizon World | RSS24 Denoising-WM-F：latent prediction → horizon target | World-In-World-O + DINO-WM accepted：frozen visual feature dynamics与 policy ranking → `JEPADirectHorizonWorld` | I-JEPA + DINO | A2World |
+| R13 | P3 TD-Flow Outcome World | RSS25 Multi-Agent-Safe-F：长程联合安全后果 → risk/progress heads | TD-Flow-O：direct-horizon temporal-difference Flow → `TDFlowOutcomeWorld` | TD learning + Flow Matching | Flow-equivariant WM 仅按正式状态记账 |
+| R14 | P0 Conservative Reranker | RSS24 Anomaly-W：异常即 abstain/react → calibrated fallback | World-In-World-O：one-step utility test → `ConservativeConsequenceReranker` | PETS + MBOP | Cortex 2.0 |
+| R14 | P1 CEM Latent Team MPC | RA-L26 Planner-W：sampling planner 需同预算实证 → branch labels/CEM budget | World-In-World-O：推理计算必须换来闭环收益 → `CEMLatentTeamMPC` | PlaNet + CEM | Cortex 2.0 |
+| R14 | P2 Flow-MPPI | RSS25 Multi-Agent-Safe-F/W：joint safety projection → ESS/fallback | MAC-Flow accepted：flow proposal 与 constrained update → `FlowMPPIPlanner` | MPPI + Flow Matching | Flow-Opt |
+| R14 | P3 World-Guided DiT Steering | Steering-Diffusion-F：不重训 base 的 guided sampling → guidance interface | World-In-World-O + MAC-Flow accepted：world utility gradient/energy → `WorldGuidedDiTPlanner` | classifier-guided diffusion + energy-based control | Cortex 2.0 |
+
+表中 `W/F/O` 分别表示 official winner/finalist/oral，不把 finalist 写成 winner，也不把 poster/spotlight 写成 oral。`accepted` 只表示官方会议信息页可核验的接收，不暗示 oral。`PAPERS.yaml` 必须把每个简称解析为 paper/proceedings、官方 status proof、代码/项目、许可证、OpenAlex ID 和“落到哪个 symbol/test”；watchlist 预印本若 citation snapshot 未达阈值，只用于避免重复主张，不能让候选通过 Paper Evidence Gate。
+
+### 13.4 允许与禁止的表述
+
+只有 R14 Gate20 与 R15 四 seed来源/分离审计通过后，才允许写：**“Before We Act integrates provenance-preserving predictive, action-generation and latent-planning components into a new no-wrist multi-robot consequence-before-action pipeline, without CoRE at inference.”** 如果 W12 winner确实是 flow/DiT组件，才能在方法名中写 Flow/DiT；否则按真实胜者命名。CoRE 必须被准确描述为训练期可选 teacher 与性能 baseline，上游组件必须准确署名和引用。在任何结果下都禁止写：
+
+- “超过同事方法”，除非输入与训练协议完全对齐；
+- “严格去中心化”，因为当前 evaluator 使用 global view、team belief 和 joint candidate actions；
+- “我们提出了上游组件的核心算法”，因为被复制的 encoder/action expert/dynamics/planner属于原作者；
+- “部署了完整 OpenPI/RDT/LPWM/World-In-World”，因为 V4.5 只做组件级代码移植；
+- “world model 生成动作”，除非最终代码确实由 world component直接产生动作；默认由 W12移植的action generator生成，world component只预测/评价后果；
+- “Flow Matching 带来闭环提升”，除非 W12 winner确为flow组件且相对非flow公平对照的Gate20支持；
+- “发现了真实团队意图”，除非 partner-action、object-transition、progress 三个操作化目标以及 intent-shuffle 的跨 seed 证据同时支持；
+- “与 CoRE 结构独立”，如果 runtime import/checkpoint、ACT/ARCA/router/role symbols 或删除目录 hash 测试有任一失败；
+- “world model 是收益来源”，如果只有 W13离线指标而没有 W14闭环对照支持；
+- “代码完全原创”，因为最终包包含有许可证和来源声明的上游复制组件；
+- “R7/R8 有效但训练不足”，现有闭环只支持关闭而非正向外推。
+
+## 14. 2026-08-04 至 ICRA 截稿时间表
+
+由于 S10 已在运行且完成时间由现有 monitor 决定，后续不再用假定的绝对开工日覆盖它。记 S10 完成全部既定训练、评测和 winner decision 的北京时间为 `T10`；下表是不可交换的相对排期，实际 calendar receipt 在 `transition_pack.json` 中落盘。
+
+| 窗口 | 工程主线 | 论文主线 | 退出条件 |
+|---|---|---|---|
+| 现在–`T10` | 只按既有30分钟监控S10；不改代码/配置/进程/选择规则 | 完成V4.5组件锁、许可证/SOURCE_MAP模板和claim草案 | 收到S10完整checkpoint/config/data/eval/winner hashes |
+| `T10`–`T10+2d` | 生成transition pack；实现最小闭包复制、许可证、parity、action-effect和Gate20工具 | 固化CoRE仅是teacher/baseline；登记上游作者与许可证 | W10可复现；临时上游clone移除后本项目仍可import/smoke |
+| `T10+2d`–`T10+6d` | R11四卡：抽取四个belief组件→parity→adapter→off-path训练→screen→合并W11 | 写team belief定义和逐文件来源 | action hash相同且产生唯一有效screen winner；其它诊断可选 |
+| `T10+7d`–`T10+14d` | R12四卡：抽取四个action组件→parity→adapter→训练→每路五任务Gate20→合并W12 | 写action组件归属、我方接口与闭环主表 | 每路100 episodes；只有macro严格高于W10才可winner |
+| `T10+15d`–`T10+19d` | R13四卡：抽取四个world组件→parity→off-path训练→screen→合并W13 | 写latent consequence接口；诊断放辅助表 | action hash相同且产生唯一有效screen winner；ranking/calibration阈值可选 |
+| `T10+20d`–`T10+26d` | R14四卡：抽取四个decision组件→parity→集成→每路五任务Gate20→合并W14 | 冻结真实winner对应的方法图与claim | 每路100 episodes；只有macro严格高于W12才可winner |
+| `T10+27d`–`T10+34d` | R15四seed正式复现：每seed Gate20，随后按资源做frozen-100；再补winner消融 | 主表、统计区间、来源/分离报告、附录 | 四seed组件SHA/adapter recipe一致；不再改变结构 |
+| 09-08 前 | 方法、checkpoint、主表与核心消融全部冻结 | 完整初稿与 supplementary | 只允许修复已登记 bug |
+| 09-09–09-14 | 不新增训练路线；只做复核与可复现打包 | 内部审稿、8 页压缩、claim/引用/许可证检查 | 最终 checklist 全绿 |
+| 09-15 | 只做提交检查 | 提交 | — |
+
+若 `T10+34d` 晚于09-08，按优先级裁剪：先取消未胜候选的离线诊断、额外视频、oracle/shuffle/calibration和非核心消融，再缩小R15 frozen-100覆盖；绝不跳过R12/R14每个候选的五任务Gate20、R15四seed Gate20、组件来源/许可证、CoRE分离或winner report。任何一轮四路全失败都记录 `no winner/no merge`，不把失败权重传给下一轮。
+
+## 15. 从现在开始的执行清单
+
+1. **已冻结历史结论：** R6L-P1 是旧 WAM 最佳；R7 `34%/32%` no winner；R8 用户确认总体显著落后同事，方向关闭。
+2. **已完成新 parent 训练与 frozen-100：** `Peer-NoWrist` 为 `100/60/0/100/97`，macro `71.4%`；checkpoint/config/summary hashes 已写入 2.4。
+3. **现在只监控 S10：** 沿用既有30分钟一轮monitor；不得修改、停止、重启、补候选、换论文卡或重算winner。任何V4.5代码都不能被正在运行的进程导入。
+4. **S10 完成即交接：** 生成 `transition_pack.json`，绑定 W10 的 commit/checkpoint/config/normalization/data/eval/selection hashes；CoRE 此后只读，登记 teacher/baseline 身份与许可证。
+5. **先建组件移植基础设施：** 实现readonly fetch、最小import闭包、按白名单复制、LICENSE/NOTICE/SOURCE_MAP、复制前后parity、component patch、禁止完整上游依赖、action-effect分类和五任务Gate20计数测试。
+6. **冻结16张双证据卡：** 每路同时创建Paper Evidence Card和Component Lock；official award/oral、OpenAlex snapshot、官方仓库commit、许可证、复制文件/符号、本地replacement site分开存证。
+7. **R11四卡：** 从同一W10创建V-JEPA2 predictor、LPWM particle、DINO-WM feature dynamics、LeRobot VLA-JEPA四个组件移植；只改belief模块，action hash相同，按screen score合并W11，其它gate可选。
+8. **R12四卡：** 从W11创建OpenPI flow action expert、SmolVLA action expert、RDT DiT、Consistency Policy四个组件移植；不用上游完整VLA。每路训练后必须五任务各20回合，只有macro严格高于W10才可合并W12。
+9. **R13四卡：** 从W12创建TD-MPC2、LPWM、V-JEPA2-AC、DINO-WM四个world组件移植；保持action hash相同，按screen score合并W13，ranking/calibration/causal/oracle阈值可选。
+10. **R14四卡：** 从W13创建World-In-World revision、DINO-WM CEM、TD-MPC2 MPC、mbrl-lib optimizer四个decision组件移植；每路必须五任务各20回合，只有macro严格高于W12才可合并W14。
+11. **每轮AI交付检查：** 必须存在`component_lock + LICENSE/NOTICE/SOURCE_MAP + component_patch + parity_receipt + adaptation_card + pytest/smoke logs + candidate_report`；AI不得补写缺失核心、部署完整上游模型、选winner或自动merge。
+12. **正式目标：** benchmark优先；W12/W14各自先严格胜过直接父baseline。aspirational frozen-100仍为macro `>=80%`、Camera `>=80%`、Stack `>=50%`、Lift/LPD/Photo `>=95/95/92`；未达到不得宣称“大幅提升/贴近同事”。
+13. **R15复现：** 只有W14通过才以四卡同时跑seeds `101/202/303/404`；每seed五任务各20回合，选型权重不得冒充正式复现，R15不再改结构。
+14. **投稿分离与来源审计：** 最终包不含`stereo_core`/CoRE checkpoint，也不依赖上游完整仓库；每个复制文件都能回溯到官方commit/license，方法图明确标出transplanted component与我方adapter/整体流向。
+15. **归档债务：** 补回R8 checkpoint SHA、五任务逐项结果、配置与acceptance JSON；只作历史证据，不改变关闭决定。
+16. **失败处理：** extraction infeasible只能在结果产生前从预注册reserve更换；训练/闭环失败候选不merge。需要组合两个组件时，只能作为下一轮一个新候选与另外三路从同一parent公平重训。
+
+## Appendix A. V3.3 的 S5-R9 正式训练计划（历史，已被 V4.3 第 10 节覆盖）
+
+### A.1 双卡两两正式复现
 
 R7/R8 结束后冻结最后一个通过的方案；若两轮都失败则冻结 R6L-P1。四个正式随机种子分两批执行，每批两卡并行：
 
@@ -2180,7 +3712,7 @@ R7/R8 结束后冻结最后一个通过的方案；若两轮都失败则冻结 R
 
 R9 不再选择结构。四个 seed 都从同一组已验收 R6L/R5-P0 ancestor hashes 创建 active clones，以各自 seed 独立训练选定 recipe 125k；不复用 R7/R8 选型 checkpoint。四个 seed 复用同一五任务数据、分层 sampler、阶段解冻点、有效训练预算与评测协议；共享数据和 Hub cache 仍只有一份，checkpoint、日志和验证结果按 seed 隔离。冻结 R6L 只作为 legacy quality/rollback reference；主表必须另列每个 formal candidate 自身的 `world_evidence_gate=0` scale-matched control，不能把旧 80k/10k R6 与 scale-aligned 125k final method 的全部差异都归因于新结构。
 
-### 10.2 主表
+### A.2 主表
 
 1. 当前分支最佳 legacy per-agent chunk baseline；
 2. R1/R2 冻结的 Per-Agent Flow；
@@ -2194,7 +3726,7 @@ R9 不再选择结构。四个 seed 都从同一组已验收 R6L/R5-P0 ancestor 
 
 R6J-P1 不进入正向主表 winner 行；它与 R6J-P0 的完整/partial 结果进入失败消融，明确报告直接 team/shared 平均注入的最好宏平均上界 `38% < 40%`。
 
-### 10.3 核心消融
+### A.3 核心消融
 
 - R6 pooled future vs R7 token-preserving future；
 - R7 no-WUC vs WUC；
@@ -2208,13 +3740,13 @@ R6J-P1 不进入正向主表 winner 行；它与 R6J-P0 的完整/partial 结果
 
 active-agent loss weighting、旧 R7 解冻和旧 R8 future dropout 不进入主表和消融表。上述主表和消融按时间选择执行，不阻塞阶段推进。
 
-### 10.4 唯一最终质量指标：闭环成功率
+### A.4 唯一最终质量指标：闭环成功率
 
 每个任务记录成功 episode 数、总 episode 数、闭环成功率及 paired initial conditions 下的逐回合结果。R9 不再进行架构选型，也不因某个 seed 的结果临时切换回失败分支。正式报告逐任务、逐 seed、四种子均值与五任务宏平均；paired test 和区间估计用于论文不确定性说明，不新增方法准入门槛。只有运行故障、产物损坏或协议偏离才重跑对应 seed。
 
-## 11. 远程 GPU 多分支闭环迭代协议
+## Appendix B. V3.3 远程 GPU 多分支协议（历史）
 
-### 11.1 Round 定义
+### B.1 Round 定义
 
 R6 以前的训练微轮次使用 `P0=父方案复跑` 与 `P1=父方案+一个 Δ`。新 R7/R8 改为“冻结 parent reference + 两候选公共垂直切片 + 一个 candidate axis”，因为两张卡都需要训练成可用备选，而不是让一张卡再次训练已经冻结的 parent。round 至少记录：
 
@@ -2226,7 +3758,7 @@ R6 以前的训练微轮次使用 `P0=父方案复跑` 与 `P1=父方案+一个 
 
 新 R4 仍是不训练、不选 winner 的单分支 checkpoint 诊断，不适用训练配对约束。
 
-### 11.2 远程运行
+### B.2 远程运行
 
 1. 每个 round 从同一个公共实现提交创建 P0/P1 两个 worktree/分支，分别固定 GPU0/GPU1；
 2. P0/P1 必须使用相同有效 batch、updates、sampler、optimizer family、数据 hash、checkpoint milestones 和闭环协议；
@@ -2234,11 +3766,11 @@ R6 以前的训练微轮次使用 `P0=父方案复跑` 与 `P1=父方案+一个 
 4. launcher 在 GPU task 前 fail closed 校验 candidate axis，monitor 同时显示 `micro_batch/accum/effective_batch` 与 `agent_windows_seen/4.8M`，不能只显示 update；
 5. 被止损的候选保留产物且不自动换成第三条路线；空出的 GPU 用于该轮 intervention 或下一阶段准备。
 
-### 11.3 On-path 以闭环为质量主指标；R7/R8 追加因果 gate
+### B.3 On-path 以闭环为质量主指标；R7/R8 追加因果 gate
 
 从 S3 起，候选完成训练后跑与父方案相同的闭环任务并输出成功率。S3-R6 必须覆盖全部五任务并按 8.2 的宏平均特殊规则验收；R7/R8 按 9.5 同时检查闭环和 causal intervention，因为其研究问题正是 world evidence 是否真正影响动作。原则上必须完成全部五任务；唯一可接受的闭环提前终止是已完成结果加剩余回合全胜仍不能达到 parent，并保留 partial summary、保守上界和人工中断记录，如 R6J-P1。训练阶段则只允许按 9.4 的 milestone 证伪规则止损。S2 predictor 严格 off-path，继续按第 7 节 capability gate。
 
-### 11.4 选择一个或多个 winner
+### B.4 选择一个或多个 winner
 
 R6 已完成轮次的规则是：
 
@@ -2251,11 +3783,11 @@ $$
 
 **S3-R6 是上式的阶段特例：**使用第 8.2 节五任务宏平均公式，单任务下降只报告、不强制失败。R7/R8 不沿用“只看闭环、不看因果”的旧规则，改用第 9.5 节：先过精确回退、future/action causal gate 和 parent macro no-regression，再在两候选间选 winner。S2 不适用闭环公式，按第 7 节 capability gate 执行。
 
-### 11.5 多分支组合不是直接 Git 合并
+### B.5 多分支组合不是直接 Git 合并
 
 R6L/R6J 只有 R6L-P1 通过，因此不创建组合分支，Git 也只合并 R6L-P1。新 R7/R8 是严格串行的两轮：R8 只能从一个已经验收的 R7 winner 出发，不能把 R7-P0/P1 权重事后混合，也不能把失败 R6J checkpoint 拼入最终模型。两候选都通过时仍只按 9.5 选择一个 parent，避免新增第三个 merge round。
 
-### 11.6 分支与产物命名
+### B.6 分支与产物命名
 
 候选命名建议：
 
@@ -2298,7 +3830,7 @@ s5/r9-e4-seed404
 
 每轮至少保留选定 parent、public-slice hash、candidate axis、checkpoint、配置、有效样本预算、causal audit 和成功率摘要。
 
-## 12. 代码落地顺序
+## Appendix C. V3.3 代码落地顺序（历史）
 
 当前分支保留为可运行参考，新主线不要继续堆进 legacy 类：
 
@@ -2391,7 +3923,7 @@ configs/wam_flow/
 17. checkpoint schema 追加 `ancestor_sha256`、`legacy_reference_sha256`、`trainable_name_sha256_by_phase`、`effective_team_batch`、`gradient_accumulation`、`agent_windows_seen_by_module`、`evidence_sources/horizons/grid`、`utility_weight`、`action_aggregator` 与 causal-audit hash；
 18. normal/scale-gate-zero/all-world-zero/shuffle、forced-evidence ranking、action-prefix shuffle 使用版本化脚本生成 paired JSON；legacy checkpoint 只通过 legacy loader 读取，禁止静默加载到 active clone。
 
-## 13. 时间表与论文并行
+## Appendix D. V3.3 时间表与论文并行（历史）
 
 | 日期 | 工程主线 | 论文主线 |
 |---|---|---|
@@ -2414,7 +3946,7 @@ configs/wam_flow/
 
 写作从 S0 同时开始，不能等实验全部结束再写。
 
-## 14. 简化推进与回退规则
+## Appendix E. V3.3 简化推进与回退规则（历史）
 
 1. S2 off-path predictor 按第 7 节推进：R3 验证 own-action dependence，R4 只做零训练 hybrid 诊断，R5 同时要求 protected-own 精确等价和 team capability；action/peer-action shuffle 无效时停止，不能用闭环持平替代。
 2. S3-R6 使用五任务宏平均特殊规则：P1 宏平均不低于对应 P0 即通过，持平也通过；每任务结果必须报告但不单独卡验收。
@@ -2424,7 +3956,7 @@ configs/wam_flow/
 6. R7/R8 都只保证外部 legacy ancestor checkpoint/hash/输出冻结不变；active Flow、own/team future 与旧 R6 adapter 明确按白名单续训，不能再声称 active own predictor 逐元素不变。回退通过重新加载冻结 winner/reference，candidate 内 gate-zero 只是同预算因果干预；`anchor_weight=0`。
 7. 若 R7 两候选都失败，跳过 R8 并回退 R6L-P1；若 R8 两候选都失败，回退 R7 winner；无论结果如何都不新增第三个模型选择 round。
 
-## 15. 从现在开始的执行清单
+## Appendix F. 截至 V3.3 结束时的执行清单（历史）
 
 1. **已完成：** 结束 B2，使用 B0 作为 R1 父方案。
 2. **已完成：** 建立 R1-F0/F1，完成训练并运行相同闭环任务。
