@@ -118,3 +118,12 @@ def test_latency_acceptance_uses_stable_sample_budget():
     runner = (ROOT / "scripts/before_we_act/run_r10_candidate.sh").read_text()
     assert "args.latency_repeats < 1000" in audit
     assert runner.count("--latency-repeats 1000") == 3
+
+
+def test_launcher_audits_each_candidate_from_its_own_worktree():
+    launcher = (
+        ROOT / "scripts/before_we_act/launch_r10_4gpu_tmux.sh"
+    ).read_text(encoding="utf-8")
+    audit_start = launcher.index("scripts/before_we_act/audit_candidate_diff.py")
+    audit_block = launcher[audit_start - 120:audit_start + 180]
+    assert 'cd "$worktree"' in audit_block

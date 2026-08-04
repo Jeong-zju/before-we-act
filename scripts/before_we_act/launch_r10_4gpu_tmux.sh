@@ -141,8 +141,11 @@ PY
   }
   "$PYTHON" "$worktree/scripts/before_we_act/validate_implementation_card.py" \
     "$card" --expected-parent "$PARENT_COMMIT" >/dev/null
-  "$PYTHON" "$worktree/scripts/before_we_act/audit_candidate_diff.py" \
-    --card "$card" --parent "$PARENT_COMMIT" --head HEAD >/dev/null
+  (
+    cd "$worktree"
+    "$PYTHON" scripts/before_we_act/audit_candidate_diff.py \
+      --card "$card" --parent "$PARENT_COMMIT" --head HEAD
+  ) >/dev/null
   WORKTREE_ARGS+=(--worktree "$candidate=$branch=$commit=$worktree")
 done
 
