@@ -127,3 +127,13 @@ def test_launcher_audits_each_candidate_from_its_own_worktree():
     audit_start = launcher.index("scripts/before_we_act/audit_candidate_diff.py")
     audit_block = launcher[audit_start - 120:audit_start + 180]
     assert 'cd "$worktree"' in audit_block
+
+
+def test_monitor_reports_eta_checkpoint_alerts_and_real_acceptance_rules():
+    source = (ROOT / "scripts/before_we_act/r10_runtime.py").read_text(
+        encoding="utf-8"
+    )
+    assert "eta={status.get('eta_hours', '-')}h" in source
+    assert "latest_checkpoint(root)" in source
+    assert "alerts={alerts or ['NONE']}" in source
+    assert 'output.append("acceptance rules:")' in source

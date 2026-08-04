@@ -193,6 +193,33 @@ def tail(path, lines=4):
         return []
 
 
+def latest_checkpoint(root: Path):
+    candidates = list((root / "train").glob("**/checkpoints/checkpoint_*.pt"))
+    candidates.extend((root / "preflight/checkpoints").glob("checkpoint_*.pt"))
+    if not candidates:
+        return "-"
+    return str(max(candidates, key=lambda item: item.stat().st_mtime))
+
+
+def runtime_alerts(state, alive, beat_age, stale_after, recent):
+    alerts = []
+    if state not in TERMINAL and not alive:
+        alerts.append("PROCESS_MISSING")
+    if state not in TERMINAL and beat_age is not None and beat_age > stale_after:
+        alerts.append("NO_HEARTBEAT")
+    recent_text = "\n".join(recent).lower()
+    patterns = {
+        "CUDA out of memory": "OOM",
+        "traceback (most recent call last)": "TRACEBACK",
+        "nan": "NAN",
+        "killed": "KILLED",
+    }
+    for pattern, alert in patterns.items():
+        if pattern.lower() in recent_text:
+            alerts.append(alert)
+    return sorted(set(alerts))
+
+
 def render(run_root: Path, selected):
     manifest = read_json(run_root / "run_manifest.json")
     gpus = gpu_rows()
@@ -205,11 +232,16 @@ def render(run_root: Path, selected):
         acceptance = read_json(root / "acceptance.json") or read_json(root / "screen_acceptance.json")
         beat_epoch = parse_time(beat.get("updated_at"))
         beat_age = current_epoch - beat_epoch if beat_epoch else None
+        started_epoch = parse_time(status.get("created_at"))
+        duration = current_epoch - started_epoch if started_epoch else None
         state = status.get("state", "NOT_STARTED")
         alive = pid_alive(status.get("pid")) or pid_alive(status.get("child_pid"))
-        if state not in TERMINAL and beat_age is not None and beat_age > manifest.get("stale_after_seconds", 75):
+        stale_after = manifest.get("stale_after_seconds", 75)
+        if state not in TERMINAL and beat_age is not None and beat_age > stale_after:
             state = "STALE"
         gpu = gpus.get(GPU_MAP[candidate], ["?", "?", "?", "?", "?"])
+        recent = tail(status.get("log"), lines=20)
+        alerts = runtime_alerts(state, alive, beat_age, stale_after, recent)
         progress = "-"
         if status.get("update") is not None:
             progress = f"update={status['update']}/{status.get('total_updates', '?')}"
@@ -230,17 +262,20 @@ def render(run_root: Path, selected):
                 (
                     f"  pid={status.get('pid', '-')} child={status.get('child_pid', '-')} "
                     f"alive={alive} started={status.get('created_at', '-')} heartbeat={beat.get('updated_at', '-')} "
-                    f"age={beat_age:.1f}s" if beat_age is not None else "  heartbeat=missing"
+                    f"age={beat_age:.1f}s duration={duration / 3600:.2f}h"
+                    if beat_age is not None and duration is not None else "  heartbeat=missing"
                 ),
                 (
                     f"  GPU util={gpu[0]}% memory={gpu[1]}/{gpu[2]}MiB temp={gpu[3]}C power={gpu[4]}W"
                 ),
                 (
                     f"  loss={status.get('loss', '-')} validation={status.get('validation_metric', '-')} "
-                    f"checkpoint={status.get('checkpoint', '-')} best={status.get('best_checkpoint', '-')}"
+                    f"eta={status.get('eta_hours', '-')}h epoch={status.get('epoch', 'N/A(update-based)')}"
                 ),
+                f"  checkpoint={status.get('checkpoint') or latest_checkpoint(root)} best={status.get('best_checkpoint', '-')}",
                 f"  log={status.get('log', '-')}",
                 f"  detail={status.get('detail', '-')}",
+                f"  alerts={alerts or ['NONE']}",
                 (
                     f"  acceptance={'PASSED' if acceptance.get('passed') else 'FAILED/PENDING'} "
                     f"progress={status.get('acceptance_progress', '-')} "
@@ -248,10 +283,12 @@ def render(run_root: Path, selected):
                 ),
             ]
         )
-        recent = tail(status.get("log"))
         if recent:
             output.append("  recent:")
-            output.extend(f"    {line[-220:]}" for line in recent)
+            output.extend(f"    {line[-220:]}" for line in recent[-4:])
+    output.append("")
+    output.append("acceptance rules:")
+    output.extend(f"  {index}. {rule}" for index, rule in enumerate(manifest.get("acceptance_rules", []), 1))
     return "\n".join(output)
 
 
