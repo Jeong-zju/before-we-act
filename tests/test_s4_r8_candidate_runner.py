@@ -31,6 +31,13 @@ def _run(*arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _shell_function(name: str) -> str:
+    source = RUNNER.read_text(encoding="utf-8")
+    start = source.index(f"{name}() {{")
+    end = source.index("\n}\n\n", start) + len("\n}\n")
+    return source[start:end]
+
+
 def test_candidate_runner_is_valid_bash_without_errexit_bundle() -> None:
     syntax = subprocess.run(
         ["bash", "-n", str(RUNNER)],
@@ -312,6 +319,91 @@ def test_candidate_runner_is_fail_closed_for_pair_fallback_and_old_artifacts() -
     assert "preflight_provenance" in source
     assert "local-oom-await-paired-fallback" in source
     assert source.count("ensure_digest") >= 10
+
+
+def test_candidate_runner_runtime_hotfix_lineage_is_path_allowlisted() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+    assert "verify_runtime_hotfix_lineage" in source
+    assert 'git -C "${candidate_worktree}" merge-base --is-ancestor' in source
+    assert "--diff-filter=ACDMRTUXB" in source
+    for allowed_path in (
+        "scripts/run_s4_r8_candidate.sh",
+        "scripts/run_s4_r7_world_utility_inference.py",
+        "tests/test_evaluate_s4_r7_causal.py",
+        "tests/test_s4_r8_candidate_runner.py",
+    ):
+        assert allowed_path in source
+    assert "Runtime hotfix lineage changed forbidden path" in source
+    assert 'training_provenance="${P0_PREFLIGHT}.provenance.json"' in source
+    assert 'training_provenance="${P1_PREFLIGHT}.provenance.json"' in source
+
+
+def test_runtime_hotfix_lineage_accepts_only_allowlisted_descendant_paths(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "candidate"
+    repository.mkdir()
+
+    def git(*arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+
+    git("init", "-q")
+    git("config", "user.name", "S4 test")
+    git("config", "user.email", "s4-test@example.invalid")
+    inference = repository / "scripts/run_s4_r7_world_utility_inference.py"
+    inference.parent.mkdir()
+    inference.write_text("original\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-qm", "training source")
+    training_commit = git("rev-parse", "HEAD").stdout.strip()
+
+    inference.write_text("runtime fix\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-qm", "allowed runtime fix")
+    function = _shell_function("verify_runtime_hotfix_lineage")
+    allowed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'{function}\nverify_runtime_hotfix_lineage "$1" "$2"',
+            "bash",
+            str(repository),
+            training_commit,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert allowed.returncode == 0, allowed.stderr
+
+    forbidden = repository / "models/changed_model.py"
+    forbidden.parent.mkdir()
+    forbidden.write_text("changed\n", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-qm", "forbidden model change")
+    rejected = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'{function}\nverify_runtime_hotfix_lineage "$1" "$2"',
+            "bash",
+            str(repository),
+            training_commit,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert rejected.returncode == 3
+    assert "forbidden path: models/changed_model.py" in rejected.stderr
 
 
 def test_candidate_runner_publishes_exact_program_pid_and_wait_heartbeats() -> None:
