@@ -1,9 +1,9 @@
 # P1 多机器人 World-Action Flow Matching 技术路线 V4.3-R10（ICRA Fast Track）
 
-> 文档更新：2026-08-04
+> 文档更新：2026-08-05
 > 工程起点：`feat/model-improvements@f37c68a`，新执行主线为 `bwa/main`
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：历史阶段结论不变；S10 `core` 已以 SHA256 `061b7a4a…` 冻结。2026-08-04 启动新定义的 R9 CoRE-native exact 前置与 R10 四路无腕 Predictive Perception / State Repair；R9 通过前不得启动 R10
+> 当前状态：历史阶段结论不变；S10 `core` 已以 SHA256 `061b7a4a…` 冻结，R9 CoRE-native exact 前置已通过；R10 四路无腕 Predictive Perception / State Repair 已于 2026-08-05 完成，四路均未通过特殊验收，`no winner`、`W10=B9-CoreNative`，不创建 R11
 > 评测原则：闭环成功率是最终质量指标；新 R7/R8 还必须用 gate-zero/future-shuffle/action-prefix 干预证明改进确实来自 world branch；S2 predictor 严格 off-path，因此按预测能力与因果门槛推进
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -68,6 +68,168 @@ $$
 5. P95 control latency不超过 B9 的 `1.15×`，且 privileged-key audit 为零。
 
 winner 顺序固定为“全部硬门槛 → Camera+Stack 增量 → macro 增量 → causal delta → latency/参数量 → P0<P1<P2<P3”。四路全失败则 R10 明确为 `no winner`，`W10=B9-CoreNative`，任何 R10 权重均不得进入后续阶段。本任务参数指定 `[NEXT_STAGE]=无`，因此无论 R10 通过或失败，本轮都在结构化结论写回后停止，不创建 R11。
+
+### 1.3 R9/R10 实际执行记录（2026-08-04）
+
+#### 1.3.1 仓库、父方案与分支
+
+用户在执行中明确把后续目标仓库从旧目录 `fe_pc_wam` 切换为 **Before We Act**。因此所有 R9/R10 实现、四个候选分支、运行脚本与本节结果均落在 GitHub 仓库 `Jeong-zju/before-we-act`；本地含用户未提交修改的 `/home/jeong/zeno/wam/before-we-act` 主工作树没有被覆盖或纳入提交，本轮使用 `/home/jeong/zeno/wam/before-we-act-r10.dhj2NO/` 下的独立 worktree。远程仓库位于 `/workspace/fe-pc-wam`，其 `origin` 已指向同一 Before We Act 仓库；目录旧名只作为远程 checkout 路径，不代表另一个 Git 仓库。
+
+冻结模型 parent 为 `bwa/r9-core-native@f782c6e9cbc7116c3906aafb89be152ce97430ea` 与 `/workspace/bwa_runs/shared/parent/checkpoint_120000.pt`，checkpoint SHA256 为 `061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d`，tensor SHA256 为 `6abec931342b543d0cbffd9d2f995845d47489c2a773a082e5bfe49526611107`。R9 对真实 checkpoint 的 state、eval/train 输出、CPU/CUDA RNG-after-state、candidate bank、normalization 与 temporal output exact audit 全部通过，结构化结果是 `/workspace/bwa_runs/r9_core_native/exact_audit_f782c6e.json`。运行设施与文档继续在 `bwa/r9-core-native` 上演进，但不得把其后续运维提交误写成模型 parent。
+
+| 候选 | 分支 | 正式 commit | 唯一实现 | GPU |
+|---|---|---|---|---:|
+| P0 | `bwa/r10-p0-calibrated-crossview` | `eba405ff04685963f1278a2353cfd5358be3844e` | calibrated unaligned cross-view bridge | 0 |
+| P1 | `bwa/r10-p1-object-slots` | `551f30cd81f435e5779ce52f11a90d90b0cb7261` | object-slot binding bridge | 1 |
+| P2 | `bwa/r10-p2-recurrent-predictive-state` | `b2e4eebc34dca86b712035a29084748dfcf3fc80` | causal recurrent predictive state | 2 |
+| P3 | `bwa/r10-p3-jepa-future-feature` | `f30280bc900afe18cbea7877476599cb5ba6190d` | JEPA multi-horizon future feature | 3 |
+
+每个候选只修改自己的 `configs/before_we_act/r10_perception/pN.yaml`、`experiments/before_we_act/r10/pN/{implementation_card.yaml,change_manifest.json}`、`stereo_core/bwa_perception.py` 与对应单元测试；候选差异审计以 `f782c6e` 为 parent 全部通过。白名单/注册入口集中在 `stereo_core/bwa_perception.py` 的 `BRIDGE_REGISTRY`、`load_r10_config()` 与 `build_perception_extension()`；共同训练、部署输入和验收入口分别为 `stereo_core/train_bwa_perception.py`、`stereo_core/evaluate_bwa_perception.py`、`scripts/before_we_act/audit_r10_gate_zero.py` 与 `scripts/before_we_act/accept_r10.py`。各分支注册且只注册一个 bridge kind，未知 kind、未知 config key、非法 parent、future/privileged deployment key 均 fail closed，避免在四个分支中混入第二种改进。
+
+本地最终公共回归命令与结果为：
+
+```bash
+cd /home/jeong/zeno/wam/before-we-act-r10.dhj2NO/r9
+/home/jeong/zeno/wam/before-we-act/.venv/bin/python -m pytest -q \
+  tests/before_we_act/test_r10_common_runtime.py \
+  tests/before_we_act/test_r10_hf_assets.py
+```
+
+结果为 `13 passed`。候选最终定向回归分别为 P0 `16 passed`、P1 `19 passed`、P2 `16 passed`、P3 `16 passed`；此前每路全量分支回归分别为 `24/27/24/24 passed`。公共运行设施最终 head 为 `bwa/r9-core-native@a1f62d48b80e3e9092a04973e0febc6acdd006ec`；它只包含下载/审计/运行/monitor/诊断设施和测试，不改变冻结模型 parent 或四个候选 commit。P0 另以 1000 次稳态样本复核部署延迟，`p95_ratio=1.124505183463078 <= 1.15`，结果位于 `/workspace/bwa_runs/r10_trained_smoke_gate/p0/gate_zero_latency_c010f03_1000.json`。
+
+#### 1.3.2 数据只经 S0 Hugging Face 路径准备
+
+用户明确禁止跨服务器同步本轮数据集。已经启动的旧分片传输在确认其 PID 不存在后标为 `STOPPED`，部分文件原样保留以供 Hub 断点复用；R10 launcher 不读取旧 rsync 状态，也没有运行任何 rsync/跨服务器 dataset child。正式资产完全使用 S0 合同：官方 `hf download`、不可变 revision、dataset Xet 开启、CLI 默认 8 workers、`HF_HUB_DOWNLOAD_TIMEOUT=600`、`HF_HUB_ETAG_TIMEOUT=60`、最多 5 次指数退避、相同 `--local-dir`/Hub cache/`.incomplete` 原位续传；鉴权只经 mode-0600 FIFO 注入，不进入 argv、环境导出、tmux command、代码、日志或 Git。
+
+| 任务 | Hub repository | revision |
+|---|---|---|
+| LiftBarrier | `zeno-ai/robofactory-lift-barrier-multiview` | `6ab620091677e69370412f08cd7adecacc28c146` |
+| LongPipelineDelivery | `zeno-ai/robofactory-long-pipeline-delivery-multiview` | `fee628311ff52a3ae0ddfddf82379c63d28f7533` |
+| TakePhoto | `zeno-ai/robofactory-take-photo-multiview` | `3966385a4c688a5610d4b6cde044150f6b73d320` |
+| ThreeRobotsStackCube | `zeno-ai/robofactory-three-robots-stack-cube-multiview` | `d0ae346bf2ce63ec801af1f036c08a4a91faf366` |
+| CameraAlignment | `zeno-ai/robofactory-camera-alignment-multiview` | `e204af13f7191dfd86dab3da529316a51558f479` |
+
+正式下载 tmux 为 `bwa-r10-hf-assets`，UTC `2026-08-04T07:18:12Z` 开始、`07:29:43Z` 完成，状态 `/workspace/bwa_runs/shared/r10_hf_assets/state.json` 为 `PASSED`、`750/750`，日志为 `/workspace/bwa_runs/shared/r10_hf_assets/download.log`。共享数据目录为 `/workspace/datasets/robofactory_multitask`，共享缓存为 `/workspace/.cache/huggingface`。可直接复现的命令为：
+
+```bash
+cd /workspace/fe-pc-wam
+scripts/before_we_act/launch_r10_hf_assets_tmux.sh \
+  --session bwa-r10-hf-assets \
+  --run-root /workspace/bwa_runs/shared/r10_hf_assets
+scripts/before_we_act/monitor_r10_hf_assets.sh \
+  --run-root /workspace/bwa_runs/shared/r10_hf_assets --once
+/venv/robofactory-act/bin/python scripts/before_we_act/audit_r10_hdf5_assets.py \
+  --data-root /workspace/datasets/robofactory_multitask \
+  --expected-files 750 \
+  --output /workspace/bwa_runs/shared/r10_hf_assets/hdf5_integrity_reproducible_v2.json
+```
+
+可复现深读审计对全部 750 个 HDF5 执行 h5py open、每个 panda agent 的 9-D qpos/8-D commanded action、global/agent RGB、时间长度一致性以及首尾 state/action/RGB 实读；结果 `750/750`、错误数 0、总计 `252,873` episode steps、HDF5 apparent bytes `754,719,954,926`，结构化结果为 `/workspace/bwa_runs/shared/r10_hf_assets/hdf5_integrity_reproducible_v2.json`。第一次固化脚本把真实 9-D qpos 错写为 8-D，因而 fail closed；失败输出 `/workspace/bwa_runs/shared/r10_hf_assets/hdf5_integrity_reproducible.json` 被保留，修正经测试和 Git 提交后用新文件名重跑，没有覆盖历史结果。
+
+#### 1.3.3 正式运行身份、环境和入口
+
+正式 run 为 `/workspace/bwa_runs/r10-20260804`，manifest 为 `/workspace/bwa_runs/r10-20260804/run_manifest.json`，UTC `2026-08-04T07:36:20Z` 创建。远程环境为 Linux `6.8.0-60-generic`、Python `3.10.20`、PyTorch `2.7.1+cu128`、CUDA `12.8`、h5py `3.16.0`、NVIDIA driver `570.169` 与四张 32,607 MiB NVIDIA GeForce RTX 5090。四个独立 tmux 为 `bwa-r10-p0`、`bwa-r10-p1`、`bwa-r10-p2`、`bwa-r10-p3`；每路的输出、日志、checkpoint、status 与 heartbeat 均隔离在 `/workspace/bwa_runs/r10-20260804/candidates/pN/`。
+
+```bash
+# 安全部署检查，不创建产物/session
+cd /workspace/fe-pc-wam
+scripts/before_we_act/launch_r10_4gpu_tmux.sh \
+  --run-id r10-20260804 --candidate all --dry-run
+
+# 四路正式启动；也可用 --candidate p0、A、p0,p1、A,B 等选择单路/两路
+scripts/before_we_act/launch_r10_4gpu_tmux.sh \
+  --run-id r10-20260804 --candidate all
+
+# 四路单次快照或持续刷新；--candidate 可换成 p0/p1/p2/p3
+scripts/before_we_act/monitor_r10.sh \
+  --run-root /workspace/bwa_runs/r10-20260804 \
+  --candidate all --once
+scripts/before_we_act/monitor_r10.sh \
+  --run-root /workspace/bwa_runs/r10-20260804 \
+  --candidate all --interval 5
+
+# 精确列出目标但不发信号；去掉 --dry-run 才会优雅停止并保留全部产物
+scripts/before_we_act/stop_r10_4gpu_tmux.sh \
+  --run-root /workspace/bwa_runs/r10-20260804 \
+  --candidate all --dry-run
+```
+
+launcher 先核对基础/候选分支、commit、parent/checkpoint hash、实现卡、候选 diff、HF asset `PASSED`、五个 manifest/frozen100、GPU 与 tmux 冲突，再执行每路 2-update 全路径预检、1000 样本 gate-zero/latency audit、10k screen、五任务 paired Gate20 normal+intervention 与特殊验收；只有“已有正向信号但尚未全通过”的候选才从同一 checkpoint 续到 30k，不能通过重启或换 seed 绕过 screen。统一 monitor 的存活依据是 runner 每 20 秒写入的真实 heartbeat，并显示 program/stage/PID/持续时间/心跳 age、GPU、update/loss/ETA、checkpoint、日志、OOM/NaN/Traceback/进程消失/无心跳告警以及 manifest 中的五项真实验收规则。安全退出脚本通过 `BWA_R10_RUN_ROOT` 与 `BWA_R10_CANDIDATE` 精确匹配 `/proc/*/environ`，先 Ctrl-C、再仅对仍存活的本轮 PID 发 TERM/KILL，绝不按模糊进程名误杀。
+
+**预算可比性边界：** B9 的 120k 不是与 R10 10k 从头训练相比较的独立预算；四路都完整继承同一个 120k B9，且只用 10k（batch 40，即约 40 万窗口）训练 zero-init extension。因此本轮可回答的是“同一强基线上的 perception/state repair 能否在预注册有限增量预算内带来闭环且因果可归因的提升”，不能回答“各架构充分训练后的固有上限”。相同 update/sample 使四候选的数据口径一致，但可能偏向较易优化的 P0/P1，并使 recurrent/JEPA 的 P2/P3 欠拟合；有 signal 才续 30k 还带有预注册 survivor-budget 条件。最终若通过，只声明该固定协议下的 winner；若四路失败，只声明 `no winner`，不得把它扩大解释成四种架构在 120k 或 compute-matched 训练下均无效。统一 30k/120k 或按 FLOPs 匹配属于新的预注册实验，而本任务 `[NEXT_STAGE]=无`，本轮不擅自启动。
+
+#### 1.3.4 已冻结的 10k screen 证据
+
+B9 在相同 Gate20 seeds 上的五任务顺序为 LiftBarrier、CameraAlignment、ThreeRobotsStackCube、LongPipelineDelivery、TakePhoto，计数为 `20/14/0/20/20`、macro `74/100`。四个候选均已产生下列不可再解释为“仍在运行”的 10k 结果；P2 selection 的最终结果在 30k 结构化验收文件完成后续写，不用训练 loss 代替闭环结论。
+
+| 候选/口径 | Gate20 五任务计数 | macro | Camera+Stack 增益 | 其他三任务增益 | causal mean / 95% lower | P95 ratio | 10k 决策 |
+|---|---|---:|---:|---:|---:|---:|---|
+| P0 official | `20/12/0/20/19` | `71/100` | `-2` | `-1` | `+0.01 / 0.00` | `0.8260716515` | FAILED；无 signal，不续 30k |
+| P1 latency-waived diagnostic | `20/13/0/20/19` | `72/100` | `-1` | `-1` | `-0.01 / -0.05` | official `1.1535992768` | official FAILED；忽略延迟仍失败，不续 30k |
+| P2 official screen | `20/15/0/20/19` | `74/100` | `+1` | `-1` | `+0.04 / +0.01` | `0.8609025423` | 3/5 gates 通过；弱 signal，从同一 run 续到 30k |
+| P3 official | `20/12/0/20/20` | `72/100` | `-2` | `0` | `-0.01 / -0.03` | `1.0157427541` | FAILED；无 signal，不续 30k |
+
+P0 的 exact 与 latency/input 两门通过，但 macro、Camera+Stack/其他任务和 causal lower 三门失败；`screen_continue=false`，runner 以预注册筛选码 10 退出，不是进程异常。结构化结果为 `/workspace/bwa_runs/r10-20260804/candidates/p0/validation/screen/acceptance.json`，SHA256 `fee66e212670af079bc6e00eff52f549c918a21b34749e569730ae57e17b6509`；10k checkpoint SHA256 为 `03fbf8d5eaeb92c6cf41c2c9e8743d40fd76e2bf6cc803dbef91c45090f68176`。
+
+P1 的 gate-zero exact 与 privileged-input audit 通过，但 1000 样本 P95 为 base `30.050587 ms`、candidate `34.666336 ms`，ratio `1.1535992768 > 1.15`，因此在闭环前 official fail closed。用户随后要求暂时忽略推理开销、只看闭环 performance；独立诊断保留 official FAILED 且不改写正式状态，补跑同一 Gate20 normal/intervention 后仍未超过 B9，因果方向也为负。诊断摘要为 `/workspace/bwa_runs/r10-20260804/candidates/p1/diagnostics/latency_waived/screen/performance_summary.json`，SHA256 `44f64f278ebf97633608c7580ed7d9f1d95deaabf29ea3fd1badf312ceba51f3`；其 source acceptance SHA256 为 `7c7fa6fc5eedbb9ee7a5ea3715d0f589c2cab87fdddc07663e014ac36f519531`。
+
+P2 的 exact、causal 和 latency/input 三门通过；macro 只与 B9 持平，Camera+Stack 只增加 1/40，且其他三任务因 Photo 少 1 次而合计下降 1，所以 10k 尚未通过。Camera normal/intervention 为 `15/11`，使 100 个 paired episodes 的 causal mean `+0.04`、bootstrap lower `+0.01`，是本轮第一个通过因果门的候选；`screen_continue=true` 只表示有资格从同一 10k checkpoint 续到锁定的 30k cutoff，不是 R10 PASSED。
+
+P3 的 exact 与 latency/input 两门通过，但 macro、Camera+Stack/其他任务和 causal 三门失败。Camera normal/intervention 为 `12/13`，干预后反而多 1 次成功；100 个 paired episodes 的 causal mean `-0.01`、bootstrap lower `-0.03`，没有证据表明 JEPA future feature 改善闭环。`screen_continue=false`，runner 以筛选码 10 正常退出。结构化结果为 `/workspace/bwa_runs/r10-20260804/candidates/p3/validation/screen/acceptance.json`，SHA256 `da5c3e963723b2447e8e79f1d28a5f96e3cf006d70ab33f3459ad63d80e63671`；10k checkpoint SHA256 为 `c5eea8b8ea16650a66c29cbff1785e1efe8590f5c0582b12d9f9bbce8de65473`，gate audit SHA256 为 `966911c337ad2013aa637dc7a2bf07e570811a05cebe6e73951478c1ec46225e`。candidate log 共 `203,016` bytes，OOM、NaN、Traceback 与 Killed 命中均为 0，最后 heartbeat 为 UTC `2026-08-04T15:07:14.571122Z`，P3 tmux 随 runner 正常退出。
+
+StackCube 继续严格使用 RoboFactory 官方 `@register_env("ThreeRobotsStackCube-rf", max_episode_steps=800)`，不修改 horizon。B9 frozen100 的 100 个 Stack 回合也全部按 800 steps 结束；同一 Hub 数据的 150 条成功示范均在 396--427 steps 内成功（median 408、P95 417），因此没有证据把候选的 0/20 归因于 runner 提前截断。应项目方决定，本轮不运行或采用 extended-horizon 结果。
+
+#### 1.3.5 P2 30k selection、正式验收与 R10 终态（2026-08-05）
+
+正式 run 于 UTC `2026-08-04T07:36:20Z`（北京时间 `15:36:20`）创建。P2 从原 10k checkpoint 和同一 optimizer/model 轨迹续训，未重启、未换 seed、未改 config；update `30000` 后自动串联正式 gate-zero、normal 五任务各 20 episodes、预注册 `history_order_shuffle` 五任务各 20 episodes和五项验收。全流水线于 UTC `2026-08-04T23:04:26Z`（北京时间 `2026-08-05 07:04:26`）终止，状态 `FAILED`。退出码 `1` 是 `accept_r10.py` 对“正式五项未全通过”的预注册返回值，不是训练/环境崩溃。
+
+P2 最终训练记录为 loss `0.0093145659`、action loss `0.0034477136`、future-latent loss `0.0028288399`、future-qpos loss `0.0014821882`、trained gate `0.1689407974`、parent-imitation `0.0330855772`、gradient norm `0.0171509758`。正式 checkpoint 为 `/workspace/bwa_runs/r10-20260804/candidates/p2/train/selection/checkpoints/checkpoint_030000.pt`，SHA256 `1049c814b40540f1e2d9f884c839371b915b552163c1c9dd7f71d7abb2d9d116`。Gate audit 为 `/workspace/bwa_runs/r10-20260804/candidates/p2/validation/formal/gate_zero_latency.json`，SHA256 `f11165d860a0f447f19a69a302385b634f9175b684475218d0263a464cca5132`；最终 acceptance 为 `/workspace/bwa_runs/r10-20260804/candidates/p2/validation/formal/acceptance.json`，SHA256 `7fd987085c87d9266d5b3cdb3318d324a2f85b8689daa1b589c8657958225aac`。
+
+| 任务 | B9 normal | P2 30k normal | P2 intervention | normal 相对 B9 |
+|---|---:|---:|---:|---:|
+| LiftBarrier | `20/20` | `20/20` | `20/20` | `0` |
+| CameraAlignment | `14/20` | `13/20` | `11/20` | `-1` |
+| ThreeRobotsStackCube | `0/20` | `0/20` | `0/20` | `0` |
+| LongPipelineDelivery | `20/20` | `20/20` | `20/20` | `0` |
+| TakePhoto | `20/20` | `19/20` | `19/20` | `-1` |
+| 合计 | `74/100` | `72/100` | `70/100` | `-2` |
+
+P2 的五项正式验收逐条为：
+
+| 验收项 | 规则 | 实测 | 结论 |
+|---|---|---|---|
+| Gate-zero exact | base/forced chunks、routes、temporal output 逐元素一致 | 六类检查均 `exact=true`、`max_abs=0`，parent state exact | **PASS** |
+| Paired Gate20 | macro 严格高于 B9，且每任务下降不超过 `1/20` | 各任务最差只降 `1/20`，但 `72/100 < 74/100` | **FAIL** |
+| Camera+Stack/其他任务 | 前两者至少 `+4/40`，其他三任务不下降 | Camera+Stack gain `-1`；其他三任务 gain `-1` | **FAIL** |
+| Causal intervention | 方向正确且 episode-bootstrap 95% lower `>0` | mean delta `+0.02`，95% lower `-0.02` | **FAIL** |
+| 延迟与输入 | P95 `<=1.15×` 且无 privileged input | base/candidate P95 `38.552741/39.034814 ms`，ratio `1.012504255`；privileged audit 通过 | **PASS** |
+
+因此 P2 30k 为 `2/5 PASS`。续训没有把 10k 的 Camera `15/20` 与 causal lower `+0.01` 固化为可靠收益：正式 30k Camera 回落到 `13/20`，causal lower 回落到 `-0.02`，而 Stack 仍为 `0/20`。这属于模型能力/优化稳定性证据，不是 loss、数据或运行环境错误；不能用正的 causal mean `+0.02` 掩盖置信下界跨零。
+
+四路最终决策如下。P1 的闭环数字是用户要求的 latency-waived **诊断**，不改写其在正式 latency gate 处 fail closed 的官方状态。
+
+| 候选 | 最终预算/口径 | normal 五任务 | macro | causal mean/lower | P95 ratio | 正式结论 |
+|---|---|---|---:|---:|---:|---|
+| P0 | 10k official | `20/12/0/20/19` | `71/100` | `+0.01/0.00` | `0.8260716515` | `2/5`，FAILED |
+| P1 | 10k official gate；闭环为 latency-waived diagnostic | `20/13/0/20/19` | `72/100` | `-0.01/-0.05` | `1.1535992768` | official latency FAIL；其余三项未正式执行，忽略延迟仍失败 |
+| P2 | 30k formal | `20/13/0/20/19` | `72/100` | `+0.02/-0.02` | `1.0125042550` | `2/5`，FAILED |
+| P3 | 10k official | `20/12/0/20/20` | `72/100` | `-0.01/-0.03` | `1.0157427541` | `2/5`，FAILED |
+
+终态审计显示四个 candidate runner PID 均已退出，`bwa-r10-p0/p1/p2/p3` 四个 tmux session 均已自动消失；四张 GPU 均为 `0%`、`2/32607 MiB`，没有残留 `train_bwa_perception.py`、`evaluate_bwa_perception.py` 或 `run_r10_candidate.sh`。只保留统一 `bwa-r10-monitor` 与用户已有 `ssh_tmux`，两者未被停止。P0/P1/P2/P3 candidate log 分别为 `204696/198493/630593/203016 bytes`，OOM、out-of-memory、NaN、Traceback、CUDA error 与 exception 命中均为 0。P2 最后 heartbeat 为 UTC `2026-08-04T23:04:26.003187Z`，与终态写入相差约 2 ms；07:36--23:04 的全程结构化轮询采样均保持新鲜且从未进入 `STALE`。run root 没有另存 heartbeat history 流，因此该连续性结论来自全程在线采样而不是可事后重放的逐心跳文件，文档不伪称存在后者。
+
+终态 monitor 首次暴露一个展示层问题：候选顶层 `state=FAILED` 正确，但旧 monitor 只读取候选根目录 `acceptance.json`；runner 的 `run_child()` 又在非零验收码路径中错误恢复 shell `errexit`，使 root copy 与具体失败 detail 未执行，因而子栏错误显示 `FAILED/PENDING`。这不改变 validation 下已经落盘的 gate/acceptance、checkpoint 或任何指标。本地提交 `ffd5d255cd9df88aeee412eb2d2f4f63009dad55` 修复了两点：monitor 按 root→formal→screen 选择权威 acceptance，并在 P1 fail-closed 时读取结构化 gate audit；runner 保留调用方的 `errexit` 语义且不再用 EXIT trap 覆盖已写终态。该提交还为 `nvidia-smi` 增加 5 秒监测超时。随后提交 `683294af9f3303d54dea003ac0e23ee07a06b4ac` 让终态 duration 固定使用 `updated_at-created_at`，P2 最终显示 `15.47 h`，不再随查看时间增长。本地与远程均执行：
+
+```bash
+/home/jeong/zeno/wam/before-we-act/.venv/bin/python -m pytest -q \
+  tests/before_we_act/test_r10_common_runtime.py \
+  tests/before_we_act/test_r10_hf_assets.py
+bash -n scripts/before_we_act/run_r10_candidate.sh \
+  scripts/before_we_act/monitor_r10.sh
+```
+
+结果为 `17 passed`，shell 语法与 `git diff --check` 通过。远程 `/workspace/fe-pc-wam` 从 `a1f62d48b80e3e9092a04973e0febc6acdd006ec` 分两次以 `git pull --ff-only` 更新到 `683294af9f3303d54dea003ac0e23ee07a06b4ac` 后，同组测试仍为 `17 passed`。最终统一 monitor 对 P0/P2/P3 显示 `acceptance=FAILED progress=5/5 passed=2` 与三条实际失败 gate；P1 显示 `FAILED progress=2/5 passed=1`、原因 `latency_and_inputs`，并明确把其余三项列为 `not_evaluated`。
+
+失败归因汇总：代码问题仅限上述终态展示/退出详情保留，已修复且不影响实验数值；配置、官方 Stack horizon、共享数据和 S0 Hub 下载均通过审计；四卡环境无 OOM/NaN/卡死/异常重启；决定性失败属于闭环模型能力与有限增量预算下的优化稳定性，具体是四路均未产生所需的 Camera+Stack 增益，P2 的 30k 因果下界也跨零。由于四路没有任何一个同时通过五项硬门槛，R10 最终结论固定为 **FAILED / no winner / `W10=B9-CoreNative`**。不合并 P0/P1/P2/P3 中任何候选分支，不把“分数最高但未通过”冒充 winner；按本任务 `[NEXT_STAGE]=无`，不创建或运行 R11。若后续收到新的、明确覆盖该停止条件的阶段 prompt，只能把本轮作为失败诊断输入，不能追溯修改 R10 门槛或结论。
 
 ## 2. 论文目标与边界
 
@@ -2280,3 +2442,4 @@ configs/wam_flow/
 14. **已由 S10 起点覆盖（未执行）：** R7 没有合格 winner，因此串行 R8 未启动；原 `P0 horizon-prefix-mean / P1 causal-prefix-attention` 只保留为历史计划，不再自动恢复。
 15. **已由 S10 起点覆盖（未执行）：** 原 R9 四种子正式复现没有执行，不得把 R7 partial 结果或 S10 单种子 `core` 复现改写为 R9 结果；R6L-P1 继续作为历史回退证据。
 16. **已完成 S10 起点接入：** 官方 Stereo-CoRE 与用户数据 no-wrist 复现代码已直接进入 `feat/model-improvements`；冻结 checkpoint SHA256 为 `061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d`，五任务 frozen100 为 `100/60/0/100/97`。本次不创建候选分支，后续渐进改进由用户开始。
+17. **已完成但未通过：** R9 CoRE-native exact 前置通过；R10 四路无腕 Predictive Perception / State Repair 均完成各自预注册 screen，唯一有弱 signal 的 P2 从同一 run 续到 30k 并完成 formal normal/intervention。P0/P1/P2/P3 全部 FAILED，P2 formal 为 `72/100`、causal `+0.02/-0.02`、`2/5` gates；最终 `no winner`、`W10=B9-CoreNative`、不合并候选、不创建 R11。
