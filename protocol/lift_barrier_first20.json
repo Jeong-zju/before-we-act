@@ -1,0 +1,33 @@
+{
+  "version": "strict640x480-v2",
+  "task": "lift_barrier",
+  "seeds": [
+    1940938499,
+    1151242481,
+    1511303784,
+    1484628033,
+    1111870947,
+    1905246391,
+    1684440623,
+    1913249789,
+    1166892126,
+    1627598591,
+    1707967699,
+    1501024243,
+    1797636676,
+    1609044297,
+    1515889304,
+    1633435252,
+    1837474316,
+    1364032793,
+    1820311071,
+    1945955218
+  ],
+  "selection_method": "frozen random sample without replacement; Python Random(20260728); fixed first 20 in manifest order",
+  "training_seed_range": [
+    400000,
+    800999
+  ],
+  "training_seed_overlap": false,
+  "parent_manifest": "/workspace/RoboFactory/runs/strict640x480_v2/heldout_seeds/lift_barrier.json"
+}

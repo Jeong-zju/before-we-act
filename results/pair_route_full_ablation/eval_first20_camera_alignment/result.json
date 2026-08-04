@@ -1,0 +1,135 @@
+{
+  "task": "camera_alignment",
+  "env_id": "CameraAlignment-rf",
+  "checkpoint": "/workspace/RoboFactory/runs/strict640x480_v2/results/pair_route_single_b40_120k/checkpoint_120000.pt",
+  "model_contract": {
+    "vision_backbone": null,
+    "dino_model": null,
+    "defm_model": null,
+    "horizon": 100,
+    "enc_layers": 4,
+    "dec_layers": 7,
+    "d_model": null,
+    "camera_width": 640,
+    "camera_height": 480,
+    "patch_grid": [
+      30,
+      40
+    ],
+    "fusion_layers": null,
+    "depth_storage_unit": "millimeters",
+    "arms": null
+  },
+  "episodes": 20,
+  "successes": 19,
+  "success_rate": 0.95,
+  "rows": [
+    {
+      "seed": 1041308800,
+      "success": true,
+      "steps": 106
+    },
+    {
+      "seed": 1071275813,
+      "success": true,
+      "steps": 98
+    },
+    {
+      "seed": 1116633513,
+      "success": true,
+      "steps": 103
+    },
+    {
+      "seed": 1198934783,
+      "success": true,
+      "steps": 99
+    },
+    {
+      "seed": 1258102374,
+      "success": true,
+      "steps": 110
+    },
+    {
+      "seed": 1282484962,
+      "success": true,
+      "steps": 97
+    },
+    {
+      "seed": 1312103664,
+      "success": true,
+      "steps": 97
+    },
+    {
+      "seed": 1371389916,
+      "success": true,
+      "steps": 106
+    },
+    {
+      "seed": 1388088053,
+      "success": true,
+      "steps": 98
+    },
+    {
+      "seed": 1425043585,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1576923859,
+      "success": true,
+      "steps": 100
+    },
+    {
+      "seed": 1579168412,
+      "success": true,
+      "steps": 100
+    },
+    {
+      "seed": 1614753899,
+      "success": true,
+      "steps": 106
+    },
+    {
+      "seed": 1707521464,
+      "success": true,
+      "steps": 100
+    },
+    {
+      "seed": 1719794939,
+      "success": true,
+      "steps": 99
+    },
+    {
+      "seed": 1730183932,
+      "success": true,
+      "steps": 106
+    },
+    {
+      "seed": 1791357909,
+      "success": true,
+      "steps": 105
+    },
+    {
+      "seed": 1791641211,
+      "success": true,
+      "steps": 101
+    },
+    {
+      "seed": 1894003198,
+      "success": true,
+      "steps": 92
+    },
+    {
+      "seed": 1905860028,
+      "success": true,
+      "steps": 98
+    }
+  ],
+  "camera": "strictly local single wrist RGB-D on matching panda_hand; no global/peer/right-camera input",
+  "seed_protocol": {
+    "method": "frozen random sample without replacement; Python Random(20260728); fixed first 20 in manifest order",
+    "source": "/workspace/RoboFactory/runs/strict640x480_v2/evaluation_protocol/camera_alignment_first20.json",
+    "sha256": "2c0cc58b53bcbe91e53962d4fb53582111fa072e557a8ca3cf9dd833e1298572",
+    "training_seed_overlap": false
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "task": "lift_barrier",
+  "env_id": "LiftBarrier-rf",
+  "checkpoint": "/workspace/RoboFactory/runs/strict640x480_v2/results/pair_route_cap_only_single_b40_120k/checkpoint_120000.pt",
+  "model_contract": {
+    "vision_backbone": null,
+    "dino_model": null,
+    "defm_model": null,
+    "horizon": 100,
+    "enc_layers": 4,
+    "dec_layers": 7,
+    "d_model": null,
+    "camera_width": 640,
+    "camera_height": 480,
+    "patch_grid": [
+      30,
+      40
+    ],
+    "fusion_layers": null,
+    "depth_storage_unit": "millimeters",
+    "arms": null
+  },
+  "episodes": 1,
+  "successes": 1,
+  "success_rate": 1.0,
+  "rows": [
+    {
+      "seed": 1121330154,
+      "success": true,
+      "steps": 66
+    }
+  ],
+  "camera": "strictly local single wrist RGB-D on matching panda_hand; no global/peer/right-camera input",
+  "seed_protocol": {
+    "method": "supplementary replacement audit only; source manifest index 20; excluded from frozen primary metric",
+    "source": "/workspace/RoboFactory/runs/strict640x480_v2/evaluation_protocol/lift_barrier_replacement_seed21.json",
+    "sha256": "5568c9f4fecfec6d5c808b2a30190bbacdecdeb4d9c7467f8dc222a438bd2f38",
+    "training_seed_overlap": false
+  }
+}
