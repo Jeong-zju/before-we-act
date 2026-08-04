@@ -99,9 +99,28 @@ if ((!DRY_RUN)); then
   fi
 fi
 
-run_sync five_task_dataset \
-  /workspace/datasets/robofactory_multitask/ \
-  "$DEST_ROOT/datasets/robofactory_multitask/"
+write_state DOWNLOADING five_task_dataset parallel_five_tasks
+printf '[%s] stage=five_task_dataset mode=parallel-five-task\n' \
+  "$(date -u +%FT%TZ)" | tee -a "$LOG"
+DATASET_PIDS=()
+for task in \
+  lift_barrier \
+  camera_alignment \
+  three_robots_stack_cube \
+  long_pipeline_delivery \
+  take_photo; do
+  mkdir -p "$DEST_ROOT/datasets/robofactory_multitask/$task"
+  rsync "${RSYNC_OPTIONS[@]}" -e "$SSH_COMMAND" \
+    "$SOURCE_HOST:/workspace/datasets/robofactory_multitask/$task/" \
+    "$DEST_ROOT/datasets/robofactory_multitask/$task/" \
+    >"$RUN_ROOT/${task}.log" 2>&1 &
+  DATASET_PIDS+=("$!")
+done
+for pid in "${DATASET_PIDS[@]}"; do
+  wait "$pid"
+done
+printf '[%s] five-task parallel transfer complete\n' \
+  "$(date -u +%FT%TZ)" | tee -a "$LOG"
 if ((DRY_RUN)); then
   write_state STOPPED asset_sync dry_run_complete
 else
