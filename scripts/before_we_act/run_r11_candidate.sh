@@ -62,6 +62,9 @@ fi
 for path in "$PYTHON" "$RUNTIME" "$CONFIG" "$LOCK" "$PARITY" "$PARENT_CHECKPOINT" "$DATA_ROOT"; do
   [[ -e "$path" ]] || { printf 'missing required path: %s\n' "$path" >&2; exit 3; }
 done
+if ! "$PYTHON" -c 'import timm' >/dev/null 2>&1; then
+  "$PYTHON" -m pip install --disable-pip-version-check -r "$FE_ROOT/requirements/r11-p0.txt"
+fi
 
 CHILD_PID=0
 HEARTBEAT_PID=0

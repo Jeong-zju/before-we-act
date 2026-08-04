@@ -1,0 +1,29 @@
+schema_version: 1
+candidate_id: p0
+official_repo: https://github.com/facebookresearch/vjepa2.git
+upstream_commit_sha: 204698b45b3712590f06245fbfba32d3be539812
+license:
+  code: MIT
+  weights: not_used
+  data: not_used
+files:
+- upstream_path: src/models/predictor.py
+  local_path: before_we_act/upstream_components/vjepa2/src/models/predictor.py
+  sha256_before_adaptation: 3d8481bf2544b85ed92b3feb418e3b6d85ca1f81034c931b8c860f2d3d9aac2b
+  sha256_after_copy: 3d8481bf2544b85ed92b3feb418e3b6d85ca1f81034c931b8c860f2d3d9aac2b
+- upstream_path: src/models/utils/modules.py
+  local_path: before_we_act/upstream_components/vjepa2/src/models/utils/modules.py
+  sha256_before_adaptation: b93f6c7e0747deb216419c000c2878f11a9189024a9adeacfd437e172396dff0
+  sha256_after_copy: b93f6c7e0747deb216419c000c2878f11a9189024a9adeacfd437e172396dff0
+- upstream_path: src/models/utils/pos_embs.py
+  local_path: before_we_act/upstream_components/vjepa2/src/models/utils/pos_embs.py
+  sha256_before_adaptation: e6d3b3863ade47b3734a3b443f1bcc93eab02e39bf596ea199517f68ccab443e
+  sha256_after_copy: e6d3b3863ade47b3734a3b443f1bcc93eab02e39bf596ea199517f68ccab443e
+- upstream_path: src/masks/utils.py
+  local_path: before_we_act/upstream_components/vjepa2/src/masks/utils.py
+  sha256_before_adaptation: 833f111a0fa5ffdbd3a6412e2dace2517c3c178f49c14f8bb631d9f6a070dfd0
+  sha256_after_copy: 833f111a0fa5ffdbd3a6412e2dace2517c3c178f49c14f8bb631d9f6a070dfd0
+- upstream_path: src/utils/tensors.py
+  local_path: before_we_act/upstream_components/vjepa2/src/utils/tensors.py
+  sha256_before_adaptation: 782b58bd2af456e184750e5318ab773105108383f61b280fe4c7a90f46add2c8
+  sha256_after_copy: 782b58bd2af456e184750e5318ab773105108383f61b280fe4c7a90f46add2c8
