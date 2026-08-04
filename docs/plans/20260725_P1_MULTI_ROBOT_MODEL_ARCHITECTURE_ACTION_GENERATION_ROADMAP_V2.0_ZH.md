@@ -1,9 +1,9 @@
-# P1 多机器人 World-Action Flow Matching 技术路线 V3.4（ICRA Fast Track）
+# P1 多机器人 World-Action Flow Matching 技术路线 V4.3-R10（ICRA Fast Track）
 
 > 文档更新：2026-08-04
-> 工程起点：当前 `feat/model-improvements` 分支
+> 工程起点：`feat/model-improvements@f37c68a`，新执行主线为 `bwa/main`
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：M0、M1、S0、S1-R1、S2、S3-R6 已完成；新 R7 完成 30k 训练后由 operator 中止剩余验证，最终 no winner/no merge，R8/R9 未执行。相关方案冻结为历史记录且不再作为 S10 起点；S10 已直接接入用户自有服务器完成的 `core` 用户五任务复现：120k updates、500 回合冻结评测、宏平均 71.4%，后续改进从该提交开始
+> 当前状态：历史阶段结论不变；S10 `core` 已以 SHA256 `061b7a4a…` 冻结。2026-08-04 启动新定义的 R9 CoRE-native exact 前置与 R10 四路无腕 Predictive Perception / State Repair；R9 通过前不得启动 R10
 > 评测原则：闭环成功率是最终质量指标；新 R7/R8 还必须用 gate-zero/future-shuffle/action-prefix 干预证明改进确实来自 world branch；S2 predictor 严格 off-path，因此按预测能力与因果门槛推进
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -33,6 +33,41 @@ ICRA 截稿临近，后续不再按旧版 M3–M11 的长串行路线推进。�
 工程上已将官方 Stereo-CoRE `f60995c082a18cc849fcf3537ac4b89f1ac9b19f` 及用户服务器完成的 no-wrist 适配直接接入 `feat/model-improvements`。该适配用用户数据完成 `batch 40 × 120,000 updates = 4.8M` local action chunks，并在五任务 frozen100 上得到 `100/60/0/100/97`、宏平均 `71.4%`。这不是原 R9 四种子方案的完成结果，也不与同事的腕部 RGB-D 结果作同条件横比；详细来源、manifest/checkpoint/result hashes 见 [S10 `core` 用户数据复现与接入记录](../reports/20260804_S10_CORE_USER_DATA_REPRODUCTION_ZH.md)。
 
 本次接入不创建 S10 候选分支、不预选改进方向。代码和结果提交后，由用户从该单一起点自行开展多分支渐进修改。
+
+### 1.2 R9/R10 执行覆盖与事实源校正（2026-08-04）
+
+本节是本次 R10 执行的规范入口，覆盖本文后续“R9 四种子正式复现”和“后续由用户自行开始”的旧含义，但不改写其历史结果。规则来源是同机旧工程克隆中尚未提交的用户 V4.3 草稿；为避免覆盖该克隆的未提交工作，本次只把 R9/R10 的必要规则审计迁入当前目标仓库。事实冲突按已经提交并验收的 S10 产物解决：V4.3 草稿曾写 parent hash `54cb21e7…`，但可访问的原复现服务器、当前 S10 报告和完整文件三方共同证明正式 checkpoint 为 `061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d`、大小 `734,197,493` bytes；R9/R10 只接受后者。
+
+R9 是 R10 的强制前置且不训练模型。完整无腕 `stereo_core/` 源码必须从 `vendor/stereo-core/stereo_core/` 逐字导入顶层，MIT 许可证与逐文件源 SHA256 由 `UPSTREAM_CORE_MANIFEST.json` 绑定；活动源码只允许做无参数的结构拆分。`NoWristPAIRRoute` 的冻结公共接口为 `encode_view_tokens()`、`_sample_training_latent()`、`encode_context()`、`decode_with_gates()` 与 `propose_core_bank()`，结构化类型为 `CoreViewTokens`、`CoreDeploymentContext`、`CoreContext` 与 `CoreCandidateBank`。新 bank 固定为 normalized `[B,5,H,D]`，candidate 0 是原 top-2 sparse route 的单一 base chunk，随后是四个 forced-role chunks。原训练 forward 仍只对 batch 首样本生成旧 counterfactual，且 posterior、clamp、`randn_like`、dropout 与 RNG-after-state 顺序不得改变。评测端固定拆出 `prepare_no_wrist_batch()`、`denormalize_action_chunks()` 与 `TemporalChunkEnsembler`，禁止更改归一化、chunk append 顺序、衰减或 action cadence。
+
+R9 exact gate 同时要求：真实 checkpoint `strict=True`；state-dict key/value hash 不变；不新增 parent 参数或 persistent buffer；`actions=None/eval` 的 prediction/route/tuple 逐元素一致；固定 CPU/CUDA RNG 后 `actions!=None/train` 的 prediction、posterior、counterfactual 与 RNG-after-state 逐元素一致；normalization 和 temporal output 逐元素一致。任一 exact 项失败即在 R9 停止，不能用近似容差进入 R10。
+
+R9 还运行七路归因：`normal`、`local-only`、`global-only`、同任务异 episode 的 `shuffle-global`、`shuffle-local`、只置换 global patch 的 `patch-permute`、关闭 cross-view relative bias 的 `no-relbias`。它们用于判断把不同外参 local/global RGB 强按同 patch 对齐是否拖累 CameraAlignment/StackCube，不直接选择模型。原生 action bank 另以 snapshot/restore（证明连续十步可复现）或同 seed 严格 replay 测不可部署 oracle；go/no-go 报告门槛为 frozen Gate20 macro headroom `>=+10pp`、CameraAlignment+StackCube `>=+8/40`、有效候选贡献 `>=80%` 且 forced-role action 无 NaN/越界。bank headroom 不足不阻止 R10，但会使后续 proposal 扩展成为强制项。
+
+R10 的共同 parent 固定为通过 exact gate 的 `B9-CoreNative` 同一 commit/checkpoint。DINO、ACT posterior/decoder、ARCA、role adapters/prototypes、PAIR router、out head、normalization 与 temporal ensembler 全冻结；每路只训练一个 zero-init `CorePerceptionExtension`，并且只能通过
+
+$$
+\mathbf x=\mathbf x_0+\tanh(g)\Delta_\psi
+$$
+
+把 residual 注入原 `parent_fused`。gate 与最后投影均 zero-init，固定相机 calibration/ray metadata 必须进入 config hash，deployment schema 禁止 future label、task/agent ID、simulator/privileged state。
+
+| 候选 / GPU / 分支 | 唯一新增机制 | 预注册反证 |
+|---|---|---|
+| P0 / GPU0 / `bwa/r10-p0-calibrated-crossview` | `CalibratedUnalignedBridge`：两路各自 2-D position、camera embedding、可选 ray Fourier 与 latent-query cross-attention | ray/view shuffle 无效，或 Camera+Stack 不升 |
+| P1 / GPU1 / `bwa/r10-p1-object-slots` | `ObjectSlotBridge`：共享 slots 与迭代 binding | slot permutation/object mask 无效，或跨帧/跨视角不稳定 |
+| P2 / GPU2 / `bwa/r10-p2-predictive-state` | `RecurrentPredictiveStateBridge`：合法 tokens/qpos/executed-action history 的 causal GRU/RSSM | history/action-prefix shuffle 无效，或仅离线预测改善 |
+| P3 / GPU3 / `bwa/r10-p3-jepa-bridge` | `JEPAFutureFeatureBridge`：当前/history 预测 `h={5,15,30}` 的冻结 DINO latent，部署只保留 predictor state | target/action shuffle 无效，或预测提升不转成闭环提升 |
+
+四路复用单一 `train_bwa_perception.py` 与 `NoWristFrameDataset/ExactFiveTaskBatchSampler`，只由 `bridge.kind` 注册结构；统一执行 `10k screen → 最多 30k selection`，updates、batch、五任务数据、seed schedule、precision 与 cutoff 完全相同。每路晋级必须同时满足：
+
+1. `perception_gate=0` 与 `B9-CoreNative` 的 base/forced chunks、route 和 temporal output 逐元素一致；
+2. paired Gate20 五任务 macro 严格高于 B9，任一任务下降不超过 `1/20`；
+3. CameraAlignment+ThreeRobotsStackCube 合计至少增加 `4/40`，LiftBarrier+LongPipelineDelivery+TakePhoto 合计不下降；
+4. 本路预注册 intervention 方向正确，episode-bootstrap 95% 下界 `>0`；
+5. P95 control latency不超过 B9 的 `1.15×`，且 privileged-key audit 为零。
+
+winner 顺序固定为“全部硬门槛 → Camera+Stack 增量 → macro 增量 → causal delta → latency/参数量 → P0<P1<P2<P3”。四路全失败则 R10 明确为 `no winner`，`W10=B9-CoreNative`，任何 R10 权重均不得进入后续阶段。本任务参数指定 `[NEXT_STAGE]=无`，因此无论 R10 通过或失败，本轮都在结构化结论写回后停止，不创建 R11。
 
 ## 2. 论文目标与边界
 
