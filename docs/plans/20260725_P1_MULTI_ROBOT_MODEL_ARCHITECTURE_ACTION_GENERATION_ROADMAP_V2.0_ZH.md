@@ -3,7 +3,7 @@
 > 文档更新：2026-08-04
 > 工程起点：当前 `feat/model-improvements` 分支
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：M0、M1、S0、S1-R1、S2、S3-R6 已完成；原 R7/R8/R9 方案冻结为历史计划且不再作为 S10 起点执行。S10 已直接接入用户自有服务器完成的 `core` 用户五任务复现：120k updates、500 回合冻结评测、宏平均 71.4%，后续改进从该提交开始
+> 当前状态：M0、M1、S0、S1-R1、S2、S3-R6 已完成；新 R7 完成 30k 训练后由 operator 中止剩余验证，最终 no winner/no merge，R8/R9 未执行。相关方案冻结为历史记录且不再作为 S10 起点；S10 已直接接入用户自有服务器完成的 `core` 用户五任务复现：120k updates、500 回合冻结评测、宏平均 71.4%，后续改进从该提交开始
 > 评测原则：闭环成功率是最终质量指标；新 R7/R8 还必须用 gate-zero/future-shuffle/action-prefix 干预证明改进确实来自 world branch；S2 predictor 严格 off-path，因此按预测能力与因果门槛推进
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -1930,6 +1930,12 @@ P0/P1 normal `gate_summary.json` SHA256 分别为 `5e15bc5c45c314510df4002bcc5a6
 
 服务器更新后只 respawn 永久 tmux 的 P0/P1 失败窗格，window 0 与 30 分钟 monitor 未动；runner 重新校验 750 文件 receipt、parent hashes、pair-exact、checkpoint/config/source identity，复用 normal，将两份不完整 legacy task 原样保留为 `lift_barrier.superseded_20260803T222848Z` 后重跑。北京时间 `2026-08-04 06:29:33`，P0/P1 均已通过修复后的 M2 direct-control 握手，legacy seed 900 均 `success=true, steps=71`，正在 episode `2/20`，心跳存活。此时动态 ETA 为核心四条件约 `2026-08-05 01:21:46`、完整 R7 约 `2026-08-06 02:33:03`（北京时间）；仍为运行中估计，不是验收结论。
 
+北京时间 `2026-08-04 09:31`，operator 根据已经完整取得的 normal 结果判断本轮性能不尽如人意并明确要求终止训练和验证。正式 30k 训练此前已经结束，因此本次实际停止的是两路进行中的 `legacy_reference` 验证、永久 monitor，以及服务器上遗留的四个高频只读轮询进程；`2026-08-04 09:32:14` 的停止后审计显示 `ssh_tmux` 仅保留 window 0、匹配本 run 的进程为 0、GPU compute process 为 0。checkpoint、normal 完整产物和 legacy 部分产物均原样保留，未删除或覆盖。同事服务器同期不存在 S4-R7/R8 训练或验证进程，其无关 GPU 任务未触碰。
+
+终止点的 legacy 证据只允许作为 **partial / non-acceptance** 记录：P0 已完整得到 LiftBarrier `7/20`、LongPipelineDelivery `11/20`，TakePhoto 完成 `16/20` 且成功 `2` 次，另一个 episode 在 step 300 被人工中断；P1 已完整得到 LiftBarrier `6/20`、LongPipelineDelivery `12/20`，TakePhoto 完成 `15/20` 且成功 `1` 次，另一个 episode 在 step 1025 被人工中断。`legacy_reference` 五任务未完成，因而不存在有效的 condition-level `gate_summary.json`；`world_evidence_gate_zero`、`shuffle_all` 及四个诊断条件均未开始。不能用这些部分结果补齐缺失回合、外推完整 macro 或执行预注册因果门槛。
+
+本轮最终状态固定为 **operator-stopped / no winner / no merge**：P0 normal `34/100` 虽暂高于 P1 的 `32/100`，但没有证据证明 `normal >= legacy_reference`、`normal > world_evidence_gate_zero` 和 `normal > shuffle_all`；P1 还已明确违反 utility calibration 门槛。因此两个候选都不得声明通过，P0/P1 分支均不合并到 `feat/model-improvements`。在 operator 给出新的书面启动决定前，不再恢复 round4、不启动依赖 R7 winner 的串行 R8；模型修改主线继续保留已验收的 R6L-P1（merge `7308f5e`）作为回退方法。
+
 R7 新 run 使用独立 root，禁止复用旧 125k 配置绑定的 preflight/resume：
 
 ```bash
@@ -2235,7 +2241,7 @@ configs/wam_flow/
 10. **已完成并部分通过：** S3-R6 旧 run 已终止且不得复用；新 run 四候选均完成 fresh 五任务 Flow 80k，两个 P1 均完成 adapter/gate 10k。R6L-P1 以宏平均 `39% > 29%` 通过；R6J-P1 在四个完整任务及 CameraAlignment 6 回合后可证明最终上界 `38% < 40%`，经 operator 授权停止剩余 eval，不晋级并保留 R6J-P0。
 11. **已完成工程晋级：** `s3/r6l-p1-protected-local-gated` 通过 merge commit `7308f5e` 合并到 `feat/model-improvements`；R6L-P0、R6J-P0、R6J-P1 均不合并，只保留分支与远程产物供审计。
 12. **旧路线已关闭：** 旧 R7a/R7b/R7m 与旧 R8 future-dropout 不运行，不再沿失败 R6J checkpoint 解冻 team/Flow。
-13. **已由 S10 起点覆盖（未执行）：** 原 R7 的 `P0 no-WUC / P1 WUC` 两卡候选保留为历史计划。
-14. **已由 S10 起点覆盖（未执行）：** 原 R8 的 `P0 horizon-prefix-mean / P1 causal-prefix-attention` 保留为历史计划。
-15. **已由 S10 起点覆盖（未执行）：** 原 R9 四种子正式复现没有执行，不把 S10 单种子 `core` 复现改写为 R9 结果。
+13. **已完成训练但由 operator 中止验证、未通过：** 新 R7 `s4-r7-fast30k-round4` 两候选均完成全量 750 episodes、配对 preflight、30k 训练和 normal Gate20；P0/P1 normal 分别为 `34/100`、`32/100`，P1 utility calibration 失败。operator 于北京时间 `2026-08-04 09:31` 因性能不尽如人意终止剩余验证；核心因果条件不完整，因此 no winner、no merge。
+14. **已由 S10 起点覆盖（未执行）：** R7 没有合格 winner，因此串行 R8 未启动；原 `P0 horizon-prefix-mean / P1 causal-prefix-attention` 只保留为历史计划，不再自动恢复。
+15. **已由 S10 起点覆盖（未执行）：** 原 R9 四种子正式复现没有执行，不得把 R7 partial 结果或 S10 单种子 `core` 复现改写为 R9 结果；R6L-P1 继续作为历史回退证据。
 16. **已完成 S10 起点接入：** 官方 Stereo-CoRE 与用户数据 no-wrist 复现代码已直接进入 `feat/model-improvements`；冻结 checkpoint SHA256 为 `061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d`，五任务 frozen100 为 `100/60/0/100/97`。本次不创建候选分支，后续渐进改进由用户开始。
