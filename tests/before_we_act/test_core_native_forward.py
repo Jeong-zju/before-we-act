@@ -175,3 +175,22 @@ def test_r9_adds_no_parent_state_dict_entries():
     assert tuple(reference.state_dict()) == tuple(native.state_dict())
     for name, expected in reference.state_dict().items():
         torch.testing.assert_close(expected, native.state_dict()[name], rtol=0, atol=0)
+
+
+def test_default_deployment_context_is_exact_and_privileged_keys_fail_closed():
+    from stereo_core.bwa_contracts import CoreDeploymentContext
+
+    _reference, native = _models()
+    native.eval()
+    global_rgb, local_rgb, qpos, _ = _inputs()
+    with torch.no_grad():
+        default = native(global_rgb, local_rgb, qpos)
+        explicit = native(
+            global_rgb,
+            local_rgb,
+            qpos,
+            deployment_context=CoreDeploymentContext(),
+        )
+    _assert_tuple_exact(default, explicit)
+    with pytest.raises(ValueError, match="privileged"):
+        CoreDeploymentContext(fixed_camera_metadata={"simulator_state": object()})

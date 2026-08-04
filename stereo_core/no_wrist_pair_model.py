@@ -272,6 +272,7 @@ class NoWristPAIRRoute(ACT):
         actions: torch.Tensor | None = None,
         return_routing: bool = False,
         counterfactual: bool = False,
+        deployment_context: CoreDeploymentContext | None = None,
     ):
         views = self.encode_view_tokens(global_rgb, local_rgb)
         observation = views.parent_fused
@@ -287,6 +288,7 @@ class NoWristPAIRRoute(ACT):
             local_rgb,
             qpos,
             latent=latent,
+            deployment_context=deployment_context,
             _views=views,
             _state_vec=state_vec,
             _sparse_routes=gates,
