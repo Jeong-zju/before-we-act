@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "before-we-act/implementation-card/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "round", "candidate_id", "branch", "parent",
+    "allowed_files", "public_symbols", "tensor_contracts", "losses",
+    "config_keys", "required_tests", "papers", "acceptance"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "round": {"const": "R10"},
+    "candidate_id": {"enum": ["p0", "p1", "p2", "p3"]},
+    "branch": {"type": "string", "pattern": "^bwa/r10-p[0-3]-"},
+    "parent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branch", "commit", "checkpoint_sha256"],
+      "properties": {
+        "branch": {"const": "bwa/r9-core-native"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "checkpoint_sha256": {"const": "061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d"}
+      }
+    },
+    "allowed_files": {"type": "array", "minItems": 2, "items": {"type": "string"}},
+    "public_symbols": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "tensor_contracts": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "losses": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "config_keys": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "required_tests": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "papers": {
+      "type": "array", "minItems": 2,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["title", "url", "mechanism", "non_claim"],
+        "properties": {
+          "title": {"type": "string"}, "url": {"type": "string"},
+          "mechanism": {"type": "string"}, "non_claim": {"type": "string"}
+        }
+      }
+    },
+    "acceptance": {"type": "array", "minItems": 5, "items": {"type": "string"}}
+  }
+}

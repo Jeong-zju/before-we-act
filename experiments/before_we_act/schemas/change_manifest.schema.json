@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "before-we-act/change-manifest/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "candidate_id", "parent_commit", "candidate_commit",
+    "implementation_card_sha256", "changed_files", "trainable_parameters",
+    "frozen_parent_tensor_sha256", "tests"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_id": {"enum": ["p0", "p1", "p2", "p3"]},
+    "parent_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "candidate_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "implementation_card_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "changed_files": {"type": "array", "items": {"type": "string"}},
+    "trainable_parameters": {"type": "array", "items": {"type": "string"}},
+    "frozen_parent_tensor_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "tests": {"type": "object"}
+  }
+}
