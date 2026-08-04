@@ -90,6 +90,12 @@ def test_runtime_heartbeat_is_real_and_refreshes_training_metrics(tmp_path):
     assert status["loss"] == 0.25
 
 
+def test_runtime_does_not_treat_zero_pid_sentinel_as_alive():
+    runtime = _load_runtime()
+    assert runtime.pid_alive(0) is False
+    assert runtime.pid_alive(-1) is False
+
+
 def test_future_targets_are_not_put_in_deployment_context():
     source = (ROOT / "stereo_core/train_bwa_perception.py").read_text(encoding="utf-8")
     context_start = source.index("deployment_context = CoreDeploymentContext(")

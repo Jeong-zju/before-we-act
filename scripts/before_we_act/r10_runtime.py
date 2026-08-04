@@ -158,7 +158,10 @@ def parse_time(value):
 
 def pid_alive(pid):
     try:
-        os.kill(int(pid), 0)
+        pid = int(pid)
+        if pid <= 0:
+            return False
+        os.kill(pid, 0)
         return True
     except (OSError, TypeError, ValueError):
         return False
