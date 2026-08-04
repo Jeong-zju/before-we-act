@@ -61,9 +61,10 @@ for branch in "${BRANCHES[@]}"; do
     printf 'missing remote branch: %s\n' "$branch" >&2; exit 3;
   }
 done
-ASSET_STATUS="$(jq -r '.status // "UNKNOWN"' /workspace/bwa_runs/shared/s10_asset_sync/state.json 2>/dev/null || true)"
+ASSET_STATUS="$(jq -r '.status // "UNKNOWN"' /workspace/bwa_runs/shared/r10_hf_assets/state.json 2>/dev/null || true)"
 if [[ "$ASSET_STATUS" != PASSED ]]; then
-  printf 'shared S10 asset sync is not PASSED: %s\n' "$ASSET_STATUS" >&2
+  printf 'shared S10 Hugging Face assets are not PASSED: %s\n' "$ASSET_STATUS" >&2
+  printf 'start/resume with scripts/before_we_act/launch_r10_hf_assets_tmux.sh\n' >&2
   exit 3
 fi
 for task in lift_barrier camera_alignment three_robots_stack_cube long_pipeline_delivery take_photo; do
