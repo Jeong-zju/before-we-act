@@ -1,0 +1,535 @@
+{
+  "task": "take_photo",
+  "env_id": "TakePhoto-rf",
+  "checkpoint": "/workspace/RoboFactory/runs/strict640x480_v2/results/pair_route_cap_only_single_b40_120k/checkpoint_120000.pt",
+  "model_contract": {
+    "vision_backbone": null,
+    "dino_model": null,
+    "defm_model": null,
+    "horizon": 100,
+    "enc_layers": 4,
+    "dec_layers": 7,
+    "d_model": null,
+    "camera_width": 640,
+    "camera_height": 480,
+    "patch_grid": [
+      30,
+      40
+    ],
+    "fusion_layers": null,
+    "depth_storage_unit": "millimeters",
+    "arms": null
+  },
+  "episodes": 100,
+  "successes": 29,
+  "success_rate": 0.29,
+  "rows": [
+    {
+      "seed": 1000976546,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1004189748,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1013779558,
+      "success": true,
+      "steps": 204
+    },
+    {
+      "seed": 1019172138,
+      "success": true,
+      "steps": 191
+    },
+    {
+      "seed": 1030785214,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1037301163,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1041889680,
+      "success": true,
+      "steps": 187
+    },
+    {
+      "seed": 1048802305,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1091497730,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1147397299,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1162867305,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1175975658,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1180413028,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1207426483,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1222222030,
+      "success": true,
+      "steps": 175
+    },
+    {
+      "seed": 1234022769,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1236100077,
+      "success": true,
+      "steps": 180
+    },
+    {
+      "seed": 1255598789,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1280939401,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1296005881,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1307591532,
+      "success": true,
+      "steps": 186
+    },
+    {
+      "seed": 1316812231,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1346024082,
+      "success": true,
+      "steps": 197
+    },
+    {
+      "seed": 1370486243,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1389868928,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1414812038,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1418534147,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1420041458,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1424381736,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1449469805,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1451192084,
+      "success": true,
+      "steps": 1087
+    },
+    {
+      "seed": 1451910270,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1457967641,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1470417549,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1500703139,
+      "success": true,
+      "steps": 206
+    },
+    {
+      "seed": 1508109933,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1509075275,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1510341351,
+      "success": true,
+      "steps": 198
+    },
+    {
+      "seed": 1510543437,
+      "success": true,
+      "steps": 187
+    },
+    {
+      "seed": 1528457461,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1541655256,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1543729260,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1546813860,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1547013618,
+      "success": true,
+      "steps": 193
+    },
+    {
+      "seed": 1551024153,
+      "success": true,
+      "steps": 219
+    },
+    {
+      "seed": 1554826007,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1556098999,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1557902170,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1569360819,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1571025471,
+      "success": true,
+      "steps": 219
+    },
+    {
+      "seed": 1580787392,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1609756861,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1615058059,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1622016015,
+      "success": true,
+      "steps": 238
+    },
+    {
+      "seed": 1631761927,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1635071196,
+      "success": true,
+      "steps": 199
+    },
+    {
+      "seed": 1635574532,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1637035205,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1637140173,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1641731589,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1643800731,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1644238459,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1658975837,
+      "success": true,
+      "steps": 178
+    },
+    {
+      "seed": 1668209811,
+      "success": true,
+      "steps": 207
+    },
+    {
+      "seed": 1671129506,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1681823344,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1682123864,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1710048905,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1710777206,
+      "success": true,
+      "steps": 190
+    },
+    {
+      "seed": 1713729269,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1723817216,
+      "success": true,
+      "steps": 225
+    },
+    {
+      "seed": 1726106858,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1735061721,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1740143966,
+      "success": true,
+      "steps": 192
+    },
+    {
+      "seed": 1771683199,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1773661402,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1778251400,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1804832914,
+      "success": true,
+      "steps": 181
+    },
+    {
+      "seed": 1804924208,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1816626159,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1831139959,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1831853090,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1839464492,
+      "success": true,
+      "steps": 182
+    },
+    {
+      "seed": 1843688393,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1844259407,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1863197702,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1866836215,
+      "success": true,
+      "steps": 589
+    },
+    {
+      "seed": 1867691966,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1885984577,
+      "success": true,
+      "steps": 192
+    },
+    {
+      "seed": 1897805026,
+      "success": true,
+      "steps": 180
+    },
+    {
+      "seed": 1900838114,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1907613062,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1910535675,
+      "success": true,
+      "steps": 189
+    },
+    {
+      "seed": 1922948762,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1941538617,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1959039015,
+      "success": true,
+      "steps": 182
+    },
+    {
+      "seed": 1959237991,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1966614201,
+      "success": true,
+      "steps": 187
+    },
+    {
+      "seed": 1979870721,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1999529169,
+      "success": false,
+      "steps": 1500
+    }
+  ],
+  "camera": "strictly local single wrist RGB-D on matching panda_hand; no global/peer/right-camera input",
+  "seed_protocol": {
+    "method": "frozen random sample without replacement; Python Random(20260728)",
+    "source": "/workspace/RoboFactory/runs/strict640x480_v2/heldout_seeds/take_photo.json",
+    "sha256": "9877dd0b63b6651aa6f327e2ed8ea1ac7d35c3e75432c1c370f9503b43b5b485",
+    "training_seed_overlap": false
+  }
+}

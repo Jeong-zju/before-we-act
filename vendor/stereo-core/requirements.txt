@@ -1,0 +1,12 @@
+torch>=2.7
+torchvision
+transformers
+h5py
+numpy
+scipy
+pillow
+tqdm
+gymnasium
+imageio
+matplotlib
+huggingface_hub>=0.34

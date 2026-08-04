@@ -1,0 +1,33 @@
+{
+  "version": "strict640x480-v2",
+  "task": "long_pipeline_delivery",
+  "seeds": [
+    1377975857,
+    1929227305,
+    1996105486,
+    1784630386,
+    1744462179,
+    1989278646,
+    1115697836,
+    1118794547,
+    1561536534,
+    1328134359,
+    1213395708,
+    1216691922,
+    1653629554,
+    1771709052,
+    1085334846,
+    1934002399,
+    1673447263,
+    1044836506,
+    1755162436,
+    1017039386
+  ],
+  "selection_method": "frozen random sample without replacement; Python Random(20260728); fixed first 20 in manifest order",
+  "training_seed_range": [
+    400000,
+    800999
+  ],
+  "training_seed_overlap": false,
+  "parent_manifest": "/workspace/RoboFactory/runs/strict640x480_v2/heldout_seeds/long_pipeline_delivery.json"
+}

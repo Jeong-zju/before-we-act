@@ -1,0 +1,30 @@
+{
+  "seeds": [
+    1004189748,
+    1147397299,
+    1255598789,
+    1418534147,
+    1557902170,
+    1609756861,
+    1637035205,
+    1637140173,
+    1641731589,
+    1681823344,
+    1682123864,
+    1713729269,
+    1735061721,
+    1771683199,
+    1778251400,
+    1831853090,
+    1863197702,
+    1907613062,
+    1979870721
+  ],
+  "selection_method": "targeted disagreement audit: successful under Stereo-ACT or Local-ARCA, failed under Stereo-CoRE SR@1; each seed rerun three times",
+  "training_seed_overlap": false,
+  "source_evaluations": [
+    "/workspace/RoboFactory/runs/strict640x480_v2/results/stereo_cross_relbias_all5_80k/formal_heldout_100/eval_take_photo.json",
+    "/workspace/RoboFactory/runs/strict640x480_v2/results/local_arca_all5_80k/formal_heldout_100/eval_take_photo.json",
+    "/workspace/RoboFactory/runs/strict640x480_v2/results/pair_route_cap_only_single_b40_120k/eval_100_take_photo/result.json"
+  ]
+}

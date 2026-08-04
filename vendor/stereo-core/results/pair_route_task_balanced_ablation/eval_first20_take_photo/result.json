@@ -1,0 +1,135 @@
+{
+  "task": "take_photo",
+  "env_id": "TakePhoto-rf",
+  "checkpoint": "/workspace/RoboFactory/runs/strict640x480_v2/results/pair_route_full_mixed_single_b40_120k/checkpoint_120000.pt",
+  "model_contract": {
+    "vision_backbone": null,
+    "dino_model": null,
+    "defm_model": null,
+    "horizon": 100,
+    "enc_layers": 4,
+    "dec_layers": 7,
+    "d_model": null,
+    "camera_width": 640,
+    "camera_height": 480,
+    "patch_grid": [
+      30,
+      40
+    ],
+    "fusion_layers": null,
+    "depth_storage_unit": "millimeters",
+    "arms": null
+  },
+  "episodes": 20,
+  "successes": 0,
+  "success_rate": 0.0,
+  "rows": [
+    {
+      "seed": 1041889680,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1175975658,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1316812231,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1370486243,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1414812038,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1451910270,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1510543437,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1528457461,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1543729260,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1556098999,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1557902170,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1571025471,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1615058059,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1723817216,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1726106858,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1735061721,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1866836215,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1922948762,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1941538617,
+      "success": false,
+      "steps": 1500
+    },
+    {
+      "seed": 1979870721,
+      "success": false,
+      "steps": 1500
+    }
+  ],
+  "camera": "strictly local single wrist RGB-D on matching panda_hand; no global/peer/right-camera input",
+  "seed_protocol": {
+    "method": "frozen random sample without replacement; Python Random(20260728); fixed first 20 in manifest order",
+    "source": "/workspace/RoboFactory/runs/strict640x480_v2/evaluation_protocol/take_photo_first20.json",
+    "sha256": "4e55cf625adb7f0f4a9aed4cdf1e8759e3ce3306aeedfa99a9a7e960480a83cb",
+    "training_seed_overlap": false
+  }
+}

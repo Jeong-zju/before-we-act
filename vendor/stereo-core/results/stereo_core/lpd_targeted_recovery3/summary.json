@@ -1,0 +1,47 @@
+{
+  "metric": "Targeted Recovery@3 (not a replacement for frozen SR@1)",
+  "targeted_seeds": 6,
+  "recovered_seeds": 1,
+  "recovered_seed_ids": [
+    1705278980
+  ],
+  "trial_successes": [
+    1,
+    1,
+    1
+  ],
+  "per_seed_trials": {
+    "1395922740": [
+      0,
+      0,
+      0
+    ],
+    "1665228332": [
+      0,
+      0,
+      0
+    ],
+    "1676351806": [
+      0,
+      0,
+      0
+    ],
+    "1698131089": [
+      0,
+      0,
+      0
+    ],
+    "1705278980": [
+      1,
+      1,
+      1
+    ],
+    "1744462179": [
+      0,
+      0,
+      0
+    ]
+  },
+  "frozen_sr1_successes": 94,
+  "supplementary_any_success_total": 95
+}

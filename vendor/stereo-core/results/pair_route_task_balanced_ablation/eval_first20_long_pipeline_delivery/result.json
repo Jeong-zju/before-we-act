@@ -1,0 +1,875 @@
+{
+  "task": "long_pipeline_delivery",
+  "env_id": "LongPipelineDelivery-rf",
+  "checkpoint": "/workspace/RoboFactory/runs/strict640x480_v2/results/pair_route_full_mixed_single_b40_120k/checkpoint_120000.pt",
+  "model_contract": {
+    "vision_backbone": null,
+    "dino_model": null,
+    "defm_model": null,
+    "horizon": 100,
+    "enc_layers": 4,
+    "dec_layers": 7,
+    "d_model": null,
+    "camera_width": 640,
+    "camera_height": 480,
+    "patch_grid": [
+      30,
+      40
+    ],
+    "fusion_layers": null,
+    "depth_storage_unit": "millimeters",
+    "arms": null
+  },
+  "episodes": 20,
+  "successes": 1,
+  "success_rate": 0.05,
+  "rows": [
+    {
+      "seed": 1017039386,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": 438,
+          "2": 239,
+          "3": 59
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": 455,
+          "2": 334,
+          "3": 144
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.9096280336380005,
+          "1": 0.044284671545028687,
+          "2": 0.019812190905213356,
+          "3": 0.019059767946600914
+        },
+        "shoe_min_y": 0.0033037951216101646,
+        "shoe_max_z": 0.07818695902824402,
+        "min_goal_xy_distance": 1.1251440048217773,
+        "final_shoe_xyz": [
+          -0.21938350796699524,
+          0.013212106190621853,
+          0.04243466630578041
+        ],
+        "final_goal_xy_distance": 1.1351375579833984,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1044836506,
+      "success": true,
+      "steps": 706,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": true,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": 630,
+          "1": 436,
+          "2": 244,
+          "3": 60
+        },
+        "last_grasp_step": {
+          "0": 706,
+          "1": 535,
+          "2": 340,
+          "3": 150
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.01496619451791048,
+          "1": 0.016988638788461685,
+          "2": 0.017656637355685234,
+          "3": 0.01993255503475666
+        },
+        "shoe_min_y": -1.1110284328460693,
+        "shoe_max_z": 0.07855824381113052,
+        "min_goal_xy_distance": 0.09977887570858002,
+        "final_shoe_xyz": [
+          -0.12855878472328186,
+          -1.1110284328460693,
+          0.07233758270740509
+        ],
+        "final_goal_xy_distance": 0.09977887570858002,
+        "failure_robot": null,
+        "failure_stage": null
+      }
+    },
+    {
+      "seed": 1085334846,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": 444,
+          "2": 239,
+          "3": 56
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": 446,
+          "2": 337,
+          "3": 144
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.9119011759757996,
+          "1": 0.04238653928041458,
+          "2": 0.014125221408903599,
+          "3": 0.013513249345123768
+        },
+        "shoe_min_y": 0.00514746131375432,
+        "shoe_max_z": 0.07974715530872345,
+        "min_goal_xy_distance": 1.1299471855163574,
+        "final_shoe_xyz": [
+          -0.2483784556388855,
+          0.018822675570845604,
+          0.042436227202415466
+        ],
+        "final_goal_xy_distance": 1.146249532699585,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1115697836,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": 433,
+          "2": 240,
+          "3": 58
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": 465,
+          "2": 342,
+          "3": 148
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.9029526114463806,
+          "1": 0.02561323158442974,
+          "2": 0.01989690586924553,
+          "3": 0.015926094725728035
+        },
+        "shoe_min_y": -0.007285118568688631,
+        "shoe_max_z": 0.07884171605110168,
+        "min_goal_xy_distance": 1.1292542219161987,
+        "final_shoe_xyz": [
+          -0.23959024250507355,
+          -0.0038307674694806337,
+          0.04243466258049011
+        ],
+        "final_goal_xy_distance": 1.1326674222946167,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1118794547,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": true,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": 647,
+          "1": 443,
+          "2": 252,
+          "3": 62
+        },
+        "last_grasp_step": {
+          "0": 650,
+          "1": 543,
+          "2": 346,
+          "3": 156
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.04181090369820595,
+          "1": 0.015986308455467224,
+          "2": 0.014997641555964947,
+          "3": 0.01839357800781727
+        },
+        "shoe_min_y": -0.5842027068138123,
+        "shoe_max_z": 0.07887934893369675,
+        "min_goal_xy_distance": 0.5390719771385193,
+        "final_shoe_xyz": [
+          -0.23277588188648224,
+          -0.5781463384628296,
+          0.04243670403957367
+        ],
+        "final_goal_xy_distance": 0.546385645866394,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_final_delivery_or_release"
+      }
+    },
+    {
+      "seed": 1213395708,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": 440,
+          "2": 246,
+          "3": 61
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": 488,
+          "2": 350,
+          "3": 155
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.8421498537063599,
+          "1": 0.026910122483968735,
+          "2": 0.02034744806587696,
+          "3": 0.020056316629052162
+        },
+        "shoe_min_y": -0.06815417110919952,
+        "shoe_max_z": 0.07677658647298813,
+        "min_goal_xy_distance": 1.0541514158248901,
+        "final_shoe_xyz": [
+          -0.23334932327270508,
+          -0.06406832486391068,
+          0.04243460297584534
+        ],
+        "final_goal_xy_distance": 1.0579057931900024,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1216691922,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": true,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": 647,
+          "1": 443,
+          "2": 253,
+          "3": 63
+        },
+        "last_grasp_step": {
+          "0": 652,
+          "1": 544,
+          "2": 346,
+          "3": 155
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.041393738240003586,
+          "1": 0.018948903307318687,
+          "2": 0.016899066045880318,
+          "3": 0.0187782421708107
+        },
+        "shoe_min_y": -0.5835071802139282,
+        "shoe_max_z": 0.07918861508369446,
+        "min_goal_xy_distance": 0.6143624782562256,
+        "final_shoe_xyz": [
+          -0.2285173386335373,
+          -0.5778218507766724,
+          0.04243846610188484
+        ],
+        "final_goal_xy_distance": 0.6223152279853821,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_final_delivery_or_release"
+      }
+    },
+    {
+      "seed": 1328134359,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": 428,
+          "2": 241,
+          "3": 59
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": 1464,
+          "2": 339,
+          "3": 151
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.8918811082839966,
+          "1": 0.02816823683679104,
+          "2": 0.024293502792716026,
+          "3": 0.017563963308930397
+        },
+        "shoe_min_y": -0.018491357564926147,
+        "shoe_max_z": 0.07686353474855423,
+        "min_goal_xy_distance": 1.1320171356201172,
+        "final_shoe_xyz": [
+          -0.24343746900558472,
+          -0.018491150811314583,
+          0.042435355484485626
+        ],
+        "final_goal_xy_distance": 1.1320174932479858,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1377975857,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": 417,
+          "2": 227,
+          "3": 51
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": 471,
+          "2": 325,
+          "3": 133
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.7252967357635498,
+          "1": 0.023514095693826675,
+          "2": 0.017183436080813408,
+          "3": 0.01412985473871231
+        },
+        "shoe_min_y": -0.18714308738708496,
+        "shoe_max_z": 0.08068636059761047,
+        "min_goal_xy_distance": 0.9873864054679871,
+        "final_shoe_xyz": [
+          -0.2448563426733017,
+          -0.18205100297927856,
+          0.042467329651117325
+        ],
+        "final_goal_xy_distance": 0.9923844933509827,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1561536534,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": 444,
+          "2": 249,
+          "3": 63
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": 461,
+          "2": 341,
+          "3": 153
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.9071835875511169,
+          "1": 0.04381640627980232,
+          "2": 0.02288893610239029,
+          "3": 0.021641114726662636
+        },
+        "shoe_min_y": 0.0014246029313653708,
+        "shoe_max_z": 0.07840590924024582,
+        "min_goal_xy_distance": 1.1609350442886353,
+        "final_shoe_xyz": [
+          -0.21526339650154114,
+          0.0092734694480896,
+          0.04243463650345802
+        ],
+        "final_goal_xy_distance": 1.1693477630615234,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1653629554,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": true,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": 630,
+          "1": 438,
+          "2": 248,
+          "3": 61
+        },
+        "last_grasp_step": {
+          "0": 683,
+          "1": 539,
+          "2": 343,
+          "3": 155
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.027170652523636818,
+          "1": 0.0190497525036335,
+          "2": 0.016603738069534302,
+          "3": 0.018867600709199905
+        },
+        "shoe_min_y": -0.7650638818740845,
+        "shoe_max_z": 0.076691634953022,
+        "min_goal_xy_distance": 0.3627563714981079,
+        "final_shoe_xyz": [
+          -0.21673496067523956,
+          -0.7618540525436401,
+          0.04244000092148781
+        ],
+        "final_goal_xy_distance": 0.3657195270061493,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_final_delivery_or_release"
+      }
+    },
+    {
+      "seed": 1673447263,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": 417,
+          "2": 221,
+          "3": 45
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": 1290,
+          "2": 321,
+          "3": 124
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.9049683809280396,
+          "1": 0.03286021202802658,
+          "2": 0.019451944157481194,
+          "3": 0.01470102183520794
+        },
+        "shoe_min_y": -0.005486276466399431,
+        "shoe_max_z": 0.08086653053760529,
+        "min_goal_xy_distance": 1.1633548736572266,
+        "final_shoe_xyz": [
+          -0.24803948402404785,
+          -0.005457692313939333,
+          0.0424346998333931
+        ],
+        "final_goal_xy_distance": 1.1633834838867188,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1744462179,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": true,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": 652,
+          "1": 450,
+          "2": 259,
+          "3": 66
+        },
+        "last_grasp_step": {
+          "0": 654,
+          "1": 548,
+          "2": 352,
+          "3": 162
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.042164068669080734,
+          "1": 0.016340909525752068,
+          "2": 0.01488539855927229,
+          "3": 0.019435448572039604
+        },
+        "shoe_min_y": -0.5891934037208557,
+        "shoe_max_z": 0.07912197709083557,
+        "min_goal_xy_distance": 0.6279787421226501,
+        "final_shoe_xyz": [
+          -0.23152554035186768,
+          -0.5744449496269226,
+          0.04243471100926399
+        ],
+        "final_goal_xy_distance": 0.6442064046859741,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_final_delivery_or_release"
+      }
+    },
+    {
+      "seed": 1755162436,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": 436,
+          "2": 241,
+          "3": 58
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": 463,
+          "2": 344,
+          "3": 148
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.9220963716506958,
+          "1": 0.02956792712211609,
+          "2": 0.017610544338822365,
+          "3": 0.015254469588398933
+        },
+        "shoe_min_y": 0.014436841011047363,
+        "shoe_max_z": 0.08047773689031601,
+        "min_goal_xy_distance": 1.1578415632247925,
+        "final_shoe_xyz": [
+          -0.23932012915611267,
+          0.014786028303205967,
+          0.04243460297584534
+        ],
+        "final_goal_xy_distance": 1.1581852436065674,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1771709052,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": false,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": null,
+          "2": 219,
+          "3": 46
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": null,
+          "2": 239,
+          "3": 127
+        },
+        "min_tcp_shoe_distance": {
+          "0": 1.515694260597229,
+          "1": 0.9203739166259766,
+          "2": 0.03489119932055473,
+          "3": 0.013870730996131897
+        },
+        "shoe_min_y": 0.6104907989501953,
+        "shoe_max_z": 0.0782371386885643,
+        "min_goal_xy_distance": 1.759297251701355,
+        "final_shoe_xyz": [
+          -0.2328578382730484,
+          0.6104913353919983,
+          0.04243455082178116
+        ],
+        "final_goal_xy_distance": 1.7592977285385132,
+        "failure_robot": 1,
+        "failure_stage": "robot_1_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1784630386,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": true,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": 616,
+          "1": 419,
+          "2": 224,
+          "3": 48
+        },
+        "last_grasp_step": {
+          "0": 642,
+          "1": 518,
+          "2": 321,
+          "3": 128
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.029988998547196388,
+          "1": 0.013851135969161987,
+          "2": 0.016404805704951286,
+          "3": 0.01405090931802988
+        },
+        "shoe_min_y": -0.5848240256309509,
+        "shoe_max_z": 0.08026888966560364,
+        "min_goal_xy_distance": 0.5936248302459717,
+        "final_shoe_xyz": [
+          -0.2405984103679657,
+          -0.5836319327354431,
+          0.04243268445134163
+        ],
+        "final_goal_xy_distance": 0.5948967933654785,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_final_delivery_or_release"
+      }
+    },
+    {
+      "seed": 1929227305,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": true,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": 627,
+          "1": 429,
+          "2": 235,
+          "3": 56
+        },
+        "last_grasp_step": {
+          "0": 670,
+          "1": 530,
+          "2": 331,
+          "3": 139
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.02675797790288925,
+          "1": 0.013678005896508694,
+          "2": 0.015344568528234959,
+          "3": 0.014526511542499065
+        },
+        "shoe_min_y": -0.6556662917137146,
+        "shoe_max_z": 0.08092459291219711,
+        "min_goal_xy_distance": 0.5061329007148743,
+        "final_shoe_xyz": [
+          -0.21939679980278015,
+          -0.6531569957733154,
+          0.04244852811098099
+        ],
+        "final_goal_xy_distance": 0.5093587636947632,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_final_delivery_or_release"
+      }
+    },
+    {
+      "seed": 1934002399,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": true,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": 616,
+          "1": 422,
+          "2": 227,
+          "3": 50
+        },
+        "last_grasp_step": {
+          "0": 661,
+          "1": 521,
+          "2": 323,
+          "3": 131
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.026893310248851776,
+          "1": 0.013658000156283379,
+          "2": 0.013327074237167835,
+          "3": 0.014050260186195374
+        },
+        "shoe_min_y": -0.6979465484619141,
+        "shoe_max_z": 0.08013499528169632,
+        "min_goal_xy_distance": 0.49665528535842896,
+        "final_shoe_xyz": [
+          -0.21246647834777832,
+          -0.6953144669532776,
+          0.04244028404355049
+        ],
+        "final_goal_xy_distance": 0.5003075003623962,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_final_delivery_or_release"
+      }
+    },
+    {
+      "seed": 1989278646,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": null,
+          "1": 442,
+          "2": 239,
+          "3": 56
+        },
+        "last_grasp_step": {
+          "0": null,
+          "1": 1447,
+          "2": 339,
+          "3": 145
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.9115196466445923,
+          "1": 0.04123588651418686,
+          "2": 0.018619852140545845,
+          "3": 0.015799297019839287
+        },
+        "shoe_min_y": 0.0026878321077674627,
+        "shoe_max_z": 0.07794074714183807,
+        "min_goal_xy_distance": 1.1424630880355835,
+        "final_shoe_xyz": [
+          -0.2399146407842636,
+          0.0026879545766860247,
+          0.042434655129909515
+        ],
+        "final_goal_xy_distance": 1.1424630880355835,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_never_established_grasp"
+      }
+    },
+    {
+      "seed": 1996105486,
+      "success": false,
+      "steps": 1500,
+      "lpd_diagnostic": {
+        "ever_grasped": {
+          "0": true,
+          "1": true,
+          "2": true,
+          "3": true
+        },
+        "first_grasp_step": {
+          "0": 620,
+          "1": 424,
+          "2": 230,
+          "3": 51
+        },
+        "last_grasp_step": {
+          "0": 637,
+          "1": 522,
+          "2": 327,
+          "3": 133
+        },
+        "min_tcp_shoe_distance": {
+          "0": 0.03170044720172882,
+          "1": 0.013438494876027107,
+          "2": 0.016709713265299797,
+          "3": 0.014490704983472824
+        },
+        "shoe_min_y": -0.5755384564399719,
+        "shoe_max_z": 0.08062399923801422,
+        "min_goal_xy_distance": 0.6063715815544128,
+        "final_shoe_xyz": [
+          -0.23695148527622223,
+          -0.5683804750442505,
+          0.04243496060371399
+        ],
+        "final_goal_xy_distance": 0.6157604455947876,
+        "failure_robot": 0,
+        "failure_stage": "robot_0_final_delivery_or_release"
+      }
+    }
+  ],
+  "camera": "strictly local single wrist RGB-D on matching panda_hand; no global/peer/right-camera input",
+  "seed_protocol": {
+    "method": "frozen random sample without replacement; Python Random(20260728); fixed first 20 in manifest order",
+    "source": "/workspace/RoboFactory/runs/strict640x480_v2/evaluation_protocol/long_pipeline_delivery_first20.json",
+    "sha256": "768e4c825ebcf92ce0681d50d64e44b02350718c1dd56c80936e26eab8e42a57",
+    "training_seed_overlap": false
+  }
+}

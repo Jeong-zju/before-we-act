@@ -1,0 +1,63 @@
+{
+  "dataset": "B111ue/RoboFactory-5Task-RGBD-Decentralized",
+  "evaluation": {
+    "primary": "frozen unseen 100-seed SR@1",
+    "seed_manifests": "protocol/frozen100",
+    "max_steps": 1500
+  },
+  "models": {
+    "dinov3_act_rgb": {
+      "checkpoint": "checkpoints/dinov3_act_rgb/checkpoint_080000.pt",
+      "config": "configs/dinov3_act_rgb/checkpoint_080000.json",
+      "results": "results/all5_baselines/dinov3_act_rgb",
+      "sha256": "cd0f9b1440e3c0dbfddcc2e6aa98e81f96f63c2d69234c4968189959d105f8cf",
+      "updates": 80000,
+      "normalization": "embedded checkpoint stats",
+      "sr_at_1": [87, 98, 3, 0, 14]
+    },
+    "stereo_act_cross_relbias": {
+      "checkpoint": "checkpoints/stereo_act_cross_relbias/checkpoint_080000.pt",
+      "config": "configs/stereo_act_cross_relbias/checkpoint_080000.json",
+      "results": "results/all5_baselines/stereo_act_cross_relbias",
+      "sha256": "c92eb1ef90d4e85440a8bd3ae70ba01876eb82aa2b7ff4d2992950fb389a45dd",
+      "updates": 80000,
+      "normalization": "embedded checkpoint stats",
+      "sr_at_1": [92, 100, 42, 20, 29]
+    },
+    "stereo_ffn_moe_e4": {
+      "checkpoint": "checkpoints/stereo_ffn_moe/checkpoint_080000.pt",
+      "config": "configs/stereo_ffn_moe/checkpoint_080000.json",
+      "results": "results/all5_baselines/stereo_ffn_moe",
+      "sha256": "faf1efe87593bf55e03b407a834d19fc0186839087740631abe5a13b244006aa",
+      "updates": 80000,
+      "normalization": "embedded checkpoint stats",
+      "sr_at_1": [100, 99, 68, 17, 28]
+    },
+    "stereo_local_arca": {
+      "checkpoint": "checkpoints/stereo_local_arca/checkpoint_080000.pt",
+      "config": "configs/stereo_local_arca/checkpoint_080000.json",
+      "results": "results/all5_baselines/stereo_local_arca",
+      "sha256": "c794379ce2ce60247097b7494536c3332c927402853eb4d89ee3a3a5f4d375db",
+      "updates": 80000,
+      "normalization": "embedded checkpoint stats",
+      "sr_at_1": [96, 100, 81, 15, 29]
+    },
+    "stereo_core": {
+      "checkpoint": "checkpoints/stereo_core/checkpoint_120000.pt",
+      "config": "configs/stereo_core/checkpoint_120000.json",
+      "results": "results/stereo_core",
+      "sha256": "9758a29a865ca739d1270e762d3494842ad8a7c87f0df5b22cc58ee44b4a8eab",
+      "updates": 120000,
+      "normalization": "embedded checkpoint stats",
+      "sr_at_1": [99, 100, 99, 94, 29],
+      "recovery_at_3_supplementary": [99, 100, 99, 95, 30]
+    }
+  },
+  "task_order": [
+    "LiftBarrier",
+    "CameraAlignment",
+    "ThreeRobotsStackCube",
+    "LongPipelineDelivery",
+    "TakePhoto"
+  ]
+}

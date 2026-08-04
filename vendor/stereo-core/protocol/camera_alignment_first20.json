@@ -1,0 +1,33 @@
+{
+  "version": "strict640x480-v2",
+  "task": "camera_alignment",
+  "seeds": [
+    1905860028,
+    1707521464,
+    1282484962,
+    1116633513,
+    1791641211,
+    1312103664,
+    1576923859,
+    1579168412,
+    1425043585,
+    1198934783,
+    1071275813,
+    1791357909,
+    1371389916,
+    1719794939,
+    1041308800,
+    1894003198,
+    1730183932,
+    1614753899,
+    1388088053,
+    1258102374
+  ],
+  "selection_method": "frozen random sample without replacement; Python Random(20260728); fixed first 20 in manifest order",
+  "training_seed_range": [
+    400000,
+    800999
+  ],
+  "training_seed_overlap": false,
+  "parent_manifest": "/workspace/RoboFactory/runs/strict640x480_v2/heldout_seeds/camera_alignment.json"
+}
