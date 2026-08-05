@@ -110,8 +110,8 @@ def main() -> None:
         checks[task] = {
             "exact": bool(torch.equal(left, right)),
             "max_abs": float((left.float() - right.float()).abs().max()),
-            "sha256_before": hashlib.sha256(left.contiguous().numpy().tobytes()).hexdigest(),
-            "sha256_after": hashlib.sha256(right.contiguous().numpy().tobytes()).hexdigest(),
+            "sha256_before": hashlib.sha256(left.contiguous().view(torch.uint16).numpy().tobytes()).hexdigest(),
+            "sha256_after": hashlib.sha256(right.contiguous().view(torch.uint16).numpy().tobytes()).hexdigest(),
         }
     result = {
         "schema_version": 1,
