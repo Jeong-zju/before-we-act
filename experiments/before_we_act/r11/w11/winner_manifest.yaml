@@ -1,0 +1,63 @@
+schema_version: 1
+stage: W11
+created_at_utc: "2026-08-05T04:51:31Z"
+status: promoted
+
+selection:
+  round: R11
+  run_id: r11-20260805-offpath-v1
+  winner: p0
+  ranking: [p0, p3, p1, p2]
+  rule: highest pre-frozen representation_screen_score among valid candidates
+  representation_screen_score: -0.5006217892320185
+  round_decision_path: /workspace/bwa_runs/r11-20260805-offpath-v1/round_decision.json
+  round_decision_sha256: 12728b04930c0f18c893417818f5bb79375b9e08b1bf790af43f01779e222780
+  acceptance_path: /workspace/bwa_runs/r11-20260805-offpath-v1/candidates/p0/acceptance.json
+  acceptance_sha256: 0b6b8c60ed5fc6f4a6a7eb983c4d6110773825dddc4cea4626c5700360533e95
+
+component:
+  candidate_id: p0
+  kind: vjepa2_predictor
+  official_repo: https://github.com/facebookresearch/vjepa2.git
+  upstream_commit: 204698b45b3712590f06245fbfba32d3be539812
+  code_license: MIT
+  candidate_branch: bwa/r11-p0-vjepa2-component
+  training_commit: 9bf17705352fe2640e62943a1a3d2eb53025272b
+  terminal_acceptance_commit: 2bb74d45d99e73945fa201037ce17a37375b0d21
+  full_repo_runtime_dependency: false
+  algorithmic_lines_changed: 0
+
+integration:
+  base_branch: bwa/main
+  base_commit: 1880c3093ada675157fef10cd3daf8fcc25664ed
+  winner_branch: bwa/merge-r11-winner
+  code_integration_commit: 9a678443d30020350ae33b6b4028f0732448a865
+  strategy: minimal winner-only cherry-pick followed by strict fast-forward
+  action_affecting: false
+  gate20: N/A (action hash equal)
+  forbidden_candidate_components_present: false
+  stereo_core_changed: false
+
+checkpoint:
+  update: 10000
+  source_path: /workspace/bwa_runs/r11-20260805-offpath-v1/candidates/p0/train/formal/checkpoints/checkpoint_010000.pt
+  promoted_path: /workspace/bwa_runs/shared/w11/checkpoint_010000.pt
+  sha256: a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49
+  config: configs/before_we_act/r11_belief/p0.yaml
+  immutable_mode: "0444"
+
+remote_validation:
+  receipt_root: /workspace/bwa_runs/w11-merge-validation-20260805
+  source_verified: true
+  license_verified: true
+  minimal_patch_verified: true
+  upstream_parity_exact: true
+  upstream_parity_max_abs: 0.0
+  strict_checkpoint_restore: true
+  representation_metrics_reproduced: true
+  action_hash_equal: true
+  parent_immutable: true
+
+claim_boundary:
+  closed_loop_improvement_claimed: false
+  note: W11 is an off-path belief-component winner selected by the frozen R11 screen; it does not establish a closed-loop gain over W10.
