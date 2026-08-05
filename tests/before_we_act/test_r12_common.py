@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import sys
 
+import h5py
+import numpy as np
 import torch
 
 from before_we_act.benchmark import TASKS
@@ -37,6 +39,90 @@ def test_exact_sampler_has_one_window_per_task_and_is_resumable():
     resumed = list(ExactFiveTaskWindowSampler(indices, updates=4, seed=12, start_update=2))
     assert resumed == full[2:]
     assert all(sorted(indices[row].tolist()) == [0, 1, 2, 3, 4] for row in full)
+
+
+def test_causal_history_matches_closed_loop_cold_start_and_lag():
+    from scripts.before_we_act.prepare_r12_action_cache import (
+        causal_history_indices,
+        previous_action_index,
+    )
+
+    assert causal_history_indices(0) == [0, 0, 0]
+    assert causal_history_indices(1) == [0, 0, 1]
+    assert causal_history_indices(2) == [0, 1, 2]
+    assert causal_history_indices(7) == [5, 6, 7]
+    assert previous_action_index(0) is None
+    assert previous_action_index(1) == 0
+    assert previous_action_index(7) == 6
+
+
+def test_causal_cache_selection_adds_every_episode_cold_start():
+    from scripts.before_we_act.prepare_r12_action_cache import choose_examples
+
+    manifests = {
+        task: {
+            "episodes": [
+                {
+                    "split": "train",
+                    "steps": 10,
+                    "hdf5_path": f"{task}.hdf5",
+                }
+            ]
+        }
+        for task in TASKS
+    }
+    rows = choose_examples(manifests, "train", count=5, seed=12)
+    cold = {(task, current) for task, _episode, current in rows if current < 3}
+
+    assert len(rows) == 5 + 3 * len(TASKS)
+    assert cold == {(task, current) for task in TASKS for current in (0, 1, 2)}
+
+
+def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: Path):
+    from scripts.before_we_act.prepare_r12_action_cache import read_causal_example
+
+    task = next(iter(TASKS))
+    episode_dir = tmp_path / task
+    episode_dir.mkdir()
+    episode = episode_dir / "episode.hdf5"
+    with h5py.File(episode, "w") as handle:
+        data = handle.create_group("data")
+        observations = data.create_group("observation")
+        agent = observations.create_group("agents").create_group("panda-0")
+        agent.create_dataset(
+            "qpos", data=np.arange(6 * 9, dtype=np.float32).reshape(6, 9)
+        )
+        images = observations.create_group("images")
+        images.create_dataset("global", data=np.zeros((6, 4, 4, 3), dtype=np.uint8))
+        images.create_dataset("agent_0", data=np.ones((6, 4, 4, 3), dtype=np.uint8))
+        actions = data.create_group("action").create_group("agents").create_group("panda-0")
+        actions.create_dataset(
+            "executed", data=100 + np.arange(6 * 8, dtype=np.float32).reshape(6, 8)
+        )
+        actions.create_dataset(
+            "commanded", data=200 + np.arange(6 * 8, dtype=np.float32).reshape(6, 8)
+        )
+    metadata = {"hdf5_path": "episode.hdf5", "steps": 6}
+    stats = {"a_mean": np.zeros(8, dtype=np.float32), "a_std": np.ones(8, dtype=np.float32)}
+
+    cold = read_causal_example(tmp_path, (task, metadata, 0), stats, horizon=4)
+    later = read_causal_example(tmp_path, (task, metadata, 2), stats, horizon=4)
+
+    assert cold["qpos"][:, 0].eq(cold["qpos"][0, 0]).all()
+    assert cold["actions"].eq(0).all()
+    torch.testing.assert_close(
+        cold["joint_actions"][0, 0], torch.arange(8, dtype=torch.float32) + 200
+    )
+    torch.testing.assert_close(later["actions"][0, 0], torch.zeros(8))
+    torch.testing.assert_close(
+        later["actions"][1, 0], torch.arange(8, dtype=torch.float32) + 100
+    )
+    torch.testing.assert_close(
+        later["actions"][2, 0], torch.arange(8, dtype=torch.float32) + 108
+    )
+    torch.testing.assert_close(
+        later["joint_actions"][0, 0], torch.arange(8, dtype=torch.float32) + 216
+    )
 
 
 def test_gate20_task_order_matches_frozen_contract():

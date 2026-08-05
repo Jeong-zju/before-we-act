@@ -6,7 +6,7 @@ CANDIDATE=""
 GPU_INDEX=""
 BELIEF_CHECKPOINT=/workspace/bwa_runs/shared/w11/checkpoint_010000.pt
 NORMALIZATION_CHECKPOINT=/workspace/bwa_runs/shared/parent/checkpoint_120000.pt
-ACTION_CACHE=/workspace/bwa_runs/shared/r12_action_cache.pt
+ACTION_CACHE=/workspace/bwa_runs/shared/r12_causal_coldstart_action_cache.pt
 PROTOCOL_ROOT=/workspace/bwa_runs/shared/r10_gate20
 DATA_ROOT=/workspace/datasets/robofactory_multitask
 PYTHON=/venv/robofactory-act/bin/python
@@ -47,6 +47,13 @@ LOG_ROOT="$CANDIDATE_ROOT/logs"
 MAIN_LOG="$LOG_ROOT/candidate.log"
 RECEIPTS="$CANDIDATE_ROOT/receipts"
 UPSTREAM="/workspace/bwa_upstream/r12/$CANDIDATE"
+TARGET_UPDATES="$($PYTHON - "$CONFIG" <<'PY'
+import sys, yaml
+print(yaml.safe_load(open(sys.argv[1]))["training"]["updates"])
+PY
+)"
+[[ "$TARGET_UPDATES" == 20000 ]] || { printf 'R12-R1 requires exactly 20000 updates\n' >&2; exit 3; }
+CHECKPOINT_NAME="$(printf 'checkpoint_%06d.pt' "$TARGET_UPDATES")"
 mkdir -p "$LOG_ROOT" "$RECEIPTS" "$CANDIDATE_ROOT/preflight" "$CANDIDATE_ROOT/train/formal" "$CANDIDATE_ROOT/validation/gate20"
 exec > >(tee -a "$MAIN_LOG") 2>&1
 
@@ -116,7 +123,7 @@ run_child() {
   return "$code"
 }
 
-status PREPARING cache_wait run_r12_candidate.sh "waiting for shared R12 legal-input/action-target cache" 2000
+status PREPARING cache_wait run_r12_candidate.sh "waiting for shared causal/cold-start R12 action cache" "$TARGET_UPDATES"
 for _ in $(seq 1 3600); do
   [[ -f "$ACTION_CACHE" ]] && break
   sleep 10
@@ -133,19 +140,19 @@ import sys, yaml
 print(yaml.safe_load(open(sys.argv[1]))["upstream_commit_sha"])
 PY
 )"
-run_child DOWNLOADING source_fetch fetch_upstream_readonly.py "verify official pinned source" 2000 \
+run_child DOWNLOADING source_fetch fetch_upstream_readonly.py "verify official pinned source" "$TARGET_UPDATES" \
   "$PYTHON" "$FE_ROOT/scripts/before_we_act/fetch_upstream_readonly.py" --repo "$REPO" --commit "$UPSTREAM_COMMIT" --destination "$UPSTREAM"
-run_child PREPARING source_verify verify_upstream_source.py "official repo/commit/clean checkout" 2000 \
+run_child PREPARING source_verify verify_upstream_source.py "official repo/commit/clean checkout" "$TARGET_UPDATES" \
   "$PYTHON" "$FE_ROOT/scripts/before_we_act/verify_upstream_source.py" --lock "$LOCK" --upstream "$UPSTREAM" --output "$RECEIPTS/source.json"
-run_child PREPARING license verify_component_license.py "license preserved" 2000 \
+run_child PREPARING license verify_component_license.py "license preserved" "$TARGET_UPDATES" \
   "$PYTHON" "$FE_ROOT/scripts/before_we_act/verify_component_license.py" --lock "$LOCK" --project-root "$FE_ROOT" --output "$RECEIPTS/license.json"
-run_child PREPARING patch audit_component_patch.py "minimal transplant patch audit" 2000 \
+run_child PREPARING patch audit_component_patch.py "minimal transplant patch audit" "$TARGET_UPDATES" \
   "$PYTHON" "$FE_ROOT/scripts/before_we_act/audit_component_patch.py" --lock "$LOCK" --upstream "$UPSTREAM" --project-root "$FE_ROOT" --patch-output "$RECEIPTS/upstream_adaptation.patch" --report-output "$RECEIPTS/patch.json"
-run_child PREPARING dependency audit_no_full_repo_dependency.py "no full upstream runtime import" 2000 \
+run_child PREPARING dependency audit_no_full_repo_dependency.py "no full upstream runtime import" "$TARGET_UPDATES" \
   "$PYTHON" "$FE_ROOT/scripts/before_we_act/audit_no_full_repo_dependency.py" --project-root "$FE_ROOT" --output "$RECEIPTS/dependency.json"
-run_child PREPARING core_free audit_r12_core_free.py "physical CoRE/runtime separation" 2000 \
+run_child PREPARING core_free audit_r12_core_free.py "physical CoRE/runtime separation" "$TARGET_UPDATES" \
   "$PYTHON" "$FE_ROOT/scripts/before_we_act/audit_r12_core_free.py" --project-root "$FE_ROOT" --candidate-module "$MODULE" --output "$RECEIPTS/core_free.json"
-run_child PREPARING parity parity.py "official/local component numerical parity" 2000 \
+run_child PREPARING parity parity.py "official/local component numerical parity" "$TARGET_UPDATES" \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" "$PARITY" --upstream "$UPSTREAM" --output "$RECEIPTS/parity.json" --device cuda:0
 
 run_child TRAINING preflight train_action_generator.py "two-update train/save test" 2 \
@@ -154,15 +161,15 @@ run_child VALIDATING preflight_restore verify_r12_preflight.py "strict restore, 
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" "$FE_ROOT/scripts/before_we_act/verify_r12_preflight.py" --config "$CONFIG" --checkpoint "$CANDIDATE_ROOT/preflight/checkpoints/checkpoint_000002.pt" --device cuda:0 --output "$RECEIPTS/preflight.json"
 
 FORMAL="$CANDIDATE_ROOT/train/formal"
-run_child TRAINING formal train_action_generator.py "frozen 2000-update action component training" 2000 \
+run_child TRAINING formal train_action_generator.py "causal/cold-start 20000-update action component training" "$TARGET_UPDATES" \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.train_action_generator --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --output "$FORMAL" --device cuda:0
-CHECKPOINT="$FORMAL/checkpoints/checkpoint_002000.pt"
-run_child VALIDATING offline_validation evaluate_action_generator_offline.py "held-out finite/control-cycle smoke; no quality threshold" 2000 \
+CHECKPOINT="$FORMAL/checkpoints/$CHECKPOINT_NAME"
+run_child VALIDATING offline_validation evaluate_action_generator_offline.py "held-out finite/control-cycle smoke; no quality threshold" "$TARGET_UPDATES" \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.evaluate_action_generator_offline --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --checkpoint "$CHECKPOINT" --output "$CANDIDATE_ROOT/validation/offline.json" --device cuda:0
 
 for task in lift_barrier camera_alignment three_robots_stack_cube long_pipeline_delivery take_photo; do
   eval_log="$LOG_ROOT/gate20_${task}.log"
-  run_child VALIDATING gate20 evaluate_action_generator.py "$task paired Gate20; exactly 20 episodes" 2000 \
+  run_child VALIDATING gate20 evaluate_action_generator.py "$task paired Gate20; exactly 20 episodes" "$TARGET_UPDATES" \
     env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" BWA_R12_RUN_ROOT="$RUN_ROOT" BWA_R12_CANDIDATE="$CANDIDATE" \
     "$PYTHON" -m before_we_act.evaluate_action_generator --config "$CONFIG" --checkpoint "$CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --task "$task" --seed-file "$PROTOCOL_ROOT/seeds/$task.json" --episodes 20 --max-steps 1500 --device cuda:0 --output "$CANDIDATE_ROOT/validation/gate20/$task.json" --resume-log "$eval_log" >>"$eval_log" 2>&1
 done
@@ -174,8 +181,8 @@ for task in lift_barrier camera_alignment three_robots_stack_cube long_pipeline_
   BASE_ARGS+=(--baseline "$task=/workspace/bwa_runs/shared/frozen100/$task.json")
 done
 set +e
-run_child ACCEPTING acceptance accept_r12.py "engineering hard gates plus complete Gate20 > W10 74/100" 2000 \
-  "$PYTHON" "$FE_ROOT/scripts/before_we_act/accept_r12.py" --candidate "$CANDIDATE" --branch "$EXPECTED_BRANCH" --commit "$EXPECTED_COMMIT" --checkpoint "$CHECKPOINT" --source "$RECEIPTS/source.json" --license "$RECEIPTS/license.json" --patch "$RECEIPTS/patch.json" --dependency "$RECEIPTS/dependency.json" --parity "$RECEIPTS/parity.json" --preflight "$RECEIPTS/preflight.json" --offline "$CANDIDATE_ROOT/validation/offline.json" --core-free "$RECEIPTS/core_free.json" --baseline-summary "$PROTOCOL_ROOT/baseline_gate20.json" "${BASE_ARGS[@]}" "${GATE_ARGS[@]}" --output "$CANDIDATE_ROOT/acceptance.json"
+run_child ACCEPTING acceptance accept_r12.py "engineering hard gates plus complete Gate20 > W10 74/100" "$TARGET_UPDATES" \
+  "$PYTHON" "$FE_ROOT/scripts/before_we_act/accept_r12.py" --candidate "$CANDIDATE" --branch "$EXPECTED_BRANCH" --commit "$EXPECTED_COMMIT" --checkpoint "$CHECKPOINT" --expected-updates "$TARGET_UPDATES" --source "$RECEIPTS/source.json" --license "$RECEIPTS/license.json" --patch "$RECEIPTS/patch.json" --dependency "$RECEIPTS/dependency.json" --parity "$RECEIPTS/parity.json" --preflight "$RECEIPTS/preflight.json" --offline "$CANDIDATE_ROOT/validation/offline.json" --core-free "$RECEIPTS/core_free.json" --baseline-summary "$PROTOCOL_ROOT/baseline_gate20.json" "${BASE_ARGS[@]}" "${GATE_ARGS[@]}" --output "$CANDIDATE_ROOT/acceptance.json"
 ACCEPT_CODE=$?
 set -e
 TOTAL="$($PYTHON - "$CANDIDATE_ROOT/acceptance.json" <<'PY'
@@ -184,8 +191,8 @@ print(json.load(open(sys.argv[1]))["gate20"]["candidate_total_successes"])
 PY
 )"
 if ((ACCEPT_CODE == 0)); then
-  status PASSED complete accept_r12.py "qualified R12 component; Gate20=$TOTAL/100 strictly >74" 2000
+  status PASSED complete accept_r12.py "qualified R12 component; Gate20=$TOTAL/100 strictly >74" "$TARGET_UPDATES"
 else
-  status FAILED complete accept_r12.py "R12 not qualified; Gate20=$TOTAL/100 or engineering gate failed" 2000
+  status FAILED complete accept_r12.py "R12 not qualified; Gate20=$TOTAL/100 or engineering gate failed" "$TARGET_UPDATES"
 fi
 exit "$ACCEPT_CODE"

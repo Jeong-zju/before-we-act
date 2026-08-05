@@ -12,7 +12,7 @@ from .raw_team_windows import TASKS
 
 
 class CachedActionWindows(Dataset):
-    """R11 legal inputs plus normalized future joint-action supervision."""
+    """Causal legal inputs plus normalized future joint-action supervision."""
 
     def __init__(self, cache_path: str | Path, split: str) -> None:
         payload = torch.load(cache_path, map_location="cpu", weights_only=False)
@@ -21,6 +21,12 @@ class CachedActionWindows(Dataset):
         if split not in ("train", "validation"):
             raise ValueError("R12 cache split must be train or validation")
         self.metadata = payload["metadata"]
+        if (
+            self.metadata.get("protocol_variant") != "causal_lag1_coldstart_v1"
+            or self.metadata.get("action_history_lag") != 1
+            or self.metadata.get("cold_start_steps") != [0, 1, 2]
+        ):
+            raise ValueError("R12 cache is not the causal cold-start protocol")
         self.stats: Mapping[str, torch.Tensor] = payload["stats"]
         self.data: Mapping[str, torch.Tensor] = payload[split]
         size = int(self.data["visual"].shape[0])

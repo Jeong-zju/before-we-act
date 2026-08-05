@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Augment the frozen R11 legal-input cache with future joint actions only."""
+"""Build causal R12 histories, cold starts, and future joint-action targets."""
 from __future__ import annotations
 
 import argparse
@@ -19,6 +19,8 @@ from before_we_act.data.raw_team_windows import TASKS, manifest_receipt
 
 
 EXPECTED_PARENT_SHA256 = "061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d"
+PROTOCOL_VARIANT = "causal_lag1_coldstart_v1"
+COLD_START_STEPS = (0, 1, 2)
 
 
 def now() -> str:
@@ -41,7 +43,7 @@ def sha256(path: Path) -> str:
 
 
 def choose_examples(manifests: dict, split: str, count: int, seed: int):
-    """Reproduce the exact R11 selection order without changing that cache."""
+    """Return random interior windows plus every episode's cold-start prefix."""
     rng = random.Random(seed + (0 if split == "train" else 10_000))
     pools = {}
     for task in TASKS:
@@ -54,20 +56,71 @@ def choose_examples(manifests: dict, split: str, count: int, seed: int):
         task = TASKS[index % len(TASKS)]
         episode = rng.choice(pools[task])
         steps = int(episode["steps"])
-        current = rng.randint(2, steps - 2)
+        if steps < 6:
+            raise ValueError("episode is too short for causal R12 history and target")
+        current = rng.randint(3, steps - 2)
         examples.append((task, episode, current))
+    for task in TASKS:
+        for episode in pools[task]:
+            steps = int(episode["steps"])
+            examples.extend(
+                (task, episode, current)
+                for current in COLD_START_STEPS
+                if current < steps
+            )
     rng.shuffle(examples)
     return examples
 
 
-def read_joint_actions(data_root: Path, item, stats: dict, horizon: int = 100):
+def causal_history_indices(current: int, history: int = 3) -> list[int]:
+    if current < 0 or history < 1:
+        raise ValueError("invalid causal history request")
+    return [max(0, current - offset) for offset in range(history - 1, -1, -1)]
+
+
+def previous_action_index(observation_index: int) -> int | None:
+    if observation_index < 0:
+        raise ValueError("observation index cannot be negative")
+    return observation_index - 1 if observation_index else None
+
+
+def patch_means(image: np.ndarray, grid: int = 4) -> np.ndarray:
+    height, width, channels = image.shape
+    if channels != 3 or height % grid or width % grid:
+        raise ValueError("R12 images must be divisible into the frozen RGB grid")
+    value = image.reshape(grid, height // grid, grid, width // grid, 3)
+    return value.mean(axis=(1, 3), dtype=np.float32).reshape(grid * grid, 3) / 127.5 - 1.0
+
+
+def read_causal_example(data_root: Path, item, stats: dict, horizon: int = 100):
     task, episode, current = item
     path = data_root / task / episode["hdf5_path"]
+    history = causal_history_indices(current)
+    visual = np.zeros((3, 16, 15), dtype=np.float16)
+    view_mask = np.zeros((3, 5), dtype=np.float16)
+    qpos = np.zeros((3, 4, 9), dtype=np.float32)
+    action_history = np.zeros((3, 4, 8), dtype=np.float32)
     actions = np.zeros((horizon, 4, 8), dtype=np.float32)
     step_mask = np.zeros(horizon, dtype=np.bool_)
     with h5py.File(path, "r") as handle:
         data = handle["data"]
         agents = sorted(data["observation/agents"].keys())
+        views = ["global"] + [f"agent_{index}" for index in range(len(agents))]
+        for time_index, observation_index in enumerate(history):
+            for view_index, view in enumerate(views):
+                visual[time_index, :, view_index * 3 : (view_index + 1) * 3] = patch_means(
+                    data[f"observation/images/{view}"][observation_index]
+                )
+                view_mask[time_index, view_index] = 1
+            prior = previous_action_index(observation_index)
+            for agent_index, agent in enumerate(agents):
+                qpos[time_index, agent_index] = data[
+                    f"observation/agents/{agent}/qpos"
+                ][observation_index]
+                if prior is not None:
+                    action_history[time_index, agent_index] = data[
+                        f"action/agents/{agent}/executed"
+                    ][prior]
         end = min(current + horizon, int(episode["steps"]))
         valid = end - current
         step_mask[:valid] = True
@@ -81,7 +134,22 @@ def read_joint_actions(data_root: Path, item, stats: dict, horizon: int = 100):
             actions[:valid, agent_index] = command
             actions[valid:, agent_index] = command[-1]
     actions = (actions - stats["a_mean"][None, None]) / stats["a_std"][None, None]
-    return torch.from_numpy(actions), torch.from_numpy(step_mask)
+    agent_mask = np.zeros(4, dtype=np.bool_)
+    agent_mask[: len(agents)] = True
+    return {
+        "visual": torch.from_numpy(visual),
+        "view_mask": torch.from_numpy(view_mask),
+        "qpos": torch.from_numpy(qpos),
+        "actions": torch.from_numpy(action_history),
+        "agent_mask": torch.from_numpy(agent_mask),
+        "task_index": torch.tensor(TASKS.index(task), dtype=torch.long),
+        "joint_actions": torch.from_numpy(actions),
+        "action_step_mask": torch.from_numpy(step_mask),
+    }
+
+
+def stack(rows: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    return {key: torch.stack([row[key] for row in rows]) for key in rows[0]}
 
 
 def main() -> None:
@@ -96,7 +164,17 @@ def main() -> None:
     output = Path(args.output)
     if output.exists():
         payload = torch.load(output, map_location="cpu", weights_only=False)
-        if payload.get("round") != "R12":
+        metadata = payload.get("metadata", {})
+        if (
+            payload.get("round") != "R12"
+            or metadata.get("protocol_variant") != PROTOCOL_VARIANT
+            or metadata.get("action_history_lag") != 1
+            or metadata.get("cold_start_steps") != list(COLD_START_STEPS)
+            or metadata.get("parent_normalization_checkpoint_sha256")
+            != EXPECTED_PARENT_SHA256
+            or metadata.get("train_windows") != 5_896
+            or metadata.get("validation_windows") != 1_474
+        ):
             raise ValueError("existing action cache identity differs")
         print(json.dumps({"reused": str(output), "sha256": sha256(output)}))
         return
@@ -114,6 +192,9 @@ def main() -> None:
     if metadata["seed"] != 20260805 or metadata["history_steps"] != 3:
         raise ValueError("R11 cache selection protocol differs")
     data_root = Path(args.data_root).resolve(strict=True)
+    receipt = manifest_receipt(data_root)
+    if metadata.get("manifest_sha256") != receipt:
+        raise ValueError("R11 cache and R12 dataset manifests differ")
     manifests = {
         task: json.loads((data_root / task / "training_manifest.json").read_text(encoding="utf-8"))
         for task in TASKS
@@ -121,44 +202,43 @@ def main() -> None:
     result_splits = {}
     last_beat = time.monotonic()
     for split, count_key in (("train", "train_windows"), ("validation", "validation_windows")):
-        source = r11[split]
         examples = choose_examples(manifests, split, int(metadata[count_key]), int(metadata["seed"]))
-        action_rows, mask_rows = [], []
+        rows = []
         for index, item in enumerate(examples, 1):
-            action, mask = read_joint_actions(data_root, item, stats)
-            action_rows.append(action)
-            mask_rows.append(mask)
+            rows.append(read_causal_example(data_root, item, stats))
             if time.monotonic() - last_beat >= 20:
                 atomic_json(
                     heartbeat,
                     {"producer": "prepare_r12_action_cache", "split": split, "row": index, "total": len(examples), "updated_at": now()},
                 )
                 last_beat = time.monotonic()
-        result_splits[split] = {
-            key: value for key, value in source.items()
-            if key in {"visual", "view_mask", "qpos", "actions", "agent_mask", "task_index"}
-        }
-        result_splits[split]["joint_actions"] = torch.stack(action_rows)
-        result_splits[split]["action_step_mask"] = torch.stack(mask_rows)
+        result_splits[split] = stack(rows)
     payload = {
         "schema_version": 1,
         "round": "R12",
         "metadata": {
             "created_at": now(),
+            "protocol_variant": PROTOCOL_VARIANT,
+            "action_history_lag": 1,
+            "target_starts_at_current_step": True,
+            "cold_start_steps": list(COLD_START_STEPS),
+            "cold_start_padding": "repeat_first_observation_and_zero_previous_action",
             "r11_cache": str(r11_path),
             "r11_cache_sha256": sha256(r11_path),
             "parent_normalization_checkpoint": str(parent_path),
             "parent_normalization_checkpoint_sha256": EXPECTED_PARENT_SHA256,
             "data_root": str(data_root),
-            "manifest_sha256": manifest_receipt(data_root),
+            "manifest_sha256": receipt,
             "tasks": TASKS,
             "seed": 20260805,
             "history_steps": 3,
             "horizon": 100,
             "max_agents": 4,
             "action_dim": 8,
-            "train_windows": int(metadata["train_windows"]),
-            "validation_windows": int(metadata["validation_windows"]),
+            "random_train_windows": int(metadata["train_windows"]),
+            "random_validation_windows": int(metadata["validation_windows"]),
+            "train_windows": len(result_splits["train"]["visual"]),
+            "validation_windows": len(result_splits["validation"]["visual"]),
             "legal_inputs": metadata["legal_inputs"],
             "forbidden_inputs": metadata["forbidden_inputs"],
         },

@@ -35,6 +35,7 @@ def main() -> None:
     parser.add_argument("--branch", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--expected-updates", type=int, required=True)
     parser.add_argument("--source", required=True)
     parser.add_argument("--license", required=True)
     parser.add_argument("--patch", required=True)
@@ -108,8 +109,18 @@ def main() -> None:
         check("upstream_component_parity", parity.get("passed"), args.parity),
         check("train_save_strict_restore_normalization_mask", preflight.get("passed"), args.preflight),
         check(
-            "formal_2000_updates_and_offline_smoke",
-            offline.get("checkpoint_update") == 2_000
+            "causal_lag1_and_cold_start_cache",
+            offline.get("action_cache_protocol") == "causal_lag1_coldstart_v1"
+            and offline.get("action_history_lag") == 1
+            and offline.get("cold_start_steps") == [0, 1, 2]
+            and offline.get("cold_start_padding")
+            == "repeat_first_observation_and_zero_previous_action",
+            args.offline,
+        ),
+        check(
+            "formal_expected_updates_and_offline_smoke",
+            args.expected_updates == 20_000
+            and offline.get("checkpoint_update") == args.expected_updates
             and offline.get("finite")
             and offline.get("absent_agent_zero")
             and offline.get("normalized_abs_max", 99) <= 5.0,

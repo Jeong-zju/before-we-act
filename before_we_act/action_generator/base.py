@@ -76,8 +76,10 @@ def load_r12_config(path: str | Path) -> R12Config:
     }
     if set(training) != required_training:
         raise ValueError("R12 training keys differ from the frozen schema")
-    if training["updates"] != 2_000 or training["seed"] != 20260805:
+    if training["updates"] != 20_000 or training["seed"] != 20260805:
         raise ValueError("R12 update/seed freeze differs")
+    if training["checkpoint_every"] != 2_000 or training["progress_every"] != 50:
+        raise ValueError("R12-R1 checkpoint/progress cadence differs")
     if training["precision"] != "bfloat16":
         raise ValueError("R12 precision must be bfloat16")
     rule = payload["selection_rule"]
