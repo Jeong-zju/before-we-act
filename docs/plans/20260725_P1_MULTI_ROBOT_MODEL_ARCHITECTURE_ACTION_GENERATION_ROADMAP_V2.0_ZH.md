@@ -3138,9 +3138,9 @@ R11 只替换或新增 `before_we_act/team_belief/encoder`，控制动作仍由 
 
 四路共享本项目 trainer、raw-observation cache、split和 checkpoint wrapper。R11 没有 `I11>=5%`、causal CI、AUROC/ECE 或 latency quality hard gate；这些只写 `optional_diagnostics.json`。唯一 W11 由训练前固定的 `representation_screen_score` 排名选择，默认按 held-out future feature、partner action、shared progress和吞吐排序，不设最低阈值；只有作业无法运行、数据泄漏、来源不合规或 action hash 改变才失去资格。action hash 一旦改变，必须重新分类并补 Gate20。
 
-#### 10.14.1 R11 终态执行账本（2026-08-05，PASSED / W11=P0，仅诊断选择、不合并）
+#### 10.14.1 R11 终态执行账本（2026-08-05，PASSED / W11=P0；诊断时不合并，后续经用户显式授权合并）
 
-本轮于北京时间 `2026-08-05 08:00:26` 创建 run，在 `08:30:24` 生成唯一排名决定；对应 UTC 为 `00:00:26–00:30:24`。冻结父节点为 `bwa/r9-core-native@06ba780a4617b4aa92b5a103864f0ca28f79aaa6`，父 checkpoint 为 `/workspace/bwa_runs/shared/parent/checkpoint_120000.pt`，SHA256 为 `061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d`。公共工程分支终态为 `bwa/main@8d0f658`，四路有效性均为 `PASSED`，预注册分数排序为 `P0 > P3 > P1 > P2`，因此 R11 的**诊断性 W11 选择**为 P0 V-JEPA2 Predictor Transplant。`round_decision.json` 明确记录 `merge_performed=false`；遵守本次任务的 `[ON_DIAG_PASS]` 与 10.13.1“AI 不自行合并”边界，不创建 `bwa/merge-r11-winner`，不创建或运行 R12。
+本轮于北京时间 `2026-08-05 08:00:26` 创建 run，在 `08:30:24` 生成唯一排名决定；对应 UTC 为 `00:00:26–00:30:24`。冻结父节点为 `bwa/r9-core-native@06ba780a4617b4aa92b5a103864f0ca28f79aaa6`，父 checkpoint 为 `/workspace/bwa_runs/shared/parent/checkpoint_120000.pt`，SHA256 为 `061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d`。公共工程分支诊断终态为 `bwa/main@8d0f658`，四路有效性均为 `PASSED`，预注册分数排序为 `P0 > P3 > P1 > P2`，因此 R11 的**诊断性 W11 选择**为 P0 V-JEPA2 Predictor Transplant。`round_decision.json` 在当时明确记录 `merge_performed=false`；先遵守该任务的 `[ON_DIAG_PASS]` 与 10.13.1“AI 不自行合并”边界停止。用户随后另行显式授权“根据约定好的规则，合并出 W11”，因此只在新授权后执行 H 节的 winner-only 合并；原决定文件保持不可变，不回写历史字段，也没有创建或运行 R12。
 
 必须准确解释这里的“通过”：R11 通过表示四个官方组件移植均满足来源、许可证、最小 patch、上游 parity、训练/恢复、off-path 动作哈希等工程有效性门，并能按预注册 score 得到唯一顺序；它**不表示** P0 已提高 W10 闭环成功率，也不表示 10k off-path 更新可以和 W10 的 120k 动作策略训练量直接比较。四路均未进入动作路径，Gate20 依法为 N/A。
 
@@ -3304,7 +3304,43 @@ launcher 的 `--candidates A,B --dry-run`、单路/四路 monitor `--once`、单
 
 ##### G. 结论、风险与停止条件
 
-R11 最终结论为 **PASSED**，诊断性 `W11=P0`。但四路 future/action gain 都因明显落后极强的 last-frame/last-action baseline 而裁剪到 `-1.0`，throughput 又全部饱和为 `1.0`；所以本轮非常接近的排序实质主要由 progress R² 决定，P0 相对 P3 只高约 `0.00011969`。这是真实负面证据：不能把 P0 的第一名写成“预测表征已优于 persistence”“提高 Camera/Stack”或“闭环 performance 提升”。若未来显式启动 R12，W11 的作用只能是按冻结规则选出的 belief 接口/checkpoint，并应优先补多 seed screen 稳定性或重新审视过强 baseline/score 饱和现象；这些建议不得追溯修改本轮阈值、排名或 PASSED 结论。本任务在文档提交推送后停止，不进入 `[NEXT_STAGE]`。
+R11 最终结论为 **PASSED**，诊断性 `W11=P0`。但四路 future/action gain 都因明显落后极强的 last-frame/last-action baseline 而裁剪到 `-1.0`，throughput 又全部饱和为 `1.0`；所以本轮非常接近的排序实质主要由 progress R² 决定，P0 相对 P3 只高约 `0.00011969`。这是真实负面证据：不能把 P0 的第一名写成“预测表征已优于 persistence”“提高 Camera/Stack”或“闭环 performance 提升”。若未来显式启动 R12，W11 的作用只能是按冻结规则选出的 belief 接口/checkpoint，并应优先补多 seed screen 稳定性或重新审视过强 baseline/score 饱和现象；这些建议不得追溯修改本轮阈值、排名或 PASSED 结论。诊断任务先按原指令停止；之后仅根据新的显式授权完成 H 节 W11 合并，仍不进入 R12。
+
+##### H. 后续显式授权的 W11 winner-only 合并（2026-08-05 12:53 CST）
+
+用户在诊断账本提交后明确要求按既定规则合并 W11。本次以已推送的 `bwa/main@1880c3093ada675157fef10cd3daf8fcc25664ed` 为合并基线创建 `bwa/merge-r11-winner`，只移植 P0 的最小 V-JEPA2 Predictor 组件和该组件必需的锁定 `timm` 安装逻辑；P0 原训练提交 `b95d9c1`、依赖修复 `b842ae5` 在新基线上分别成为 `89b352d`、`9a67844`。随后新增不可变 winner/weight 账本 `experiments/before_we_act/r11/w11/winner_manifest.yaml`，W11 分支终态为 `e912259974c1a182ecc1ef9761c6944e1baac9df`，并以 `git merge --ff-only bwa/merge-r11-winner` 严格快进 `bwa/main`。两条分支均已推送；没有 squash、无冲突提交、没有 P1/P2/P3 组件、没有完整 V-JEPA2 仓库、没有 `stereo_core/**` 改动。
+
+原始 `round_decision.json` 继续保留诊断当时的 `merge_performed=false`，避免篡改实验历史；后续 promotion 的权威记录改由上述 Git winner manifest 承担。manifest 固定了 `winner=p0`、`ranking=[p0,p3,p1,p2]`、决定文件 SHA256、上游 commit/license、候选训练/验收 commit、W11 代码 commit、checkpoint 与 claim boundary。
+
+本地合并 worktree 为 `/home/jeong/zeno/wam/before-we-act-r11.8jSOij/w11`。实际完成 `compileall`、四个 R11 Bash 入口 `bash -n`、LICENSE、`full_repo_runtime_dependency=false`、`strictly_off_path` 与 diff allowlist 审计；核心可运行测试为 `2 passed / 2 skipped`。完整 `tests/before_we_act` 在本机因既有环境没有 `h5py` 无法收集，另外两个旧 R10 card test 硬编码不存在的当前-worktree `.venv/bin/python`，这些环境限制没有被伪装成通过，也未通过安装依赖或创建链接污染用户工作树。张量和 CUDA 复验全部在正式远程 venv 补齐。
+
+远程使用独立 worktree `/workspace/bwa_worktrees/w11`，在 `GPU0` 空闲时从原 10k checkpoint 只做复验、不重训。回执目录为 `/workspace/bwa_runs/w11-merge-validation-20260805`：官方 V-JEPA2 checkout clean 且 commit 精确；MIT LICENSE 通过；`algorithmic_lines_changed=0`；无完整上游 runtime 依赖；upstream parity 为 exact、`max_abs=0`；正式 checkpoint 严格恢复后离线 MSE/R²/screen score 与原结果逐项相同；五任务 `action_hash_equal=true` 且 `parent_immutable=true`。复验时吞吐为 `11615.48 windows/s`，仍高于冻结的 512 饱和阈值，因此 screen score 保持 `-0.5006217892320185`。
+
+胜出权重从原 run **复制而非移动或覆盖**到共享只读路径：
+
+```text
+/workspace/bwa_runs/shared/w11/checkpoint_010000.pt
+SHA256=a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49
+mode=0444, update=10000
+```
+
+源文件仍保留在 `/workspace/bwa_runs/r11-20260805-offpath-v1/candidates/p0/train/formal/checkpoints/checkpoint_010000.pt`，两者经 `cmp` 与 SHA256 双重确认逐字节相同。远程 `/workspace/fe-pc-wam` 的 `bwa/main` 和 `/workspace/bwa_worktrees/w11` 的 `bwa/merge-r11-winner` 均已严格快进到 `e912259`。本次只形成可供后续阶段显式引用的 W11，不启动 R12、训练或闭环 Gate20。
+
+可复制核验命令：
+
+```bash
+ssh -p 10328 root@69.176.92.104
+
+git -C /workspace/fe-pc-wam rev-parse bwa/main
+git -C /workspace/bwa_worktrees/w11 rev-parse bwa/merge-r11-winner
+git -C /workspace/bwa_worktrees/w11 show --stat --oneline e912259
+
+sha256sum \
+  /workspace/bwa_runs/r11-20260805-offpath-v1/candidates/p0/train/formal/checkpoints/checkpoint_010000.pt \
+  /workspace/bwa_runs/shared/w11/checkpoint_010000.pt
+
+jq . /workspace/bwa_runs/w11-merge-validation-20260805/{parity,representation_screen,action_hash}.json
+```
 
 ### 10.15 R12：四路 Action Generator 组件移植（action-affecting，强制 Gate20）
 
