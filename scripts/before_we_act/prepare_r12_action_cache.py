@@ -172,8 +172,10 @@ def main() -> None:
             or metadata.get("cold_start_steps") != list(COLD_START_STEPS)
             or metadata.get("parent_normalization_checkpoint_sha256")
             != EXPECTED_PARENT_SHA256
-            or metadata.get("train_windows") != 5_896
-            or metadata.get("validation_windows") != 1_474
+            or metadata.get("train_windows")
+            != metadata.get("random_train_windows", 0) + 1_800
+            or metadata.get("validation_windows")
+            != metadata.get("random_validation_windows", 0) + 225
         ):
             raise ValueError("existing action cache identity differs")
         print(json.dumps({"reused": str(output), "sha256": sha256(output)}))
