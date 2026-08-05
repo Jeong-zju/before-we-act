@@ -1,9 +1,9 @@
 # P1 多机器人 Before-We-Act 技术路线 V4.5（S10 冻结 / 上游组件代码移植优先 / Benchmark-First Gate20）
 
-> 文档更新：2026-08-05（V4.5 + R11 终态：四路官方 belief 组件移植有效，诊断性 `W11=P0`，不自动合并或启动 R12）
+> 文档更新：2026-08-05（V4.5 + R12-R1 因果诊断终态与 R12-R2 训练前预注册）
 > 工程起点：`bwa/r9-core-native@06ba780`；R10 四路已全部失败并固定 `W10=B9-CoreNative`；R11 四路于 2026-08-05 完成并全部 PASSED，冻结排名 `P0>P3>P1>P2`
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1，四路来源/parity/restore/action-hash 均通过，`Gate20=N/A`。本任务按停止条件未创建 merge winner 或 R12 run
+> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1。R12-R1 四路均已被 Gate20 数学淘汰，未产生 W12；当前仍在 R12，按 10.15.1 的训练前冻结方案执行 R12-R2，禁止提前进入 R13
 > 评测原则：S10 原样完成；R11/R13 保持 off-path，R12/R14 会改变动作轨迹。任何候选只要可能改变最终执行动作、候选选择、动作后处理或策略权重，就必须在同一五任务、同一 seeds 上完成**每任务 20 回合**闭环（简称 `Gate20`，即每候选共 `5×20=100` episodes）后才有 winner 资格；其它表征、排序、校准、因果和 oracle 指标降为可选诊断，不再挡住 benchmark 更优候选
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -3371,6 +3371,23 @@ R12 从 W11 的 `TeamBeliefState → ActionProposalBatch` 现有接口出发，�
 R12 的预注册 reserve pool 为 [Diffusion Policy](https://github.com/real-stanford/diffusion_policy) 的 policy/scheduler core（MIT）和 LeRobot `multi_task_dit` 的动作模块（Apache-2.0）。只有主候选在**任何训练结果产生前**因最小闭包过大、框架不兼容或许可证/权重限制被判 `extraction_infeasible` 时，才可按预注册顺序替换；不能因为预检loss不好而换路线。
 
 每路必须完成：复制前/后 component parity、mini-batch train→save→restore、action normalization round-trip、finite/range/mask、CoRE目录移除和控制周期 smoke。随后四路无条件跑五任务各 20 回合。唯一 W12 是 Gate20 macro 严格高于 W10 的最佳候选；oracle `+10pp`、diversity、shuffle、teacher-removal、solver steps和因果 CI均降为可选消融。四路均不提高时 `no winner/no merge`，保留 W10/W11并重新提出四个官方组件，不允许合并“最不差者”。
+
+#### 10.15.1 R12-R1 因果诊断与 R12-R2 训练前预注册（2026-08-05）
+
+R12-R1 先暴露了一个确定的代码级因果错位：最初 action cache 把当前时刻 executed action 作为输入、同一时刻 commanded action作为监督；闭环却只能使用上一已执行动作。该泄漏在 `e3e15f2` 修成 lag-1，并补齐 t=0/1/2 cold start。修正后四路各训到 20k，离线 MSE 相对修正前依次变化为 P0 `0.660435→0.396915`、P1 `0.382273→0.104795`、P2 `0.821775→0.823545`、P3 `0.917297→0.724067`。这证明 P0/P1 的训练信号有效，但闭环仍存在专家历史训练与模型自生成历史推理之间的 exposure bias；P2 没有离线收益，P3 完整 Gate20 为 `0/100`。P0/P1/P2 在剩余回合即使全成功也不可能超过 W10 `74/100` 后，由用户授权按实验 identity 优雅终止验证，checkpoint、日志和已完成 episode 均保留。R12-R1 因此为 `no winner/no merge`，不存在可供 R13 冻结的 W12。
+
+继续 R12 而非进入 R13 的依赖依据是：10.16 明确要求 R13 冻结 W12 action generator；在 W12 不存在时启动 R13 会把失败动作分布固化到后果模型中，既不满足父节点契约，也无法归因。R12-R2 在任何新训练结果产生前将完整规则冻结于 `experiments/before_we_act/r12/r2_selection_rule.json`，四路保持独立：
+
+| 候选 / GPU | R12-R2 官方组件 | 初始化 | 冻结总预算 | 本轮唯一改进假设 |
+|---|---|---|---:|---|
+| P0 / GPU0 | OpenPI flow action expert | R12-R1 P0 20k checkpoint（hash锁定） | 120k | 保留已有正信号，扩大合法时间覆盖并缓解历史漂移 |
+| P1 / GPU1 | SmolVLA flow action expert | R12-R1 P1 20k checkpoint（hash锁定） | 60k | 离线收益最强但后段 loss已回升，先用较小续训预算验证闭环转化 |
+| P2 / GPU2 | ACT action-chunk CVAE Transformer（官方 `tonyzhaozh/act`） | 随机 | 120k | 用已验证的 chunking + temporal-ensemble动作核心替代无收益的从零 1B RDT |
+| P3 / GPU3 | Diffusion Policy Transformer（官方 `real-stanford/diffusion_policy`） | 随机 | 120k | 用成熟 receding-horizon action diffusion替代无预训练 teacher 的 consistency student |
+
+共享数据协议升级为 `causal_lag1_coldstart_dense_v2`：每个 train episode抽取 100 个内部时刻、每个 validation episode抽取 64 个内部时刻，并保留每个 episode 的 t=0/1/2；输入继续严格只含 lag-1 executed history。trainer按固定 seed和update生成 clean / zero / scale-aware Gaussian noise / extra-lag 四种 action-history mixture，最大扰动概率 0.75，目的是模拟闭环模型历史而不把 future 或 commanded target喂回输入。学习率使用预注册 linear-warmup + cosine-decay；P0/P1只恢复 model weight，不恢复旧 optimizer，以避免把 R1 后段上升动量带入新数据分布。
+
+R12-R2 不改变真实验收：每路必须完成完全相同 seeds、task顺序、control cadence和 temporal aggregation 的 `5×20=100`；只有工程 hard gates 全通过且总成功数严格大于 W10 `74/100` 才合格，loss/offline MSE不构成质量门。若四路仍无合格候选，则继续记录 `no winner/no merge`，不得进入 R13。训练与 Gate20 的提交、路径、运行命令、终态指标和逐项验收将在本节同一账本续写。
 
 ### 10.16 R13：四路 Candidate-Conditioned Latent World 组件移植（off-path）
 

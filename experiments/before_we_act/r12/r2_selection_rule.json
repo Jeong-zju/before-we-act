@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "round": "R12-R2",
+  "frozen_at": "2026-08-05",
+  "parent": {
+    "belief_checkpoint": "/workspace/bwa_runs/shared/w11/checkpoint_010000.pt",
+    "belief_checkpoint_sha256": "a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49",
+    "normalization_checkpoint": "/workspace/bwa_runs/shared/parent/checkpoint_120000.pt",
+    "normalization_checkpoint_sha256": "061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d"
+  },
+  "candidates": {
+    "p0": {"component": "OpenPI flow action expert", "initialization": "R12-R1 P0 checkpoint_020000", "target_updates": 120000},
+    "p1": {"component": "SmolVLA flow action expert", "initialization": "R12-R1 P1 checkpoint_020000", "target_updates": 60000},
+    "p2": {"component": "ACT action-chunk CVAE Transformer", "initialization": "random", "target_updates": 120000},
+    "p3": {"component": "Diffusion Policy Transformer", "initialization": "random", "target_updates": 120000}
+  },
+  "data": {
+    "protocol_variant": "causal_lag1_coldstart_dense_v2",
+    "train_interior_windows_per_episode": 100,
+    "validation_interior_windows_per_episode": 64,
+    "cold_start_steps": [0, 1, 2],
+    "history_robustification": "deterministic_clean_zero_noise_lag_mixture",
+    "future_or_commanded_actions_in_input": false
+  },
+  "gate20": {
+    "tasks": ["lift_barrier", "camera_alignment", "three_robots_stack_cube", "long_pipeline_delivery", "take_photo"],
+    "episodes_per_task": 20,
+    "baseline_successes": [20, 14, 0, 20, 20],
+    "baseline_total": 74,
+    "qualification": "valid_component && complete_100_episodes && total_successes > 74",
+    "loss_threshold": null
+  },
+  "tie_break": ["paired_wins", "camera_plus_stack_successes", "worst_task_successes", "p95_latency_ms", "gpu_hours", "candidate_id"],
+  "no_qualified_candidate": "no winner/no merge; remain in R12; do not enter R13"
+}

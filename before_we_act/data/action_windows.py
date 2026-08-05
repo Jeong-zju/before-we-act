@@ -22,11 +22,11 @@ class CachedActionWindows(Dataset):
             raise ValueError("R12 cache split must be train or validation")
         self.metadata = payload["metadata"]
         if (
-            self.metadata.get("protocol_variant") != "causal_lag1_coldstart_v1"
+            self.metadata.get("protocol_variant") != "causal_lag1_coldstart_dense_v2"
             or self.metadata.get("action_history_lag") != 1
             or self.metadata.get("cold_start_steps") != [0, 1, 2]
         ):
-            raise ValueError("R12 cache is not the causal cold-start protocol")
+            raise ValueError("R12 cache is not the dense causal cold-start protocol")
         self.stats: Mapping[str, torch.Tensor] = payload["stats"]
         self.data: Mapping[str, torch.Tensor] = payload[split]
         size = int(self.data["visual"].shape[0])

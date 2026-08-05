@@ -19,7 +19,7 @@ from before_we_act.data.raw_team_windows import TASKS, manifest_receipt
 
 
 EXPECTED_PARENT_SHA256 = "061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d"
-PROTOCOL_VARIANT = "causal_lag1_coldstart_v1"
+PROTOCOL_VARIANT = "causal_lag1_coldstart_dense_v2"
 COLD_START_STEPS = (0, 1, 2)
 
 
@@ -42,8 +42,8 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def choose_examples(manifests: dict, split: str, count: int, seed: int):
-    """Return random interior windows plus every episode's cold-start prefix."""
+def choose_examples(manifests: dict, split: str, per_episode: int, seed: int):
+    """Return dense, unique interior windows plus every episode's cold-start prefix."""
     rng = random.Random(seed + (0 if split == "train" else 10_000))
     pools = {}
     for task in TASKS:
@@ -52,14 +52,18 @@ def choose_examples(manifests: dict, split: str, count: int, seed: int):
             raise ValueError(f"no {split} episodes for {task}")
         pools[task] = rows
     examples = []
-    for index in range(count):
-        task = TASKS[index % len(TASKS)]
-        episode = rng.choice(pools[task])
-        steps = int(episode["steps"])
-        if steps < 6:
-            raise ValueError("episode is too short for causal R12 history and target")
-        current = rng.randint(3, steps - 2)
-        examples.append((task, episode, current))
+    for task in TASKS:
+        for episode in pools[task]:
+            steps = int(episode["steps"])
+            if steps < 6:
+                raise ValueError("episode is too short for causal R12 history and target")
+            available = list(range(3, steps - 1))
+            if len(available) >= per_episode:
+                selected = rng.sample(available, per_episode)
+            else:
+                selected = [available[index % len(available)] for index in range(per_episode)]
+                rng.shuffle(selected)
+            examples.extend((task, episode, current) for current in selected)
     for task in TASKS:
         for episode in pools[task]:
             steps = int(episode["steps"])
@@ -160,7 +164,11 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--state", required=True)
     parser.add_argument("--heartbeat", required=True)
+    parser.add_argument("--train-interior-per-episode", type=int, default=100)
+    parser.add_argument("--validation-interior-per-episode", type=int, default=64)
     args = parser.parse_args()
+    if args.train_interior_per_episode < 1 or args.validation_interior_per_episode < 1:
+        raise ValueError("dense R12 interior windows per episode must be positive")
     output = Path(args.output)
     if output.exists():
         payload = torch.load(output, map_location="cpu", weights_only=False)
@@ -172,10 +180,11 @@ def main() -> None:
             or metadata.get("cold_start_steps") != list(COLD_START_STEPS)
             or metadata.get("parent_normalization_checkpoint_sha256")
             != EXPECTED_PARENT_SHA256
-            or metadata.get("train_windows")
-            != metadata.get("random_train_windows", 0) + 1_800
-            or metadata.get("validation_windows")
-            != metadata.get("random_validation_windows", 0) + 225
+            or metadata.get("train_interior_per_episode") != args.train_interior_per_episode
+            or metadata.get("validation_interior_per_episode")
+            != args.validation_interior_per_episode
+            or metadata.get("history_robustification")
+            != "deterministic_clean_zero_noise_lag_mixture_in_trainer"
         ):
             raise ValueError("existing action cache identity differs")
         print(json.dumps({"reused": str(output), "sha256": sha256(output)}))
@@ -203,8 +212,14 @@ def main() -> None:
     }
     result_splits = {}
     last_beat = time.monotonic()
-    for split, count_key in (("train", "train_windows"), ("validation", "validation_windows")):
-        examples = choose_examples(manifests, split, int(metadata[count_key]), int(metadata["seed"]))
+    per_episode_by_split = {
+        "train": args.train_interior_per_episode,
+        "validation": args.validation_interior_per_episode,
+    }
+    for split in ("train", "validation"):
+        examples = choose_examples(
+            manifests, split, per_episode_by_split[split], int(metadata["seed"])
+        )
         rows = []
         for index, item in enumerate(examples, 1):
             rows.append(read_causal_example(data_root, item, stats))
@@ -237,8 +252,23 @@ def main() -> None:
             "horizon": 100,
             "max_agents": 4,
             "action_dim": 8,
-            "random_train_windows": int(metadata["train_windows"]),
-            "random_validation_windows": int(metadata["validation_windows"]),
+            "train_interior_per_episode": args.train_interior_per_episode,
+            "validation_interior_per_episode": args.validation_interior_per_episode,
+            "dense_train_interior_windows": sum(
+                1
+                for task in TASKS
+                for episode in manifests[task]["episodes"]
+                if episode["split"] == "train"
+                for _ in range(args.train_interior_per_episode)
+            ),
+            "dense_validation_interior_windows": sum(
+                1
+                for task in TASKS
+                for episode in manifests[task]["episodes"]
+                if episode["split"] == "validation"
+                for _ in range(args.validation_interior_per_episode)
+            ),
+            "history_robustification": "deterministic_clean_zero_noise_lag_mixture_in_trainer",
             "train_windows": len(result_splits["train"]["visual"]),
             "validation_windows": len(result_splits["validation"]["visual"]),
             "legal_inputs": metadata["legal_inputs"],

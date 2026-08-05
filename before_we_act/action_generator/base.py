@@ -73,15 +73,40 @@ def load_r12_config(path: str | Path) -> R12Config:
     required_training = {
         "updates", "batch_size", "seed", "learning_rate", "weight_decay",
         "precision", "checkpoint_every", "progress_every", "grad_clip",
+        "warm_start_checkpoint", "warm_start_sha256", "warm_start_update",
+        "warmup_steps", "decay_steps", "decay_lr_ratio",
+        "history_augmentation_probability", "history_augmentation_ramp_updates",
+        "history_noise_scale",
     }
     if set(training) != required_training:
         raise ValueError("R12 training keys differ from the frozen schema")
-    if training["updates"] != 20_000 or training["seed"] != 20260805:
+    if training["updates"] not in (60_000, 120_000) or training["seed"] != 20260805:
         raise ValueError("R12 update/seed freeze differs")
-    if training["checkpoint_every"] != 2_000 or training["progress_every"] != 50:
-        raise ValueError("R12-R1 checkpoint/progress cadence differs")
+    if training["checkpoint_every"] != 10_000 or training["progress_every"] != 50:
+        raise ValueError("R12-R2 checkpoint/progress cadence differs")
     if training["precision"] != "bfloat16":
         raise ValueError("R12 precision must be bfloat16")
+    warm_path = str(training["warm_start_checkpoint"])
+    warm_sha = str(training["warm_start_sha256"])
+    warm_update = int(training["warm_start_update"])
+    if bool(warm_path) != bool(warm_sha) or bool(warm_path) != bool(warm_update):
+        raise ValueError("R12 warm-start path/hash/update must be jointly present or absent")
+    if warm_path and (len(warm_sha) != 64 or warm_update != 20_000):
+        raise ValueError("R12-R2 warm start must be a pinned R12-R1 20k checkpoint")
+    if not 0 <= warm_update < int(training["updates"]):
+        raise ValueError("R12 warm-start update must precede the target budget")
+    if not 0 < int(training["warmup_steps"]) < int(training["decay_steps"]):
+        raise ValueError("R12 learning-rate schedule is invalid")
+    if int(training["decay_steps"]) != int(training["updates"]):
+        raise ValueError("R12 decay schedule must end at the frozen update budget")
+    if not 0 < float(training["decay_lr_ratio"]) <= 1:
+        raise ValueError("R12 decay LR ratio must be in (0, 1]")
+    if not 0 <= float(training["history_augmentation_probability"]) <= 1:
+        raise ValueError("R12 history augmentation probability must be in [0, 1]")
+    if int(training["history_augmentation_ramp_updates"]) < 1:
+        raise ValueError("R12 history augmentation ramp must be positive")
+    if float(training["history_noise_scale"]) < 0:
+        raise ValueError("R12 history noise scale must be non-negative")
     rule = payload["selection_rule"]
     expected_rule = {
         "gate20_tasks": [

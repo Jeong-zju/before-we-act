@@ -16,14 +16,14 @@ CANDIDATE_SPECS = {
         "official_repo": "https://github.com/huggingface/lerobot.git",
     },
     "p2": {
-        "kind": "rdt_diffusion_transformer",
-        "module": "before_we_act.action_generator.rdt_diffusion",
-        "official_repo": "https://github.com/thu-ml/RoboticsDiffusionTransformer.git",
+        "kind": "act_action_chunk_transformer",
+        "module": "before_we_act.action_generator.act_chunk",
+        "official_repo": "https://github.com/tonyzhaozh/act.git",
     },
     "p3": {
-        "kind": "consistency_policy_ctm",
-        "module": "before_we_act.action_generator.consistency_policy",
-        "official_repo": "https://github.com/Aaditya-Prasad/Consistency-Policy.git",
+        "kind": "diffusion_policy_transformer",
+        "module": "before_we_act.action_generator.diffusion_policy_transformer",
+        "official_repo": "https://github.com/real-stanford/diffusion_policy.git",
     },
 }
 

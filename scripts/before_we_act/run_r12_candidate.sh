@@ -6,7 +6,7 @@ CANDIDATE=""
 GPU_INDEX=""
 BELIEF_CHECKPOINT=/workspace/bwa_runs/shared/w11/checkpoint_010000.pt
 NORMALIZATION_CHECKPOINT=/workspace/bwa_runs/shared/parent/checkpoint_120000.pt
-ACTION_CACHE=/workspace/bwa_runs/shared/r12_causal_coldstart_action_cache.pt
+ACTION_CACHE=/workspace/bwa_runs/shared/r12_dense_causal_history_action_cache_v2.pt
 PROTOCOL_ROOT=/workspace/bwa_runs/shared/r10_gate20
 DATA_ROOT=/workspace/datasets/robofactory_multitask
 PYTHON=/venv/robofactory-act/bin/python
@@ -38,7 +38,7 @@ LOCK="$FE_ROOT/experiments/before_we_act/r12/$CANDIDATE/component_lock.yaml"
 PARITY="$FE_ROOT/experiments/before_we_act/r12/$CANDIDATE/parity.py"
 MODULE="$($PYTHON - "$CANDIDATE" <<'PY'
 import sys
-print({"p0":"before_we_act/action_generator/openpi_flow.py","p1":"before_we_act/action_generator/smolvla_flow.py","p2":"before_we_act/action_generator/rdt_diffusion.py","p3":"before_we_act/action_generator/consistency_policy.py"}[sys.argv[1]])
+print({"p0":"before_we_act/action_generator/openpi_flow.py","p1":"before_we_act/action_generator/smolvla_flow.py","p2":"before_we_act/action_generator/act_chunk.py","p3":"before_we_act/action_generator/diffusion_policy_transformer.py"}[sys.argv[1]])
 PY
 )"
 MANIFEST="$RUN_ROOT/run_manifest.json"
@@ -46,13 +46,13 @@ CANDIDATE_ROOT="$RUN_ROOT/candidates/$CANDIDATE"
 LOG_ROOT="$CANDIDATE_ROOT/logs"
 MAIN_LOG="$LOG_ROOT/candidate.log"
 RECEIPTS="$CANDIDATE_ROOT/receipts"
-UPSTREAM="/workspace/bwa_upstream/r12/$CANDIDATE"
+UPSTREAM="/workspace/bwa_upstream/r12r2/$CANDIDATE"
 TARGET_UPDATES="$($PYTHON - "$CONFIG" <<'PY'
 import sys, yaml
 print(yaml.safe_load(open(sys.argv[1]))["training"]["updates"])
 PY
 )"
-[[ "$TARGET_UPDATES" == 20000 ]] || { printf 'R12-R1 requires exactly 20000 updates\n' >&2; exit 3; }
+[[ "$TARGET_UPDATES" == 60000 || "$TARGET_UPDATES" == 120000 ]] || { printf 'R12-R2 budget must be 60000 or 120000 updates\n' >&2; exit 3; }
 CHECKPOINT_NAME="$(printf 'checkpoint_%06d.pt' "$TARGET_UPDATES")"
 mkdir -p "$LOG_ROOT" "$RECEIPTS" "$CANDIDATE_ROOT/preflight" "$CANDIDATE_ROOT/train/formal" "$CANDIDATE_ROOT/validation/gate20"
 exec > >(tee -a "$MAIN_LOG") 2>&1
@@ -155,13 +155,13 @@ run_child PREPARING core_free audit_r12_core_free.py "physical CoRE/runtime sepa
 run_child PREPARING parity parity.py "official/local component numerical parity" "$TARGET_UPDATES" \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" "$PARITY" --upstream "$UPSTREAM" --output "$RECEIPTS/parity.json" --device cuda:0
 
-run_child TRAINING preflight train_action_generator.py "two-update train/save test" 2 \
-  env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.train_action_generator --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --output "$CANDIDATE_ROOT/preflight" --device cuda:0 --updates 2
+run_child TRAINING preflight train_action_generator.py "two-update cold-start train/save test" 2 \
+  env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.train_action_generator --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --output "$CANDIDATE_ROOT/preflight" --device cuda:0 --updates 2 --ignore-warm-start
 run_child VALIDATING preflight_restore verify_r12_preflight.py "strict restore, normalization, finite/range/mask" 2 \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" "$FE_ROOT/scripts/before_we_act/verify_r12_preflight.py" --config "$CONFIG" --checkpoint "$CANDIDATE_ROOT/preflight/checkpoints/checkpoint_000002.pt" --device cuda:0 --output "$RECEIPTS/preflight.json"
 
 FORMAL="$CANDIDATE_ROOT/train/formal"
-run_child TRAINING formal train_action_generator.py "causal/cold-start 20000-update action component training" "$TARGET_UPDATES" \
+run_child TRAINING formal train_action_generator.py "dense causal/history-robust R12-R2 action component training" "$TARGET_UPDATES" \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.train_action_generator --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --output "$FORMAL" --device cuda:0
 CHECKPOINT="$FORMAL/checkpoints/$CHECKPOINT_NAME"
 run_child VALIDATING offline_validation evaluate_action_generator_offline.py "held-out finite/control-cycle smoke; no quality threshold" "$TARGET_UPDATES" \

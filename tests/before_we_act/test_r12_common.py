@@ -71,11 +71,47 @@ def test_causal_cache_selection_adds_every_episode_cold_start():
         }
         for task in TASKS
     }
-    rows = choose_examples(manifests, "train", count=5, seed=12)
+    rows = choose_examples(manifests, "train", per_episode=5, seed=12)
     cold = {(task, current) for task, _episode, current in rows if current < 3}
 
-    assert len(rows) == 5 + 3 * len(TASKS)
+    assert len(rows) == 5 * len(TASKS) + 3 * len(TASKS)
     assert cold == {(task, current) for task in TASKS for current in (0, 1, 2)}
+
+
+def test_history_robustification_is_deterministic_causal_and_masked():
+    from before_we_act.train_action_generator import robustify_action_history
+
+    batch = {
+        "actions": torch.arange(2 * 3 * 4 * 8, dtype=torch.float32).reshape(2, 3, 4, 8),
+        "agent_mask": torch.tensor([[True, True, False, False], [True, True, True, False]]),
+    }
+    training = {
+        "history_augmentation_probability": 1.0,
+        "history_augmentation_ramp_updates": 1,
+        "history_noise_scale": 0.25,
+    }
+    stats = {"a_std": torch.ones(8)}
+    first, first_metrics = robustify_action_history(batch, stats, training, 11, 7)
+    second, second_metrics = robustify_action_history(batch, stats, training, 11, 7)
+    torch.testing.assert_close(first, second)
+    assert first_metrics == second_metrics
+    assert first_metrics["history_aug_fraction"] == 1.0
+    assert first[0, :, 2:].eq(0).all()
+    assert first[1, :, 3:].eq(0).all()
+
+
+def test_r12_r2_learning_rate_warmup_and_decay():
+    from before_we_act.train_action_generator import learning_rate_at_update
+
+    training = {
+        "learning_rate": 1e-3,
+        "warmup_steps": 100,
+        "decay_steps": 1000,
+        "decay_lr_ratio": 0.1,
+    }
+    assert learning_rate_at_update(training, 1) == 1e-5
+    assert learning_rate_at_update(training, 100) == 1e-3
+    assert abs(learning_rate_at_update(training, 1000) - 1e-4) < 1e-12
 
 
 def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: Path):

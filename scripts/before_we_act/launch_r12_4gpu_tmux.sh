@@ -13,12 +13,12 @@ NORMALIZATION_CHECKPOINT=/workspace/bwa_runs/shared/parent/checkpoint_120000.pt
 NORMALIZATION_SHA256=061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d
 PARENT_COMMIT=fdc228189c7fc8556acba9ab9462998ffb967c71
 BASE_BRANCH=feat/model-improvements
-WORKTREE_ROOT=/workspace/bwa_worktrees/r12r1
+WORKTREE_ROOT=/workspace/bwa_worktrees/r12r2
 DATA_ROOT=/workspace/datasets/robofactory_multitask
 R11_CACHE=/workspace/bwa_runs/shared/r11_observation_cache.pt
-ACTION_CACHE=/workspace/bwa_runs/shared/r12_causal_coldstart_action_cache.pt
+ACTION_CACHE=/workspace/bwa_runs/shared/r12_dense_causal_history_action_cache_v2.pt
 PROTOCOL_ROOT=/workspace/bwa_runs/shared/r10_gate20
-BRANCHES=(bwa/r12r1-p0-openpi-causal-coldstart-20k bwa/r12r1-p1-smolvla-causal-coldstart-20k bwa/r12r1-p2-rdt-causal-coldstart-20k bwa/r12r1-p3-consistency-causal-coldstart-20k)
+BRANCHES=(bwa/r12r2-p0-openpi-dense-history-120k bwa/r12r2-p1-smolvla-dense-history-60k bwa/r12r2-p2-act-dense-history-120k bwa/r12r2-p3-diffusion-policy-dense-history-120k)
 
 while (($#)); do
   case "$1" in
@@ -64,7 +64,7 @@ for task in lift_barrier camera_alignment three_robots_stack_cube long_pipeline_
 done
 for candidate in "${SELECTED[@]}"; do
   index="${candidate#p}"
-  session="bwa-r12r1-$candidate"
+  session="bwa-r12r2-$candidate"
   tmux has-session -t "$session" 2>/dev/null && { printf 'session already exists: %s\n' "$session" >&2; exit 3; }
   uuid="$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits | awk -F', ' -v target="$index" '$1==target {print $2}')"
   if [[ -n "$uuid" ]] && nvidia-smi --query-compute-apps=gpu_uuid --format=csv,noheader | grep -Fxq "$uuid"; then
@@ -74,14 +74,14 @@ for candidate in "${SELECTED[@]}"; do
 done
 printf 'R12 preflight: run=%s root=%s selected=%s engineering_base=%s@%s W11_parent=%s\n' "$RUN_ID" "$RUN_ROOT" "${SELECTED[*]}" "$BASE_BRANCH" "$BASE_HEAD" "$PARENT_COMMIT"
 for candidate in "${SELECTED[@]}"; do
-  printf '  %s branch=%s GPU=%s session=bwa-r12r1-%s\n' "$candidate" "${BRANCHES[${candidate#p}]}" "${candidate#p}" "$candidate"
+  printf '  %s branch=%s GPU=%s session=bwa-r12r2-%s\n' "$candidate" "${BRANCHES[${candidate#p}]}" "${candidate#p}" "$candidate"
 done
 if ((DRY_RUN)); then
   printf 'dry-run passed; no worktree, cache, artifact, download or tmux session created\n'
   exit 0
 fi
 
-mkdir -p "$WORKTREE_ROOT" "$RUN_ROOT" /workspace/.cache/huggingface /workspace/bwa_upstream/r12
+mkdir -p "$WORKTREE_ROOT" "$RUN_ROOT" /workspace/.cache/huggingface /workspace/bwa_upstream/r12r2
 WORKTREE_ARGS=()
 for index in 0 1 2 3; do
   candidate="p$index"
@@ -107,11 +107,11 @@ MANIFEST_COUNT="$(find "$DATA_ROOT" -mindepth 2 -maxdepth 2 -type f -name traini
 EPISODE_COUNT="$(find "$DATA_ROOT" -mindepth 3 -maxdepth 3 -type f -name 'episode_*.hdf5' | wc -l)"
 [[ "$MANIFEST_COUNT" == 5 && "$EPISODE_COUNT" == 750 ]] || { printf 'dataset incomplete: %s manifests %s episodes\n' "$MANIFEST_COUNT" "$EPISODE_COUNT" >&2; exit 3; }
 if [[ ! -f "$ACTION_CACHE" ]]; then
-  if tmux has-session -t bwa-r12r1-prepare 2>/dev/null; then
-    printf 'reusing active shared cache preparation session: bwa-r12r1-prepare\n'
+  if tmux has-session -t bwa-r12r2-prepare 2>/dev/null; then
+    printf 'reusing active shared cache preparation session: bwa-r12r2-prepare\n'
   else
-    tmux new-session -d -s bwa-r12r1-prepare -n cache \
-      "cd '$FE_ROOT' && exec env PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_action_cache.py' --r11-cache '$R11_CACHE' --parent-checkpoint '$NORMALIZATION_CHECKPOINT' --data-root '$DATA_ROOT' --output '$ACTION_CACHE' --state '/workspace/bwa_runs/shared/r12_causal_coldstart_action_cache_state.json' --heartbeat '/workspace/bwa_runs/shared/r12_causal_coldstart_action_cache_heartbeat.json'"
+    tmux new-session -d -s bwa-r12r2-prepare -n cache \
+      "cd '$FE_ROOT' && exec env PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_action_cache.py' --r11-cache '$R11_CACHE' --parent-checkpoint '$NORMALIZATION_CHECKPOINT' --data-root '$DATA_ROOT' --output '$ACTION_CACHE' --state '/workspace/bwa_runs/shared/r12_dense_causal_history_action_cache_v2_state.json' --heartbeat '/workspace/bwa_runs/shared/r12_dense_causal_history_action_cache_v2_heartbeat.json'"
   fi
 fi
 for candidate in p0 p1 p2 p3; do
@@ -122,7 +122,7 @@ done
 for candidate in "${SELECTED[@]}"; do
   index="${candidate#p}"
   worktree="$WORKTREE_ROOT/$candidate"
-  tmux new-session -d -s "bwa-r12r1-$candidate" -n pipeline \
+  tmux new-session -d -s "bwa-r12r2-$candidate" -n pipeline \
     "cd '$worktree' && exec env CUDA_VISIBLE_DEVICES='$index' BWA_R12_RUN_ROOT='$RUN_ROOT' BWA_R12_CANDIDATE='$candidate' '$worktree/scripts/before_we_act/run_r12_candidate.sh' --run-root '$RUN_ROOT' --candidate '$candidate' --gpu-index '$index' --belief-checkpoint '$BELIEF_CHECKPOINT' --normalization-checkpoint '$NORMALIZATION_CHECKPOINT' --action-cache '$ACTION_CACHE' --protocol-root '$PROTOCOL_ROOT' --data-root '$DATA_ROOT' --python '$PYTHON'"
 done
 printf 'started R12 candidates: %s\n' "${SELECTED[*]}"

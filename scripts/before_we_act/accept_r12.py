@@ -110,7 +110,7 @@ def main() -> None:
         check("train_save_strict_restore_normalization_mask", preflight.get("passed"), args.preflight),
         check(
             "causal_lag1_and_cold_start_cache",
-            offline.get("action_cache_protocol") == "causal_lag1_coldstart_v1"
+            offline.get("action_cache_protocol") == "causal_lag1_coldstart_dense_v2"
             and offline.get("action_history_lag") == 1
             and offline.get("cold_start_steps") == [0, 1, 2]
             and offline.get("cold_start_padding")
@@ -119,7 +119,7 @@ def main() -> None:
         ),
         check(
             "formal_expected_updates_and_offline_smoke",
-            args.expected_updates == 20_000
+            args.expected_updates in (60_000, 120_000)
             and offline.get("checkpoint_update") == args.expected_updates
             and offline.get("finite")
             and offline.get("absent_agent_zero")

@@ -8,6 +8,7 @@ from pathlib import Path
 import random
 import signal
 import time
+import math
 
 import numpy as np
 import torch
@@ -43,6 +44,58 @@ def device_batch(batch, device):
     return {key: value.to(device, non_blocking=True) for key, value in batch.items()}
 
 
+def learning_rate_at_update(training, update: int) -> float:
+    """Linear warmup followed by cosine decay, frozen before the R12-R2 run."""
+    base = float(training["learning_rate"])
+    warmup = int(training["warmup_steps"])
+    decay = int(training["decay_steps"])
+    floor = float(training["decay_lr_ratio"])
+    if update <= warmup:
+        return base * update / warmup
+    progress = min(1.0, max(0.0, (update - warmup) / (decay - warmup)))
+    return base * (floor + (1.0 - floor) * 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+
+def robustify_action_history(batch, stats, training, update: int, seed: int):
+    """Deterministic scheduled-sampling proxy for closed-loop action-history drift.
+
+    Each selected sample receives exactly one of three perturbations: all-zero
+    history, scale-aware Gaussian noise, or a one-slot additional lag.  The
+    remaining samples retain expert history.  No future/commanded action enters
+    the model input.
+    """
+    actions = batch["actions"].clone()
+    maximum = float(training["history_augmentation_probability"])
+    ramp = int(training["history_augmentation_ramp_updates"])
+    probability = maximum * min(1.0, update / ramp)
+    if probability <= 0:
+        return actions, {"history_aug_probability": 0.0, "history_aug_fraction": 0.0}
+    generator = torch.Generator(device=actions.device)
+    generator.manual_seed(int(seed) + 2_000_003 * int(update))
+    selected = torch.rand(len(actions), generator=generator, device=actions.device) < probability
+    variants = torch.randint(0, 3, (len(actions),), generator=generator, device=actions.device)
+    zero = selected & variants.eq(0)
+    noisy = selected & variants.eq(1)
+    lagged = selected & variants.eq(2)
+    actions[zero] = 0
+    if bool(noisy.any()):
+        scale = torch.as_tensor(stats["a_std"], device=actions.device, dtype=actions.dtype)
+        noise = torch.randn(actions.shape, generator=generator, device=actions.device, dtype=actions.dtype)
+        actions[noisy] = actions[noisy] + noise[noisy] * scale * float(training["history_noise_scale"])
+    if bool(lagged.any()):
+        shifted = torch.zeros_like(actions[lagged])
+        shifted[:, 1:] = actions[lagged, :-1]
+        actions[lagged] = shifted
+    actions = actions * batch["agent_mask"][:, None, :, None].to(actions.dtype)
+    return actions, {
+        "history_aug_probability": probability,
+        "history_aug_fraction": float(selected.float().mean()),
+        "history_zero_fraction": float(zero.float().mean()),
+        "history_noise_fraction": float(noisy.float().mean()),
+        "history_lag_fraction": float(lagged.float().mean()),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -53,6 +106,7 @@ def main() -> None:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--updates", type=int)
     parser.add_argument("--resume", default="")
+    parser.add_argument("--ignore-warm-start", action="store_true")
     parser.add_argument("--workers", type=int, default=2)
     args = parser.parse_args()
     config_path = Path(args.config).resolve(strict=True)
@@ -80,7 +134,22 @@ def main() -> None:
     if dataset.metadata["seed"] != int(config.training["seed"]):
         raise ValueError("R12 cache seed differs")
     resume = torch.load(args.resume, map_location="cpu", weights_only=False) if args.resume else None
-    start_update = int(resume["update"]) if resume else 0
+    warm_path = "" if args.ignore_warm_start else str(config.training["warm_start_checkpoint"])
+    warm_start = None
+    if not resume and warm_path:
+        resolved_warm_path = Path(warm_path).resolve(strict=True)
+        if sha256(resolved_warm_path) != str(config.training["warm_start_sha256"]):
+            raise ValueError("R12-R1 warm-start checkpoint hash differs")
+        warm_start = torch.load(resolved_warm_path, map_location="cpu", weights_only=False)
+        if warm_start.get("candidate_id") != config.candidate_id:
+            raise ValueError("warm-start candidate differs")
+        if int(warm_start.get("update", -1)) != int(config.training["warm_start_update"]):
+            raise ValueError("warm-start update differs")
+    start_update = (
+        int(resume["update"])
+        if resume
+        else int(config.training["warm_start_update"]) if warm_start else 0
+    )
     if start_update >= target_updates:
         raise ValueError("resume update is not below target")
     sampler = ExactFiveTaskWindowSampler(
@@ -107,6 +176,8 @@ def main() -> None:
             raise ValueError("resume candidate differs")
         model.load_state_dict(resume["model"], strict=True)
         optimizer.load_state_dict(resume["optimizer"])
+    elif warm_start:
+        model.load_state_dict(warm_start["model"], strict=True)
 
     output = Path(args.output).resolve()
     checkpoints = output / "checkpoints"
@@ -127,6 +198,11 @@ def main() -> None:
         "batch_size": 5,
         "seed": int(config.training["seed"]),
         "precision": config.training["precision"],
+        "warm_start_checkpoint": str(Path(warm_path).resolve()) if warm_start else None,
+        "warm_start_sha256": str(config.training["warm_start_sha256"]) if warm_start else None,
+        "warm_start_update": start_update if warm_start else 0,
+        "history_robustification": "deterministic_clean_zero_noise_lag_mixture",
+        "learning_rate_schedule": "linear_warmup_cosine_decay",
     }
     (output / "training_identity.json").write_text(
         json.dumps(identity, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -157,6 +233,11 @@ def main() -> None:
                 "belief_checkpoint_sha256": sha256(belief_path),
                 "core_free_runtime": True,
                 "last_metrics": last,
+                "initialization": {
+                    "warm_start_checkpoint": identity["warm_start_checkpoint"],
+                    "warm_start_sha256": identity["warm_start_sha256"],
+                    "warm_start_update": identity["warm_start_update"],
+                },
             },
             path,
         )
@@ -165,6 +246,12 @@ def main() -> None:
     update = start_update
     for update, cpu_batch in enumerate(loader, start=start_update + 1):
         batch = device_batch(cpu_batch, device)
+        batch["actions"], history_metrics = robustify_action_history(
+            batch, dataset.stats, config.training, update, int(config.training["seed"])
+        )
+        current_lr = learning_rate_at_update(config.training, update)
+        for group in optimizer.param_groups:
+            group["lr"] = current_lr
         with torch.no_grad(), torch.autocast(
             "cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"
         ):
@@ -190,6 +277,8 @@ def main() -> None:
             "update": update,
             "loss": float(total.detach()),
             "grad_norm": float(grad_norm),
+            "learning_rate": current_lr,
+            **history_metrics,
             **{
                 key: float(value.detach())
                 for key, value in losses.items()
