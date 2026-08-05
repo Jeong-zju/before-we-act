@@ -68,7 +68,9 @@ def main() -> None:
     )
     timing_noise = noise[:1]
     latencies = []
-    with torch.no_grad():
+    with torch.no_grad(), torch.autocast(
+        "cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"
+    ):
         for _ in range(3):
             model.sample(timing_belief, noise=timing_noise)
         if device.type == "cuda":
