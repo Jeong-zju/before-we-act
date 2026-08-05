@@ -1,9 +1,9 @@
 # P1 多机器人 Before-We-Act 技术路线 V4.5（S10 冻结 / 上游组件代码移植优先 / Benchmark-First Gate20）
 
-> 文档更新：2026-08-05（V4.5 + R12-R1 因果诊断终态与 R12-R2 训练前预注册）
+> 文档更新：2026-08-05（V4.5 + R12-R1 因果诊断与 R12-R2 完整终态）
 > 工程起点：`bwa/r9-core-native@06ba780`；R10 四路已全部失败并固定 `W10=B9-CoreNative`；R11 四路于 2026-08-05 完成并全部 PASSED，冻结排名 `P0>P3>P1>P2`
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1。R12-R1 四路均已被 Gate20 数学淘汰，未产生 W12；当前仍在 R12，按 10.15.1 的训练前冻结方案执行 R12-R2，禁止提前进入 R13
+> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1。R12-R1 与 R12-R2 均未产生 W12；R12-R2 四路已完整完成 `4×100` Gate20 并全部 FAILED，轮级决定为 `no_winner_no_merge`。当前继续停留在 R12，先修复 representation sufficiency 与 on-policy recovery data，禁止提前进入 R13
 > 评测原则：S10 原样完成；R11/R13 保持 off-path，R12/R14 会改变动作轨迹。任何候选只要可能改变最终执行动作、候选选择、动作后处理或策略权重，就必须在同一五任务、同一 seeds 上完成**每任务 20 回合**闭环（简称 `Gate20`，即每候选共 `5×20=100` episodes）后才有 winner 资格；其它表征、排序、校准、因果和 oracle 指标降为可选诊断，不再挡住 benchmark 更优候选
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -3388,6 +3388,107 @@ R12-R1 先暴露了一个确定的代码级因果错位：最初 action cache �
 共享数据协议升级为 `causal_lag1_coldstart_dense_v2`：每个 train episode抽取 100 个内部时刻、每个 validation episode抽取 64 个内部时刻，并保留每个 episode 的 t=0/1/2；输入继续严格只含 lag-1 executed history。trainer按固定 seed和update生成 clean / zero / scale-aware Gaussian noise / extra-lag 四种 action-history mixture，最大扰动概率 0.75，目的是模拟闭环模型历史而不把 future 或 commanded target喂回输入。学习率使用预注册 linear-warmup + cosine-decay；P0/P1只恢复 model weight，不恢复旧 optimizer，以避免把 R1 后段上升动量带入新数据分布。
 
 R12-R2 不改变真实验收：每路必须完成完全相同 seeds、task顺序、control cadence和 temporal aggregation 的 `5×20=100`；只有工程 hard gates 全通过且总成功数严格大于 W10 `74/100` 才合格，loss/offline MSE不构成质量门。若四路仍无合格候选，则继续记录 `no winner/no merge`，不得进入 R13。训练与 Gate20 的提交、路径、运行命令、终态指标和逐项验收将在本节同一账本续写。
+
+##### 10.15.1.1 R12-R2 实现、身份与可复现运行账本
+
+R12-R2 的公共实现先提交到 `feat/model-improvements@97ea1aaa5b3eb2a565864bed619c8c8781b12b4a` 并推送；训练前规则提交为 `83c5235a45e94e4d105e069149109ba8e603050e`，其后 `7e570d6`、`8ae7730`、`97ea1aa` 只优化共享 action cache 的批量读取、按 episode 并行抽取和跨进程 NumPy 序列化，不改变样本定义。四个候选从同一公共提交创建独立分支，模型实现没有跨分支混合：
+
+| 候选 / GPU | 分支与正式 commit | 官方来源与冻结 commit | 本地 replacement / 注册入口 |
+|---|---|---|---|
+| P0 / 0 | `bwa/r12r2-p0-openpi-dense-history-120k@42db68e825a4faefa844ca0a083090f4c7b27a18` | OpenPI `15a9616a00943ada6c20a0f158e3adb39df2ccac`（Apache-2.0） | `before_we_act/action_generator/openpi_flow.py` / `action_generator/registry.py` |
+| P1 / 1 | `bwa/r12r2-p1-smolvla-dense-history-60k@7a38baf8b05451168599cba831a2bdc6db96cc46` | LeRobot SmolVLA `64b23178d5348609c266250d3e1f511eba4c33ff`（Apache-2.0） | `before_we_act/action_generator/smolvla_flow.py` / `action_generator/registry.py` |
+| P2 / 2 | `bwa/r12r2-p2-act-dense-history-120k@8868a7944703ec499ed294946c9378bc10ef57e3` | ACT `742c753c0d4a5d87076c8f69e5628c79a8cc5488`（MIT） | `before_we_act/action_generator/act_chunk.py` / `action_generator/registry.py` |
+| P3 / 3 | `bwa/r12r2-p3-diffusion-policy-dense-history-120k@74e3dc03a60ecfc1d34854c86a3f778290478c31` | Diffusion Policy `5ba07ac6661db573af695b419a7947ecb704690f`（MIT） | `before_we_act/action_generator/diffusion_policy_transformer.py` / `action_generator/registry.py` |
+
+P2 逐字复制 ACT `detr/models/transformer.py`，核心算法行改动为 0；P3 复制 Diffusion Policy 的 `TransformerForDiffusion`、位置编码和 module mixin，兼容补丁由 `upstream_adaptation.patch` 单独登记。P0/P1 延续 R12-R1 已通过来源审计的官方 action expert。四路运行时的 `source/license/patch/dependency/core-free/parity/preflight` 结构化 receipt 均写入各自 `candidates/pN/receipts/`；模型白名单、配置 schema、训练/恢复、离线验证与正式闭环调用链分别复核了 `before_we_act/action_generator/{registry.py,base.py}`、`before_we_act/train_action_generator.py`、`before_we_act/evaluate_action_generator_offline.py`、`before_we_act/evaluate_action_generator.py`、`scripts/before_we_act/{run_r12_candidate.sh,accept_r12.py}`。所有候选 worktree 的公共回归均为 `11 passed`：
+
+```bash
+cd /home/jeong/zeno/wam/before-we-act-r12r2-p0
+uv run --frozen pytest -q tests/before_we_act/test_r12_common.py
+# p1/p2/p3 分别把目录末尾换成对应候选；四路结果均为 11 passed
+```
+
+正式 run 为 `/workspace/bwa_runs/r12r2-20260805-dense-history-act-dp`，UTC `2026-08-05T12:56:33Z` 创建。远程公共 worktree 为 `/workspace/bwa_worktrees/model-improvements`，候选 worktree 为 `/workspace/bwa_worktrees/r12r2/p0` 至 `p3`；tmux 分别为 `bwa-r12r2-p0` 至 `bwa-r12r2-p3`，统一 monitor 为 `bwa-r12r2-monitor`。环境为 Python `3.10.20`、PyTorch `2.7.1+cu128`、CUDA `12.8`、Diffusers `0.32.2`、h5py `3.16.0`、四张 NVIDIA GeForce RTX 5090；未注入或回显 Hugging Face token。共享数据继续使用 `/workspace/datasets/robofactory_multitask`，共享 Hub cache 为 `/workspace/.cache/huggingface`，没有重新下载或覆盖 S0/R10 资产。
+
+R12-R2 action cache 为 `/workspace/bwa_runs/shared/r12_dense_causal_history_action_cache_v2.pt`，SHA256 `29cad3c30b9709dd08df3b494f215cdf662b3ed333b3782a6cafd1cecbbe72a0`，包含 `61,800` 个 train windows 和 `5,025` 个 validation windows；producer commit 为 `97ea1aa`。输入只有当前及历史 fixed-view RGB、qpos、lag-1 已执行动作和 mask，明确不含 future、当前 commanded action、task ID、robot ID 或 simulator state；t=0/1/2 cold start 使用首 observation 重复和零 previous action。W11 checkpoint 固定为 `/workspace/bwa_runs/shared/w11/checkpoint_010000.pt`，SHA256 `a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49`；W10 normalization/baseline checkpoint 为 `/workspace/bwa_runs/shared/parent/checkpoint_120000.pt`，SHA256 `061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d`。
+
+正式训练、monitor 与精确安全退出可直接复现；`--candidate` 也接受 `p0`、`p1`、`p2`、`p3` 或逗号分隔的子集：
+
+```bash
+cd /workspace/bwa_worktrees/model-improvements
+scripts/before_we_act/launch_r12_4gpu_tmux.sh \
+  --run-id r12r2-20260805-dense-history-act-dp \
+  --run-root /workspace/bwa_runs/r12r2-20260805-dense-history-act-dp \
+  --candidate all
+
+scripts/before_we_act/monitor_r12.sh \
+  --run-root /workspace/bwa_runs/r12r2-20260805-dense-history-act-dp \
+  --candidate all --once
+
+scripts/before_we_act/stop_r12_4gpu_tmux.sh \
+  --run-root /workspace/bwa_runs/r12r2-20260805-dense-history-act-dp \
+  --candidates all --dry-run
+# 审核 dry-run 的 PID/session/identity 后，去掉 --dry-run 才会优雅停止精确目标。
+```
+
+训练与离线验证均已结束，四路 checkpoint 都通过 strict restore、finite/range、absent-agent zero、CoRE 物理移除和控制周期检查。训练 loss 只用于诊断，不作晋级条件：
+
+| 候选 | 训练预算 / 初始化 | 末 10k 平均训练 loss | held-out normalized action MSE | offline P95 | checkpoint SHA256 |
+|---|---|---:|---:|---:|---|
+| P0 | 20k warm start → 120k | `0.052833` | `0.196101` | `34.07 ms` | `df2778b9ad408541d58434eb73bd791f077d03a3001e1b33a43ab78e9ee5918e` |
+| P1 | 20k warm start → 60k | `0.027914` | `0.078029` | `102.30 ms` | `1e9d36ae0195cbd90c5e832e64e0a33bdd088ea6885f13d5d9ed5b871e8ea1ef` |
+| P2 | scratch → 120k | total/L1/KL=`0.210480/0.046876/0.016360` | `0.060998` | `9.44 ms` | `bc96f4ca62bd5b9a7c6b60794fc1cdcf8433842646310f322820cd75f105fd27` |
+| P3 | scratch → 120k | `0.047586` | `0.781193` | `46.13 ms` | `613992c8bb5be92161e4b9a9eaecbe3a46ccf2747721dbfc64c9ad5f1a245270` |
+
+##### 10.15.1.2 R12-R2 完整 Gate20 终态、验收与轮级决定
+
+四路于 UTC `2026-08-05T17:04:32Z–19:50:43Z` 依次结束；每路都完成五任务各 20 回合，没有用数学淘汰、loss 或中间成功率代替正式 Gate20。所有回合使用 `/workspace/bwa_runs/shared/r10_gate20/seeds/*.json` 的前 20 个冻结 seed、每回合最多 1500 steps、每 environment step 重新生成 proposal、W10 exponential chunk ensemble `decay=0.01`。结构化结果、主日志、逐任务日志、status 和 heartbeat 分别位于 `/workspace/bwa_runs/r12r2-20260805-dense-history-act-dp/candidates/pN/{acceptance.json,logs/,status.json,heartbeat.json}`。
+
+| 候选 | Lift | Camera | Stack | Pipeline | Photo | 总计 / macro | paired wins | 最大任务 P95 | elapsed GPU-hours | 终态 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| W10 冻结 baseline | 20 | 14 | 0 | 20 | 20 | `74/100` / `74%` | — | — | — | baseline |
+| P0 OpenPI | 8 | 10 | 1 | 0 | 2 | `21/100` / `21%` | 4 | `54.35 ms` | `4.133` | FAILED |
+| P1 SmolVLA | 6 | 7 | 2 | 1 | 3 | `19/100` / `19%` | 3 | `183.35 ms` | `6.903` | FAILED |
+| P2 ACT | 7 | 9 | 0 | 0 | 2 | `18/100` / `18%` | 3 | `17.29 ms` | `4.262` | FAILED |
+| P3 Diffusion Policy | 0 | 2 | 0 | 0 | 0 | `2/100` / `2%` | 1 | `80.93 ms` | `5.725` | FAILED |
+
+任务级相对 W10 delta 为 P0 `-12/-4/+1/-20/-18`、P1 `-14/-7/+2/-19/-17`、P2 `-13/-5/0/-20/-18`、P3 `-20/-12/0/-20/-20`。四路全部 `safety_projections=0`，逐任务 episode seed 唯一且完整。P0/P1 对 Stack 的 `+1/+2` 是真实但很小的局部收益，无法补偿 Lift/Pipeline/Photo 的灾难性回归；不能把“相对 W10 唯一有 Stack success”包装成整体改进。
+
+验收严格复用 `scripts/before_we_act/accept_r12.py`。四路逐项结果完全一致：`official_source_commit_pinned`、`license_verified_and_preserved`、`minimal_component_patch_audited`、`no_full_repo_runtime_dependency`、`upstream_component_parity`、`train_save_strict_restore_normalization_mask`、`causal_lag1_and_cold_start_cache`、`formal_expected_updates_and_offline_smoke`、`physical_core_free_runtime`、`complete_paired_gate20` 十项全部 PASS；唯一 FAIL 是 `strictly_better_than_w10`。因此四路都是 `valid_component=true` 但 `qualified=false`，不能选择“最不差”的 P0。
+
+四路 acceptance 完成后使用以下冻结命令生成轮级决定：
+
+```bash
+cd /workspace/bwa_worktrees/model-improvements
+RUN=/workspace/bwa_runs/r12r2-20260805-dense-history-act-dp
+/venv/robofactory-act/bin/python scripts/before_we_act/decide_r12_winner.py \
+  --acceptance p0=$RUN/candidates/p0/acceptance.json \
+  --acceptance p1=$RUN/candidates/p1/acceptance.json \
+  --acceptance p2=$RUN/candidates/p2/acceptance.json \
+  --acceptance p3=$RUN/candidates/p3/acceptance.json \
+  --status p0=$RUN/candidates/p0/status.json \
+  --status p1=$RUN/candidates/p1/status.json \
+  --status p2=$RUN/candidates/p2/status.json \
+  --status p3=$RUN/candidates/p3/status.json \
+  --baseline-commit fdc228189c7fc8556acba9ab9462998ffb967c71 \
+  --baseline-checkpoint-sha256 061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d \
+  --output $RUN/round_decision.json
+```
+
+`round_decision.json` 的 SHA256 为 `01123b25e968e17b3f8a7346c99785ac4995539d0bf07366b0ba45256ba37820`，内容为 `qualified_set=[]`、`unique_winner=null`、`decision=no_winner_no_merge`、`merge_performed=false`、`baseline_after=fdc228189c7fc8556acba9ab9462998ffb967c71`。终态审计确认四个 R12 tmux 均已自然退出，远程无 `evaluate_action_generator`、`train_action_generator` 或 `run_r12_candidate.sh` 残留进程，四张 GPU 无 compute process；所有候选主日志未检出 OOM、NaN、Traceback、Killed 或 segmentation fault。最后 heartbeat 与 status terminal 时间逐路相差不足 6 ms，说明终态前心跳连续。
+
+##### 10.15.1.3 性能低下的归因与下一步决策
+
+本轮明确否定“主要因为训练步数不足”。P0 从合法 R1 20k 继续到 120k，末段平均 loss 降到 `0.052833`、离线 MSE 从 R1 的 `0.396915` 降到 `0.196101`，闭环仍只有 `21%`；P2 从零训练 120k，取得四路最佳离线 MSE `0.060998` 和最佳延迟，却只有 `18%`；P3 训练 loss 持续下降到末 10k `0.047586`，但离线 MSE `0.781193`、闭环 `2%`。离线排序、更新预算和闭环排序明显解耦，因而不得再以相同数据把某一路机械续训到更高 update 作为下一轮主方案。
+
+证据更支持以下共享根因，按优先级排列：
+
+1. **W11 observation/belief 信息瓶颈。** 正式 evaluator 把每张 `480×640` RGB 压成 `4×4` 区块的 RGB 均值，再经 W11 形成 96-D belief；细粒度空间几何、物体边界与相机对应关系在 action core 之前已经大量丢失。R11 自身的 future/action gain 曾全部被裁剪到 `-1.0`，P0 相对 P3 的冻结选择分差仅约 `0.00011969`，所以 W11“赢得相对筛选”从未证明它足以支持闭环控制。
+2. **expert-state 到 student-state 的 covariate shift。** dense cache 扩充了 demonstration 内部时刻，history augmentation 只扰动 previous-action history；它没有让 observation/qpos 来自学生偏离后的状态。Pipeline/Photo 上几乎全部回合跑满 1500 steps，正是小误差累积后没有 recovery supervision 的表现。下一轮应使用 [DAgger](https://proceedings.mlr.press/v15/ross11a.html) 式训练期数据聚合：在与 Gate20 seed 严格隔离的学生 rollout 上，由冻结 W10 teacher 标注恢复动作，并与原 demonstration replay 混合；teacher 不能进入部署 runtime。
+3. **移植了官方算法核心，不等于移植了技能。** 四路 `component_lock.yaml` 都明确 `weights: not_used`；P0/P1 没有部署上游 VLM/预训练视觉语言权重，P2/P3 又从零训练。来源、许可证和数值 parity 证明的是实现可信，不会凭空提供 OpenPI、SmolVLA、ACT 或 Diffusion Policy 在其原始数据上的策略能力。
+4. **P3 还有目标/采样失配。** diffusion denoising loss 降得很好，但 held-out action MSE 最差且闭环接近零，表明当前条件表示下的 denoising objective/sampler 并未学到可执行的长时序 mode；这不是增加相同 update 能可靠修复的问题。
+
+阶段决策是：**不进入 R13，继续停留在 R12，但不立即做同数据续训。** R13 明确要冻结一个合格 W12；当前没有 W12，提前训练 world model 只会固化失败动作分布。下一步先做两个 fail-closed 前置实验：① representation sufficiency probe，在完全相同 held-out windows 上比较 W11 belief 与合法 fixed-view spatial pretrained features 对 W10 teacher action/stage 的可预测性；若 W11 明显落后，则以 R11b/R12-interface repair 名义恢复空间 token 后重新冻结 W11，而不是在 action core 后补救；②使用训练 seed 的 on-policy recovery-state aggregation，并对 Stack/Pipeline/Photo 做 task/stage 平衡。只有这两项修复完成后才创建 R12-R3 四路；P2 ACT 因最低离线 MSE和最低延迟可作为高效主基线，P0 因本轮最高闭环分保留为独立对照，但二者都必须重新过同一完整 Gate20，验收标准不降低。
 
 ### 10.16 R13：四路 Candidate-Conditioned Latent World 组件移植（off-path）
 
