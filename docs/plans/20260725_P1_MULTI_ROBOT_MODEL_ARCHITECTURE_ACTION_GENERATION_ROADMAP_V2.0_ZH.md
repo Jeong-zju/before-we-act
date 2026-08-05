@@ -3342,6 +3342,21 @@ sha256sum \
 jq . /workspace/bwa_runs/w11-merge-validation-20260805/{parity,representation_screen,action_hash}.json
 ```
 
+###### H.1 W11 主模型改进分支落点纠正（2026-08-05 14:43 CST）
+
+首次 promotion 只将 `bwa/merge-r11-winner` 快进到了 V4.5 暂存线 `bwa/main`，没有同步到项目约定的主模型改进分支 `feat/model-improvements`，这是分支落点错误，不是新的模型选择。用户指出后，从远端最新 `feat/model-improvements@f37c68ab6f3cadf12da25bba7ef23b651342105a` 建立隔离 worktree；Git 证明该提交是 `bwa/main@54ecbbc14539d64289707491a8257aa5276cb151` 的祖先，因此采用严格 fast-forward 将完整、已验证的 W10→R11 公共提交链和唯一 W11=P0 winner-only 结果推进到 `feat/model-improvements`。没有重新训练、没有改变 W11 排名或 checkpoint，也没有引入 P1/P2/P3 的候选组件。
+
+`winner_manifest.yaml` 新增 `canonical_promotion`，固定目标分支、推进前提交、来源分支/提交和时间。原始 `integration` 字段继续描述 W11 在 V4.5 暂存线上的形成过程；新增字段描述其最终进入项目主模型改进分支的事实，二者不互相覆盖。用户原始 `/home/jeong/zeno/wam/before-we-act` 工作树仍保留在旧本地提交且含未提交文件，未执行 pull、stash、reset 或覆盖；远端 `origin/feat/model-improvements` 才是本次安全推进后的权威状态。本地原工作树需先自行提交或暂存既有修改，再执行 fast-forward 更新。
+
+可复制核验命令：
+
+```bash
+git fetch origin
+git rev-parse origin/feat/model-improvements
+git merge-base --is-ancestor e912259974c1a182ecc1ef9761c6944e1baac9df origin/feat/model-improvements
+git show origin/feat/model-improvements:experiments/before_we_act/r11/w11/winner_manifest.yaml
+```
+
 ### 10.15 R12：四路 Action Generator 组件移植（action-affecting，强制 Gate20）
 
 R12 从 W11 的 `TeamBeliefState → ActionProposalBatch` 现有接口出发，每路只替换 action generator 内核，继续使用本项目 dataset、trainer、checkpoint、temporal aggregation 和 evaluator。不是部署四个完整 VLA；vision-language backbone、demo server和上游 benchmark runner均不进入 runtime。若本 benchmark 没有合法 language instruction，所有需要文本条件的组件接收同一个冻结 null embedding，禁止用 task ID 生成提示词。
