@@ -239,9 +239,16 @@ def read_causal_episode_group(
 def read_causal_episode_group_job(arguments):
     key, data_root, group, stats = arguments
     unique_currents = list(dict.fromkeys(group["currents"]))
-    return key, read_causal_episode_group(
+    rows = read_causal_episode_group(
         Path(data_root), group["task"], group["episode"], unique_currents, stats
     )
+    # Avoid torch.multiprocessing file-descriptor sharing after a short-lived
+    # ProcessPool worker exits. NumPy arrays use ordinary pickle transport and
+    # are converted back in the parent without changing values or dtypes.
+    return key, {
+        current: {name: value.numpy() for name, value in row.items()}
+        for current, row in rows.items()
+    }
 
 
 def stack(rows: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
@@ -328,7 +335,12 @@ def main() -> None:
         jobs = [(key, str(data_root), group, stats) for key, group in groups.items()]
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
             for key, result in executor.map(read_causal_episode_group_job, jobs):
-                prepared[key] = result
+                prepared[key] = {
+                    current: {
+                        name: torch.from_numpy(value) for name, value in row.items()
+                    }
+                    for current, row in result.items()
+                }
                 completed += len(groups[key]["currents"])
                 if time.monotonic() - last_beat >= 20:
                     atomic_json(
