@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import torch
 
@@ -62,3 +63,14 @@ def test_r12_runtime_reports_true_gate20_progress(tmp_path: Path):
     assert result["episodes"] == 100
     assert result["successes"] == 10
     assert result["p95"] == 5
+
+
+def test_r12_atomic_json_allows_concurrent_status_and_heartbeat(tmp_path: Path):
+    from scripts.before_we_act.r12_runtime import atomic_json
+
+    path = tmp_path / "heartbeat.json"
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda index: atomic_json(path, {"index": index}), range(200)))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["index"] in range(200)
+    assert not list(tmp_path.glob(".heartbeat.json.*.tmp"))
