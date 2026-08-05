@@ -95,9 +95,12 @@ if [[ "$MANIFEST_COUNT" != 5 || "$EPISODE_COUNT" != 750 ]]; then
   "$FE_ROOT/scripts/before_we_act/launch_r10_hf_assets_tmux.sh" --anonymous
 fi
 if [[ ! -f "$CACHE" ]]; then
-  tmux has-session -t bwa-r11-prepare 2>/dev/null && { printf 'cache preparation session already exists\n' >&2; exit 3; }
-  PREPARE_CMD="while [[ \$(find '$DATA_ROOT' -mindepth 2 -maxdepth 2 -type f -name training_manifest.json 2>/dev/null | wc -l) != 5 || \$(find '$DATA_ROOT' -mindepth 3 -maxdepth 3 -type f -name 'episode_*.hdf5' 2>/dev/null | wc -l) != 750 ]]; do sleep 30; done; exec '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r11_observation_cache.py' --data-root '$DATA_ROOT' --output '$CACHE'"
-  tmux new-session -d -s bwa-r11-prepare -n cache "cd '$FE_ROOT' && $PREPARE_CMD"
+  if tmux has-session -t bwa-r11-prepare 2>/dev/null; then
+    printf 'reusing active shared cache preparation session: bwa-r11-prepare\n'
+  else
+    PREPARE_CMD="while [[ \$(find '$DATA_ROOT' -mindepth 2 -maxdepth 2 -type f -name training_manifest.json 2>/dev/null | wc -l) != 5 || \$(find '$DATA_ROOT' -mindepth 3 -maxdepth 3 -type f -name 'episode_*.hdf5' 2>/dev/null | wc -l) != 750 ]]; do sleep 30; done; exec '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r11_observation_cache.py' --data-root '$DATA_ROOT' --output '$CACHE'"
+    tmux new-session -d -s bwa-r11-prepare -n cache "cd '$FE_ROOT' && $PREPARE_CMD"
+  fi
 fi
 for candidate in p0 p1 p2 p3; do
   if [[ " ${SELECTED[*]} " != *" $candidate "* ]]; then
