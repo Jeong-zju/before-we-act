@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -96,14 +97,6 @@ def patch_means(image: np.ndarray, grid: int = 4) -> np.ndarray:
     return value.mean(axis=(1, 3), dtype=np.float32).reshape(grid * grid, 3) / 127.5 - 1.0
 
 
-def patch_means_batch(images: np.ndarray, grid: int = 4) -> np.ndarray:
-    count, height, width, channels = images.shape
-    if channels != 3 or height % grid or width % grid:
-        raise ValueError("R12 images must be divisible into the frozen RGB grid")
-    value = images.reshape(count, grid, height // grid, grid, width // grid, 3)
-    return value.mean(axis=(2, 4), dtype=np.float32).reshape(count, grid * grid, 3) / 127.5 - 1.0
-
-
 def read_causal_example(data_root: Path, item, stats: dict, horizon: int = 100):
     task, episode, current = item
     path = data_root / task / episode["hdf5_path"]
@@ -184,12 +177,8 @@ def read_causal_episode_group(
         visual_cache: dict[tuple[str, int], np.ndarray] = {}
         for view in views:
             dataset = data[f"observation/images/{view}"]
-            for start in range(0, len(observation_indices), 32):
-                indices = observation_indices[start : start + 32]
-                patches = patch_means_batch(np.asarray(dataset[indices]))
-                visual_cache.update(
-                    ((view, index), patch) for index, patch in zip(indices, patches)
-                )
+            for index in observation_indices:
+                visual_cache[(view, index)] = patch_means(np.asarray(dataset[index]))
         qpos_by_agent = {
             agent: np.asarray(data[f"observation/agents/{agent}/qpos"], dtype=np.float32)
             for agent in agents
@@ -247,6 +236,14 @@ def read_causal_episode_group(
     return rows
 
 
+def read_causal_episode_group_job(arguments):
+    key, data_root, group, stats = arguments
+    unique_currents = list(dict.fromkeys(group["currents"]))
+    return key, read_causal_episode_group(
+        Path(data_root), group["task"], group["episode"], unique_currents, stats
+    )
+
+
 def stack(rows: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
     return {key: torch.stack([row[key] for row in rows]) for key in rows[0]}
 
@@ -261,8 +258,13 @@ def main() -> None:
     parser.add_argument("--heartbeat", required=True)
     parser.add_argument("--train-interior-per-episode", type=int, default=100)
     parser.add_argument("--validation-interior-per-episode", type=int, default=64)
+    parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
-    if args.train_interior_per_episode < 1 or args.validation_interior_per_episode < 1:
+    if (
+        args.train_interior_per_episode < 1
+        or args.validation_interior_per_episode < 1
+        or args.workers < 1
+    ):
         raise ValueError("dense R12 interior windows per episode must be positive")
     output = Path(args.output)
     if output.exists():
@@ -323,18 +325,17 @@ def main() -> None:
             ].append(current)
         prepared = {}
         completed = 0
-        for key, group in groups.items():
-            unique_currents = list(dict.fromkeys(group["currents"]))
-            prepared[key] = read_causal_episode_group(
-                data_root, group["task"], group["episode"], unique_currents, stats
-            )
-            completed += len(group["currents"])
-            if time.monotonic() - last_beat >= 20:
-                atomic_json(
-                    heartbeat,
-                    {"producer": "prepare_r12_action_cache", "split": split, "row": completed, "total": len(examples), "updated_at": now()},
-                )
-                last_beat = time.monotonic()
+        jobs = [(key, str(data_root), group, stats) for key, group in groups.items()]
+        with ProcessPoolExecutor(max_workers=args.workers) as executor:
+            for key, result in executor.map(read_causal_episode_group_job, jobs):
+                prepared[key] = result
+                completed += len(groups[key]["currents"])
+                if time.monotonic() - last_beat >= 20:
+                    atomic_json(
+                        heartbeat,
+                        {"producer": "prepare_r12_action_cache", "split": split, "row": completed, "total": len(examples), "workers": args.workers, "updated_at": now()},
+                    )
+                    last_beat = time.monotonic()
         rows = [
             prepared[(task, episode["hdf5_path"])][current]
             for task, episode, current in examples
