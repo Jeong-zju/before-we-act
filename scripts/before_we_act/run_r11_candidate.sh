@@ -62,9 +62,6 @@ fi
 for path in "$PYTHON" "$RUNTIME" "$CONFIG" "$LOCK" "$PARITY" "$PARENT_CHECKPOINT" "$DATA_ROOT"; do
   [[ -e "$path" ]] || { printf 'missing required path: %s\n' "$path" >&2; exit 3; }
 done
-if ! "$PYTHON" -c 'import timm' >/dev/null 2>&1; then
-  "$PYTHON" -m pip install --disable-pip-version-check -r "$FE_ROOT/requirements/r11-p0.txt"
-fi
 
 CHILD_PID=0
 HEARTBEAT_PID=0
@@ -113,6 +110,11 @@ run_child() {
   CHILD_PID=0
   return "$code"
 }
+
+if ! "$PYTHON" -c 'import timm' >/dev/null 2>&1; then
+  run_child PREPARING dependencies uv "install pinned V-JEPA2 dependency into the existing venv" 10000 \
+    uv pip install --python "$PYTHON" -r "$FE_ROOT/requirements/r11-p0.txt"
+fi
 
 status PREPARING cache_wait run_r11_candidate.sh "waiting for shared legal-input cache" 10000
 for _ in $(seq 1 3600); do
