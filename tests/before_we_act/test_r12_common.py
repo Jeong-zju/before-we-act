@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import subprocess
+import sys
 
 import torch
 
@@ -74,3 +76,70 @@ def test_r12_atomic_json_allows_concurrent_status_and_heartbeat(tmp_path: Path):
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["index"] in range(200)
     assert not list(tmp_path.glob(".heartbeat.json.*.tmp"))
+
+
+def test_r12_decision_uses_gpu_hours_before_candidate_id(tmp_path: Path):
+    acceptances = []
+    statuses = []
+    for index in range(4):
+        candidate = f"p{index}"
+        acceptance = tmp_path / f"{candidate}_acceptance.json"
+        status = tmp_path / f"{candidate}_status.json"
+        acceptance.write_text(
+            json.dumps(
+                {
+                    "candidate_id": candidate,
+                    "qualified": True,
+                    "valid_component": True,
+                    "commit": f"commit-{candidate}",
+                    "checkpoint": f"/{candidate}.pt",
+                    "latency_p95_ms_max_task": 10,
+                    "gate20": {
+                        "candidate_total_successes": 80,
+                        "tasks": {
+                            task: {"candidate": 16, "paired_wins": 1}
+                            for task in TASKS
+                        },
+                    },
+                    "acceptance": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        # P1 is the only faster equally qualified candidate.  Candidate ID
+        # would otherwise choose P0, so this isolates the GPU-hours ordering.
+        terminal_minute = 30 if candidate == "p1" else 40
+        status.write_text(
+            json.dumps(
+                {
+                    "candidate": candidate,
+                    "created_at": "2026-08-05T00:00:00Z",
+                    "updated_at": f"2026-08-05T00:{terminal_minute}:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        acceptances.extend(["--acceptance", f"{candidate}={acceptance}"])
+        statuses.extend(["--status", f"{candidate}={status}"])
+    output = tmp_path / "decision.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/before_we_act/decide_r12_winner.py",
+            *acceptances,
+            *statuses,
+            "--baseline-commit",
+            "baseline",
+            "--baseline-checkpoint-sha256",
+            "0" * 64,
+            "--output",
+            str(output),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    decision = json.loads(output.read_text(encoding="utf-8"))
+    assert decision["unique_winner"] == "p1"
+    assert decision["candidate_results"]["p1"]["gpu_hours"] == 0.5
