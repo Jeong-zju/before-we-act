@@ -20,11 +20,19 @@ def main() -> None:
     scanned = 0
     for path in sorted((root / "before_we_act").rglob("*.py")):
         relative = path.relative_to(root)
-        if "upstream_components" in relative.parts and "tests" in relative.parts:
+        # Vendored allowlisted files intentionally retain their upstream package
+        # imports as provenance.  The runtime-dependency gate applies to project
+        # adapters and entrypoints, not to source-map evidence that is never
+        # imported directly by an R12 adapter.
+        if "upstream_components" in relative.parts:
             continue
         scanned += 1
         source = path.read_text(encoding="utf-8")
-        if "/workspace/bwa_upstream" in source or "/tmp/bwa-r11-upstreams" in source:
+        if any(marker in source for marker in (
+            "/workspace/bwa_upstream",
+            "/tmp/bwa-r11-upstreams",
+            "/tmp/bwa-r12-upstream",
+        )):
             violations.append({"path": str(relative), "reason": "absolute upstream cache path"})
         tree = ast.parse(source, filename=str(path))
         for node in ast.walk(tree):

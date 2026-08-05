@@ -27,7 +27,7 @@ def main() -> None:
     def rank(row):
         gate = row["gate20"]
         tasks = gate["tasks"]
-        paired_wins = sum(max(0, task["delta"]) for task in tasks.values())
+        paired_wins = sum(task["paired_wins"] for task in tasks.values())
         camera_stack = tasks["camera_alignment"]["candidate"] + tasks["three_robots_stack_cube"]["candidate"]
         worst = min(task["candidate"] for task in tasks.values())
         latency = row.get("latency_p95_ms_max_task")
