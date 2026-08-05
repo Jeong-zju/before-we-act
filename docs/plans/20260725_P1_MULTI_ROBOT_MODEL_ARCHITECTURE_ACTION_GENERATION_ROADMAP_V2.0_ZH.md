@@ -1,9 +1,9 @@
 # P1 多机器人 Before-We-Act 技术路线 V4.5（S10 冻结 / 上游组件代码移植优先 / Benchmark-First Gate20）
 
-> 文档更新：2026-08-05（V4.5：S10 之后逐轮退出 CoRE 内核；官方开源组件代码移植优先，不全量部署上游模型）
-> 工程起点：`bwa/r9-core-native@06ba780`；R10 四路已全部失败并固定 `no winner`，因此 `W10=B9-CoreNative`；用户于 2026-08-05 显式启动 R11
+> 文档更新：2026-08-05（V4.5 + R11 终态：四路官方 belief 组件移植有效，诊断性 `W11=P0`，不自动合并或启动 R12）
+> 工程起点：`bwa/r9-core-native@06ba780`；R10 四路已全部失败并固定 `W10=B9-CoreNative`；R11 四路于 2026-08-05 完成并全部 PASSED，冻结排名 `P0>P3>P1>P2`
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R10 于 2026-08-05 终态审计为四路 FAILED / no winner。R11 现按 10.13–10.14 执行，CoRE 只作冻结 teacher/baseline
+> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1，四路来源/parity/restore/action-hash 均通过，`Gate20=N/A`。本任务按停止条件未创建 merge winner 或 R12 run
 > 评测原则：S10 原样完成；R11/R13 保持 off-path，R12/R14 会改变动作轨迹。任何候选只要可能改变最终执行动作、候选选择、动作后处理或策略权重，就必须在同一五任务、同一 seeds 上完成**每任务 20 回合**闭环（简称 `Gate20`，即每候选共 `5×20=100` episodes）后才有 winner 资格；其它表征、排序、校准、因果和 oracle 指标降为可选诊断，不再挡住 benchmark 更优候选
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -3137,6 +3137,174 @@ R11 只替换或新增 `before_we_act/team_belief/encoder`，控制动作仍由 
 | **R11-P3 / GPU3：LeRobot VLA-JEPA Transplant** | LeRobot 中 VLA-JEPA 的 predictive representation/policy encoder所需文件与测试；不得部署整个 LeRobot package | 新增 `team_belief/vla_jepa_encoder`；用 adapter 对齐 camera keys、state features 和 agent/time mask | next-state/partner-action probe、显存、延迟 |
 
 四路共享本项目 trainer、raw-observation cache、split和 checkpoint wrapper。R11 没有 `I11>=5%`、causal CI、AUROC/ECE 或 latency quality hard gate；这些只写 `optional_diagnostics.json`。唯一 W11 由训练前固定的 `representation_screen_score` 排名选择，默认按 held-out future feature、partner action、shared progress和吞吐排序，不设最低阈值；只有作业无法运行、数据泄漏、来源不合规或 action hash 改变才失去资格。action hash 一旦改变，必须重新分类并补 Gate20。
+
+#### 10.14.1 R11 终态执行账本（2026-08-05，PASSED / W11=P0，仅诊断选择、不合并）
+
+本轮于北京时间 `2026-08-05 08:00:26` 创建 run，在 `08:30:24` 生成唯一排名决定；对应 UTC 为 `00:00:26–00:30:24`。冻结父节点为 `bwa/r9-core-native@06ba780a4617b4aa92b5a103864f0ca28f79aaa6`，父 checkpoint 为 `/workspace/bwa_runs/shared/parent/checkpoint_120000.pt`，SHA256 为 `061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d`。公共工程分支终态为 `bwa/main@8d0f658`，四路有效性均为 `PASSED`，预注册分数排序为 `P0 > P3 > P1 > P2`，因此 R11 的**诊断性 W11 选择**为 P0 V-JEPA2 Predictor Transplant。`round_decision.json` 明确记录 `merge_performed=false`；遵守本次任务的 `[ON_DIAG_PASS]` 与 10.13.1“AI 不自行合并”边界，不创建 `bwa/merge-r11-winner`，不创建或运行 R12。
+
+必须准确解释这里的“通过”：R11 通过表示四个官方组件移植均满足来源、许可证、最小 patch、上游 parity、训练/恢复、off-path 动作哈希等工程有效性门，并能按预注册 score 得到唯一顺序；它**不表示** P0 已提高 W10 闭环成功率，也不表示 10k off-path 更新可以和 W10 的 120k 动作策略训练量直接比较。四路均未进入动作路径，Gate20 依法为 N/A。
+
+##### A. 本地分支、上游来源和提交
+
+| 候选 | GPU | 官方组件 / commit / 许可证 | 分支 | 正式 10k 使用的代码提交 | 终态验收提交 | 终态 |
+|---|---:|---|---|---|---|---|
+| P0 | 0 | V-JEPA2 `VisionTransformerPredictor` / `204698b45b3712590f06245fbfba32d3be539812` / MIT | `bwa/r11-p0-vjepa2-component` | `9bf17705352fe2640e62943a1a3d2eb53025272b` | `2bb74d45d99e73945fa201037ce17a37375b0d21` | PASSED |
+| P1 | 1 | LPWM `ParticleSpatioTemporalTransformer` / `4cf53c403433e64c01652ac2adbec66231a46dea` / MIT | `bwa/r11-p1-lpwm-particle-component` | `dca09daeffb07c64ad3c96942c0a7c2a5ab71425` | `008c8628f7e0e1971aee30e1bf87715a1b2174b9` | PASSED |
+| P2 | 2 | DINO-WM `ViTPredictor` / `0a9492fa12044b852ae9e001cc74604b79c8bb0c` / MIT | `bwa/r11-p2-dinowm-feature-component` | `3aab60ddd9290d09de7c70f1863f7408b94c6515` | `0e87a870e72c41f5766c9285a4aa0c2324d201dd` | PASSED |
+| P3 | 3 | LeRobot VLA-JEPA `ActionConditionedVideoPredictor` / `64b23178d5348609c266250d3e1f511eba4c33ff` / Apache-2.0 | `bwa/r11-p3-lerobot-vlajepa-component` | `2b31dab851c6b87dc6c909dad0b044adbcb044be` | `2004728f32a85f174856376d64fa1022eed48375` | PASSED |
+
+终态提交相对训练提交只包含公共 launcher 复用修复和 BF16 原始存储哈希兼容修复，不改模型、数据、损失、optimizer、训练样本或 checkpoint。所有分支已推送到 `origin`。用户原 `feat/model-improvements` 工作树中的既有修改未被覆盖；R11 使用独立本地 worktree `/home/jeong/zeno/wam/before-we-act-r11.8jSOij/{main,p0,p1,p2,p3}`。
+
+主要新增/修改位置如下：
+
+- 公共 contract/trainer/evaluator：`before_we_act/contracts.py`、`before_we_act/team_belief/{base,registry}.py`、`before_we_act/data/raw_team_windows.py`、`before_we_act/{train_team_belief,evaluate_team_belief}.py`；
+- 四路唯一模型文件：`team_belief/{vjepa2_predictor,lpwm_particle,dino_wm_feature_dynamics,lerobot_vla_jepa}.py`；
+- 最小上游闭包与许可证：各分支的 `before_we_act/upstream_components/<source>/`、`LICENSES/upstream_components/<source>/LICENSE`；完整上游仓库只存在远程临时只读 cache `/workspace/bwa_upstream/r11/p0..p3`，不进入 runtime 或 Git；
+- provenance：`experiments/before_we_act/r11/p0..p3/{component_lock,source_map,adaptation_card,paper_evidence_card,parity}.py|yaml`；
+- 配置：`configs/before_we_act/r11_belief/p0..p3.yaml`；
+- 一键与验收：`scripts/before_we_act/{launch_r11_4gpu_tmux,run_r11_candidate,monitor_r11,stop_r11_4gpu_tmux}.sh`、`r11_runtime.py`、`accept_r11.py`、`decide_r11_winner.py` 及 source/license/patch/dependency/action-hash 审计脚本。
+
+白名单/完整调用链已同时检查：`team_belief/registry.py` 注册四个 candidate→module；`load_r11_config` 锁定 candidate、训练预算、合法 observation、loss 和 score schema；`r11_runtime.py`、launcher、acceptor、winner decider 的候选 choices 均为 P0–P3；动态 import 在某个独立分支缺少其它三路模块时 fail closed，不会混入别路实现。
+
+##### B. 本地验证与远程环境
+
+本地在无 PyTorch 的干净 worktree 先完成语法、Bash、配置和非张量审计；以下命令均实际通过。复制的 LPWM/DINO-WM 原文件自带 trailing whitespace，因此 `diff --check` 对我方代码排除 `upstream_components/**`，原文件完整性由 source map 与 component patch 审计负责：
+
+```bash
+cd /home/jeong/zeno/wam/before-we-act-r11.8jSOij/main
+python3 -m compileall -q before_we_act scripts/before_we_act
+bash -n scripts/before_we_act/{launch_r11_4gpu_tmux,run_r11_candidate,monitor_r11,stop_r11_4gpu_tmux}.sh
+
+cd /home/jeong/zeno/wam/before-we-act-r11.8jSOij/p0
+python3 scripts/before_we_act/verify_upstream_source.py --lock experiments/before_we_act/r11/p0/component_lock.yaml --upstream /tmp/bwa-r11-upstreams.m2AfXd/vjepa2 --output /tmp/p0-source.json
+python3 scripts/before_we_act/verify_component_license.py --lock experiments/before_we_act/r11/p0/component_lock.yaml --project-root . --output /tmp/p0-license.json
+python3 scripts/before_we_act/audit_component_patch.py --lock experiments/before_we_act/r11/p0/component_lock.yaml --upstream /tmp/bwa-r11-upstreams.m2AfXd/vjepa2 --project-root . --patch-output /tmp/p0.patch --report-output /tmp/p0-patch.json
+python3 scripts/before_we_act/audit_no_full_repo_dependency.py --project-root . --output /tmp/p0-dependency.json
+python3 scripts/before_we_act/classify_action_effect.py --parent 06ba780a4617b4aa92b5a103864f0ca28f79aaa6 --head HEAD --output /tmp/p0-action-effect.json
+# P1/P2/P3 使用各自 lock 与 lpwm/dino_wm/lerobot checkout 重复同组命令，四路均 passed=true。
+```
+
+远程环境为 Ubuntu/Linux `6.8.0-60`、Python `3.10.20`、PyTorch `2.7.1+cu128`、CUDA runtime `12.8`、四张 NVIDIA GeForce RTX 5090（每张 `33679998976` bytes）。正式进程使用 `/venv/robofactory-act/bin/python`、bfloat16、batch 64、seed `20260805`、AdamW、每路 10,000 updates；远程额外 CUDA 合成前向显示四路统一 `TeamBeliefState.tokens=[2,16,96]`、partner action `[2,4,8]` 且全部 finite。
+
+##### C. 数据、Hugging Face、run 与 tmux
+
+数据严格复用 S0 固定 revision 的 Hugging Face 下载机制。launcher 检查到 `/workspace/datasets/robofactory_multitask` 已有 5 份 manifest 和 750 个 HDF5，故本轮没有跨服务器同步、没有重新下载、没有使用或显示 token；若缺失，launcher 唯一回退是调用已有 `launch_r10_hf_assets_tmux.sh --anonymous`，该脚本继续使用官方 `hf download`、固定 revisions、Xet、最多五次指数退避、同一 local-dir 与 `.incomplete` 断点续传。共享 HF cache 为 `/workspace/.cache/huggingface`。
+
+共享合法输入 cache 为 `/workspace/bwa_runs/shared/r11_observation_cache.pt`，包含 4096 train + 1024 validation 窗口，SHA256 `c32ef0c47faf955a4355e4e2f5f986f56e10631fae9498e1a1a7a92f18648852`。每个窗口只向模型提供 history=3 的固定 global/agent RGB 4×4 patch grid、qpos、executed action history、view/agent mask；`task_index` 只在 evaluator 端做五任务分组，未进入模型 forward。validation 共 1024 个样本，各任务 204 或 205 个。
+
+run root 与隔离路径：
+
+```text
+/workspace/bwa_runs/r11-20260805-offpath-v1/
+  run_manifest.json
+  round_decision.json
+  candidates/p0..p3/
+    logs/candidate.log
+    status.json
+    heartbeat.json
+    receipts/{source,license,patch,dependency,parity,preflight}.json
+    preflight/checkpoints/
+    train/formal/{progress.jsonl,checkpoints/}
+    validation/{representation_screen,action_hash}.json
+    acceptance.json
+```
+
+GPU/session 固定为 `GPU0/bwa-r11-p0`、`GPU1/bwa-r11-p1`、`GPU2/bwa-r11-p2`、`GPU3/bwa-r11-p3`；四个候选 session 在终态自然退出，未被主动 kill。共享 cache session `bwa-r11-prepare` 也在完成后自然退出。只读长周期 monitor `bwa-r11-monitor` 保留，刷新间隔 1800 秒；永久用户 session `ssh_tmux` 和历史 `bwa-r10-monitor` 未被改动。
+
+正式部署命令：
+
+```bash
+ssh -p 10328 root@69.176.92.104
+cd /workspace/fe-pc-wam
+git switch bwa/main
+git pull --ff-only origin bwa/main
+
+# 先验证，不创建 run/session
+scripts/before_we_act/launch_r11_4gpu_tmux.sh \
+  --run-id r11-20260805-offpath-v1 \
+  --run-root /workspace/bwa_runs/r11-20260805-offpath-v1 \
+  --candidate all --dry-run
+
+# 正式四路；--candidate 也接受 p0、A、p0,p1、A,B
+scripts/before_we_act/launch_r11_4gpu_tmux.sh \
+  --run-id r11-20260805-offpath-v1 \
+  --run-root /workspace/bwa_runs/r11-20260805-offpath-v1 \
+  --candidate all
+```
+
+##### D. 训练、验证和预注册分数
+
+冻结分数为：
+
+```text
+0.50*future_feature_gain + 0.25*partner_action_gain
++ 0.20*shared_progress_r2 + 0.05*throughput_score
+```
+
+future/action gain 相对 validation 的 last-frame persistence / last executed action，均裁剪到 `[-1,1]`；throughput 在 512 windows/s 饱和。它只负责有效候选间的离线排序，没有最低阈值。
+
+| 候选 | 10k 最终 train loss | future MSE / baseline / gain | partner MSE / baseline / gain | progress MSE / mean baseline / R² | windows/s | screen score | 排名 |
+|---|---:|---|---|---|---:|---:|---:|
+| P0 | 0.000655850 | 0.000301388 / 0.000016690 / -1.0 | 0.001805298 / 0.000163382 / -1.0 | 0.000266612 / 0.085756336 / 0.996891 | 19128.32 | **-0.500621789** | **1** |
+| P1 | 0.000564234 | 0.000060350 / 0.000016690 / -1.0 | 0.001816910 / 0.000163382 / -1.0 | 0.000327629 / 0.085756336 / 0.996180 | 22789.32 | -0.500764094 | 3 |
+| P2 | 0.000902742 | 0.000086709 / 0.000016690 / -1.0 | 0.002419588 / 0.000163382 / -1.0 | 0.000815995 / 0.085756336 / 0.990485 | 26069.16 | -0.501903055 | 4 |
+| P3 | 0.000566887 | 0.000061645 / 0.000016690 / -1.0 | 0.001882798 / 0.000163382 / -1.0 | 0.000317933 / 0.085756336 / 0.996293 | 7512.44 | -0.500741479 | 2 |
+
+P0 五任务 progress MSE（仅 optional diagnostic，顺序 Lift/Camera/Stack/LPD/Photo）为 `0.000321236 / 0.000198058 / 0.000204197 / 0.000334769 / 0.000274839`；完整四路逐任务 future/action/progress 指标保存在各自 `validation/representation_screen.json`，没有用 task aggregate 反向训练。正式 checkpoint 与 SHA256：
+
+| 候选 | checkpoint | SHA256 |
+|---|---|---|
+| P0 | `candidates/p0/train/formal/checkpoints/checkpoint_010000.pt` | `a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49` |
+| P1 | `candidates/p1/train/formal/checkpoints/checkpoint_010000.pt` | `ae633af7fd7232ba87173670eea981dc1b09bdc13a02ddaf196d5a64714829cd` |
+| P2 | `candidates/p2/train/formal/checkpoints/checkpoint_010000.pt` | `87db3137f6c4c31e6d02414fb3e339b7f70539e17460a38de6a446624f8f0b95` |
+| P3 | `candidates/p3/train/formal/checkpoints/checkpoint_010000.pt` | `286f97aa6d43b3a818d9f33f4959b31973d24da4ecdc77a79ed1e94a42168d38` |
+
+##### E. 特殊验收逐项结果与故障恢复
+
+| R11 实际硬门 | P0 | P1 | P2 | P3 |
+|---|---|---|---|---|
+| 官方 source/精确 commit/clean checkout | PASS | PASS | PASS | PASS |
+| LICENSE hash 与声明保留 | PASS | PASS | PASS | PASS |
+| 最小 copied component patch 审计 | PASS | PASS | PASS | PASS |
+| `full_repo_runtime_dependency=false` | PASS | PASS | PASS | PASS |
+| 同 device/dtype 上游 parity（四路 max_abs=0） | PASS | PASS | PASS | PASS |
+| 2-update train→save→strict restore→finite replay | PASS | PASS | PASS | PASS |
+| 正式 10,000 updates + 1024-window validation | PASS | PASS | PASS | PASS |
+| 五任务 canary W10 action hash逐元素相同、parent state/checkpoint 不变 | PASS | PASS | PASS | PASS |
+| candidate/branch/receipt identity 一致 | PASS | PASS | PASS | PASS |
+
+四路原始 10k 训练、checkpoint 和 representation screen 均一次完成，无 OOM、NaN、Killed、卡死或 checkpoint 覆盖。验收阶段发现一个公共代码兼容问题：BF16 tensor 可以被 `torch.equal` 正确比较，但当前 NumPy 不支持直接把 BF16 tensor 转为字节，导致四路第一次 action SHA256 序列化均抛出 `TypeError: Got unsupported ScalarType BFloat16`。修复提交 `8d0f658` 仅把相同 BF16 存储 `view(torch.uint16)` 后取字节，不改变动作、模型、checkpoint 或判据；随后四路从既有 10k checkpoint 只补跑 action-hash 与 acceptor，均得到 `action_hash_equal=true`、`parent_immutable=true`。P0 在 cache wait 前另遇到 venv 无 `python -m pip`，用服务器已有 `uv pip --python /venv/robofactory-act/bin/python` 安装锁定的 `timm==1.0.19` 后启动；该次发生在任何训练/收据产生前。全部恢复写入 `run_manifest.json.recoveries`，日志保留原 traceback，不选择性删除失败证据。
+
+因此终态 log scan 为每路 `OOM=false / NaN=false / Killed=false / recovered BF16 traceback=1`。正式训练期间 monitor 观测的模型显存约 698–738 MiB，producer heartbeat 每 20 秒更新，过程中没有进入 STALE；终态 PID 均为 0、候选 tmux 均自然退出、四 GPU 均回到 `2 MiB / 0%` 空闲。原 pipeline 因兼容异常退出码为 1，版本化修复后的 action-hash/acceptance recovery exit code为 0；最终 `acceptance.json` 与 `round_decision.json` 是 monitor PASSED/FAILED 的唯一权威来源。
+
+##### F. 可复制 monitor、验收决定和安全退出命令
+
+```bash
+RUN_ROOT=/workspace/bwa_runs/r11-20260805-offpath-v1
+cd /workspace/fe-pc-wam
+
+# 四路单次快照 / 单路快照
+scripts/before_we_act/monitor_r11.sh --run-root "$RUN_ROOT" --candidate all --once
+scripts/before_we_act/monitor_r11.sh --run-root "$RUN_ROOT" --candidate p0 --once
+
+# 持续刷新；已验证的长期 tmux 使用 1800 秒轮询
+scripts/before_we_act/monitor_r11.sh --run-root "$RUN_ROOT" --candidate all --interval 1800
+tmux attach -t bwa-r11-monitor                    # Ctrl-b d 仅 detach
+
+# 重新生成排名决定；只写 run artifact，不做 Git merge
+/venv/robofactory-act/bin/python scripts/before_we_act/decide_r11_winner.py \
+  --run-root "$RUN_ROOT" --output "$RUN_ROOT/round_decision.json"
+
+# 精确 dry-run；去掉 --dry-run 才会只停止所选 R11 tagged PID/session
+scripts/before_we_act/stop_r11_4gpu_tmux.sh --run-root "$RUN_ROOT" --candidate p0 --dry-run
+scripts/before_we_act/stop_r11_4gpu_tmux.sh --run-root "$RUN_ROOT" --candidate all --dry-run
+```
+
+launcher 的 `--candidates A,B --dry-run`、单路/四路 monitor `--once`、单路/四路 stop `--dry-run` 已在四 GPU 回空闲后再次实际验证通过。最终决定文件为 `/workspace/bwa_runs/r11-20260805-offpath-v1/round_decision.json`，内容为 `passed=true`、`winner=p0`、`ranking=[p0,p3,p1,p2]`、`merge_performed=false`。
+
+##### G. 结论、风险与停止条件
+
+R11 最终结论为 **PASSED**，诊断性 `W11=P0`。但四路 future/action gain 都因明显落后极强的 last-frame/last-action baseline 而裁剪到 `-1.0`，throughput 又全部饱和为 `1.0`；所以本轮非常接近的排序实质主要由 progress R² 决定，P0 相对 P3 只高约 `0.00011969`。这是真实负面证据：不能把 P0 的第一名写成“预测表征已优于 persistence”“提高 Camera/Stack”或“闭环 performance 提升”。若未来显式启动 R12，W11 的作用只能是按冻结规则选出的 belief 接口/checkpoint，并应优先补多 seed screen 稳定性或重新审视过强 baseline/score 饱和现象；这些建议不得追溯修改本轮阈值、排名或 PASSED 结论。本任务在文档提交推送后停止，不进入 `[NEXT_STAGE]`。
 
 ### 10.15 R12：四路 Action Generator 组件移植（action-affecting，强制 Gate20）
 
