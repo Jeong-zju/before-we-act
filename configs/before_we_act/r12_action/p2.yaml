@@ -1,0 +1,51 @@
+schema_version: 1
+round: R12
+candidate_id: p2
+parent_commit: fdc228189c7fc8556acba9ab9462998ffb967c71
+belief_checkpoint_sha256: a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49
+component:
+  kind: act_action_chunk_transformer
+  hidden_dim: 256
+  num_heads: 8
+  encoder_layers: 4
+  decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.1
+  latent_dim: 32
+  kl_weight: 10.0
+  condition_tokens: 21
+  chunk_size: 100
+  temporal_ensemble: true
+action:
+  horizon: 100
+  max_agents: 4
+  action_dim: 8
+  belief_dim: 96
+  normalization: W10_mean_std_copied_into_R12_checkpoint
+  normalized_clip: 5.0
+  num_proposals: 1
+training:
+  updates: 120000
+  batch_size: 5
+  seed: 20260805
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  precision: bfloat16
+  checkpoint_every: 10000
+  progress_every: 50
+  grad_clip: 1.0
+  warm_start_checkpoint: ''
+  warm_start_sha256: ''
+  warm_start_update: 0
+  warmup_steps: 1000
+  decay_steps: 120000
+  decay_lr_ratio: 0.1
+  history_augmentation_probability: 0.75
+  history_augmentation_ramp_updates: 10000
+  history_noise_scale: 0.25
+selection_rule:
+  gate20_tasks: [lift_barrier, camera_alignment, three_robots_stack_cube, long_pipeline_delivery, take_photo]
+  episodes_per_task: 20
+  baseline_total_successes: 74
+  winner_rule: complete_100_episodes_and_total_successes_strictly_greater_than_74
+  tie_break: [paired_wins, camera_plus_stack_successes, worst_task_successes, p95_latency_ms, gpu_hours, candidate_id]

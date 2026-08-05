@@ -1,0 +1,13 @@
+schema_version: 1
+round: R12
+candidate_id: p2
+source_component: ACT CVAE posterior and DETR action-query decoder
+absorbed_idea: predict a 100-step joint chunk with learned action queries and a training-only CVAE posterior
+legal_input_mapping: W11 belief tokens are DETR memory; normalized four-agent actions are flattened to 32 dimensions
+local_adapter: before_we_act.action_generator.act_chunk.ACTActionChunkCore
+checkpoint_initialization: from_scratch
+training_protocol: {variant: causal_lag1_coldstart_dense_v2_history_robust, updates: 120000, cold_start_steps: [0, 1, 2]}
+compatibility_edits: [project belief width to ACT hidden width, prepend latent memory token, map joint action width]
+algorithm_changed: false
+retained_invariants: [CVAE reparameterization, L1 plus KL objective, learned action queries, zero latent at inference]
+forbidden_inputs: [task_id, robot_id, role_id, simulator_state, future_action]
