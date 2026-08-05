@@ -96,6 +96,14 @@ def patch_means(image: np.ndarray, grid: int = 4) -> np.ndarray:
     return value.mean(axis=(1, 3), dtype=np.float32).reshape(grid * grid, 3) / 127.5 - 1.0
 
 
+def patch_means_batch(images: np.ndarray, grid: int = 4) -> np.ndarray:
+    count, height, width, channels = images.shape
+    if channels != 3 or height % grid or width % grid:
+        raise ValueError("R12 images must be divisible into the frozen RGB grid")
+    value = images.reshape(count, grid, height // grid, grid, width // grid, 3)
+    return value.mean(axis=(2, 4), dtype=np.float32).reshape(count, grid * grid, 3) / 127.5 - 1.0
+
+
 def read_causal_example(data_root: Path, item, stats: dict, horizon: int = 100):
     task, episode, current = item
     path = data_root / task / episode["hdf5_path"]
@@ -150,6 +158,93 @@ def read_causal_example(data_root: Path, item, stats: dict, horizon: int = 100):
         "joint_actions": torch.from_numpy(actions),
         "action_step_mask": torch.from_numpy(step_mask),
     }
+
+
+def read_causal_episode_group(
+    data_root: Path,
+    task: str,
+    episode: dict,
+    currents: list[int],
+    stats: dict,
+    horizon: int = 100,
+) -> dict[int, dict[str, torch.Tensor]]:
+    """Read one episode once and reproduce ``read_causal_example`` exactly.
+
+    Image frames shared by adjacent history windows are decoded once in bounded
+    batches.  This is an artifact-construction optimization only; selected
+    windows, legal inputs, targets, normalization, and output order are unchanged.
+    """
+    path = data_root / task / episode["hdf5_path"]
+    histories = {current: causal_history_indices(current) for current in currents}
+    observation_indices = sorted({index for values in histories.values() for index in values})
+    with h5py.File(path, "r") as handle:
+        data = handle["data"]
+        agents = sorted(data["observation/agents"].keys())
+        views = ["global"] + [f"agent_{index}" for index in range(len(agents))]
+        visual_cache: dict[tuple[str, int], np.ndarray] = {}
+        for view in views:
+            dataset = data[f"observation/images/{view}"]
+            for start in range(0, len(observation_indices), 32):
+                indices = observation_indices[start : start + 32]
+                patches = patch_means_batch(np.asarray(dataset[indices]))
+                visual_cache.update(
+                    ((view, index), patch) for index, patch in zip(indices, patches)
+                )
+        qpos_by_agent = {
+            agent: np.asarray(data[f"observation/agents/{agent}/qpos"], dtype=np.float32)
+            for agent in agents
+        }
+        executed_by_agent = {
+            agent: np.asarray(data[f"action/agents/{agent}/executed"], dtype=np.float32)
+            for agent in agents
+        }
+        commanded_by_agent = {
+            agent: np.asarray(data[f"action/agents/{agent}/commanded"], dtype=np.float32)
+            for agent in agents
+        }
+    rows = {}
+    for current in currents:
+        history = histories[current]
+        visual = np.zeros((3, 16, 15), dtype=np.float16)
+        view_mask = np.zeros((3, 5), dtype=np.float16)
+        qpos = np.zeros((3, 4, 9), dtype=np.float32)
+        action_history = np.zeros((3, 4, 8), dtype=np.float32)
+        actions = np.zeros((horizon, 4, 8), dtype=np.float32)
+        step_mask = np.zeros(horizon, dtype=np.bool_)
+        for time_index, observation_index in enumerate(history):
+            for view_index, view in enumerate(views):
+                visual[time_index, :, view_index * 3 : (view_index + 1) * 3] = visual_cache[
+                    (view, observation_index)
+                ]
+                view_mask[time_index, view_index] = 1
+            prior = previous_action_index(observation_index)
+            for agent_index, agent in enumerate(agents):
+                qpos[time_index, agent_index] = qpos_by_agent[agent][observation_index]
+                if prior is not None:
+                    action_history[time_index, agent_index] = executed_by_agent[agent][prior]
+        end = min(current + horizon, int(episode["steps"]))
+        valid = end - current
+        step_mask[:valid] = True
+        for agent_index, agent in enumerate(agents):
+            command = commanded_by_agent[agent][current:end]
+            if not len(command):
+                raise ValueError(f"empty action suffix: {path}:{current}")
+            actions[:valid, agent_index] = command
+            actions[valid:, agent_index] = command[-1]
+        actions = (actions - stats["a_mean"][None, None]) / stats["a_std"][None, None]
+        agent_mask = np.zeros(4, dtype=np.bool_)
+        agent_mask[: len(agents)] = True
+        rows[current] = {
+            "visual": torch.from_numpy(visual),
+            "view_mask": torch.from_numpy(view_mask),
+            "qpos": torch.from_numpy(qpos),
+            "actions": torch.from_numpy(action_history),
+            "agent_mask": torch.from_numpy(agent_mask),
+            "task_index": torch.tensor(TASKS.index(task), dtype=torch.long),
+            "joint_actions": torch.from_numpy(actions),
+            "action_step_mask": torch.from_numpy(step_mask),
+        }
+    return rows
 
 
 def stack(rows: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
@@ -220,15 +315,30 @@ def main() -> None:
         examples = choose_examples(
             manifests, split, per_episode_by_split[split], int(metadata["seed"])
         )
-        rows = []
-        for index, item in enumerate(examples, 1):
-            rows.append(read_causal_example(data_root, item, stats))
+        groups = {}
+        for task, episode, current in examples:
+            key = (task, episode["hdf5_path"])
+            groups.setdefault(key, {"task": task, "episode": episode, "currents": []})[
+                "currents"
+            ].append(current)
+        prepared = {}
+        completed = 0
+        for key, group in groups.items():
+            unique_currents = list(dict.fromkeys(group["currents"]))
+            prepared[key] = read_causal_episode_group(
+                data_root, group["task"], group["episode"], unique_currents, stats
+            )
+            completed += len(group["currents"])
             if time.monotonic() - last_beat >= 20:
                 atomic_json(
                     heartbeat,
-                    {"producer": "prepare_r12_action_cache", "split": split, "row": index, "total": len(examples), "updated_at": now()},
+                    {"producer": "prepare_r12_action_cache", "split": split, "row": completed, "total": len(examples), "updated_at": now()},
                 )
                 last_beat = time.monotonic()
+        rows = [
+            prepared[(task, episode["hdf5_path"])][current]
+            for task, episode, current in examples
+        ]
         result_splits[split] = stack(rows)
     payload = {
         "schema_version": 1,

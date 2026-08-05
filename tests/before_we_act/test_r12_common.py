@@ -161,6 +161,38 @@ def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: 
     )
 
 
+def test_grouped_cache_reader_is_exactly_equal_to_single_window_reader(tmp_path: Path):
+    from scripts.before_we_act.prepare_r12_action_cache import (
+        read_causal_episode_group,
+        read_causal_example,
+    )
+
+    task = next(iter(TASKS))
+    episode_dir = tmp_path / task
+    episode_dir.mkdir()
+    episode = episode_dir / "episode.hdf5"
+    with h5py.File(episode, "w") as handle:
+        data = handle.create_group("data")
+        observations = data.create_group("observation")
+        agent = observations.create_group("agents").create_group("panda-0")
+        agent.create_dataset("qpos", data=np.arange(8 * 9, dtype=np.float32).reshape(8, 9))
+        images = observations.create_group("images")
+        pixels = np.arange(8 * 4 * 4 * 3, dtype=np.uint8).reshape(8, 4, 4, 3)
+        images.create_dataset("global", data=pixels)
+        images.create_dataset("agent_0", data=pixels[:, ::-1])
+        actions = data.create_group("action").create_group("agents").create_group("panda-0")
+        actions.create_dataset("executed", data=np.arange(8 * 8, dtype=np.float32).reshape(8, 8))
+        actions.create_dataset("commanded", data=100 + np.arange(8 * 8, dtype=np.float32).reshape(8, 8))
+    metadata = {"hdf5_path": "episode.hdf5", "steps": 8}
+    stats = {"a_mean": np.arange(8, dtype=np.float32), "a_std": np.arange(8, dtype=np.float32) + 1}
+    grouped = read_causal_episode_group(tmp_path, task, metadata, [0, 2, 5], stats, horizon=4)
+    for current in (0, 2, 5):
+        single = read_causal_example(tmp_path, (task, metadata, current), stats, horizon=4)
+        assert grouped[current].keys() == single.keys()
+        for key in single:
+            torch.testing.assert_close(grouped[current][key], single[key])
+
+
 def test_gate20_task_order_matches_frozen_contract():
     assert tuple(TASKS) == (
         "lift_barrier",
