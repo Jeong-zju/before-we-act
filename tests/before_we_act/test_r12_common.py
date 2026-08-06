@@ -5,6 +5,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -86,6 +87,60 @@ def test_recovery_metadata_does_not_break_mixed_batch_collation():
     batch = torch.utils.data.default_collate([recovery, base])
     assert batch["visual"].shape == (2, 3, 16, 15)
     assert batch["spatial_tokens"].shape == (2, 5, 16, 768)
+
+
+def test_runtime_archives_failed_precheckpoint_attempt_before_commit_rebind(
+    tmp_path: Path,
+):
+    from scripts.before_we_act.r12_runtime import init
+
+    run_root = tmp_path / "run"
+    mappings = []
+    old_commits = {}
+    for index in range(4):
+        candidate = f"p{index}"
+        branch = f"branch-{candidate}"
+        worktree = tmp_path / candidate
+        lock = worktree / f"experiments/before_we_act/r12/{candidate}/component_lock.yaml"
+        lock.parent.mkdir(parents=True)
+        lock.write_text(
+            "component_name: component\n"
+            "official_repo: https://example.test/repo.git\n"
+            "upstream_commit_sha: deadbeef\n"
+            "code_weight_data_license:\n  code: MIT\n"
+            "copied_upstream_files: []\n",
+            encoding="utf-8",
+        )
+        mappings.append(f"{candidate}={branch}=new-{candidate}={worktree}")
+        old_commits[candidate] = f"old-{candidate}"
+    create_args = SimpleNamespace(
+        run_root=run_root,
+        run_id="test-run",
+        parent_commit="parent",
+        belief_checkpoint=tmp_path / "belief.pt",
+        belief_checkpoint_sha256="belief-sha",
+        normalization_checkpoint=tmp_path / "normalization.pt",
+        worktree=[item.replace("=new-", "=old-") for item in mappings],
+        recover_failed_run=False,
+    )
+    init(create_args)
+    for candidate in ("p0", "p1", "p2", "p3"):
+        root = run_root / "candidates" / candidate
+        (root / "logs").mkdir(parents=True)
+        (root / "logs" / "candidate.log").write_text("KeyError: rollout_seed\n")
+        (root / "status.json").write_text(
+            json.dumps({"state": "FAILED", "update": 1, "pid": 0, "child_pid": 0})
+        )
+    recover_args = SimpleNamespace(**{**vars(create_args), "worktree": mappings, "recover_failed_run": True})
+    init(recover_args)
+
+    manifest = json.loads((run_root / "run_manifest.json").read_text())
+    assert manifest["commits"] == {f"p{i}": f"new-p{i}" for i in range(4)}
+    assert manifest["recoveries"][0]["previous_commits"] == old_commits
+    assert manifest["recoveries"][0]["restart_update"] == 0
+    archive = Path(manifest["recoveries"][0]["archive_root"])
+    assert (archive / "p0/logs/candidate.log").is_file()
+    assert (run_root / "candidates/p0").is_dir()
 
 
 def test_causal_history_matches_closed_loop_cold_start_and_lag():

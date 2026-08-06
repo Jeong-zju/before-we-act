@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -107,11 +108,6 @@ def update_status(args):
 
 def init(args):
     manifest = args.run_root / "run_manifest.json"
-    if manifest.exists():
-        current = read_json(manifest)
-        if current.get("run_id") != args.run_id or current.get("parent_commit") != args.parent_commit:
-            raise ValueError("existing R12 run manifest identity differs")
-        return
     worktrees, branches, commits, components = {}, {}, {}, {}
     for item in args.worktree:
         candidate, branch, commit, path = item.split("=", 3)
@@ -133,6 +129,54 @@ def init(args):
         }
     if set(worktrees) != set(CANDIDATES):
         raise ValueError("all four R12 worktrees are required")
+    if manifest.exists():
+        current = read_json(manifest)
+        if current.get("run_id") != args.run_id or current.get("parent_commit") != args.parent_commit:
+            raise ValueError("existing R12 run manifest identity differs")
+        if current.get("branches") != branches or current.get("worktrees") != worktrees:
+            raise ValueError("existing R12 run branch/worktree mapping differs")
+        if current.get("commits") == commits:
+            return
+        if not args.recover_failed_run:
+            raise ValueError(
+                "existing R12 run commits differ; use --recover-failed-run only for a failed pre-checkpoint attempt"
+            )
+        discarded_updates = {}
+        for candidate in CANDIDATES:
+            candidate_root = root_for(args.run_root, candidate)
+            status = read_json(candidate_root / "status.json")
+            update = int(status.get("update") or 0)
+            if status.get("state") != "FAILED" or update > 1:
+                raise ValueError(
+                    f"{candidate} is not an eligible failed pre-checkpoint attempt"
+                )
+            if pid_alive(status.get("pid")) or pid_alive(status.get("child_pid")):
+                raise ValueError(f"{candidate} still has a live process")
+            if list((candidate_root / "train" / "formal").glob("**/checkpoint_*.pt")):
+                raise ValueError(f"{candidate} has a formal checkpoint; refusing rebind")
+            discarded_updates[candidate] = update
+        attempt_index = len(list((args.run_root / "attempts").glob("failed_attempt_*"))) + 1
+        archive_root = args.run_root / "attempts" / f"failed_attempt_{attempt_index:03d}"
+        archive_root.mkdir(parents=True, exist_ok=False)
+        for candidate in CANDIDATES:
+            candidate_root = root_for(args.run_root, candidate)
+            if candidate_root.exists():
+                shutil.move(str(candidate_root), str(archive_root / candidate))
+        recovery = {
+            "at": now(),
+            "reason": "mixed base/recovery DataLoader collate failed on recovery-only rollout metadata",
+            "archive_root": str(archive_root),
+            "previous_commits": current["commits"],
+            "replacement_commits": commits,
+            "discarded_uncheckpointed_updates": discarded_updates,
+            "restart_update": 0,
+        }
+        current.update(commits=commits, components=components)
+        current.setdefault("recoveries", []).append(recovery)
+        atomic_json(manifest, current)
+        for candidate in CANDIDATES:
+            root_for(args.run_root, candidate).mkdir(parents=True, exist_ok=True)
+        return
     atomic_json(
         manifest,
         {
@@ -361,6 +405,7 @@ def main():
     init_parser.add_argument("--belief-checkpoint-sha256", required=True)
     init_parser.add_argument("--normalization-checkpoint", required=True)
     init_parser.add_argument("--worktree", action="append", default=[])
+    init_parser.add_argument("--recover-failed-run", action="store_true")
     status_parser = sub.add_parser("status"); add_status_arguments(status_parser)
     beat_parser = sub.add_parser("heartbeat")
     beat_parser.add_argument("--run-root", type=Path, required=True)

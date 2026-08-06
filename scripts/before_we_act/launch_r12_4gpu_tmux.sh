@@ -6,6 +6,7 @@ RUN_ID="r12r3-$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_ROOT=""
 SELECTION=all
 DRY_RUN=0
+RECOVER_FAILED_RUN=0
 PYTHON=/venv/robofactory-act/bin/python
 BELIEF_CHECKPOINT=/workspace/bwa_runs/shared/w11/checkpoint_010000.pt
 BELIEF_SHA256=a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49
@@ -30,6 +31,7 @@ while (($#)); do
     --run-root) RUN_ROOT="$2"; shift 2 ;;
     --candidate|--candidates) SELECTION="$2"; shift 2 ;;
     --python) PYTHON="$2"; shift 2 ;;
+    --recover-failed-run) RECOVER_FAILED_RUN=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -105,7 +107,11 @@ for index in 0 1 2 3; do
   [[ -f "$worktree/configs/before_we_act/r12_action/$candidate.yaml" && -f "$worktree/experiments/before_we_act/r12/$candidate/component_lock.yaml" ]] || { printf 'missing R12 contract for %s\n' "$candidate" >&2; exit 3; }
   WORKTREE_ARGS+=(--worktree "$candidate=$branch=$commit=$worktree")
 done
-"$PYTHON" "$FE_ROOT/scripts/before_we_act/r12_runtime.py" init --run-root "$RUN_ROOT" --run-id "$RUN_ID" --parent-commit "$PARENT_COMMIT" --belief-checkpoint "$BELIEF_CHECKPOINT" --belief-checkpoint-sha256 "$BELIEF_SHA256" --normalization-checkpoint "$NORMALIZATION_CHECKPOINT" "${WORKTREE_ARGS[@]}"
+RECOVERY_ARGS=()
+if ((RECOVER_FAILED_RUN)); then
+  RECOVERY_ARGS+=(--recover-failed-run)
+fi
+"$PYTHON" "$FE_ROOT/scripts/before_we_act/r12_runtime.py" init --run-root "$RUN_ROOT" --run-id "$RUN_ID" --parent-commit "$PARENT_COMMIT" --belief-checkpoint "$BELIEF_CHECKPOINT" --belief-checkpoint-sha256 "$BELIEF_SHA256" --normalization-checkpoint "$NORMALIZATION_CHECKPOINT" "${RECOVERY_ARGS[@]}" "${WORKTREE_ARGS[@]}"
 
 MANIFEST_COUNT="$(find "$DATA_ROOT" -mindepth 2 -maxdepth 2 -type f -name training_manifest.json | wc -l)"
 EPISODE_COUNT="$(find "$DATA_ROOT" -mindepth 3 -maxdepth 3 -type f -name 'episode_*.hdf5' | wc -l)"
