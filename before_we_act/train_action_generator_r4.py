@@ -61,6 +61,30 @@ def seed_everything(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
+def capture_rng_state() -> dict:
+    """Capture every RNG that can affect an exact R12-R4 continuation."""
+
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch_cpu": torch.get_rng_state(),
+        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+    }
+
+
+def restore_rng_state(state: dict) -> None:
+    required = {"python", "numpy", "torch_cpu", "torch_cuda"}
+    if set(state) != required:
+        raise ValueError("R12-R4 resume checkpoint has incomplete RNG state")
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch_cpu"])
+    if torch.cuda.is_available():
+        if len(state["torch_cuda"]) != torch.cuda.device_count():
+            raise ValueError("R12-R4 resume CUDA RNG device count differs")
+        torch.cuda.set_rng_state_all(state["torch_cuda"])
+
+
 def device_batch(batch, device):
     return {key: value.to(device, non_blocking=True) for key, value in batch.items()}
 
@@ -262,6 +286,7 @@ def main() -> None:
         if not boundary_transition:
             optimizer.load_state_dict(resume["optimizer"])
         warm_receipt = resume["warm_start_receipt"]
+        restore_rng_state(resume["rng_state"])
     else:
         warm_path = Path(
             str(config.training["warm_start_checkpoint"])
@@ -334,6 +359,7 @@ def main() -> None:
                 "full_index_sha256": identity["full_index_sha256"],
                 "core_free_runtime": True,
                 "last_metrics": last,
+                "rng_state": capture_rng_state(),
             },
         )
         return path
