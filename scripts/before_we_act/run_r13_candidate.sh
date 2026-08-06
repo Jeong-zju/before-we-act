@@ -162,6 +162,10 @@ run_child TRAINING formal train_team_world.py "frozen common 10000-update world 
 CHECKPOINT="$FORMAL/checkpoints/checkpoint_010000.pt"
 run_child VALIDATING world_screen evaluate_team_world.py "frozen validation windows and world score" 10000 \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROOT" "$PYTHON" -m before_we_act.evaluate_team_world --config "$CONFIG" --cache "$CACHE" --checkpoint "$CHECKPOINT" --output "$CANDIDATE_ROOT/validation/world_screen.json" --device cuda:0
+"$PYTHON" "$RUNTIME" status --run-root "$RUN_ROOT" --candidate "$CANDIDATE" \
+  --state VALIDATING --stage world_screen_complete --program evaluate_team_world.py \
+  --detail "final checkpoint is the frozen screen checkpoint" --pid "$$" --child-pid 0 \
+  --total-updates 10000 --checkpoint "$CHECKPOINT" --best-checkpoint "$CHECKPOINT" --log "$MAIN_LOG"
 run_child ACCEPTING action_hash audit_r13_action_hash.py "frozen W12 proposal/checkpoint exact hash" 10000 \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROOT" "$PYTHON" "$ROOT/scripts/before_we_act/audit_r13_action_hash.py" --config "$CONFIG" --cache "$CACHE" --checkpoint "$CHECKPOINT" --action-checkpoint "$ACTION_CHECKPOINT" --device cuda:0 --output "$CANDIDATE_ROOT/validation/action_hash.json"
 
