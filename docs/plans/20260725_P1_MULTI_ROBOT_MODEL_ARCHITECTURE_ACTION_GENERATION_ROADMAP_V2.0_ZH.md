@@ -3631,15 +3631,21 @@ P2 的全量 held-out `22,475` timestep 验证全部 finite，总体 first-step/
 | 候选 | 训练/验证终态 | overall first/full MSE | Stack Gate20 | 五任务总分 | 验收 |
 |---|---|---:|---:|---:|---|
 | E1-P0 OpenPI | 130k + 22,475 行 + 100 回合完成 | `0.027114/0.044294` | `0/20` | `74/100` | `FAILED` |
-| E1-P1 SmolVLA | 130k 已完成；本文更新时在全量离线验证，tmux 保留 | 待结构化终态 | 待跑满 | 待跑满 | `PENDING` |
+| E1-P1 SmolVLA | 130k + 22,475 行 + 100 回合完成 | `0.003687/0.018717` | `0/20` | `74/100` | `FAILED` |
 | **E1-P2 ACT** | **130k + 22,475 行 + 100 回合完成** | **`0.007540/0.019272`** | **`3/20`** | **`77/100`** | **`PASSED`** |
 | E1-P3 Diffusion | 130k + 22,475 行 + 100 回合完成 | `0.319643/0.385556` | `0/20` | `74/100` | `FAILED` |
+
+P1 于 UTC `2026-08-06T13:40:50Z` 自然完成最后一个回合和结构化验收。虽然它的总体离线 MSE 是四路最低，真实 Stack 仍为 `0/20`：20 回合中 9 次到达 B placed、2 次到达 A-on-B、0 次到达 C-on-A，P95 latency 为 `129.5905 ms`；checkpoint SHA256 为 `da1dfff4c948ecc8daf6af32a0bd1e4eac967a459c63f76f6557a1e0a547bbd1`。这与 P2 的 `3/20` 再次证明 offline imitation error 不能替代多阶段闭环质量门。四路 acceptance SHA256 依次为 P0 `ad3c337acd3a1beec51a80959584651b61040e6e3257ed25a9a6fbad6649f6b3`、P1 `4abe72a207de19485b5e43a9fa6a75ff91aec2a38df9b126c830fa049bf70a98`、P2 `eeb7abd70a98f4f1e38e1e88f6bf639c0c81677d44db8b1ea10f70574fc09349`、P3 `4be348fce8cfd433ba1f5debb1a10c08d5d352962ce5318334b2626e9e191758`。
+
+四路终态后执行冻结排序脚本生成 `/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/round_decision.json`，SHA256 `3cd258a885c69a44317c14996e52bdf2bee5c6d5245815bc372b7ae0189a9fb7`。结果为 `qualified_set=["p2"]`、`unique_winner="p2"`、`winner_source_commit=6deffc978c35cb567f659e2b46560a9c2c01d5ec`、`decision=winner_identified_no_merge_without_separate_authorization`、`merge_performed=false`；四路计费时间口径的 GPU-hours 分别为 `1.8424/3.4475/2.5449/2.1946`。因此 P2 不再只是“首个通过者”，而是完整同轮比较后的唯一合格 winner。
 
 十项特殊验收逐项为：`strict_restore_gradient_and_action_effect`、`native_high_resolution_before_compression`、`full_five_task_training_data_with_difficult_task_emphasis`、`two_stage_10k_plus_120k_complete`、`full_validation_finite`、`physical_core_free_specialist`、`exact_w10_no_regression_fallback`、`stack_uses_high_resolution_specialist`、`complete_paired_gate20`、`r11_plus_r12_mean_strictly_better_than_w10`，全部 `true`。受保护四任务的 80 行报告与冻结 W10 相同 seed 逐行 exact；另在 GPU2 直接重跑 `/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p2/receipts/fallback_action_hash_canary.json`，加载 W11 前后五任务 action tensor hash 完全一致、各任务 `max_abs=0`，W10 checkpoint SHA256 前后均为 `061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d`，`parent_immutable=true`。
 
 P2 候选特有改动为 `before_we_act/action_generator/act_chunk.py`、复制的 ACT `detr/models/transformer.py` 最小 closure、`configs/before_we_act/r12_action/e1_p2.yaml`、component lock/source map/evidence card/parity、LICENSE 与 `tests/before_we_act/test_r12_p2.py`。公共训练/验证链为 `before_we_act/action_generator/evolution.py`、`before_we_act/data/full_episode_windows.py`、`train_action_generator_evolution.py`、在线/离线 evaluator、preflight/core-free/acceptance/runtime/launch/monitor/stop 脚本。模型白名单与完整调用链检查覆盖 `before_we_act/action_generator/registry.py`、config loader 的 candidate-kind 校验、runner 的 candidate→module 映射、CLI choices 与 acceptance candidate choices；P2 没有通过只改一个白名单绕过注册。
 
-持续演进期间额外发现并修正一个重要的时间因果错位：早期 E2-v1 用“成功示范实际长度”归一化训练进度，而部署按公开时限归一化；Stack 示范约 `401–416` 步、公开时限 `800` 步，导致同一第 400 步在训练/部署约为 `1.0/0.5`。v1 在 `10,650/30,000` 被安全标记 `STOPPED` 且全部产物保留；commit `c520efe6964278b2966f90116db7b4cf962c7152` 改为每任务冻结公开时限，E2-v2 完成 30k 与全量离线验证，overall first/full 为 `0.02301249/0.03540991`，checkpoint SHA256 `0d70d906d22b239ac59b4453612342da9be91f9090c063208a33d27f0a4728f8`。ManiSkill `TimeLimitWrapper` 又不暴露 `env.spec`，首次正式 Stack evaluator 因过严元数据检查 fail-closed；`44e8a3d565a45ea2fadab6de245853a2735030fc` 仅在 wrapper 明确给值时校验、始终以冻结公开时限作为权威分母，真实模型 1-step 闭环 smoke 已通过。该 E2 诊断不替代、也不污染 E1-P2 的完整 PASSED 结果。ACT+公开时钟 E3 分支 `bwa/r12e3-p2-act-causal-phase-stack-specialist@4df1c81` 已推送并保持独立 tmux/输出；本文更新时仍在训练，不能写成完成。
+持续演进期间额外发现并修正一个重要的时间因果错位：早期 E2-v1 用“成功示范实际长度”归一化训练进度，而部署按公开时限归一化；Stack 示范约 `401–416` 步、公开时限 `800` 步，导致同一第 400 步在训练/部署约为 `1.0/0.5`。v1 在 `10,650/30,000` 被安全标记 `STOPPED` 且全部产物保留；commit `c520efe6964278b2966f90116db7b4cf962c7152` 改为每任务冻结公开时限，E2-v2 完成 30k 与全量离线验证，overall first/full 为 `0.02301249/0.03540991`，checkpoint SHA256 `0d70d906d22b239ac59b4453612342da9be91f9090c063208a33d27f0a4728f8`。ManiSkill `TimeLimitWrapper` 又不暴露 `env.spec`，首次正式 Stack evaluator 因过严元数据检查 fail-closed；`44e8a3d565a45ea2fadab6de245853a2735030fc` 仅在 wrapper 明确给值时校验、始终以冻结公开时限作为权威分母，真实模型 1-step 闭环 smoke 已通过。该 E2 诊断不替代、也不污染 E1-P2 的完整 PASSED 结果。
+
+P2 正式通过后，所有尚未形成正式质量结论的后续 R12 探索都按精确 run/candidate 安全停止：公开时钟 P0 run `/workspace/bwa_runs/r12e3-20260806-public-clock-p0-v1` 在 `16,300/30,000` 为 `STOPPED`，ACT+公开时钟 P2 run `/workspace/bwa_runs/r12e3-20260806-act-causal-phase-p2-v2` 在 `24,200/30,000` 为 `STOPPED`；两者 checkpoint、日志、状态与 heartbeat 全部保留。latest-chunk receding-horizon 诊断分支 `bwa/r12e4-p0-latest-chunk-stack-specialist@1b351ed` 已通过 `38` 项测试并推送，但因 GPU3 已被在途 E3-P2 独占而没有形成正式 Gate 输出，目标随后已由 E1-P2 达成，故不补跑、不作性能主张。UTC `13:41:48Z` 后 E1 四个 candidate tmux 均自然退出，E2/E3 精确停止完成，相关 monitor tmux 已关闭；四张 RTX 5090 compute process 均为空，没有训练、验证或 R13 进程残留。
 
 共享数据为 `/workspace/datasets/robofactory_multitask`，HF cache 为 `/workspace/.cache/huggingface`，高分辨率特征 cache 为 `/workspace/bwa_runs/shared/r12r4_native_full_cache_v2`（train/validation `180448/22475`），P2 输出/日志/checkpoint/状态/心跳分别为 `/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p2/{validation/,logs/,train/formal/checkpoints/,status.json,heartbeat.json}`。主要命令均可直接复制：
 
@@ -3672,9 +3678,23 @@ env CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. /venv/robofactory-act/bin/python \
   --parent-checkpoint /workspace/bwa_runs/shared/parent/checkpoint_120000.pt \
   --data-root /workspace/datasets/robofactory_multitask --device cuda:0 \
   --output /workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p2/receipts/fallback_action_hash_canary.json
+
+# 四路终态冻结排序（已执行；只写决定，不合并）
+/venv/robofactory-act/bin/python scripts/before_we_act/decide_r12_winner.py \
+  --acceptance p0=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p0/acceptance.json \
+  --acceptance p1=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p1/acceptance.json \
+  --acceptance p2=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p2/acceptance.json \
+  --acceptance p3=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p3/acceptance.json \
+  --status p0=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p0/status.json \
+  --status p1=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p1/status.json \
+  --status p2=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p2/status.json \
+  --status p3=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p3/status.json \
+  --baseline-commit 015a2fc09337a49a96ea0cfa5b49aff257e20d85 \
+  --baseline-checkpoint-sha256 061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d \
+  --output /workspace/bwa_runs/r12e1-20260806-agent-slot-v4/round_decision.json
 ```
 
-最终阶段决定：**R12 通过，综合闭环目标已完成；按当前任务的 `[ON_DIAG_PASS]` 写入结果后停止，不进入 R13。** P2 是唯一已结构化证明合格的 W12 候选，但本次没有收到 winner merge 授权，因此 `merge_performed=false`，不擅自合并到模型改进主分支。仍在运行的 P1/E3 只作为已启动实验继续由 tmux 持久化，不能推翻 P2 已经成立的 `77/100` 下界；其未完成结果不得冒充终态。
+最终阶段决定：**R12 通过，综合闭环目标已完成；按当前任务的 `[ON_DIAG_PASS]` 写入结果后停止，不进入 R13。** P2 是完整四路终态比较后的唯一合格 W12 候选；本次没有收到 winner merge 授权，因此 `merge_performed=false`，不擅自合并到模型改进主分支。所有在途 R12 探索和 monitor 已完成或安全停止，不再消耗 GPU。
 
 ##### 10.15.4.2 后续显式授权的 W12 winner-only 合并（2026-08-06）
 
