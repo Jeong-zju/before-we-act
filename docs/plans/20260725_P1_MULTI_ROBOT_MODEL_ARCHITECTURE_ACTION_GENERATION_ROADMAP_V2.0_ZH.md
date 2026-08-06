@@ -3712,7 +3712,7 @@ cd /home/jeong/zeno/wam/before-we-act
   tests/before_we_act/test_r12_full_episode_windows.py
 ```
 
-结果为 `37 passed`。不可变选择、来源、checkpoint、报告 hash 和 claim boundary 写入 `experiments/before_we_act/r12/w12/winner_manifest.yaml`；正式 W12 checkpoint 从原 P2 产物按 SHA256 `4c85dcd30058912f4be375af04b65b0f39b365d885883eb29934552b14020e41` 晋级到 `/workspace/bwa_runs/shared/w12/checkpoint_130000.pt`。W12 的正式定义固定为 E1-P2 ACT + current-condition plan prior：Stack 走高分辨率专家，另外四任务保持 exact-W10 fallback；E2/E3 不属于 W12。
+结果为 `37 passed`。远程 `/workspace/bwa_worktrees/model-improvements` 同样执行上述三组测试并得到 `37 passed`；不可变选择、四路冻结决定、来源、checkpoint、报告 hash 和 claim boundary 写入 `experiments/before_we_act/r12/w12/winner_manifest.yaml`。正式 W12 checkpoint 从原 P2 产物按 SHA256 `4c85dcd30058912f4be375af04b65b0f39b365d885883eb29934552b14020e41` 以同文件系统 hard link 晋级到 `/workspace/bwa_runs/shared/w12/checkpoint_130000.pt`，两路径 inode `25788281925`、link count `2`、权限 `0444`，没有复制额外的约 `235 MiB`。W12 的正式定义固定为 E1-P2 ACT + current-condition plan prior：Stack 走高分辨率专家，另外四任务保持 exact-W10 fallback；E2/E3 不属于 W12。
 
 ### 10.16 R13：四路 Candidate-Conditioned Latent World 组件移植（off-path）
 
