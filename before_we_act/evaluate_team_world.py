@@ -75,7 +75,7 @@ def main() -> None:
             target = batch["future_latent"].float()
             latent_error = (latent - target).square().mean(dim=(-1, -2))
             latent_base = (
-                batch["current_latent"].float()[:, None] - target
+                batch["current_latent"].float()[:, None, None] - target
             ).square().mean(dim=(-1, -2))
             qpos = prediction.qpos_delta_by_horizon[:, 0].float()
             qpos_error = (qpos - batch["future_qpos_delta"].float()).square().mean(dim=(-1, -2))
