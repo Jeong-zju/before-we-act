@@ -357,6 +357,8 @@ def test_r12_evolution_runtime_and_launcher_use_e1_identity():
     ).read_text(encoding="utf-8")
     assert 'choices=("R12-R3", "R12-R4", "R12-E1")' in runtime
     assert "--round R12-E1" in launcher
+    assert "reuse completed immutable cache shard" in launcher
+    assert 'stage == "native_rgb_post_dino_shard_complete"' in launcher
     assert "train_action_generator_evolution" in runner
     assert "evaluate_action_generator_evolution" in runner
 
