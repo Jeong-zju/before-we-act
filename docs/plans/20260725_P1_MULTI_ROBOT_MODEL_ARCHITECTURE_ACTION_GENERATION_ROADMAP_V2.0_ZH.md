@@ -3,7 +3,7 @@
 > 文档更新：2026-08-05（V4.5 + R12-R1 因果诊断与 R12-R2 完整终态）
 > 工程起点：`bwa/r9-core-native@06ba780`；R10 四路已全部失败并固定 `W10=B9-CoreNative`；R11 四路于 2026-08-05 完成并全部 PASSED，冻结排名 `P0>P3>P1>P2`
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1。R12-R1 与 R12-R2 均未产生 W12；R12-R2 四路已完整完成 `4×100` Gate20 并全部 FAILED，轮级决定为 `no_winner_no_merge`。当前继续停留在 R12；R12-R3 已预注册为 `W11 + 当前原始 fixed-view RGB 的 DINOv3 空间网格 + training-only on-policy recovery`，须先通过 representation sufficiency 与 recovery cache 两个 fail-closed 前置门，禁止提前进入 R13
+> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1，W12 晋级见 10.15.5。R13 四路 Candidate-Conditioned Latent World 组件移植已于 2026-08-06 完成，四路均通过 `11/11` 工程硬门；冻结 `world_screen_score` 排序为 `P0 > P1 > P2 > P3`，P0 TD-MPC2 为唯一排序胜者。R13 全程 off-path、W12 action hash bit-exact，未授权也未执行 winner merge；按本轮任务的 `[ON_DIAG_PASS]` 仅写入结果后停止，未进入 R14
 > 评测原则：S10 原样完成；R11/R13 保持 off-path，R12/R14 会改变动作轨迹。任何候选只要可能改变最终执行动作、候选选择、动作后处理或策略权重，就必须在同一五任务、同一 seeds 上完成**每任务 20 回合**闭环（简称 `Gate20`，即每候选共 `5×20=100` episodes）后才有 winner 资格；其它表征、排序、校准、因果和 oracle 指标降为可选诊断，不再挡住 benchmark 更优候选
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -3732,6 +3732,166 @@ R13 仍要求来源/parity、future不进入input、action hash完全相同；`p
 R13 的共同父分支选择为 `feat/model-improvements`：`bwa/main` 当前只含 W11，而该分支已经包含正式晋级的 W12 动作生成器，起点为 `8b90d9ef411450afc1b476c230ee3de45b934709`；四候选必须从后续同一个 R13 共同基础 commit 分叉。冻结 W11 checkpoint 为 `/workspace/bwa_runs/shared/w11/checkpoint_010000.pt`（SHA256 `a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49`），冻结 W12 checkpoint 为 `/workspace/bwa_runs/shared/w12/checkpoint_130000.pt`（SHA256 `4c85dcd30058912f4be375af04b65b0f39b365d885883eb29934552b14020e41`）。共同数据来自 `/workspace/bwa_runs/shared/r12r4_native_full_cache_v2/index.json`，R13 只物化 W11 belief、W12 `ActionProposalBatch` 和分离存储的未来监督目标；`future_targets_are_model_inputs=false` 是硬门。
 
 训练前选择规则已冻结于 `experiments/before_we_act/r13/selection_rule.json`：五任务平衡抽取 4096 train / 1024 validation windows，预测 horizons 为 `1/5/15`，四路统一 10000 updates、batch 64、seed `20260806`、BF16；`world_screen_score = 0.50*latent_gain + 0.20*qpos_gain + 0.20*progress_r2 + 0.10*throughput_score`，不设质量阈值。失败类在现有成功 demonstration 中不可识别，因此 AUROC/ECE 明确记为 unavailable，不得据此宣称 failure calibration。protected tasks 的缓存 action 是 off-path W12 specialist counterfactual；实际部署动作仍保持 W12 的显式 Stack specialist / exact-W10 fallback routing，并由独立 action/checkpoint hash 验收证明世界模型不进入 planner、rerank 或 actuator。
+
+#### 10.16.2 R13 四路正式执行、验收与停止记录（2026-08-06）
+
+**阶段决定。** R13 于 UTC `2026-08-06T14:51:25Z` 启动，四路正式训练均完成 10000 updates，最终特殊验收于 `15:30:29Z` 前完成。四候选均为 `PASSED (11/11)`；按训练前冻结且无质量阈值的规则，`world_screen_score` 最高的 P0 TD-MPC2 是唯一排序胜者。当前任务的通过后动作是“写入路线并停止”，故 `winner_pack_complete.json` 明确记录 `merge_performed=false`、`merge_authorized=false`；没有创建或运行 R14，也没有把 off-path screen 结果写成闭环性能提升。
+
+**Git 与实现 identity。** 选择 `feat/model-improvements` 而非 `bwa/main` 的依据是后者停在 W11，前者已包含正式 W12。R13 公共基础 commit 为 `075d64acc98db931367c98375c0c635f88aa5671`；公共执行/恢复代码终态为 `feat/model-improvements@3f4036a82b802af74a058add45d4881f8bfbe3b5`。训练清单冻结的是实际训练 commit，分支当前 tip 还包括共享评估修复、可观测性及依赖锁定：
+
+| 候选 | 分支 | 正式训练 commit | 验证/当前 tip | 官方源 commit |
+|---|---|---|---|---|
+| P0 / GPU0 | `bwa/r13-p0-tdmpc2-world-component` | `835dfacd20a186bb37b4de7dc11ec68a09777c3b` | `0d9a8afebcd233b8ff0d9a731d445d717ee38623` | TD-MPC2 `e9f59321933cbc8e11a002b842adc7d4ffae8ff1` |
+| P1 / GPU1 | `bwa/r13-p1-lpwm-world-component` | `15cc859b1814a395df3df33f79ff34e38c70078b` | `b58ee6fe888ae65ce1ebf19a7e4caf106d5502d6` | LPWM `4cf53c403433e64c01652ac2adbec66231a46dea` |
+| P2 / GPU2 | `bwa/r13-p2-vjepa2ac-world-component` | `8776691610603502dc21de2072454d39cefa9c2b` | `cb4e874224ad13ffcf644b02e0a3f103b7ea8e78` | V-JEPA2 `204698b45b3712590f06245fbfba32d3be539812` |
+| P3 / GPU3 | `bwa/r13-p3-dinowm-world-component` | `d9155dac2dcfcc25e39c85a953684dbabd315b01` | `b63bb8db53c4eb4274f7be58918a9edc3eb3764f` | DINO-WM `0a9492fa12044b852ae9e001cc74604b79c8bb0c` |
+
+以上分支和公共分支均已推送到 `origin`。P2/P3 终态 tip 只补充 S0 环境中已存在的 `timm==1.0.19` / `einops==0.8.1` 依赖锁定，不改模型或既有实验产物。四路 component lock、source map、LICENSE、adaptation card、paper evidence card、numerical parity 和候选测试分别位于 `experiments/before_we_act/r13/p{0,1,2,3}/`、`before_we_act/upstream_components/r13_*` 与 `tests/before_we_act/test_r13_p*.py`。公共改动集中在：
+
+- `before_we_act/contracts.py`、`before_we_act/data/world_windows.py`、`before_we_act/world_model/{base,registry}.py`：`ConsequencePrediction`、输入/未来 label 分离、四路模型注册与配置校验；
+- `before_we_act/{train,evaluate}_team_world.py`：统一训练、严格 restore、验证与冻结 screen；
+- `scripts/before_we_act/{prepare,verify}_r13_world_cache.py`、`verify_r13_preflight.py`、`audit_r13_action_hash.py`、`accept_r13.py`、`decide_r13_winner.py`：缓存、因果、动作哈希、11 项验收及唯一胜者；
+- `scripts/before_we_act/launch_r13_4gpu_tmux.sh`、`monitor_r13.sh`、`stop_r13_4gpu_tmux.sh`、`r13_runtime.py`、`run_r13_candidate.sh`、`recover_r13_validation.sh`：四卡 tmux 启动、20 秒 producer heartbeat、统一状态、monitor 和精确安全退出。
+
+模型白名单/完整调用链检查位置为 `before_we_act/world_model/registry.py::CANDIDATE_SPECS`、`before_we_act/world_model/base.py::load_world_config`、`scripts/before_we_act/r13_runtime.py::CANDIDATES`、`accept_r13.py --candidate choices`、launcher 的 `BRANCHES`/`A-D` alias、candidate runner 的 `p[0-3]`/GPU identity 校验；四处均覆盖 P0–P3，未只修改单一白名单。
+
+**本地与远程验证。** 公共基础在本地执行下列命令为 `40 passed`，最终恢复脚本变更后 R13 contract 再验为 `3 passed`，所有 shell 脚本通过 `bash -n` 和 `git diff --check`：
+
+```bash
+cd /home/jeong/zeno/wam/before-we-act
+uv run pytest -q \
+  tests/before_we_act/test_r12_p2.py \
+  tests/before_we_act/test_r12_common.py \
+  tests/before_we_act/test_r12_full_episode_windows.py \
+  tests/before_we_act/test_r13_world_contract.py
+uv run pytest -q tests/before_we_act/test_r13_world_contract.py
+bash -n scripts/before_we_act/launch_r13_4gpu_tmux.sh \
+  scripts/before_we_act/monitor_r13.sh \
+  scripts/before_we_act/stop_r13_4gpu_tmux.sh \
+  scripts/before_we_act/recover_r13_validation.sh
+git diff --check
+```
+
+P0/P1/P3 的独立本地候选测试均为 `4 passed`；P2 在本机自动创建的 Python 3.11 / torch 2.11 环境触发 torchvision NMS 二进制矩阵错误，分类为本地环境问题而不是跳过。实际目标环境使用 S0 冻结的 Python 3.10 / torch 2.7.1，四路分别执行 common contract + candidate test，结果均为 `4 passed`。远程可复制命令为：
+
+```bash
+ssh -p 10328 root@69.176.92.104 '
+set -Eeuo pipefail
+for c in p0 p1 p2 p3; do
+  wt=/workspace/bwa_worktrees/r13/$c
+  cd "$wt"
+  PYTHONPATH="$wt" /venv/robofactory-act/bin/python -m pytest -q \
+    tests/before_we_act/test_r13_world_contract.py \
+    "tests/before_we_act/test_r13_$c.py"
+done'
+```
+
+**运行环境与目录。** 远程为 Linux `6.8.0-60-generic`、Python `3.10.20`、torch `2.7.1+cu128`、CUDA runtime `12.8`、driver `570.169`，四张 `NVIDIA GeForce RTX 5090 32607 MiB`。沿用 S0 的 `/venv/robofactory-act/bin/python`、`/workspace/.cache/huggingface` 和既有鉴权/离线缓存机制；本轮无需新增 HF 下载，也没有把 token 写入命令、代码、日志或文档。路径固定为：
+
+- 输入 index：`/workspace/bwa_runs/shared/r12r4_native_full_cache_v2/index.json`；共享 cache：`/workspace/bwa_runs/shared/r13/world_cache_v1.pt`，SHA256 `73d02e53565576d44ceb0d2876502d88fd3bd62703c4c114ee64a15e9ce80a75`；
+- cache receipt：`/workspace/bwa_runs/r13-20260806-world-v1/shared/cache.json`，4096 train / 1024 validation、五任务齐全、horizons `1/5/15`、输入/目标 key 不相交、`future_targets_are_model_inputs=false`，全部检查通过；
+- run root：`/workspace/bwa_runs/r13-20260806-world-v1`；每路独立 `candidates/pN/{logs,train,validation,receipts}`、`status.json`、`heartbeat.json`；
+- 正式 checkpoint：`candidates/pN/train/formal/checkpoints/checkpoint_010000.pt`；日志：`candidates/pN/logs/candidate.log`，无覆盖恢复日志为 `validation_recovery_v2.log`；
+- tmux：`bwa-r13-p0`、`bwa-r13-p1`、`bwa-r13-p2`、`bwa-r13-p3`，共享缓存准备为 `bwa-r13-prepare`。全部已自然退出；四张卡当前无 compute process，未触碰 R10/R11/R12 或 `ssh_tmux` 等无关 session。
+
+正式启动和训练命令为：
+
+```bash
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+./scripts/before_we_act/launch_r13_4gpu_tmux.sh \
+  --run-id r13-20260806-world-v1 --candidate all'
+```
+
+共享 cache 的 SHA receipt 生成后，四路各先做来源/许可证/patch/无完整上游依赖/parity/off-path 检查和 2-update save/strict-restore preflight，再运行 10000 updates、验证、action hash 和特殊验收。单路、任意两路及四路 selector 均复用同一入口；UTC `15:34Z` 另以 `--candidates A,C --dry-run` 验证两路模式，确认不创建 worktree/output/session。
+
+**训练与 screen 结果。** 四路均为 batch 64、BF16、seed `20260806`、10000 updates；`gpu_memory_gb` 是进程内 `max_memory_allocated`，不是整卡 nvidia-smi 进程占用。正式训练合计约 `1.31 GPU-hours`，无 OOM、NaN、卡死、异常重启或 heartbeat stale：
+
+| 候选 | final loss | latent / qpos / progress loss | updates/s | peak alloc GiB | latent MSE / gain | qpos MSE / gain | progress MSE / R² | shuffle Δ | windows/s | screen score |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| P0 TD-MPC2 | 0.00050003 | 0.00024094 / 0.00110694 / 0.00089268 | 8.70 | 0.0741 | 0.00028597 / 0.12293 | 0.00108341 / 0.56660 | 0.00110947 / 0.98673 | 0.00312052 | 30880 | **0.47213065** |
+| P1 LPWM | 0.00035930 | 0.00026671 / 0.00084975 / 0.00019500 | 8.40 | 0.0687 | 0.00029868 / 0.08393 | 0.00087830 / 0.64866 | 0.00026973 / 0.99677 | 0.00433510 | 22912 | **0.47105280** |
+| P2 V-JEPA2-AC | 0.00037879 | 0.00027504 / 0.00088619 / 0.00024291 | 7.95 | 0.0446 | 0.00030601 / 0.06146 | 0.00090236 / 0.63903 | 0.00031305 / 0.99625 | 0.00257865 | 18232 | **0.45778855** |
+| P3 DINO-WM | 0.00044382 | 0.00028672 / 0.00109037 / 0.00035748 | 8.91 | 0.0450 | 0.00031667 / 0.02878 | 0.00108660 / 0.56533 | 0.00042930 / 0.99486 | 0.00393948 | 41116 | **0.42642743** |
+
+四个 checkpoint SHA256 依次为 P0 `6f98120d087d0f93969c697b2a041d338bd9e235adf136a690bb10689cb19b64`、P1 `2fd33b9a3e26571be3f2fd144691b12342d04634ba6221e7428edc75b25c465c`、P2 `c69d90b6af2839517e693791d40b46acbd511ca8e78d7dd24241618a7d5228ae`、P3 `c593f02c1c2768656483f34d96c47ebbb490a844ae883f2df22006051c0e0484`。最终 heartbeat 分别为 `15:30:27.135943Z`、`15:30:25.825812Z`、`15:30:29.984894Z`、`15:30:27.490735Z`；运行中 monitor 的 heartbeat age 均低于 75 秒 stale 门。
+
+**特殊验收逐项结果。** 四路 source 均解析到上表官方 commit且 clean，LICENSE 均为 MIT；adaptation patch 均为 `algorithmic_lines_changed=0`，numerical upstream parity 均为 exact、`max_abs=0.0`，`full_repo_runtime_dependency=false`。preflight 的 action-conditioned prediction delta 为 P0 `0.01753261`、P1 `0.09946487`、P2 `0.00095130`、P3 `0.08226238`，均 finite 且非零。权威 `accept_r13.py` 的 11 个硬门结果如下：
+
+| 硬门 | P0 | P1 | P2 | P3 |
+|---|---|---|---|---|
+| official source commit pinned | PASS | PASS | PASS | PASS |
+| license verified/preserved | PASS | PASS | PASS | PASS |
+| minimal component patch audited | PASS | PASS | PASS | PASS |
+| no full repo runtime dependency | PASS | PASS | PASS | PASS |
+| strictly off-path, no planner/rerank | PASS | PASS | PASS | PASS |
+| upstream numerical parity | PASS | PASS | PASS | PASS |
+| 2-update train/save/strict-restore | PASS | PASS | PASS | PASS |
+| future targets never model inputs | PASS | PASS | PASS | PASS |
+| formal 10000 updates + validation | PASS | PASS | PASS | PASS |
+| frozen W12 action hash exact | PASS | PASS | PASS | PASS |
+| candidate identity consistent | PASS | PASS | PASS | PASS |
+
+独立 action audit 对四路都得到 action tensor hash before/after `99621ac9ac1fd9bd00ea235879dd4adac078f5117bd6a4074beeac725a8babda`，冻结 W12 checkpoint before/after 均为 `4c85dcd30058912f4be375af04b65b0f39b365d885883eb29934552b14020e41`；因此 `Gate20=N/A (action hash equal)`。现有 cache 只含成功 demonstrations、没有反事实 branch outcome 或 failure class，故 pair accuracy、Spearman、AUROC、ECE、oracle retention 均按冻结规则记为 unavailable/可选，不用通用阈值代替真实验收，也不宣称 failure calibration。
+
+**共享评估异常及无覆盖恢复。** 四路完成正式 10000 updates 后，公共 evaluator 的 latent persistence baseline 少了 target-token 轴，原 pipeline 在验证阶段统一以 code 1 退出；这是公共代码广播错误，不是四个模型能力失败。修复 commit `32533c5` 将 `current_latent[:, None]` 改为 `current_latent[:, None, None]`。第一次恢复又因工作目录仍指向公共分支而在模型 import 前退出；证据保留在 `validation_recovery.log`/`validation_recovery.json`。`recover_r13_validation.sh --attempt 2` 改为进入候选 worktree，并写独立 `validation_recovery_v2.log`/receipt；receipt 明确 `training_reused=true`、`checkpoint_overwritten=false`。成功恢复日志无 traceback，原训练/第一次恢复日志保留失败 traceback；所有日志均为 OOM=0、NaN=0。四路恢复进程最终自然 code 0，未重训、未删除或覆盖 cache/checkpoint/result。
+
+恢复和冻结 winner pack 的实际命令为：
+
+```bash
+ssh -p 10328 root@69.176.92.104 '
+set -Eeuo pipefail
+BASE=/workspace/bwa_worktrees/model-improvements
+RUN=/workspace/bwa_runs/r13-20260806-world-v1
+for c in p0 p1 p2 p3; do
+  g=${c#p}
+  wt=$(jq -r --arg c "$c" ".worktrees[\$c]" "$RUN/run_manifest.json")
+  tmux new-session -d -s "bwa-r13-$c" \
+    "cd $BASE && exec ./scripts/before_we_act/recover_r13_validation.sh --run-root $RUN --candidate $c --gpu-index $g --worktree $wt --attempt 2 --python /venv/robofactory-act/bin/python"
+done'
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+PYTHONPATH=. /venv/robofactory-act/bin/python \
+  scripts/before_we_act/decide_r13_winner.py \
+  --run-root /workspace/bwa_runs/r13-20260806-world-v1 \
+  --output /workspace/bwa_runs/r13-20260806-world-v1/winner_pack_complete.json'
+```
+
+winner pack SHA256 为 `e7dfaa876b95e088ce29294275373042b3f28aaba303a9a2445e3977dc2523f5`，`qualified_set=[p0,p1,p2,p3]`、ranking `p0,p1,p2,p3`、winner `p0`、`unique_winner=true`、`passed=true`、`merge_performed=false`。
+
+**一键操作。** 新 run 可直接复制；`--candidate A`/`B`/`C`/`D` 启动单路，`--candidates A,C` 启动任意两路，`all` 启动四路。脚本会校验分支/commit/checkpoint/data/cache/GPU、拒绝重复 session，并输出 monitor/stop 命令：
+
+```bash
+# 部署/训练（新 run；可把 all 改成 A、B、C、D 或 A,C）
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+RUN_ID=r13-$(date -u +%Y%m%dT%H%M%SZ)
+./scripts/before_we_act/launch_r13_4gpu_tmux.sh \
+  --run-id "$RUN_ID" --candidate all'
+
+# 单次四路快照；把 all 改成 p0 可看单路
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+./scripts/before_we_act/monitor_r13.sh \
+  --run-root /workspace/bwa_runs/r13-20260806-world-v1 \
+  --candidate all --once'
+
+# 持续刷新
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+./scripts/before_we_act/monitor_r13.sh \
+  --run-root /workspace/bwa_runs/r13-20260806-world-v1 \
+  --candidate all --interval 30'
+
+# 精确安全退出；把 all 改成 A/B/C/D 可停单路，先加 --dry-run 可只列目标
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+./scripts/before_we_act/stop_r13_4gpu_tmux.sh \
+  --run-root /workspace/bwa_runs/r13-20260806-world-v1 \
+  --candidate all'
+```
+
+终态 stop `--dry-run` 显示 P0–P3 和 shared-prepare 的 tagged PID 均为 `none`，没有发送信号或关闭任何 session。最终结论为：**R13 通过；P0 TD-MPC2 是冻结 screen 的唯一排序胜者；本轮不授权合并、不进入 R14，整体状态为完成并停止。** 后续若另行授权晋级，应只从 winner pack 指定的 P0 最小组件/checkpoint 建立 winner-only merge，并在进入任何 action-affecting R14 前另行冻结父 commit 与 Gate20 协议。
 
 ### 10.17 R14：四路 World-Guided Decision 组件移植（action-affecting，强制 Gate20）
 
