@@ -12,7 +12,7 @@ import torch
 
 from before_we_act.benchmark import TASKS
 from before_we_act.contracts import ActionProposalBatch
-from before_we_act.data.action_windows import ExactFiveTaskWindowSampler
+from before_we_act.data.action_windows import CachedActionWindows, ExactFiveTaskWindowSampler
 
 
 def test_action_proposal_rejects_absent_agent_motion():
@@ -55,6 +55,37 @@ def test_exact_sampler_can_force_task_balanced_recovery_rows():
     )
     assert all(sorted(task_indices[row].tolist()) == [0, 1, 2, 3, 4] for row in batches)
     assert all(sources[row].eq(1).all() for row in batches)
+
+
+def test_recovery_metadata_does_not_break_mixed_batch_collation():
+    dataset = CachedActionWindows.__new__(CachedActionWindows)
+    dataset.base_size = 1
+    dataset.data = {
+        "visual": torch.zeros(1, 3, 16, 15),
+        "task_index": torch.zeros(1, dtype=torch.long),
+    }
+    dataset.spatial_data = {
+        "spatial_tokens": torch.zeros(1, 5, 16, 768),
+        "spatial_view_mask": torch.ones(1, 5, dtype=torch.bool),
+    }
+    dataset.recovery_data = {
+        "visual": torch.ones(1, 3, 16, 15),
+        "task_index": torch.ones(1, dtype=torch.long),
+        "spatial_tokens": torch.ones(1, 5, 16, 768),
+        "spatial_view_mask": torch.ones(1, 5, dtype=torch.bool),
+        "source_policy": ("p0",),
+        "rollout_seed": torch.tensor([12001]),
+        "rollout_step": torch.tensor([7]),
+    }
+
+    base = dataset[0]
+    recovery = dataset[1]
+    assert base.keys() == recovery.keys()
+    assert "rollout_seed" not in recovery
+    assert "rollout_step" not in recovery
+    batch = torch.utils.data.default_collate([recovery, base])
+    assert batch["visual"].shape == (2, 3, 16, 15)
+    assert batch["spatial_tokens"].shape == (2, 5, 16, 768)
 
 
 def test_causal_history_matches_closed_loop_cold_start_and_lag():

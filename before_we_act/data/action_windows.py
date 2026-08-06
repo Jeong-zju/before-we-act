@@ -131,7 +131,14 @@ class CachedActionWindows(Dataset):
             row = {
                 key: value[spatial_index]
                 for key, value in self.recovery_data.items()
-                if key not in ("spatial_tokens", "spatial_view_mask", "source_policy")
+                if key
+                not in (
+                    "spatial_tokens",
+                    "spatial_view_mask",
+                    "source_policy",
+                    "rollout_seed",
+                    "rollout_step",
+                )
             }
             spatial = self.recovery_data
         if self.spatial_data is not None:
