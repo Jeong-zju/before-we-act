@@ -123,12 +123,12 @@ if [[ ! -f "$SPATIAL_CACHE" ]]; then
     session="bwa-r12r3-spatial-rank$index"
     if ! tmux has-session -t "$session" 2>/dev/null; then
       tmux new-session -d -s "$session" -n spatial \
-        "cd '$FE_ROOT' && exec env CUDA_VISIBLE_DEVICES='$index' PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_spatial_cache.py' --mode shard --rank '$index' --world-size 4 --action-cache '$ACTION_CACHE' --data-root '$DATA_ROOT' --vision-artifact '$VISION_ARTIFACT' --shard-dir '$SPATIAL_SHARDS' --state '$SPATIAL_SHARDS/rank_${index}_state.json' --heartbeat '$SPATIAL_SHARDS/rank_${index}_heartbeat.json' --device cuda:0"
+        "while [[ ! -f '$ACTION_CACHE' ]]; do sleep 10; done; cd '$FE_ROOT' && exec env CUDA_VISIBLE_DEVICES='$index' PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_spatial_cache.py' --mode shard --rank '$index' --world-size 4 --action-cache '$ACTION_CACHE' --data-root '$DATA_ROOT' --vision-artifact '$VISION_ARTIFACT' --shard-dir '$SPATIAL_SHARDS' --state '$SPATIAL_SHARDS/rank_${index}_state.json' --heartbeat '$SPATIAL_SHARDS/rank_${index}_heartbeat.json' --device cuda:0"
     fi
   done
   if ! tmux has-session -t bwa-r12r3-spatial-consolidate 2>/dev/null; then
     tmux new-session -d -s bwa-r12r3-spatial-consolidate -n consolidate \
-      "cd '$FE_ROOT' && exec env PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_spatial_cache.py' --mode consolidate --world-size 4 --action-cache '$ACTION_CACHE' --shard-dir '$SPATIAL_SHARDS' --output '$SPATIAL_CACHE' --state '/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1_state.json' --heartbeat '/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1_heartbeat.json'"
+      "while [[ ! -f '$ACTION_CACHE' ]]; do sleep 10; done; cd '$FE_ROOT' && exec env PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_spatial_cache.py' --mode consolidate --world-size 4 --action-cache '$ACTION_CACHE' --shard-dir '$SPATIAL_SHARDS' --output '$SPATIAL_CACHE' --state '/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1_state.json' --heartbeat '/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1_heartbeat.json'"
   fi
 fi
 PROBE="$RUN_ROOT/representation_sufficiency.json"
