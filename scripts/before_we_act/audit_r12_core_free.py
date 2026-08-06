@@ -20,11 +20,24 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--candidate-module", required=True)
-    parser.add_argument("--round", choices=("R12-R3", "R12-R4"), default="R12-R3")
+    parser.add_argument(
+        "--round", choices=("R12-R3", "R12-R4", "R12-E1"), default="R12-R3"
+    )
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     root = Path(args.project_root).resolve()
-    if args.round == "R12-R4":
+    if args.round == "R12-E1":
+        relative_paths = [
+            "before_we_act/action_generator/r4_base.py",
+            "before_we_act/action_generator/evolution.py",
+            "before_we_act/action_generator/spatial_bridge.py",
+            args.candidate_module,
+            "before_we_act/spatial_observation.py",
+            "before_we_act/train_action_generator_evolution.py",
+            "before_we_act/evaluate_action_generator_evolution.py",
+            "before_we_act/evaluate_action_generator_evolution_offline.py",
+        ]
+    elif args.round == "R12-R4":
         relative_paths = [
             "before_we_act/action_generator/r4_base.py",
             "before_we_act/action_generator/spatial_bridge.py",
