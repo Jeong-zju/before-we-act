@@ -322,6 +322,45 @@ def test_r12_r4_uses_one_identical_five_view_dino_microbatch_contract():
     assert "inference_batch_size=5" in audit
 
 
+def test_r12_r4_core_free_receipt_covers_the_complete_new_runtime(tmp_path: Path):
+    relative_paths = [
+        "before_we_act/action_generator/r4_base.py",
+        "before_we_act/action_generator/spatial_bridge.py",
+        "before_we_act/action_generator/candidate.py",
+        "before_we_act/spatial_observation.py",
+        "before_we_act/train_action_generator_r4.py",
+        "before_we_act/evaluate_action_generator_r4.py",
+        "before_we_act/evaluate_action_generator_r4_offline.py",
+    ]
+    for relative in relative_paths:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("safe_runtime_symbol\n", encoding="utf-8")
+    output = tmp_path / "receipt.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/before_we_act/audit_r12_core_free.py",
+            "--round",
+            "R12-R4",
+            "--project-root",
+            str(tmp_path),
+            "--candidate-module",
+            "before_we_act/action_generator/candidate.py",
+            "--output",
+            str(output),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(output.read_text(encoding="utf-8"))
+    assert receipt["round"] == "R12-R4"
+    assert receipt["passed"] is True
+    assert set(receipt["audited_files"]) == set(relative_paths)
+
+
 def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: Path):
     from scripts.before_we_act.prepare_r12_action_cache import read_causal_example
 

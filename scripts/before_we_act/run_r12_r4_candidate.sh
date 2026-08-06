@@ -152,7 +152,7 @@ run_child PREPARING patch audit_component_patch.py "minimal transplant patch aud
 run_child PREPARING dependency audit_no_full_repo_dependency.py "no full upstream runtime import" "$TARGET_UPDATES" \
   "$PYTHON" "$FE_ROOT/scripts/before_we_act/audit_no_full_repo_dependency.py" --project-root "$FE_ROOT" --output "$RECEIPTS/dependency.json"
 run_child PREPARING core_free audit_r12_core_free.py "physical CoRE/runtime separation" "$TARGET_UPDATES" \
-  "$PYTHON" "$FE_ROOT/scripts/before_we_act/audit_r12_core_free.py" --project-root "$FE_ROOT" --candidate-module "$MODULE" --output "$RECEIPTS/core_free.json"
+  "$PYTHON" "$FE_ROOT/scripts/before_we_act/audit_r12_core_free.py" --round R12-R4 --project-root "$FE_ROOT" --candidate-module "$MODULE" --output "$RECEIPTS/core_free.json"
 run_child PREPARING parity parity.py "official/local component numerical parity" "$TARGET_UPDATES" \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" "$PARITY" --upstream "$UPSTREAM" --output "$RECEIPTS/parity.json" --device cuda:0
 run_child PREPARING cache_equivalence audit_r12_r4_cache_equivalence.py "native RGB online/cache exact equivalence" "$TARGET_UPDATES" \

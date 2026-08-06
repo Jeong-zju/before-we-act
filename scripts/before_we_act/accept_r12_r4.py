@@ -174,7 +174,21 @@ def main() -> None:
             and offline.get("all_outputs_finite") is True,
             args.offline,
         ),
-        check("physical_core_free_runtime", core_free.get("passed") and identity.get("core_free_runtime"), args.core_free),
+        check(
+            "physical_core_free_runtime",
+            core_free.get("passed")
+            and core_free.get("round") == "R12-R4"
+            and {
+                "before_we_act/action_generator/r4_base.py",
+                "before_we_act/action_generator/spatial_bridge.py",
+                "before_we_act/spatial_observation.py",
+                "before_we_act/train_action_generator_r4.py",
+                "before_we_act/evaluate_action_generator_r4.py",
+                "before_we_act/evaluate_action_generator_r4_offline.py",
+            }.issubset(set(core_free.get("audited_files", [])))
+            and identity.get("core_free_runtime"),
+            args.core_free,
+        ),
         check(
             "complete_paired_gate20",
             all_complete and len(seed_protocols) == 5,

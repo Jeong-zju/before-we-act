@@ -20,14 +20,27 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--candidate-module", required=True)
+    parser.add_argument("--round", choices=("R12-R3", "R12-R4"), default="R12-R3")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     root = Path(args.project_root).resolve()
-    paths = [
-        root / "before_we_act/action_generator/base.py",
-        root / args.candidate_module,
-        root / "before_we_act/evaluate_action_generator.py",
-    ]
+    if args.round == "R12-R4":
+        relative_paths = [
+            "before_we_act/action_generator/r4_base.py",
+            "before_we_act/action_generator/spatial_bridge.py",
+            args.candidate_module,
+            "before_we_act/spatial_observation.py",
+            "before_we_act/train_action_generator_r4.py",
+            "before_we_act/evaluate_action_generator_r4.py",
+            "before_we_act/evaluate_action_generator_r4_offline.py",
+        ]
+    else:
+        relative_paths = [
+            "before_we_act/action_generator/base.py",
+            args.candidate_module,
+            "before_we_act/evaluate_action_generator.py",
+        ]
+    paths = [root / relative for relative in dict.fromkeys(relative_paths)]
     findings = []
     for path in paths:
         text = path.read_text(encoding="utf-8")
@@ -36,7 +49,7 @@ def main() -> None:
                 findings.append({"path": str(path.relative_to(root)), "token": token})
     result = {
         "schema_version": 1,
-        "round": "R12-R3",
+        "round": args.round,
         "candidate_id": Path(args.candidate_module).stem,
         "audited_files": [str(path.relative_to(root)) for path in paths],
         "forbidden_runtime_references": findings,
