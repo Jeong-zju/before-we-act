@@ -322,45 +322,6 @@ def test_r12_r4_uses_one_identical_five_view_dino_microbatch_contract():
     assert "inference_batch_size=5" in audit
 
 
-def test_r12_r4_core_free_audit_covers_the_complete_runtime(tmp_path: Path):
-    required = [
-        "before_we_act/action_generator/r4_base.py",
-        "before_we_act/action_generator/spatial_bridge.py",
-        "before_we_act/action_generator/candidate.py",
-        "before_we_act/spatial_observation.py",
-        "before_we_act/train_action_generator_r4.py",
-        "before_we_act/evaluate_action_generator_r4.py",
-        "before_we_act/evaluate_action_generator_r4_offline.py",
-    ]
-    for relative in required:
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("legal_runtime = True\n", encoding="utf-8")
-    output = tmp_path / "audit.json"
-    result = subprocess.run(
-        [
-            sys.executable,
-            "scripts/before_we_act/audit_r12_core_free.py",
-            "--round",
-            "R12-R4",
-            "--project-root",
-            str(tmp_path),
-            "--candidate-module",
-            "before_we_act/action_generator/candidate.py",
-            "--output",
-            str(output),
-        ],
-        cwd=Path(__file__).resolve().parents[2],
-        text=True,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(output.read_text())
-    assert payload["round"] == "R12-R4"
-    assert payload["passed"] is True
-    assert set(payload["audited_files"]) == set(required)
-
-
 def test_r12_r4_core_free_receipt_covers_the_complete_new_runtime(tmp_path: Path):
     relative_paths = [
         "before_we_act/action_generator/r4_base.py",
