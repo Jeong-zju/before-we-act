@@ -239,7 +239,18 @@ def init(args):
                 "candidate-specific preregistered 60k fresh-update budget complete; offline control-cycle smoke is finite",
                 "mandatory five tasks x exactly 20 paired episodes using frozen W10 seeds",
                 "candidate qualifies only when valid and total successes strictly exceed W10 74/100",
-            ] if round_name == "R12-R3" else [
+            ] if round_name == "R12-R3" else ([
+                "native 480x640 multi-view RGB is the primary policy input before post-DINO compression",
+                "W11 TeamBeliefState and explicit task ID are supplemental bounded conditioning",
+                "all five training tasks remain present with deterministic Stack/Camera emphasis",
+                "10k bridge/task-FiLM alignment followed by 120k joint optimization",
+                "strict restore, finite/range/mask, image effect and task-conditioning effect",
+                "runtime contains no Stereo-CoRE/PAIR/ARCA/forced-role implementation or checkpoint",
+                "full held-out 22475-timestep offline validation is finite",
+                "Lift/Camera/LPD/Photo route through the exact unchanged W10 fallback",
+                "Stack routes through the high-resolution specialist on exactly 20 paired Gate20 seeds",
+                "candidate qualifies only when R11=74 and R12-E1 total successes strictly exceed W10 74/100",
+            ] if round_name == "R12-E1" else [
                 "official commit/license/source map and unmodified algorithm parity",
                 "minimal component closure; no complete upstream runtime dependency",
                 "native 480x640 RGB enters frozen DINO before any post-encoder 6x8 compression",
@@ -251,7 +262,7 @@ def init(args):
                 "full held-out 22475-timestep offline validation is finite",
                 "mandatory five tasks x exactly 20 paired episodes using frozen W10 seeds",
                 "candidate qualifies only when valid and total successes strictly exceed W10 74/100",
-            ]),
+            ])),
         },
     )
     for candidate in CANDIDATES:
