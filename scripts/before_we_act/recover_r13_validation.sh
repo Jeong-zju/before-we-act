@@ -5,6 +5,7 @@ RUN_ROOT=""
 CANDIDATE=""
 GPU_INDEX=""
 WORKTREE=""
+ATTEMPT=1
 ACTION_CHECKPOINT=/workspace/bwa_runs/shared/w12/checkpoint_130000.pt
 CACHE=/workspace/bwa_runs/shared/r13/world_cache_v1.pt
 PYTHON=/venv/robofactory-act/bin/python
@@ -14,6 +15,7 @@ while (($#)); do
     --candidate) CANDIDATE="$2"; shift 2 ;;
     --gpu-index) GPU_INDEX="$2"; shift 2 ;;
     --worktree) WORKTREE="$2"; shift 2 ;;
+    --attempt) ATTEMPT="$2"; shift 2 ;;
     --action-checkpoint) ACTION_CHECKPOINT="$2"; shift 2 ;;
     --cache) CACHE="$2"; shift 2 ;;
     --python) PYTHON="$2"; shift 2 ;;
@@ -23,6 +25,7 @@ done
 if [[ ! "$CANDIDATE" =~ ^p[0-3]$ || ! "$GPU_INDEX" =~ ^[0-3]$ || "${CANDIDATE#p}" != "$GPU_INDEX" ]]; then
   printf 'candidate/GPU must be p0/0 through p3/3\n' >&2; exit 2
 fi
+[[ "$ATTEMPT" =~ ^[1-9][0-9]*$ ]] || { printf 'attempt must be a positive integer\n' >&2; exit 2; }
 [[ -n "$RUN_ROOT" && -n "$WORKTREE" ]] || { printf 'run root and worktree are required\n' >&2; exit 2; }
 BASE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNTIME="$BASE_ROOT/scripts/before_we_act/r13_runtime.py"
@@ -33,8 +36,13 @@ CHECKPOINT="$CANDIDATE_ROOT/train/formal/checkpoints/checkpoint_010000.pt"
 SCREEN="$CANDIDATE_ROOT/validation/world_screen.json"
 ACTION_HASH="$CANDIDATE_ROOT/validation/action_hash.json"
 ACCEPTANCE="$CANDIDATE_ROOT/acceptance.json"
-RECOVERY="$CANDIDATE_ROOT/receipts/validation_recovery.json"
-LOG="$CANDIDATE_ROOT/logs/validation_recovery.log"
+if ((ATTEMPT == 1)); then
+  RECOVERY="$CANDIDATE_ROOT/receipts/validation_recovery.json"
+  LOG="$CANDIDATE_ROOT/logs/validation_recovery.log"
+else
+  RECOVERY="$CANDIDATE_ROOT/receipts/validation_recovery_v${ATTEMPT}.json"
+  LOG="$CANDIDATE_ROOT/logs/validation_recovery_v${ATTEMPT}.log"
+fi
 for path in "$PYTHON" "$MANIFEST" "$WORKTREE" "$CONFIG" "$CHECKPOINT" "$ACTION_CHECKPOINT" "$CACHE"; do
   [[ -e "$path" ]] || { printf 'missing recovery input: %s\n' "$path" >&2; exit 3; }
 done
@@ -87,7 +95,7 @@ run_child() {
 }
 
 VALIDATION_COMMIT="$(git -C "$WORKTREE" rev-parse HEAD)"
-"$PYTHON" - "$RECOVERY" "$TRAINING_COMMIT" "$VALIDATION_COMMIT" <<'PY'
+"$PYTHON" - "$RECOVERY" "$TRAINING_COMMIT" "$VALIDATION_COMMIT" "$ATTEMPT" <<'PY'
 import datetime, json, os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 payload = {
@@ -96,6 +104,7 @@ payload = {
     "reason": "shared evaluator latent persistence baseline omitted the target-token axis",
     "training_commit": sys.argv[2],
     "validation_fix_commit": sys.argv[3],
+    "attempt": int(sys.argv[4]),
     "training_reused": True,
     "checkpoint_overwritten": False,
     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -104,6 +113,10 @@ temporary = path.with_suffix(path.suffix + ".tmp")
 temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 os.replace(temporary, path)
 PY
+# Python prepends the current working directory to sys.path.  Entering the
+# candidate worktree is therefore required in addition to PYTHONPATH; otherwise
+# the common base branch's intentionally empty candidate registry wins.
+cd "$WORKTREE"
 run_child VALIDATING validation_recovery evaluate_team_world.py "evaluate completed 10000-update checkpoint with axis fix" \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$WORKTREE" "$PYTHON" -m before_we_act.evaluate_team_world --config "$CONFIG" --cache "$CACHE" --checkpoint "$CHECKPOINT" --output "$SCREEN" --device cuda:0
 run_child ACCEPTING action_hash audit_r13_action_hash.py "frozen W12 proposal/checkpoint exact hash" \
