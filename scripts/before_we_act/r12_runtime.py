@@ -455,7 +455,7 @@ def render(run_root: Path, selected):
             f"  checkpoint={status.get('checkpoint') or latest_checkpoint(root)} best={status.get('best_checkpoint', '-')}",
             f"  validation_metric={status.get('validation_metric', '-')} entered_validation={status.get('stage') in ('offline_validation','gate20','acceptance','complete')}",
             f"  Gate20 tasks={gate['complete_tasks']}/5 episodes={gate['episodes']}/100 successes={gate['successes']} per_task={gate['per_task']} p95={gate['p95']}",
-            f"  entered_acceptance={status.get('stage') in ('acceptance','complete')} acceptance={acceptance.get('status', 'PENDING')} progress={len(acceptance.get('acceptance', []))}/14 failed={[row['id'] for row in acceptance.get('acceptance', []) if not row.get('passed')]}",
+            f"  entered_acceptance={status.get('stage') in ('acceptance','complete')} acceptance={acceptance.get('status', 'PENDING')} progress={len(acceptance.get('acceptance', []))}/{len(manifest.get('acceptance_rules', []))} failed={[row['id'] for row in acceptance.get('acceptance', []) if not row.get('passed')]}",
             f"  log={status.get('log', '-')} detail={status.get('detail', '-')} alerts={alerts or ['NONE']}",
         ])
         if recent:
@@ -495,7 +495,9 @@ def main():
     init_parser = sub.add_parser("init")
     init_parser.add_argument("--run-root", type=Path, required=True)
     init_parser.add_argument("--run-id", required=True)
-    init_parser.add_argument("--round", choices=("R12-R3", "R12-R4"), default="R12-R3")
+    init_parser.add_argument(
+        "--round", choices=("R12-R3", "R12-R4", "R12-E1"), default="R12-R3"
+    )
     init_parser.add_argument("--session-prefix", default="bwa-r12r3")
     init_parser.add_argument("--formal-updates", type=int, default=60_000)
     init_parser.add_argument("--shared-spatial-cache", default="/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1.pt")
