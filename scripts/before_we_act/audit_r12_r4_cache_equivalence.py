@@ -34,7 +34,12 @@ def main() -> None:
     ):
         raise ValueError("R12-R4 cache equivalence index identity differs")
     encoder = R12SpatialObservationEncoder(
-        index["observation"], args.vision_artifact, inference_batch_size=1
+        # Cache construction and deployed Gate20 inference both encode all
+        # present fixed views in one bounded batch (at most five).  CUDA GEMM
+        # reduction order is batch-shape dependent, so the equivalence audit
+        # must use the identical micro-batch contract before requiring exact
+        # fp16 equality.
+        index["observation"], args.vision_artifact, inference_batch_size=5
     ).to(device).eval()
     rows = []
     for task in TASKS:
