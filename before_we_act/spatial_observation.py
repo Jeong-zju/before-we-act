@@ -15,6 +15,7 @@ from torch import nn
 
 from models.wam_multimodal.vision_encoder import (
     DINOV3_PREPROCESS_ID,
+    DINOV3_RECTANGULAR_PREPROCESS_ID,
     FrozenDINOv3Config,
     FrozenDINOv3Encoder,
 )
@@ -40,6 +41,32 @@ def locked_r12_spatial_observation() -> dict[str, object]:
     }
 
 
+def locked_r12_full_episode_observation() -> dict[str, object]:
+    """Full-data repair contract that preserves the fixed camera aspect ratio.
+
+    A 192x256 DINO input has the same pixel budget as the failed 224-square
+    adapter while retaining the native 3:4 geometry.  Its 12x16 patch map is
+    pooled to 6x8 rather than the previous 4x4 grid.
+    """
+
+    return {
+        "mode": "w11_plus_current_dinov3_rectangular_6x8_v1",
+        "encoder_name": "dinov3_vitb16_lvd",
+        "model_id": "facebook/dinov3-vitb16-pretrain-lvd1689m",
+        "weights_sha256": "9a21ac3df0c63839d62612dda6f454d816c25611cc7a52966ed5a5a94921dc8b",
+        "config_sha256": "69256c4c142d59b0c0ccf5746542d9f2415f6c7db03bd7835a1f7b3afedb77fe",
+        "preprocess": DINOV3_RECTANGULAR_PREPROCESS_ID,
+        "input_height": 192,
+        "input_width": 256,
+        "feature_dim": 768,
+        "spatial_grid": [6, 8],
+        "max_views": 5,
+        "history_frames": 1,
+        "fusion": "direct_candidate_conditioning_no_scalar_gate",
+        "fusion_heads": 4,
+    }
+
+
 class R12SpatialObservationEncoder(nn.Module):
     """Frozen DINOv3-B/16 with bounded per-view spatial pooling."""
 
@@ -57,6 +84,7 @@ class R12SpatialObservationEncoder(nn.Module):
         # FrozenDINOv3Encoder never performs a network lookup or consumes this
         # syntactic placeholder.
         revision_placeholder = "0" * 40
+        rectangular = "input_height" in observation or "input_width" in observation
         self.encoder = FrozenDINOv3Encoder(
             FrozenDINOv3Config(
                 encoder_name=str(observation["encoder_name"]),
@@ -66,8 +94,14 @@ class R12SpatialObservationEncoder(nn.Module):
                 weights_path=root / "model.safetensors",
                 expected_weights_sha256=str(observation["weights_sha256"]),
                 expected_config_sha256=str(observation["config_sha256"]),
-                input_size=int(observation["input_size"]),
-                preprocess_id=DINOV3_PREPROCESS_ID,
+                input_size=(None if rectangular else int(observation["input_size"])),
+                input_height=(
+                    int(observation["input_height"]) if rectangular else None
+                ),
+                input_width=(
+                    int(observation["input_width"]) if rectangular else None
+                ),
+                preprocess_id=str(observation["preprocess"]),
                 inference_batch_size=int(inference_batch_size),
             )
         )

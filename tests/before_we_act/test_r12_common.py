@@ -246,6 +246,17 @@ def test_r12_r3_spatial_observation_contract_is_hash_locked():
     assert contract["fusion"] == "zero_gated_cross_attention_into_w11_tokens"
 
 
+def test_r12_full_episode_observation_preserves_aspect_ratio_without_more_pixels():
+    from before_we_act.spatial_observation import locked_r12_full_episode_observation
+
+    observation = locked_r12_full_episode_observation()
+    assert observation["input_height"] == 192
+    assert observation["input_width"] == 256
+    assert observation["input_height"] * observation["input_width"] < 224 * 224
+    assert observation["spatial_grid"] == [6, 8]
+    assert "no_scalar_gate" in observation["fusion"]
+
+
 def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: Path):
     from scripts.before_we_act.prepare_r12_action_cache import read_causal_example
 

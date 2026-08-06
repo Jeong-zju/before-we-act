@@ -3532,6 +3532,37 @@ scripts/before_we_act/stop_r12_4gpu_tmux.sh \
 
 共享空间缓存为 `/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1.pt`，共享 recovery cache 为 `/workspace/bwa_runs/shared/r12r3_on_policy_recovery_cache_v1.pt`；表征 probe、recovery seed/receipt、四路状态、日志、checkpoint、offline 与 Gate20 结果均落在 `/workspace/bwa_runs/r12r3-20260806-spatial-recovery/`。运行终态、commit/hash、缓存行数、probe 指标、训练/验证指标和逐项 Gate20 将只在实际完成后追加，不预写成功结论。
 
+##### 10.15.2.1 R12-R3 数学淘汰快照与因果诊断（2026-08-06，验证继续跑满）
+
+截至 `2026-08-06T07:03:18Z`，四路进程、tmux 和实际状态心跳均正常，无 OOM、NaN、Traceback、Killed 或无心跳；已经完成的 Gate20 回合与成功数为 P0 `15/78`、P1 `12/38`、P2 `17/81`、P3 `3/62`。把全部未完成回合都按成功计算，四路最高可能终值也只有 `37/100`、`74/100`、`36/100`、`41/100`，因此均已确定不可能满足“完整 `100` 回合且严格高于 W10 `74/100`”。验证进程不提前终止，仍跑满以获得可复核的五任务失败分布；本快照不是终态结果表，最终 acceptance/hash/时间将在全部自然结束后追加。
+
+当前证据进一步否定“只差训练步数”：四路已经各完成新的 60k 更新，且 P0/P1/P2 的 `tanh(spatial_gate)` 仅为 `-0.001356/-0.005931/-0.000098`。P2 在 160 条 held-out 控制样本上，正常与 gate-zero 的 first-step action L1 差仅 `7.76e-6`，spatial row shuffle 的 MSE 也不恶化；说明独立 probe 证明“空间特征中存在信息”，却没有证明正式 action policy 实际使用了该信息。P2 分数据源误差同时显示 recovery 明显劣于 demonstration：例如 Lift first-step MSE `0.03238 vs 0.00233`，Photo full-chunk MSE `0.07658 vs 0.01423`。训练代码审计还发现 `0.75` history augmentation 同时作用于 demonstration 与真实 recovery 行；在 `0.35` recovery sampling 下，最终 batch 中只有 `0.35*(1-0.75)=8.75%` 的行保留未经破坏的真实 student history。更关键的是 recovery label 来自本身只有 `74/100` 的 W10，不能成为“严格超过 W10”的充分 oracle。
+
+因此 R12-R3 的主要失败链是：`224×224` 方形缩放破坏固定相机 `3:4` 几何，随后 `4×4` pooling 进一步压缩；零初始化标量门使空间 adapter 在 action loss 下几乎没有梯度；demo/recovery 不区分地破坏真实历史；学生状态又只由 W10 标注，造成强 covariate shift。R12-R2 120k 与本轮新增 60k 都没有消除这些现象，所以不得把相同 recipe 机械续到 120k。R11 的动作路径与 W10 hash exact，因此其闭环成功率继承 `74/100`；目标 `(R11+R12)/2 > W10` 仍等价于 R12 必须严格高于 `74/100`，验收线不变。
+
+#### 10.15.3 R12-R4：全量矩形观测、直接 Query Bridge 与两阶段对齐（预注册，action-affecting / 强制 Gate20）
+
+R12-R4 继续停留在 R12，不启动 R13。公共修正只针对已经由 R3 反证的接口和数据问题，不改变冻结 seeds 或验收线：
+
+1. **全量数据且不复制大缓存。** 对 600 个 train、75 个 validation 成功 episode 的每一个合法 timestep 建立按 episode 分片的 cache，train/validation 分别应精确覆盖 `180,448/22,475` 帧；sampler 对每任务做确定性无放回循环，在重复小任务以维持 task balance 的同时保证所有 timestep 至少被访问一遍。分片直接作为 dataset，不再生成第二份 monolithic spatial cache，旧 cache/结果不覆盖。
+2. **保留相机几何。** DINOv3-B/16 输入由失真的 `224×224` 改为 `192×256`，像素数 `49,152 < 50,176`，保持原生 `3:4` aspect；`12×16` patch map pooled 为 `6×8`。因此 frozen DINO 像素预算不增加，但 action bridge 的 token 成本会增加，P95 必须实测，不能预写通过。
+3. **TeamBeliefState 与原始观测真正同时入模。** 21 个 W11 token 保留；五路当前 DINO grid 由 16 个 learned query 直接 cross-attend 并追加到 action-core condition，完全删除 scalar gate。该 lightweight querying bridge 参考 [BLIP-2 论文](https://arxiv.org/abs/2301.12597) 与 [LAVIS 官方 Q-Former 实现](https://github.com/salesforce/LAVIS/blob/main/lavis/models/blip2_models/blip2_qformer.py)，但只处理合法 robot spatial tokens，不读取 text/task ID/future/simulator state。
+4. **两阶段训练实际对齐 bridge。** Stage A `10k` 冻结已训练 action core，用正式 action objective 只训练 query bridge和因 condition 长度改变而新增的位置参数；Stage B 解冻全部参数再训练 `120k`。这不是把 R3 checkpoint 同 recipe 续到 120k，而是先让真实 policy adapter 学会使用视觉，再充分联合训练。两阶段共享一个 resume-stable sampler cursor，总 `130k`，batch 为每任务 2 行、共 10 joint windows；到约 update `44,247` 前应已覆盖最大任务 bucket 的全部 timestep。
+5. **恢复数据 fail closed。** R3 的 W10-labeled recovery cache 不进入 R4 正式 sampler；demonstration history 扰动上限从 `0.75` 降到 `0.25`。未来只有经训练 seed 的 state-aware scripted oracle/intervention 验证成功，且 batch 保留 `source_index`、真实 recovery 行明确免扰动时，才允许新增 recovery source。[DAgger](https://proceedings.mlr.press/v15/ross11a.html) 与 [MimicGen 官方数据生成实现](https://github.com/NVlabs/mimicgen) 仅作为数据聚合设计依据；MimicGen 的 NVIDIA Source Code License 不满足本项目 permissive component transplant 规则，其代码不复制进 runtime。
+
+四路继续保持可独立归因，不互相复制 action core：
+
+| 候选 / GPU | 预注册分支 | 独立 action 机制 | R4 特殊修正 |
+|---|---|---|---|
+| P0 / 0 | `bwa/r12r4-p0-openpi-full-query-130k` | OpenPI action-expert conditional flow | R3 P0 core-only warm start；query bridge 10k + joint 120k |
+| P1 / 1 | `bwa/r12r4-p1-smolvla-full-query-130k` | SmolVLA/Llama action-expert flow | R3 P1 core-only warm start；query bridge 10k + joint 120k |
+| P2 / 2 | `bwa/r12r4-p2-act-plan-prior-full-130k` | ACT CVAE/DETR chunker | 除公共 bridge 外，将 train posterior / inference zero-latent 改为 current-condition plan proposal；KL-balanced prior/recognition 参考 MIT [HULC 官方实现](https://github.com/mees/hulc)，不得输入 goal/task ID |
+| P3 / 3 | `bwa/r12r4-p3-diffusion-full-query-130k` | Diffusion Policy Transformer | R3 P3 core-only warm start；query bridge 10k + joint 120k |
+
+P2 的 learned plan proposal 是本轮唯一额外 action-mechanism 变化：训练时 recognition 读取合法 expert action suffix，proposal 只读当前 fused condition；推理只用 proposal mean，不固定为零 latent。KL balancing 锁定为 HULC 默认方向 `alpha=0.8`，权重先经本项目 held-out action scale smoke 固定，正式启动后不得看 Gate20 调参。P0/P1/P3 不混入该 plan prior。
+
+R4 工程 hard gates 增加：full timestep count/hash、episode shard无重复无遗漏、矩形 preprocess identity、所有 query/projection 参数在 Stage A 有 finite nonzero gradient、spatial shuffle使正式 policy action显著变化、R3 recovery cache未进入 training identity、source-aware history exemption、两阶段 update/optimizer receipt。原 source/license/minimal patch/upstream parity/core-free/causal lag-1/cold-start/finite-range-mask gate 继续适用。质量门完全不变：每路必须跑完同一 `5×20`，总成功数严格大于 W10 `74/100` 才能成为 W12；R11+R12 平均值也据此才会严格高于 W10。若 R4 仍全失败，则根据完整 Gate20 的 task/stage failure 与 attribution 进入新的 R12 修复轮，不进入 R13、不降低标准。
+
 ### 10.16 R13：四路 Candidate-Conditioned Latent World 组件移植（off-path）
 
 R13 冻结 W12 动作生成器，仅替换 `world_model/core`，读取 W11 belief和 W12 action candidates，预测 latent consequence/progress/failure；planner和rerank关闭。以下候选都只复制 world-model核心及直接依赖，不部署其 agent、environment或完整 RL training stack。
