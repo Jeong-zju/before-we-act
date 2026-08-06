@@ -3536,6 +3536,8 @@ scripts/before_we_act/stop_r12_4gpu_tmux.sh \
 
 截至 `2026-08-06T07:03:18Z`，四路进程、tmux 和实际状态心跳均正常，无 OOM、NaN、Traceback、Killed 或无心跳；已经完成的 Gate20 回合与成功数为 P0 `15/78`、P1 `12/38`、P2 `17/81`、P3 `3/62`。把全部未完成回合都按成功计算，四路最高可能终值也只有 `37/100`、`74/100`、`36/100`、`41/100`，因此均已确定不可能满足“完整 `100` 回合且严格高于 W10 `74/100`”。验证进程不提前终止，仍跑满以获得可复核的五任务失败分布；本快照不是终态结果表，最终 acceptance/hash/时间将在全部自然结束后追加。
 
+该不可逆质量判断登记为 `R12-R3_TERMINAL_QUALITY_DECISION_RECEIPT`：它只证明 R12-R3 四路都不可能产生 W12，并授权在四路自然跑满、共享高分辨率缓存完整且 GPU 空闲后启动已预注册的 R12-R4；它不把 partial 计数冒充最终 Gate20，不能替代后续必须追加的 `4×100` 终态表、acceptance/hash、日志与完成时间。
+
 当前证据进一步否定“只差训练步数”：四路已经各完成新的 60k 更新，且 P0/P1/P2 的 `tanh(spatial_gate)` 仅为 `-0.001356/-0.005931/-0.000098`。P2 在 160 条 held-out 控制样本上，正常与 gate-zero 的 first-step action L1 差仅 `7.76e-6`，spatial row shuffle 的 MSE 也不恶化；说明独立 probe 证明“空间特征中存在信息”，却没有证明正式 action policy 实际使用了该信息。P2 分数据源误差同时显示 recovery 明显劣于 demonstration：例如 Lift first-step MSE `0.03238 vs 0.00233`，Photo full-chunk MSE `0.07658 vs 0.01423`。训练代码审计还发现 `0.75` history augmentation 同时作用于 demonstration 与真实 recovery 行；在 `0.35` recovery sampling 下，最终 batch 中只有 `0.35*(1-0.75)=8.75%` 的行保留未经破坏的真实 student history。更关键的是 recovery label 来自本身只有 `74/100` 的 W10，不能成为“严格超过 W10”的充分 oracle。
 
 因此 R12-R3 的主要失败链是：`224×224` 方形缩放破坏固定相机 `3:4` 几何，随后 `4×4` pooling 进一步压缩；零初始化标量门使空间 adapter 在 action loss 下几乎没有梯度；demo/recovery 不区分地破坏真实历史；学生状态又只由 W10 标注，造成强 covariate shift。R12-R2 120k 与本轮新增 60k 都没有消除这些现象，所以不得把相同 recipe 机械续到 120k。R11 的动作路径与 W10 hash exact，因此其闭环成功率继承 `74/100`；目标 `(R11+R12)/2 > W10` 仍等价于 R12 必须严格高于 `74/100`，验收线不变。
