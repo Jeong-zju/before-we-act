@@ -67,7 +67,7 @@ for candidate in "${SELECTED[@]}"; do
   tmux has-session -t "$session" 2>/dev/null && { printf 'session already exists: %s\n' "$session" >&2; exit 3; }
 done
 printf 'R12-E1 preflight: run=%s root=%s selected=%s base=%s@%s\n' "$RUN_ID" "$RUN_ROOT" "${SELECTED[*]}" "$BASE_BRANCH" "$BASE_HEAD"
-printf '  policy: native 480x640 multi-view RGB primary; W11+task ID supplemental; exact W10 fallback except Stack\n'
+printf '  policy: native 480x640 multi-view RGB primary; W11+task ID+bounded agent-slot ID supplemental; exact W10 fallback except Stack\n'
 for candidate in "${SELECTED[@]}"; do
   index="${candidate#p}"
   usage="$(nvidia-smi -i "$index" --query-compute-apps=pid --format=csv,noheader | tr '\n' ',' || true)"
