@@ -38,7 +38,7 @@ def sinusoid_table(length: int, width: int) -> torch.Tensor:
 
 
 class ACTActionChunkCore(nn.Module):
-    """Official ACT CVAE/DETR action-chunk core behind the R12 codec."""
+    """ACT CVAE/DETR chunk core with an R12-R4 current-condition plan prior."""
 
     def __init__(self, config: Mapping[str, object]) -> None:
         super().__init__()
@@ -46,7 +46,8 @@ class ACTActionChunkCore(nn.Module):
         self.action_dim = int(config["joint_action_dim"])
         self.hidden_dim = int(config["hidden_dim"])
         self.latent_dim = int(config["latent_dim"])
-        self.kl_weight = float(config["kl_weight"])
+        self.plan_kl_weight = float(config["plan_kl_weight"])
+        self.kl_balance_alpha = float(config["kl_balance_alpha"])
         condition_tokens = int(config["condition_tokens"])
         self.condition_projection = nn.Linear(int(config["belief_dim"]), self.hidden_dim)
         self.condition_position = nn.Embedding(condition_tokens + 1, self.hidden_dim)
@@ -77,6 +78,19 @@ class ACTActionChunkCore(nn.Module):
         self.posterior_condition = nn.Linear(int(config["belief_dim"]), self.hidden_dim)
         self.posterior_action = nn.Linear(self.action_dim, self.hidden_dim)
         self.latent_stats = nn.Linear(self.hidden_dim, 2 * self.latent_dim)
+        proposal_hidden = int(config["plan_prior_hidden_dim"])
+        self.plan_proposal = nn.Sequential(
+            nn.LayerNorm(int(config["belief_dim"])),
+            nn.Linear(int(config["belief_dim"]), proposal_hidden),
+            nn.GELU(),
+            nn.Linear(proposal_hidden, proposal_hidden),
+            nn.GELU(),
+            nn.Linear(proposal_hidden, 2 * self.latent_dim),
+        )
+        # R3 used z=0 at inference.  Preserve that behavior before Stage A
+        # while retaining a trainable current-observation plan proposal.
+        nn.init.zeros_(self.plan_proposal[-1].weight)
+        nn.init.zeros_(self.plan_proposal[-1].bias)
         self.latent_projection = nn.Linear(self.latent_dim, self.hidden_dim)
         self.action_head = nn.Linear(self.hidden_dim, self.action_dim)
         self.register_buffer(
@@ -85,14 +99,29 @@ class ACTActionChunkCore(nn.Module):
             persistent=True,
         )
 
+    @staticmethod
+    def _masked_pool(
+        tokens: torch.Tensor, token_mask: torch.Tensor
+    ) -> torch.Tensor:
+        weights = token_mask[:, :, None].to(tokens.dtype)
+        return (tokens * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1)
+
+    def _proposal(
+        self, tokens: torch.Tensor, token_mask: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        statistics = self.plan_proposal(self._masked_pool(tokens, token_mask))
+        mean, logvar = statistics.chunk(2, dim=-1)
+        return mean, logvar.clamp(-10.0, 5.0)
+
     def _posterior(
         self,
         tokens: torch.Tensor,
+        token_mask: torch.Tensor,
         actions: torch.Tensor,
         mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         batch = len(tokens)
-        pooled = tokens.mean(dim=1)
+        pooled = self._masked_pool(tokens, token_mask)
         encoded = torch.cat(
             [
                 self.posterior_cls.weight[None].expand(batch, -1, -1),
@@ -111,8 +140,27 @@ class ACTActionChunkCore(nn.Module):
             pos=self.posterior_position.to(encoded.dtype),
         )[0]
         mu, logvar = self.latent_stats(output).chunk(2, dim=-1)
+        logvar = logvar.clamp(-10.0, 5.0)
         latent = mu + torch.exp(0.5 * logvar) * torch.randn_like(mu)
         return latent, mu, logvar
+
+    @staticmethod
+    def _gaussian_kl(
+        posterior_mu: torch.Tensor,
+        posterior_logvar: torch.Tensor,
+        proposal_mu: torch.Tensor,
+        proposal_logvar: torch.Tensor,
+    ) -> torch.Tensor:
+        return 0.5 * (
+            proposal_logvar
+            - posterior_logvar
+            + (
+                posterior_logvar.exp()
+                + (posterior_mu - proposal_mu).square()
+            )
+            / proposal_logvar.exp()
+            - 1.0
+        ).sum(dim=-1).mean()
 
     def _decode(
         self,
@@ -141,11 +189,40 @@ class ACTActionChunkCore(nn.Module):
         actions: torch.Tensor,
         mask: torch.Tensor,
     ) -> Mapping[str, torch.Tensor]:
-        latent, mu, logvar = self._posterior(tokens, actions, mask)
+        latent, posterior_mu, posterior_logvar = self._posterior(
+            tokens, token_mask, actions, mask
+        )
+        proposal_mu, proposal_logvar = self._proposal(tokens, token_mask)
         prediction = self._decode(tokens, token_mask, latent)
-        l1 = ((prediction - actions).abs() * mask.to(prediction.dtype)).mean()
-        kl = (-0.5 * (1 + logvar - mu.square() - logvar.exp())).sum(dim=-1).mean()
-        return {"loss": l1 + self.kl_weight * kl, "l1": l1, "kl": kl}
+        l1 = (prediction - actions).abs().masked_select(mask).mean()
+        # HULC/Dreamer-style KL balancing: the larger alpha puts most KL
+        # gradient on the current-condition proposal while the recognition
+        # distribution remains a stable action-aware target.
+        prior_kl = self._gaussian_kl(
+            posterior_mu.detach(),
+            posterior_logvar.detach(),
+            proposal_mu,
+            proposal_logvar,
+        )
+        recognition_kl = self._gaussian_kl(
+            posterior_mu,
+            posterior_logvar,
+            proposal_mu.detach(),
+            proposal_logvar.detach(),
+        )
+        balanced_kl = (
+            self.kl_balance_alpha * prior_kl
+            + (1.0 - self.kl_balance_alpha) * recognition_kl
+        )
+        return {
+            "loss": l1 + self.plan_kl_weight * balanced_kl,
+            "l1": l1,
+            "plan_kl": balanced_kl,
+            "plan_prior_kl": prior_kl,
+            "plan_recognition_kl": recognition_kl,
+            "plan_proposal_std": torch.exp(0.5 * proposal_logvar).mean(),
+            "plan_posterior_std": torch.exp(0.5 * posterior_logvar).mean(),
+        }
 
     def sample(
         self,
@@ -155,8 +232,8 @@ class ACTActionChunkCore(nn.Module):
         noise: torch.Tensor | None = None,
     ) -> torch.Tensor:
         del noise
-        latent = torch.zeros((len(tokens), self.latent_dim), device=tokens.device, dtype=tokens.dtype)
-        return self._decode(tokens, token_mask, latent)
+        proposal_mean, _proposal_logvar = self._proposal(tokens, token_mask)
+        return self._decode(tokens, token_mask, proposal_mean.to(tokens.dtype))
 
 
 def build_core(config: Mapping[str, object]) -> ACTActionChunkCore:
@@ -169,14 +246,17 @@ def build_core(config: Mapping[str, object]) -> ACTActionChunkCore:
         "dim_feedforward": 2048,
         "dropout": 0.1,
         "latent_dim": 32,
-        "kl_weight": 10.0,
-        "condition_tokens": 21,
+        "condition_tokens": 37,
         "chunk_size": 100,
         "temporal_ensemble": True,
+        "plan_prior": "learned_current_condition",
+        "plan_prior_hidden_dim": 256,
+        "plan_kl_weight": 0.01,
+        "kl_balance_alpha": 0.8,
         "horizon": 100,
         "joint_action_dim": 32,
         "belief_dim": 96,
     }
     if dict(config) != expected:
-        raise ValueError("R12-P2 ACT component config differs from the frozen official recipe")
+        raise ValueError("R12-R4 P2 ACT plan-prior component config differs")
     return ACTActionChunkCore(config)
