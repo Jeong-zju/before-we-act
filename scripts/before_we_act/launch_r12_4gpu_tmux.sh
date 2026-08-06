@@ -140,7 +140,7 @@ RECOVERY_ROOT="$RUN_ROOT/recovery"
 RECOVERY_SEEDS="$RECOVERY_ROOT/training_seeds.json"
 RECOVERY_RECEIPT="$RECOVERY_ROOT/recovery_receipt.json"
 mkdir -p "$RECOVERY_ROOT"
-"$PYTHON" "$FE_ROOT/scripts/before_we_act/prepare_r12_recovery_seeds.py" \
+env PYTHONPATH="$FE_ROOT" "$PYTHON" "$FE_ROOT/scripts/before_we_act/prepare_r12_recovery_seeds.py" \
   --gate20-root "$PROTOCOL_ROOT" --output "$RECOVERY_SEEDS" --per-task 4
 if [[ ! -f "$RECOVERY_CACHE" ]]; then
   for candidate in p0 p2; do
