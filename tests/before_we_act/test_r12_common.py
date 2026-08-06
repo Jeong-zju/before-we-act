@@ -345,6 +345,22 @@ def test_r12_r4_runner_requires_a_versioned_complete_core_free_receipt():
     assert 'core_free.get("round") == "R12-R4"' in acceptance
 
 
+def test_r12_evolution_runtime_and_launcher_use_e1_identity():
+    runtime = Path("scripts/before_we_act/r12_runtime.py").read_text(
+        encoding="utf-8"
+    )
+    launcher = Path(
+        "scripts/before_we_act/launch_r12_evolution_4gpu_tmux.sh"
+    ).read_text(encoding="utf-8")
+    runner = Path(
+        "scripts/before_we_act/run_r12_evolution_candidate.sh"
+    ).read_text(encoding="utf-8")
+    assert 'choices=("R12-R3", "R12-R4", "R12-E1")' in runtime
+    assert "--round R12-E1" in launcher
+    assert "train_action_generator_evolution" in runner
+    assert "evaluate_action_generator_evolution" in runner
+
+
 def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: Path):
     from scripts.before_we_act.prepare_r12_action_cache import read_causal_example
 
