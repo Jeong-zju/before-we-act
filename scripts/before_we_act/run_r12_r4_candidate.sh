@@ -177,7 +177,7 @@ for task in lift_barrier camera_alignment three_robots_stack_cube long_pipeline_
   eval_log="$LOG_ROOT/gate20_${task}.log"
   run_child VALIDATING gate20 evaluate_action_generator_r4.py "$task paired Gate20; exactly 20 episodes" "$TARGET_UPDATES" \
     env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" BWA_R12_RUN_ROOT="$RUN_ROOT" BWA_R12_CANDIDATE="$CANDIDATE" \
-    "$PYTHON" -m before_we_act.evaluate_action_generator_r4 --config "$CONFIG" --checkpoint "$CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --vision-artifact "$VISION_ARTIFACT" --vision-batch-size 1 --task "$task" --seed-file "$PROTOCOL_ROOT/seeds/$task.json" --episodes 20 --max-steps 1500 --device cuda:0 --output "$CANDIDATE_ROOT/validation/gate20/$task.json" --resume-log "$eval_log" >>"$eval_log" 2>&1
+    "$PYTHON" -m before_we_act.evaluate_action_generator_r4 --config "$CONFIG" --checkpoint "$CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --vision-artifact "$VISION_ARTIFACT" --vision-batch-size 5 --task "$task" --seed-file "$PROTOCOL_ROOT/seeds/$task.json" --episodes 20 --max-steps 1500 --device cuda:0 --output "$CANDIDATE_ROOT/validation/gate20/$task.json" --resume-log "$eval_log" >>"$eval_log" 2>&1
 done
 
 GATE_ARGS=()
