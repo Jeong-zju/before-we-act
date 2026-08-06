@@ -254,6 +254,36 @@ def test_r4_generator_bridge_stage_and_core_only_warm_start():
     assert all(parameter.requires_grad for parameter in model.parameters())
 
 
+def test_r4_warm_start_preserves_old_condition_positions_and_new_suffix():
+    from before_we_act.action_generator.r4_base import (
+        R4JointActionGenerator,
+        load_r3_core_warm_start,
+    )
+
+    model = R4JointActionGenerator(_r4_config(), core=_DummyR4Core())
+    original_suffix = model.core.condition_position.weight.detach()[22:].clone()
+    old_positions = torch.arange(22 * 96, dtype=torch.float32).reshape(22, 96)
+    source_head = _DummyR4Core().head.state_dict()
+    checkpoint = {
+        "model": {
+            "core.condition_position.weight": old_positions,
+            "core.head.weight": source_head["weight"],
+            "core.head.bias": source_head["bias"],
+        }
+    }
+    receipt = load_r3_core_warm_start(model, checkpoint)
+    torch.testing.assert_close(
+        model.core.condition_position.weight[:22], old_positions, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        model.core.condition_position.weight[22:], original_suffix, rtol=0, atol=0
+    )
+    partial = receipt["partial_position_prefix"]["condition_position.weight"]
+    assert partial["copied_prefix_tokens"] == 22
+    assert partial["new_suffix_tokens"] == 16
+    assert "condition_position.weight" not in receipt["skipped_source_keys"]
+
+
 def test_r4_history_augmentation_never_modifies_recovery_source():
     from before_we_act.train_action_generator_r4 import (
         robustify_source_aware_history,
