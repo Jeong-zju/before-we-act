@@ -18,7 +18,8 @@ import torch
 import robofactory  # noqa: F401
 
 from before_we_act.action_generator.base import JointActionGenerator, load_r12_config
-from before_we_act.benchmark import TASKS, get_task
+from before_we_act.benchmark import get_task
+from before_we_act.data.raw_team_windows import TASKS
 from before_we_act.evaluate_action_generator import TeamHistory, TemporalChunkEnsembler
 from before_we_act.spatial_observation import R12SpatialObservationEncoder
 from before_we_act.team_belief.base import PredictiveBeliefModel, load_r11_config
@@ -27,6 +28,7 @@ from stereo_core.evaluate_no_wrist_pair import predict_all as predict_teacher
 
 
 PROTOCOL = "r12r2_student_on_policy_w10_teacher_recovery_shard_v1"
+TASK_NAMES = tuple(TASKS)
 
 
 def now() -> str:
@@ -123,7 +125,7 @@ def main() -> None:
         raise ValueError("recovery seed manifest identity differs")
     rows, episodes = [], []
     last_heartbeat = time.monotonic()
-    for task in TASKS:
+    for task in TASK_NAMES:
         specification = get_task(task)
         arms = specification["agents"]
         env = gym.make(
@@ -189,7 +191,7 @@ def main() -> None:
                             "qpos": batch["qpos"][0].float().cpu(),
                             "actions": batch["actions"][0].float().cpu(),
                             "agent_mask": batch["agent_mask"][0].cpu(),
-                            "task_index": torch.tensor(TASKS.index(task), dtype=torch.long),
+                            "task_index": torch.tensor(TASK_NAMES.index(task), dtype=torch.long),
                             "joint_actions": target,
                             "action_step_mask": torch.ones(100, dtype=torch.bool),
                             "spatial_tokens": spatial_tokens[0].to(device="cpu", dtype=torch.float16),
