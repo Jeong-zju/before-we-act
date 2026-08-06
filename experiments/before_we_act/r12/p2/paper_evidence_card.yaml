@@ -1,0 +1,18 @@
+schema_version: 2
+round: R12-R4
+candidate_id: p2
+primary_method: Action Chunking with Transformers (ACT)
+primary_official_code: https://github.com/tonyzhaozh/act
+primary_paper: https://arxiv.org/abs/2304.13705
+primary_used_symbol: DETR Transformer encoder/decoder and CVAE action-chunk path
+primary_absorbed_core_view: long-horizon chunk prediction and temporal ensembling reduce compounding imitation errors
+reference_method: HULC hierarchical latent plan proposal and recognition networks
+reference_official_code: https://github.com/mees/hulc.git
+reference_commit_sha: 7fdb09f5f1ff831ec8df29cfc61a41db573e9a06
+reference_license: MIT
+reference_license_sha256: 2b0f87342e5aabfe539ea29d806b43278bab7675ef276d1f1381686efb010f68
+reference_used_symbol: learned observation-conditioned plan proposal trained against an action-aware plan recognition target with balanced KL gradients
+local_adaptation: use current native-resolution visual-query-plus-belief condition for the proposal, retain the ACT action-aware posterior, and balance KL with alpha 0.8 and beta 0.01
+source_use: reference_only_no_hulc_code_copied
+falsification: fail source/license/parity/restore, condition-dependency and mask tests, native-image cache equivalence, or frozen same-seed 100-episode Gate20
+claim_boundary: ACT remains the transplanted action core; HULC informs only the local plan-prior adaptation, not a claim of full HULC or ALOHA reproduction

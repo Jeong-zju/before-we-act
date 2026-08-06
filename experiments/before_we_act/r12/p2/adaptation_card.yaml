@@ -1,0 +1,16 @@
+schema_version: 1
+round: R12-R4
+candidate_id: p2
+source_component: ACT CVAE posterior and DETR action-query decoder
+absorbed_idea: predict a 100-step joint chunk with learned action queries, an action-aware training posterior, and a HULC-style plan proposal conditioned on the current high-resolution visual observation
+legal_input_mapping: all current 480x640 fixed-view RGB frames are encoded before 6x8 post-encoder pooling; 16 spatial queries plus 21 W11 supplemental belief tokens are DETR memory; normalized four-agent actions are flattened to 32 dimensions
+local_adapter: before_we_act.action_generator.act_chunk.ACTActionChunkCore
+checkpoint_initialization: shape-compatible R12-R3 60k action-core warm start with the latent-plus-21-belief position prefix copied exactly; plan proposal, spatial query bridge, and 16 new query-position suffixes from scratch
+training_protocol: {variant: full_episode_native_rgb_query_bridge_plan_prior_v1, bridge_updates: 10000, joint_updates: 120000, full_train_timesteps: 180448}
+compatibility_edits: [project condition width to ACT hidden width, prepend latent memory token, map joint action width, replace zero inference latent with learned current-condition proposal mean]
+algorithm_changed: true
+algorithm_change_evidence: HULC plan-recognition-to-plan-proposal KL balancing with beta 0.01 and alpha 0.8; no HULC source code copied
+retained_invariants: [CVAE reparameterization, masked L1 plus KL objective, learned action queries, training-only action-aware posterior]
+primary_input: all current fixed-view RGB uint8 frames at native 480x640 resolution
+supplemental_input: frozen W11 TeamBeliefState
+forbidden_inputs: [task_id, robot_id, role_id, simulator_state, future_action]
