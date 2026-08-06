@@ -322,6 +322,29 @@ def test_r12_r4_uses_one_identical_five_view_dino_microbatch_contract():
     assert "inference_batch_size=5" in audit
 
 
+def test_r12_r4_runner_requires_a_versioned_complete_core_free_receipt():
+    audit = Path("scripts/before_we_act/audit_r12_core_free.py").read_text(
+        encoding="utf-8"
+    )
+    runner = Path("scripts/before_we_act/run_r12_r4_candidate.sh").read_text(
+        encoding="utf-8"
+    )
+    acceptance = Path("scripts/before_we_act/accept_r12_r4.py").read_text(
+        encoding="utf-8"
+    )
+    for required in (
+        "action_generator/r4_base.py",
+        "action_generator/spatial_bridge.py",
+        "train_action_generator_r4.py",
+        "evaluate_action_generator_r4.py",
+        "evaluate_action_generator_r4_offline.py",
+    ):
+        assert required in audit
+        assert required in acceptance
+    assert "--round R12-R4" in runner
+    assert 'core_free.get("round") == "R12-R4"' in acceptance
+
+
 def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: Path):
     from scripts.before_we_act.prepare_r12_action_cache import read_causal_example
 
