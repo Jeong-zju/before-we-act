@@ -113,7 +113,7 @@ if [[ ! -f "$FULL_INDEX" ]]; then
     session="bwa-r12r4-cache-rank$index"
     if ! tmux has-session -t "$session" 2>/dev/null; then
       tmux new-session -d -s "$session" -n cache \
-        "cd '$FE_ROOT' && exec env CUDA_VISIBLE_DEVICES='$index' PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_full_episode_cache.py' --mode shard --rank '$index' --world-size 4 --data-root '$DATA_ROOT' --vision-artifact '$VISION_ARTIFACT' --output-root '$FULL_CACHE_ROOT' --state '$FULL_CACHE_ROOT/rank_${index}_state.json' --heartbeat '$FULL_CACHE_ROOT/rank_${index}_heartbeat.json' --frame-batch-size 1 --image-batch-size 1 --device cuda:0"
+        "cd '$FE_ROOT' && exec env CUDA_VISIBLE_DEVICES='$index' PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_full_episode_cache.py' --mode shard --rank '$index' --world-size 4 --data-root '$DATA_ROOT' --vision-artifact '$VISION_ARTIFACT' --output-root '$FULL_CACHE_ROOT' --state '$FULL_CACHE_ROOT/rank_${index}_state.json' --heartbeat '$FULL_CACHE_ROOT/rank_${index}_heartbeat.json' --frame-batch-size 1 --image-batch-size 5 --device cuda:0"
     fi
   done
   if ! tmux has-session -t bwa-r12r4-cache-index 2>/dev/null; then
