@@ -65,6 +65,16 @@ def main() -> None:
         )["loss"]
     loss.backward()
     gradients = {}
+    slot_gradient = model.agent_slot_embedding.grad
+    gradients["agent_slot_embedding"] = {
+        "present": slot_gradient is not None,
+        "finite": bool(torch.isfinite(slot_gradient).all())
+        if slot_gradient is not None
+        else False,
+        "l1": float(slot_gradient.abs().sum())
+        if slot_gradient is not None
+        else 0.0,
+    }
     for prefix, module in (
         ("bridge", model.bridge),
         ("task_embedding", model.task_embedding),
@@ -119,6 +129,7 @@ def main() -> None:
         "absent_agents_exact_zero": bool((values[0, :, 2:] == 0).all()),
         "spatial_row_order_changes_actions": spatial_delta > 0,
         "task_condition_changes_actions": task_delta > 0,
+        "agent_slot_gradient_nonzero": gradients["agent_slot_embedding"]["l1"] > 0,
         "native_image_primary_contract": (
             config.observation.get("input_height") == 480
             and config.observation.get("input_width") == 640

@@ -303,7 +303,11 @@ def test_r12e1_task_film_is_bounded_supplemental_conditioning():
             "component": {"kind": "act_action_chunk_transformer"},
             "observation": locked_r12_full_episode_observation(),
             "action": _r4_config().action,
-            "training": {"task_film_hidden_dim": 32, "task_film_scale": 0.25},
+            "training": {
+                "task_film_hidden_dim": 32,
+                "task_film_scale": 0.25,
+                "agent_slot_scale": 0.25,
+            },
             "deployment": {},
         }
     )
@@ -311,6 +315,7 @@ def test_r12e1_task_film_is_bounded_supplemental_conditioning():
     trainable = model.set_training_stage("bridge")
     assert "task_embedding.weight" in trainable
     assert "task_film.3.weight" in trainable
+    assert "agent_slot_embedding" in trainable
     assert "core.head.weight" not in trainable
     belief = TeamBeliefState(
         tokens=torch.randn(2, 16, 96),
@@ -331,6 +336,20 @@ def test_r12e1_task_film_is_bounded_supplemental_conditioning():
     loss = tokens.square().mean()
     loss.backward()
     assert model.task_film[3].weight.grad is not None
+    assert model.agent_slot_embedding.grad is not None
+    assert model.agent_slot_embedding.grad.abs().sum() > 0
+    with torch.no_grad():
+        original_slot = model.agent_slot_embedding.clone()
+        model.agent_slot_embedding.zero_()
+        without_slot, _ = model.condition(
+            belief, spatial, view_mask, torch.tensor([1, 2])
+        )
+        model.agent_slot_embedding.copy_(original_slot)
+    # Slot identity changes present agent tokens, but never invents a token for
+    # a masked/absent agent.
+    slot_delta = tokens[:, 16:20] - without_slot[:, 16:20]
+    assert slot_delta[0, :3].abs().sum() > 0
+    assert torch.equal(slot_delta[0, 3], torch.zeros_like(slot_delta[0, 3]))
     proposals = model.sample(
         belief,
         spatial_tokens=spatial,
