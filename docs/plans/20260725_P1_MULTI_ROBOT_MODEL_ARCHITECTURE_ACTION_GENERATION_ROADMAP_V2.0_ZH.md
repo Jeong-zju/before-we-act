@@ -3581,14 +3581,16 @@ operator 已授权推翻预定义路线并持续演进，唯一终止目标是�
 
 | 候选 / GPU | E1 分支 | agent-slot 启动 commit | Stack/Camera 每 update 行数 | 专家机制 |
 |---|---|---|---|---|
-| P0 / 0 | `bwa/r12e1-p0-openpi-stack-specialist` | `2a23ec05113937844c037a6279d7a9f62b3dfc12` | `6/2` | OpenPI continuous flow expert |
-| P1 / 1 | `bwa/r12e1-p1-smolvla-stack-specialist` | `af03d5195d462c7343bee28532207462d8e35d59` | `8/1` | SmolVLA continuous flow expert |
-| P2 / 2 | `bwa/r12e1-p2-act-stack-specialist` | `97c9e19e80572de8a321c89b88f0144b6f077607` | `6/3` | ACT continuous L1/CVAE chunk expert |
-| P3 / 3 | `bwa/r12e1-p3-diffusion-stack-specialist` | `7b20d84051ee52d53d12ead9b62f4fefcfcc6619` | `6/2` | Diffusion Policy Transformer |
+| P0 / 0 | `bwa/r12e1-p0-openpi-stack-specialist` | `598536a5a59c3fd19764dcf42bd5d3755e9204d0` | `6/2` | OpenPI continuous flow expert |
+| P1 / 1 | `bwa/r12e1-p1-smolvla-stack-specialist` | `0f348ad1b57cdbbc896f1fd4025fc60f71d4ab20` | `8/1` | SmolVLA continuous flow expert |
+| P2 / 2 | `bwa/r12e1-p2-act-stack-specialist` | `6deffc978c35cb567f659e2b46560a9c2c01d5ec` | `6/3` | ACT continuous L1/CVAE chunk expert |
+| P3 / 3 | `bwa/r12e1-p3-diffusion-stack-specialist` | `953172b4a90b6877341987af46b06b6d19924d8b` | `6/2` | Diffusion Policy Transformer |
 
-公共工程分支为 `feat/model-improvements@b6bee9ce9fe5657de9c18c09f8a3cf6557cbc74f`。本地执行 Bash `-n`、四个候选配置解析和专属/公共测试均通过；候选测试分别为 P0 `35/35`、P1 `35/35`、P2 `36/36`、P3 `35/35`，公共 runtime/full-data 回归为 `34/34`。所有提交已推送。正式等待 run root 为 `/workspace/bwa_runs/r12e1-20260806-agent-slot-v3`，tmux 为 `bwa-r12e1-p0..p3`，GPU 固定为 `0..3`，状态/心跳/日志/checkpoint 分别位于 `candidates/pN/{status.json,heartbeat.json,logs/,train/formal/checkpoints/}`。
+活动 run 的公共工程 identity 为 `feat/model-improvements@015a2fc09337a49a96ea0cfa5b49aff257e20d85`；后续测试覆盖补丁为 `4d8336e`，不改变模型/训练/推理代码。本地执行 Bash `-n`、四个候选配置解析和专属/公共测试均通过；候选完整测试分别为 P0 `36/36`、P1 `36/36`、P2 `37/37`、P3 `36/36`。所有提交已推送。活动 run root 为 `/workspace/bwa_runs/r12e1-20260806-agent-slot-v4`，tmux 为 `bwa-r12e1-p0..p3`，GPU 固定为 `0..3`，状态/心跳/日志/checkpoint 分别位于 `candidates/pN/{status.json,heartbeat.json,logs/,train/formal/checkpoints/}`。
 
-截至 UTC `2026-08-06T09:47:08Z`，四路均处于 `PREPARING/cache_wait` 且真实心跳正常、无 OOM/NaN/Traceback/进程消失；完整索引尚未出现，cache rank0 为 `169/169 PASSED`、rank2 为 `PASSED`，rank1 为 `122/169`、rank3 为 `122/168`。pipeline 会等待 index 和独占 GPU 后依次执行专属测试、core-free audit、2-update train/save/strict-restore（包括 nonzero agent-slot gradient）、130k formal、22,475 timestep offline、Stack Gate20 和 E1 acceptance，不会与 cache 争卡。较早的 `stack-specialists` 与 `agent-slot-v2` run 都在训练前精确停止并标为 STOPPED，没有 checkpoint；它们保留作审计，不是活动实验。
+完整高分辨率 cache 已于 UTC `2026-08-06T10:11Z` 生成 index：训练/验证分别覆盖 `180,448/22,475` timestep；其中 Stack 为 `120` 个训练 episode、`48,892` timestep和 `15` 个验证 episode、`6,138` timestep。`agent-slot-v3` 随后在训练前被同一静态审计误杀：specialist evaluator 当时同时包含合法 exact-W10 fallback import，审计把该隔离 fallback 误判为 Stack 专家依赖。`015a2fc` 将 protected fallback 完全移出 specialist process并补回归测试，四路 core-free receipt 此后均为 PASSED；v3 没有产生 checkpoint，不属于模型失败。
+
+`agent-slot-v4` 于 UTC `2026-08-06T10:13:59Z` 启动。截至 `10:33:45Z`，P0/P1/P2/P3 分别训练至 `33,600/15,750/19,400/27,700` / `130,000`，四路均为 `TRAINING/formal`、20 秒真实心跳正常、无 OOM/NaN/Traceback/进程消失。2-update strict-restore preflight 全部 PASSED；P0/P1/P2/P3 的 spatial-shuffle action L1 为 `0.003908/0.002183/0.002396/0.001577`，task-change action L1 为 `0.007326/0.006073/0.003754/0.011805`，agent-slot gradient L1 为 `0.857038/0.308124/0.154665/0.422510`，证明三类补充信号真实进入动作图。持久 monitor session 为 `bwa-r12e1-watch`，每 30 秒追加 `/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/monitor_history.log`。
 
 W10 Stack 阶段诊断使用两个非 Gate20 held-out 数据 seed `3031/3035`，native 与 forced-role `0/1/2/3` 共五种模式全部为 `0/2`：任一模式都没有到达 B placed、B-on-A 或 C-on-B，只有 seed 3031 的部分模式抓到 A/B，seed 3035 基本无进展。进一步逐像素核验发现，同一 seed 的 `head_camera_global/agent0/agent1/agent2` 四个观测 SHA 完全相同，三臂初始 local qpos 也完全相同；任务 YAML 又确认四个 camera 配置使用完全相同的 `look_at`。因此 W10 的“共享逐臂 policy + 无 agent ID”在初态必然输出对称动作，核心根因不是单纯 update 不足。E1 的 joint action 固定输出槽已能部分破对称；本次再显式加入 bounded learned agent-slot identity，直接修复该因果缺口，同时保持高分辨率图像为主输入。
 
@@ -3600,21 +3602,21 @@ W10 Stack 阶段诊断使用两个非 Gate20 held-out 数据 seed `3031/3035`，
 # 一键部署/训练（四路；可将 all 改成 p0/p1/p2/p3 或 A/B/C/D）
 cd /workspace/bwa_worktrees/model-improvements
 scripts/before_we_act/launch_r12_evolution_4gpu_tmux.sh \
-  --run-id r12e1-20260806-agent-slot-v3 \
-  --run-root /workspace/bwa_runs/r12e1-20260806-agent-slot-v3 \
+  --run-id r12e1-20260806-agent-slot-v4 \
+  --run-root /workspace/bwa_runs/r12e1-20260806-agent-slot-v4 \
   --candidates all
 
 # 单次或持续 monitor
 scripts/before_we_act/monitor_r12_evolution.sh \
-  --run-root /workspace/bwa_runs/r12e1-20260806-agent-slot-v3 \
+  --run-root /workspace/bwa_runs/r12e1-20260806-agent-slot-v4 \
   --candidate all --once
 scripts/before_we_act/monitor_r12_evolution.sh \
-  --run-root /workspace/bwa_runs/r12e1-20260806-agent-slot-v3 \
+  --run-root /workspace/bwa_runs/r12e1-20260806-agent-slot-v4 \
   --candidate all --interval 30
 
 # 精确安全退出；可将 all 改为单个候选
 scripts/before_we_act/stop_r12_evolution_4gpu_tmux.sh \
-  --run-root /workspace/bwa_runs/r12e1-20260806-agent-slot-v3 \
+  --run-root /workspace/bwa_runs/r12e1-20260806-agent-slot-v4 \
   --candidate all
 ```
 
