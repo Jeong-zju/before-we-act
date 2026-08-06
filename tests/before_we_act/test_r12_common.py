@@ -307,6 +307,21 @@ def test_r12_monitor_exposes_four_cache_rank_states(tmp_path: Path):
     assert "r3:NOT_STARTED" in summary
 
 
+def test_r12_r4_uses_one_identical_five_view_dino_microbatch_contract():
+    launcher = Path(
+        "scripts/before_we_act/launch_r12_r4_4gpu_tmux.sh"
+    ).read_text(encoding="utf-8")
+    runner = Path("scripts/before_we_act/run_r12_r4_candidate.sh").read_text(
+        encoding="utf-8"
+    )
+    audit = Path(
+        "scripts/before_we_act/audit_r12_r4_cache_equivalence.py"
+    ).read_text(encoding="utf-8")
+    assert "--image-batch-size 5" in launcher
+    assert "--vision-batch-size 5" in runner
+    assert "inference_batch_size=5" in audit
+
+
 def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: Path):
     from scripts.before_we_act.prepare_r12_action_cache import read_causal_example
 
