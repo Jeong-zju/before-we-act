@@ -359,6 +359,8 @@ def test_r12_evolution_runtime_and_launcher_use_e1_identity():
     assert "--round R12-E1" in launcher
     assert "reuse completed immutable cache shard" in launcher
     assert 'stage == "native_rgb_post_dino_shard_complete"' in launcher
+    assert "agent-slot ID are supplemental" in runtime
+    assert "nonzero agent-slot gradient" in runtime
     assert "train_action_generator_evolution" in runner
     assert "evaluate_action_generator_evolution" in runner
 

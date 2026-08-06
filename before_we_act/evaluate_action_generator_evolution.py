@@ -322,7 +322,7 @@ def main() -> None:
             "source": str(seed_path),
             "sha256": hashlib.sha256(seed_bytes).hexdigest(),
         },
-        "policy_inputs": "native 480x640 RGB first; W11 TeamBeliefState and task ID supplemental on specialist route",
+        "policy_inputs": "native 480x640 RGB first; W11 TeamBeliefState, task ID and bounded agent-slot ID supplemental on specialist route",
         "privileged_inputs": False,
         "control_cadence": "one proposal per environment step",
         "temporal_aggregation": "W10 exponential chunk ensemble decay=0.01",
