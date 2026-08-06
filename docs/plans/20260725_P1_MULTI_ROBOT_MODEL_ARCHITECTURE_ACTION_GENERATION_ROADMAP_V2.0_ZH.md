@@ -3676,6 +3676,24 @@ env CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. /venv/robofactory-act/bin/python \
 
 最终阶段决定：**R12 通过，综合闭环目标已完成；按当前任务的 `[ON_DIAG_PASS]` 写入结果后停止，不进入 R13。** P2 是唯一已结构化证明合格的 W12 候选，但本次没有收到 winner merge 授权，因此 `merge_performed=false`，不擅自合并到模型改进主分支。仍在运行的 P1/E3 只作为已启动实验继续由 tmux 持久化，不能推翻 P2 已经成立的 `77/100` 下界；其未完成结果不得冒充终态。
 
+##### 10.15.4.2 后续显式授权的 W12 winner-only 合并（2026-08-06）
+
+用户在上述终态账本提交后明确要求“将 P2 做 winner-only 合并”，因此本节只记录授权后的工程晋级，不追溯改写 10.15.4.1 在授权时点真实的 `merge_performed=false`。以已推送的规范模型改进主线 `feat/model-improvements@f2b66137cdec683782c21fe6b13fa8096216a421` 为基线创建 `bwa/merge-r12-winner`，通过 merge commit `e25c81f08558dd530eb91d889eff1d0d274a64d5` 合入胜出分支 `bwa/r12e1-p2-act-stack-specialist@587d034ede29badb54134c0731dd171191f2c872`，随后只允许以 strict fast-forward 推进 `feat/model-improvements`。
+
+相对合并前主线的净增量严格为 `14 files / 974 insertions`：ACT action-chunk core、官方 ACT DETR Transformer 的最小未修改 closure、MIT LICENSE、P2 的 `p2.yaml/e1_p2.yaml` 配置、component lock/source map/evidence/adaptation/parity 以及 `test_r12_p2.py`。合并树不含 P0 OpenPI、P1 SmolVLA、P3 Diffusion 的候选实现、配置或组件，也不含 E2/E3 的 causal-clock/phase-FiLM 实验代码；公共训练、验证、Gate20、fallback、monitor 与停止链在合并前已经存在于主线，没有借 winner merge 混入新的公共行为。
+
+本地 winner-only 回归命令为：
+
+```bash
+cd /home/jeong/zeno/wam/before-we-act
+.venv/bin/python -m pytest -q \
+  tests/before_we_act/test_r12_p2.py \
+  tests/before_we_act/test_r12_common.py \
+  tests/before_we_act/test_r12_full_episode_windows.py
+```
+
+结果为 `37 passed`。不可变选择、来源、checkpoint、报告 hash 和 claim boundary 写入 `experiments/before_we_act/r12/w12/winner_manifest.yaml`；正式 W12 checkpoint 从原 P2 产物按 SHA256 `4c85dcd30058912f4be375af04b65b0f39b365d885883eb29934552b14020e41` 晋级到 `/workspace/bwa_runs/shared/w12/checkpoint_130000.pt`。W12 的正式定义固定为 E1-P2 ACT + current-condition plan prior：Stack 走高分辨率专家，另外四任务保持 exact-W10 fallback；E2/E3 不属于 W12。
+
 ### 10.16 R13：四路 Candidate-Conditioned Latent World 组件移植（off-path）
 
 R13 冻结 W12 动作生成器，仅替换 `world_model/core`，读取 W11 belief和 W12 action candidates，预测 latent consequence/progress/failure；planner和rerank关闭。以下候选都只复制 world-model核心及直接依赖，不部署其 agent、environment或完整 RL training stack。
