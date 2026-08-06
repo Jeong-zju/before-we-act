@@ -9,6 +9,7 @@ from torch import nn
 import yaml
 
 from before_we_act.contracts import ActionProposalBatch, TeamBeliefState
+from before_we_act.spatial_observation import locked_r12_spatial_observation
 from .registry import CANDIDATE_SPECS, build_action_core
 
 
@@ -19,6 +20,7 @@ EXPECTED_TOP_LEVEL = {
     "parent_commit",
     "belief_checkpoint_sha256",
     "component",
+    "observation",
     "action",
     "training",
     "selection_rule",
@@ -42,6 +44,10 @@ class R12Config:
         return self.raw["action"]
 
     @property
+    def observation(self) -> Mapping[str, Any]:
+        return self.raw["observation"]
+
+    @property
     def training(self) -> Mapping[str, Any]:
         return self.raw["training"]
 
@@ -50,13 +56,17 @@ def load_r12_config(path: str | Path) -> R12Config:
     payload = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or set(payload) != EXPECTED_TOP_LEVEL:
         raise ValueError("R12 config keys differ from the frozen schema")
-    if payload["schema_version"] != 1 or payload["round"] != "R12":
+    if payload["schema_version"] != 2 or payload["round"] != "R12-R3":
         raise ValueError("R12 config identity differs")
     candidate = payload["candidate_id"]
     if candidate not in CANDIDATE_SPECS:
         raise ValueError("R12 candidate is not registered")
     if payload["component"].get("kind") != CANDIDATE_SPECS[candidate]["kind"]:
         raise ValueError("R12 candidate and component kind differ")
+    observation = payload["observation"]
+    locked_observation = locked_r12_spatial_observation()
+    if observation != locked_observation:
+        raise ValueError("locked R12-R3 spatial observation contract differs")
     action = payload["action"]
     locked_action = {
         "horizon": 100,
@@ -77,13 +87,14 @@ def load_r12_config(path: str | Path) -> R12Config:
         "warmup_steps", "decay_steps", "decay_lr_ratio",
         "history_augmentation_probability", "history_augmentation_ramp_updates",
         "history_noise_scale",
+        "recovery_sampling_probability",
     }
     if set(training) != required_training:
         raise ValueError("R12 training keys differ from the frozen schema")
-    if training["updates"] not in (60_000, 120_000) or training["seed"] != 20260805:
+    if training["updates"] != 60_000 or training["seed"] != 20260805:
         raise ValueError("R12 update/seed freeze differs")
     if training["checkpoint_every"] != 10_000 or training["progress_every"] != 50:
-        raise ValueError("R12-R2 checkpoint/progress cadence differs")
+        raise ValueError("R12-R3 checkpoint/progress cadence differs")
     if training["precision"] != "bfloat16":
         raise ValueError("R12 precision must be bfloat16")
     warm_path = str(training["warm_start_checkpoint"])
@@ -91,10 +102,10 @@ def load_r12_config(path: str | Path) -> R12Config:
     warm_update = int(training["warm_start_update"])
     if bool(warm_path) != bool(warm_sha) or bool(warm_path) != bool(warm_update):
         raise ValueError("R12 warm-start path/hash/update must be jointly present or absent")
-    if warm_path and (len(warm_sha) != 64 or warm_update != 20_000):
-        raise ValueError("R12-R2 warm start must be a pinned R12-R1 20k checkpoint")
-    if not 0 <= warm_update < int(training["updates"]):
-        raise ValueError("R12 warm-start update must precede the target budget")
+    if not warm_path or len(warm_sha) != 64 or warm_update not in (60_000, 120_000):
+        raise ValueError("R12-R3 requires a pinned terminal R12-R2 core checkpoint")
+    if warm_update <= 0:
+        raise ValueError("R12-R3 source checkpoint update must be positive")
     if not 0 < int(training["warmup_steps"]) < int(training["decay_steps"]):
         raise ValueError("R12 learning-rate schedule is invalid")
     if int(training["decay_steps"]) != int(training["updates"]):
@@ -107,6 +118,8 @@ def load_r12_config(path: str | Path) -> R12Config:
         raise ValueError("R12 history augmentation ramp must be positive")
     if float(training["history_noise_scale"]) < 0:
         raise ValueError("R12 history noise scale must be non-negative")
+    if not 0 < float(training["recovery_sampling_probability"]) < 1:
+        raise ValueError("R12-R3 recovery sampling probability must be in (0, 1)")
     rule = payload["selection_rule"]
     expected_rule = {
         "gate20_tasks": [
@@ -151,9 +164,41 @@ class JointActionGenerator(nn.Module):
             belief_dim=int(config.action["belief_dim"]),
         )
         self.core = build_action_core(config.candidate_id, component)
+        observation = config.observation
+        feature_dim = int(observation["feature_dim"])
+        grid_height, grid_width = map(int, observation["spatial_grid"])
+        max_views = int(observation["max_views"])
+        belief_dim = int(config.action["belief_dim"])
+        self.spatial_grid = (grid_height, grid_width)
+        self.max_views = max_views
+        self.spatial_feature_dim = feature_dim
+        self.spatial_norm = nn.LayerNorm(feature_dim)
+        self.spatial_projection = nn.Linear(feature_dim, belief_dim)
+        self.spatial_view_embedding = nn.Parameter(
+            torch.zeros(max_views, belief_dim)
+        )
+        self.spatial_row_embedding = nn.Parameter(
+            torch.zeros(grid_height, belief_dim)
+        )
+        self.spatial_column_embedding = nn.Parameter(
+            torch.zeros(grid_width, belief_dim)
+        )
+        self.spatial_cross_attention = nn.MultiheadAttention(
+            belief_dim,
+            int(observation["fusion_heads"]),
+            batch_first=True,
+        )
+        self.spatial_gate = nn.Parameter(torch.zeros(()))
+        nn.init.normal_(self.spatial_view_embedding, std=0.02)
+        nn.init.normal_(self.spatial_row_embedding, std=0.02)
+        nn.init.normal_(self.spatial_column_embedding, std=0.02)
 
-    @staticmethod
-    def condition(belief: TeamBeliefState) -> tuple[torch.Tensor, torch.Tensor]:
+    def condition(
+        self,
+        belief: TeamBeliefState,
+        spatial_tokens: torch.Tensor,
+        spatial_view_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         belief.validate()
         tokens = torch.cat(
             [belief.tokens, belief.agent_tokens, belief.consensus_token[:, None]], dim=1
@@ -170,6 +215,48 @@ class JointActionGenerator(nn.Module):
             ],
             dim=1,
         )
+        batch = len(tokens)
+        grid_height, grid_width = self.spatial_grid
+        expected = (
+            batch,
+            self.max_views,
+            grid_height * grid_width,
+            self.spatial_feature_dim,
+        )
+        if tuple(spatial_tokens.shape) != expected:
+            raise ValueError(
+                f"R12 spatial tokens {tuple(spatial_tokens.shape)} != {expected}"
+            )
+        if tuple(spatial_view_mask.shape) != (batch, self.max_views):
+            raise ValueError("R12 spatial view mask shape differs")
+        spatial_view_mask = spatial_view_mask.bool()
+        if not bool(spatial_view_mask.any(dim=1).all()):
+            raise ValueError("every R12 sample requires at least one legal fixed view")
+        spatial = self.spatial_projection(self.spatial_norm(spatial_tokens))
+        position = (
+            self.spatial_view_embedding[:, None, :]
+            + self.spatial_row_embedding[:, None, :]
+            .expand(-1, grid_width, -1)
+            .reshape(1, grid_height * grid_width, -1)
+            + self.spatial_column_embedding[None, :, :]
+            .expand(grid_height, -1, -1)
+            .reshape(1, grid_height * grid_width, -1)
+        )
+        spatial = spatial + position[None]
+        spatial = spatial.reshape(batch, self.max_views * grid_height * grid_width, -1)
+        spatial_mask = spatial_view_mask[:, :, None].expand(
+            -1, -1, grid_height * grid_width
+        ).reshape(batch, -1)
+        residual, _ = self.spatial_cross_attention(
+            query=tokens,
+            key=spatial,
+            value=spatial,
+            key_padding_mask=~spatial_mask,
+            need_weights=False,
+        )
+        # A zero gate makes an R12-R2 warm start bit-exact before the first
+        # optimizer update while still allowing the new path to learn.
+        tokens = tokens + torch.tanh(self.spatial_gate) * residual
         return tokens, token_mask
 
     def flatten_actions(self, actions: torch.Tensor, agent_mask: torch.Tensor) -> torch.Tensor:
@@ -182,10 +269,14 @@ class JointActionGenerator(nn.Module):
     def training_loss(
         self,
         belief: TeamBeliefState,
+        spatial_tokens: torch.Tensor,
+        spatial_view_mask: torch.Tensor,
         actions: torch.Tensor,
         step_mask: torch.Tensor,
     ) -> Mapping[str, torch.Tensor]:
-        tokens, token_mask = self.condition(belief)
+        tokens, token_mask = self.condition(
+            belief, spatial_tokens, spatial_view_mask
+        )
         flat = self.flatten_actions(actions, belief.agent_mask)
         feature_mask = belief.agent_mask[:, None, :, None].expand(
             -1, self.horizon, -1, self.action_dim
@@ -198,9 +289,13 @@ class JointActionGenerator(nn.Module):
         self,
         belief: TeamBeliefState,
         *,
+        spatial_tokens: torch.Tensor,
+        spatial_view_mask: torch.Tensor,
         noise: torch.Tensor | None = None,
     ) -> ActionProposalBatch:
-        tokens, token_mask = self.condition(belief)
+        tokens, token_mask = self.condition(
+            belief, spatial_tokens, spatial_view_mask
+        )
         flat = self.core.sample(tokens, token_mask, noise=noise)
         expected = (len(tokens), self.horizon, self.max_agents * self.action_dim)
         if tuple(flat.shape) != expected:
@@ -220,5 +315,7 @@ class JointActionGenerator(nn.Module):
                 "core_free": True,
                 "legacy_core_import": False,
                 "normalized_clip": self.normalized_clip,
+                "observation_mode": self.config.observation["mode"],
+                "spatial_gate": float(torch.tanh(self.spatial_gate).detach()),
             },
         ).validate()

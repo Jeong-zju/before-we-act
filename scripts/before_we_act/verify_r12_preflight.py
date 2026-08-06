@@ -35,9 +35,23 @@ def main() -> None:
         agent_mask=agent_mask,
     )
     noise = torch.randn((1, 100, 32), generator=generator, device=device)
+    spatial_tokens = torch.randn((1, 5, 16, 768), generator=generator, device=device)
+    spatial_view_mask = torch.tensor(
+        [[True, True, True, False, False]], device=device
+    )
     with torch.no_grad():
-        first = left.sample(belief, noise=noise).actions
-        second = right.sample(belief, noise=noise).actions
+        first = left.sample(
+            belief,
+            spatial_tokens=spatial_tokens,
+            spatial_view_mask=spatial_view_mask,
+            noise=noise,
+        ).actions
+        second = right.sample(
+            belief,
+            spatial_tokens=spatial_tokens,
+            spatial_view_mask=spatial_view_mask,
+            noise=noise,
+        ).actions
     stats = {key: torch.as_tensor(value, device=device) for key, value in saved["stats"].items()}
     normalized = torch.linspace(-2, 2, 800, device=device).reshape(1, 100, 8)
     raw = normalized * stats["a_std"] + stats["a_mean"]
@@ -56,10 +70,14 @@ def main() -> None:
             ))
             for key in saved["model"]
         ),
+        "spatial_adapter_present": any(
+            key.startswith("spatial_cross_attention.") for key in saved["model"]
+        ),
+        "spatial_gate_finite": bool(torch.isfinite(left.spatial_gate)),
     }
     result = {
         "schema_version": 1,
-        "round": "R12",
+        "round": "R12-R3",
         "candidate_id": config.candidate_id,
         "checks": checks,
         "normalized_abs_max": float(first.abs().max()),

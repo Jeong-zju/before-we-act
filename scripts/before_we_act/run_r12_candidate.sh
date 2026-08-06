@@ -7,6 +7,11 @@ GPU_INDEX=""
 BELIEF_CHECKPOINT=/workspace/bwa_runs/shared/w11/checkpoint_010000.pt
 NORMALIZATION_CHECKPOINT=/workspace/bwa_runs/shared/parent/checkpoint_120000.pt
 ACTION_CACHE=/workspace/bwa_runs/shared/r12_dense_causal_history_action_cache_v2.pt
+SPATIAL_CACHE=/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1.pt
+RECOVERY_CACHE=/workspace/bwa_runs/shared/r12r3_on_policy_recovery_cache_v1.pt
+RECOVERY_RECEIPT=""
+VISION_ARTIFACT=/workspace/artifacts/dinov3-vitb16-pretrain-lvd1689m
+REPRESENTATION_PROBE=""
 PROTOCOL_ROOT=/workspace/bwa_runs/shared/r10_gate20
 DATA_ROOT=/workspace/datasets/robofactory_multitask
 PYTHON=/venv/robofactory-act/bin/python
@@ -19,6 +24,11 @@ while (($#)); do
     --belief-checkpoint) BELIEF_CHECKPOINT="$2"; shift 2 ;;
     --normalization-checkpoint) NORMALIZATION_CHECKPOINT="$2"; shift 2 ;;
     --action-cache) ACTION_CACHE="$2"; shift 2 ;;
+    --spatial-cache) SPATIAL_CACHE="$2"; shift 2 ;;
+    --recovery-cache) RECOVERY_CACHE="$2"; shift 2 ;;
+    --recovery-receipt) RECOVERY_RECEIPT="$2"; shift 2 ;;
+    --vision-artifact) VISION_ARTIFACT="$2"; shift 2 ;;
+    --representation-probe) REPRESENTATION_PROBE="$2"; shift 2 ;;
     --protocol-root) PROTOCOL_ROOT="$2"; shift 2 ;;
     --data-root) DATA_ROOT="$2"; shift 2 ;;
     --python) PYTHON="$2"; shift 2 ;;
@@ -46,13 +56,13 @@ CANDIDATE_ROOT="$RUN_ROOT/candidates/$CANDIDATE"
 LOG_ROOT="$CANDIDATE_ROOT/logs"
 MAIN_LOG="$LOG_ROOT/candidate.log"
 RECEIPTS="$CANDIDATE_ROOT/receipts"
-UPSTREAM="/workspace/bwa_upstream/r12r2/$CANDIDATE"
+UPSTREAM="/workspace/bwa_upstream/r12r3/$CANDIDATE"
 TARGET_UPDATES="$($PYTHON - "$CONFIG" <<'PY'
 import sys, yaml
 print(yaml.safe_load(open(sys.argv[1]))["training"]["updates"])
 PY
 )"
-[[ "$TARGET_UPDATES" == 60000 || "$TARGET_UPDATES" == 120000 ]] || { printf 'R12-R2 budget must be 60000 or 120000 updates\n' >&2; exit 3; }
+[[ "$TARGET_UPDATES" == 60000 ]] || { printf 'R12-R3 budget must be 60000 fresh updates\n' >&2; exit 3; }
 CHECKPOINT_NAME="$(printf 'checkpoint_%06d.pt' "$TARGET_UPDATES")"
 mkdir -p "$LOG_ROOT" "$RECEIPTS" "$CANDIDATE_ROOT/preflight" "$CANDIDATE_ROOT/train/formal" "$CANDIDATE_ROOT/validation/gate20"
 exec > >(tee -a "$MAIN_LOG") 2>&1
@@ -71,7 +81,7 @@ if [[ "$(git -C "$FE_ROOT" branch --show-current)" != "$EXPECTED_BRANCH" || "$(g
   printf 'R12 candidate worktree branch/commit differs from manifest\n' >&2
   exit 3
 fi
-for path in "$PYTHON" "$RUNTIME" "$CONFIG" "$BELIEF_CONFIG" "$LOCK" "$PARITY" "$BELIEF_CHECKPOINT" "$NORMALIZATION_CHECKPOINT" "$DATA_ROOT" "$PROTOCOL_ROOT/baseline_gate20.json"; do
+for path in "$PYTHON" "$RUNTIME" "$CONFIG" "$BELIEF_CONFIG" "$LOCK" "$PARITY" "$BELIEF_CHECKPOINT" "$NORMALIZATION_CHECKPOINT" "$DATA_ROOT" "$PROTOCOL_ROOT/baseline_gate20.json" "$VISION_ARTIFACT/config.json" "$VISION_ARTIFACT/model.safetensors"; do
   [[ -e "$path" ]] || { printf 'missing required R12 path: %s\n' "$path" >&2; exit 3; }
 done
 
@@ -123,12 +133,24 @@ run_child() {
   return "$code"
 }
 
-status PREPARING cache_wait run_r12_candidate.sh "waiting for shared causal/cold-start R12 action cache" "$TARGET_UPDATES"
+status PREPARING cache_wait run_r12_candidate.sh "waiting for shared action cache, DINOv3 spatial cache and representation probe" "$TARGET_UPDATES"
 for _ in $(seq 1 3600); do
-  [[ -f "$ACTION_CACHE" ]] && break
+  [[ -f "$ACTION_CACHE" && -f "$SPATIAL_CACHE" && -f "$REPRESENTATION_PROBE" && -f "$RECOVERY_CACHE" && -f "$RECOVERY_RECEIPT" ]] && break
   sleep 10
 done
-[[ -f "$ACTION_CACHE" ]] || { printf 'shared R12 action cache did not appear\n' >&2; exit 3; }
+[[ -f "$ACTION_CACHE" && -f "$SPATIAL_CACHE" && -f "$REPRESENTATION_PROBE" && -f "$RECOVERY_CACHE" && -f "$RECOVERY_RECEIPT" ]] || { printf 'shared R12-R3 cache/probe/recovery receipt did not appear\n' >&2; exit 3; }
+"$PYTHON" - "$REPRESENTATION_PROBE" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1]))
+if not payload.get("passed"):
+    raise SystemExit("R12-R3 representation sufficiency probe failed closed")
+PY
+"$PYTHON" - "$RECOVERY_RECEIPT" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1]))
+if not payload.get("passed"):
+    raise SystemExit("R12-R3 on-policy recovery cache failed closed")
+PY
 
 REPO="$($PYTHON - "$LOCK" <<'PY'
 import sys, yaml
@@ -155,23 +177,23 @@ run_child PREPARING core_free audit_r12_core_free.py "physical CoRE/runtime sepa
 run_child PREPARING parity parity.py "official/local component numerical parity" "$TARGET_UPDATES" \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" "$PARITY" --upstream "$UPSTREAM" --output "$RECEIPTS/parity.json" --device cuda:0
 
-run_child TRAINING preflight train_action_generator.py "two-update cold-start train/save test" 2 \
-  env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.train_action_generator --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --output "$CANDIDATE_ROOT/preflight" --device cuda:0 --updates 2 --ignore-warm-start
+run_child TRAINING preflight train_action_generator.py "two-update spatial-fusion train/save test" 2 \
+  env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.train_action_generator --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --spatial-cache "$SPATIAL_CACHE" --recovery-cache "$RECOVERY_CACHE" --output "$CANDIDATE_ROOT/preflight" --device cuda:0 --updates 2 --ignore-warm-start
 run_child VALIDATING preflight_restore verify_r12_preflight.py "strict restore, normalization, finite/range/mask" 2 \
   env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" "$FE_ROOT/scripts/before_we_act/verify_r12_preflight.py" --config "$CONFIG" --checkpoint "$CANDIDATE_ROOT/preflight/checkpoints/checkpoint_000002.pt" --device cuda:0 --output "$RECEIPTS/preflight.json"
 
 FORMAL="$CANDIDATE_ROOT/train/formal"
-run_child TRAINING formal train_action_generator.py "dense causal/history-robust R12-R2 action component training" "$TARGET_UPDATES" \
-  env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.train_action_generator --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --output "$FORMAL" --device cuda:0
+run_child TRAINING formal train_action_generator.py "R12-R2 core warm start plus zero-gated DINOv3 spatial fusion" "$TARGET_UPDATES" \
+  env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.train_action_generator --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --spatial-cache "$SPATIAL_CACHE" --recovery-cache "$RECOVERY_CACHE" --output "$FORMAL" --device cuda:0
 CHECKPOINT="$FORMAL/checkpoints/$CHECKPOINT_NAME"
 run_child VALIDATING offline_validation evaluate_action_generator_offline.py "held-out finite/control-cycle smoke; no quality threshold" "$TARGET_UPDATES" \
-  env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.evaluate_action_generator_offline --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --checkpoint "$CHECKPOINT" --output "$CANDIDATE_ROOT/validation/offline.json" --device cuda:0
+  env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" "$PYTHON" -m before_we_act.evaluate_action_generator_offline --config "$CONFIG" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --cache "$ACTION_CACHE" --spatial-cache "$SPATIAL_CACHE" --checkpoint "$CHECKPOINT" --output "$CANDIDATE_ROOT/validation/offline.json" --device cuda:0
 
 for task in lift_barrier camera_alignment three_robots_stack_cube long_pipeline_delivery take_photo; do
   eval_log="$LOG_ROOT/gate20_${task}.log"
   run_child VALIDATING gate20 evaluate_action_generator.py "$task paired Gate20; exactly 20 episodes" "$TARGET_UPDATES" \
     env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$FE_ROOT" BWA_R12_RUN_ROOT="$RUN_ROOT" BWA_R12_CANDIDATE="$CANDIDATE" \
-    "$PYTHON" -m before_we_act.evaluate_action_generator --config "$CONFIG" --checkpoint "$CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --task "$task" --seed-file "$PROTOCOL_ROOT/seeds/$task.json" --episodes 20 --max-steps 1500 --device cuda:0 --output "$CANDIDATE_ROOT/validation/gate20/$task.json" --resume-log "$eval_log" >>"$eval_log" 2>&1
+    "$PYTHON" -m before_we_act.evaluate_action_generator --config "$CONFIG" --checkpoint "$CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --vision-artifact "$VISION_ARTIFACT" --task "$task" --seed-file "$PROTOCOL_ROOT/seeds/$task.json" --episodes 20 --max-steps 1500 --device cuda:0 --output "$CANDIDATE_ROOT/validation/gate20/$task.json" --resume-log "$eval_log" >>"$eval_log" 2>&1
 done
 
 GATE_ARGS=()
@@ -182,7 +204,7 @@ for task in lift_barrier camera_alignment three_robots_stack_cube long_pipeline_
 done
 set +e
 run_child ACCEPTING acceptance accept_r12.py "engineering hard gates plus complete Gate20 > W10 74/100" "$TARGET_UPDATES" \
-  "$PYTHON" "$FE_ROOT/scripts/before_we_act/accept_r12.py" --candidate "$CANDIDATE" --branch "$EXPECTED_BRANCH" --commit "$EXPECTED_COMMIT" --checkpoint "$CHECKPOINT" --expected-updates "$TARGET_UPDATES" --source "$RECEIPTS/source.json" --license "$RECEIPTS/license.json" --patch "$RECEIPTS/patch.json" --dependency "$RECEIPTS/dependency.json" --parity "$RECEIPTS/parity.json" --preflight "$RECEIPTS/preflight.json" --offline "$CANDIDATE_ROOT/validation/offline.json" --core-free "$RECEIPTS/core_free.json" --baseline-summary "$PROTOCOL_ROOT/baseline_gate20.json" "${BASE_ARGS[@]}" "${GATE_ARGS[@]}" --output "$CANDIDATE_ROOT/acceptance.json"
+  "$PYTHON" "$FE_ROOT/scripts/before_we_act/accept_r12.py" --candidate "$CANDIDATE" --branch "$EXPECTED_BRANCH" --commit "$EXPECTED_COMMIT" --checkpoint "$CHECKPOINT" --expected-updates "$TARGET_UPDATES" --source "$RECEIPTS/source.json" --license "$RECEIPTS/license.json" --patch "$RECEIPTS/patch.json" --dependency "$RECEIPTS/dependency.json" --parity "$RECEIPTS/parity.json" --preflight "$RECEIPTS/preflight.json" --offline "$CANDIDATE_ROOT/validation/offline.json" --core-free "$RECEIPTS/core_free.json" --representation-probe "$REPRESENTATION_PROBE" --recovery-receipt "$RECOVERY_RECEIPT" --baseline-summary "$PROTOCOL_ROOT/baseline_gate20.json" "${BASE_ARGS[@]}" "${GATE_ARGS[@]}" --output "$CANDIDATE_ROOT/acceptance.json"
 ACCEPT_CODE=$?
 set -e
 TOTAL="$($PYTHON - "$CANDIDATE_ROOT/acceptance.json" <<'PY'

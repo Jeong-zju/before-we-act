@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("--belief-config", required=True)
     parser.add_argument("--belief-checkpoint", required=True)
     parser.add_argument("--cache", required=True)
+    parser.add_argument("--spatial-cache", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", default="cuda:0")
@@ -41,17 +42,36 @@ def main() -> None:
     belief = PredictiveBeliefModel(belief_config).to(device)
     belief.load_state_dict(belief_saved["model"], strict=True)
     belief.eval()
-    dataset = CachedActionWindows(args.cache, "validation")
+    dataset = CachedActionWindows(
+        args.cache,
+        "validation",
+        spatial_cache_path=args.spatial_cache,
+    )
     count = min(args.samples, len(dataset))
     indices = torch.arange(count)
     batch = subset(dataset.data, indices, device)
+    batch.update(
+        subset(
+            {
+                "spatial_tokens": dataset.spatial_data["spatial_tokens"],
+                "spatial_view_mask": dataset.spatial_data["spatial_view_mask"],
+            },
+            indices,
+            device,
+        )
+    )
     generator = torch.Generator(device=device).manual_seed(20260805)
     noise = torch.randn((count, 100, 32), device=device, generator=generator)
     with torch.no_grad(), torch.autocast(
         "cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"
     ):
         belief_state = belief(batch)["belief"]
-        proposals = model.sample(belief_state, noise=noise)
+        proposals = model.sample(
+            belief_state,
+            spatial_tokens=batch["spatial_tokens"],
+            spatial_view_mask=batch["spatial_view_mask"],
+            noise=noise,
+        )
     prediction = proposals.actions[:, 0].permute(0, 2, 1, 3)
     target = batch["joint_actions"]
     mask = (
@@ -72,19 +92,29 @@ def main() -> None:
         "cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"
     ):
         for _ in range(3):
-            model.sample(timing_belief, noise=timing_noise)
+            model.sample(
+                timing_belief,
+                spatial_tokens=batch["spatial_tokens"][:1],
+                spatial_view_mask=batch["spatial_view_mask"][:1],
+                noise=timing_noise,
+            )
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         for _ in range(10):
             started = time.perf_counter_ns()
-            model.sample(timing_belief, noise=timing_noise)
+            model.sample(
+                timing_belief,
+                spatial_tokens=batch["spatial_tokens"][:1],
+                spatial_view_mask=batch["spatial_view_mask"][:1],
+                noise=timing_noise,
+            )
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             latencies.append((time.perf_counter_ns() - started) / 1e6)
     values = torch.tensor(latencies)
     result = {
         "schema_version": 1,
-        "round": "R12",
+        "round": "R12-R3",
         "candidate_id": config.candidate_id,
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "checkpoint": str(Path(args.checkpoint).resolve()),
@@ -106,6 +136,7 @@ def main() -> None:
             "p95": float(torch.quantile(values, 0.95)),
         },
         "core_free_runtime": bool(saved.get("core_free_runtime")),
+        "observation_mode": config.observation["mode"],
         "quality_threshold": None,
     }
     path = Path(args.output)

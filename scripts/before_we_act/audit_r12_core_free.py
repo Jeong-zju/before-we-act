@@ -36,7 +36,7 @@ def main() -> None:
                 findings.append({"path": str(path.relative_to(root)), "token": token})
     result = {
         "schema_version": 1,
-        "round": "R12",
+        "round": "R12-R3",
         "candidate_id": Path(args.candidate_module).stem,
         "audited_files": [str(path.relative_to(root)) for path in paths],
         "forbidden_runtime_references": findings,

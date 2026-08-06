@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 FE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-RUN_ID="r12-$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_ID="r12r3-$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_ROOT=""
 SELECTION=all
 DRY_RUN=0
@@ -13,12 +13,16 @@ NORMALIZATION_CHECKPOINT=/workspace/bwa_runs/shared/parent/checkpoint_120000.pt
 NORMALIZATION_SHA256=061b7a4acea8fa10f146779e7a1206822179920dfe573db536d237df81eb541d
 PARENT_COMMIT=fdc228189c7fc8556acba9ab9462998ffb967c71
 BASE_BRANCH=feat/model-improvements
-WORKTREE_ROOT=/workspace/bwa_worktrees/r12r2
+WORKTREE_ROOT=/workspace/bwa_worktrees/r12r3
 DATA_ROOT=/workspace/datasets/robofactory_multitask
 R11_CACHE=/workspace/bwa_runs/shared/r11_observation_cache.pt
 ACTION_CACHE=/workspace/bwa_runs/shared/r12_dense_causal_history_action_cache_v2.pt
+SPATIAL_CACHE=/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1.pt
+SPATIAL_SHARDS=/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1_shards
+RECOVERY_CACHE=/workspace/bwa_runs/shared/r12r3_on_policy_recovery_cache_v1.pt
+VISION_ARTIFACT=/workspace/artifacts/dinov3-vitb16-pretrain-lvd1689m
 PROTOCOL_ROOT=/workspace/bwa_runs/shared/r10_gate20
-BRANCHES=(bwa/r12r2-p0-openpi-dense-history-120k bwa/r12r2-p1-smolvla-dense-history-60k bwa/r12r2-p2-act-dense-history-120k bwa/r12r2-p3-diffusion-policy-dense-history-120k)
+BRANCHES=(bwa/r12r3-p0-openpi-spatial-fusion-60k bwa/r12r3-p1-smolvla-spatial-fusion-60k bwa/r12r3-p2-act-spatial-fusion-60k bwa/r12r3-p3-diffusion-spatial-fusion-60k)
 
 while (($#)); do
   case "$1" in
@@ -47,7 +51,7 @@ fi
 for command in git tmux nvidia-smi jq sha256sum find grep awk; do
   command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }
 done
-[[ -x "$PYTHON" && -f "$BELIEF_CHECKPOINT" && -f "$NORMALIZATION_CHECKPOINT" && -f "$R11_CACHE" ]] || { printf 'missing Python, W11/W10 checkpoint, or R11 cache\n' >&2; exit 3; }
+[[ -x "$PYTHON" && -f "$BELIEF_CHECKPOINT" && -f "$NORMALIZATION_CHECKPOINT" && -f "$R11_CACHE" && -f "$VISION_ARTIFACT/config.json" && -f "$VISION_ARTIFACT/model.safetensors" ]] || { printf 'missing Python, W11/W10 checkpoint, R11 cache, or DINOv3 artifact\n' >&2; exit 3; }
 [[ "$(sha256sum "$BELIEF_CHECKPOINT" | awk '{print $1}')" == "$BELIEF_SHA256" ]] || { printf 'W11 belief checkpoint hash differs\n' >&2; exit 3; }
 [[ "$(sha256sum "$NORMALIZATION_CHECKPOINT" | awk '{print $1}')" == "$NORMALIZATION_SHA256" ]] || { printf 'W10 normalization checkpoint hash differs\n' >&2; exit 3; }
 [[ "$(git -C "$FE_ROOT" branch --show-current)" == "$BASE_BRANCH" ]] || { printf 'R12 launcher must run from feat/model-improvements\n' >&2; exit 3; }
@@ -64,7 +68,7 @@ for task in lift_barrier camera_alignment three_robots_stack_cube long_pipeline_
 done
 for candidate in "${SELECTED[@]}"; do
   index="${candidate#p}"
-  session="bwa-r12r2-$candidate"
+  session="bwa-r12r3-$candidate"
   tmux has-session -t "$session" 2>/dev/null && { printf 'session already exists: %s\n' "$session" >&2; exit 3; }
   uuid="$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits | awk -F', ' -v target="$index" '$1==target {print $2}')"
   if [[ -n "$uuid" ]] && nvidia-smi --query-compute-apps=gpu_uuid --format=csv,noheader | grep -Fxq "$uuid"; then
@@ -74,14 +78,14 @@ for candidate in "${SELECTED[@]}"; do
 done
 printf 'R12 preflight: run=%s root=%s selected=%s engineering_base=%s@%s W11_parent=%s\n' "$RUN_ID" "$RUN_ROOT" "${SELECTED[*]}" "$BASE_BRANCH" "$BASE_HEAD" "$PARENT_COMMIT"
 for candidate in "${SELECTED[@]}"; do
-  printf '  %s branch=%s GPU=%s session=bwa-r12r2-%s\n' "$candidate" "${BRANCHES[${candidate#p}]}" "${candidate#p}" "$candidate"
+  printf '  %s branch=%s GPU=%s session=bwa-r12r3-%s\n' "$candidate" "${BRANCHES[${candidate#p}]}" "${candidate#p}" "$candidate"
 done
 if ((DRY_RUN)); then
   printf 'dry-run passed; no worktree, cache, artifact, download or tmux session created\n'
   exit 0
 fi
 
-mkdir -p "$WORKTREE_ROOT" "$RUN_ROOT" /workspace/.cache/huggingface /workspace/bwa_upstream/r12r2
+mkdir -p "$WORKTREE_ROOT" "$RUN_ROOT" /workspace/.cache/huggingface /workspace/bwa_upstream/r12r3 "$SPATIAL_SHARDS"
 WORKTREE_ARGS=()
 for index in 0 1 2 3; do
   candidate="p$index"
@@ -114,6 +118,53 @@ if [[ ! -f "$ACTION_CACHE" ]]; then
       "cd '$FE_ROOT' && exec env PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_action_cache.py' --r11-cache '$R11_CACHE' --parent-checkpoint '$NORMALIZATION_CHECKPOINT' --data-root '$DATA_ROOT' --output '$ACTION_CACHE' --state '/workspace/bwa_runs/shared/r12_dense_causal_history_action_cache_v2_state.json' --heartbeat '/workspace/bwa_runs/shared/r12_dense_causal_history_action_cache_v2_heartbeat.json'"
   fi
 fi
+if [[ ! -f "$SPATIAL_CACHE" ]]; then
+  for index in 0 1 2 3; do
+    session="bwa-r12r3-spatial-rank$index"
+    if ! tmux has-session -t "$session" 2>/dev/null; then
+      tmux new-session -d -s "$session" -n spatial \
+        "cd '$FE_ROOT' && exec env CUDA_VISIBLE_DEVICES='$index' PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_spatial_cache.py' --mode shard --rank '$index' --world-size 4 --action-cache '$ACTION_CACHE' --data-root '$DATA_ROOT' --vision-artifact '$VISION_ARTIFACT' --shard-dir '$SPATIAL_SHARDS' --state '$SPATIAL_SHARDS/rank_${index}_state.json' --heartbeat '$SPATIAL_SHARDS/rank_${index}_heartbeat.json' --device cuda:0"
+    fi
+  done
+  if ! tmux has-session -t bwa-r12r3-spatial-consolidate 2>/dev/null; then
+    tmux new-session -d -s bwa-r12r3-spatial-consolidate -n consolidate \
+      "cd '$FE_ROOT' && exec env PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_spatial_cache.py' --mode consolidate --world-size 4 --action-cache '$ACTION_CACHE' --shard-dir '$SPATIAL_SHARDS' --output '$SPATIAL_CACHE' --state '/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1_state.json' --heartbeat '/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1_heartbeat.json'"
+  fi
+fi
+PROBE="$RUN_ROOT/representation_sufficiency.json"
+if [[ ! -f "$PROBE" ]] && ! tmux has-session -t bwa-r12r3-representation-probe 2>/dev/null; then
+  tmux new-session -d -s bwa-r12r3-representation-probe -n probe \
+    "while [[ ! -f '$SPATIAL_CACHE' ]]; do sleep 10; done; cd '$FE_ROOT' && exec env CUDA_VISIBLE_DEVICES=0 PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/probe_r12_representation.py' --action-cache '$ACTION_CACHE' --spatial-cache '$SPATIAL_CACHE' --belief-config '$FE_ROOT/configs/before_we_act/r11_belief/p0.yaml' --belief-checkpoint '$BELIEF_CHECKPOINT' --output '$PROBE' --device cuda:0"
+fi
+RECOVERY_ROOT="$RUN_ROOT/recovery"
+RECOVERY_SEEDS="$RECOVERY_ROOT/training_seeds.json"
+RECOVERY_RECEIPT="$RECOVERY_ROOT/recovery_receipt.json"
+mkdir -p "$RECOVERY_ROOT"
+"$PYTHON" "$FE_ROOT/scripts/before_we_act/prepare_r12_recovery_seeds.py" \
+  --gate20-root "$PROTOCOL_ROOT" --output "$RECOVERY_SEEDS" --per-task 4
+if [[ ! -f "$RECOVERY_CACHE" ]]; then
+  for candidate in p0 p2; do
+    index="${candidate#p}"
+    session="bwa-r12r3-recovery-$candidate"
+    checkpoint="$RUN_ROOT/unused"
+    if [[ "$candidate" == p0 ]]; then
+      checkpoint=/workspace/bwa_runs/r12r2-20260805-dense-history-act-dp/candidates/p0/train/formal/checkpoints/checkpoint_120000.pt
+    else
+      checkpoint=/workspace/bwa_runs/r12r2-20260805-dense-history-act-dp/candidates/p2/train/formal/checkpoints/checkpoint_120000.pt
+    fi
+    if ! tmux has-session -t "$session" 2>/dev/null; then
+      tmux new-session -d -s "$session" -n recovery \
+        "while [[ ! -f '$PROBE' ]]; do sleep 10; done; '$PYTHON' -c 'import json; assert json.load(open(\"$PROBE\"))[\"passed\"]'; cd '$WORKTREE_ROOT/$candidate' && exec env CUDA_VISIBLE_DEVICES='$index' PYTHONPATH='$WORKTREE_ROOT/$candidate' '$PYTHON' '$WORKTREE_ROOT/$candidate/scripts/before_we_act/collect_r12_recovery.py' --candidate '$candidate' --student-config '$WORKTREE_ROOT/$candidate/configs/before_we_act/r12_action/$candidate.yaml' --student-checkpoint '$checkpoint' --belief-config '$WORKTREE_ROOT/$candidate/configs/before_we_act/r11_belief/p0.yaml' --belief-checkpoint '$BELIEF_CHECKPOINT' --teacher-checkpoint '$NORMALIZATION_CHECKPOINT' --vision-artifact '$VISION_ARTIFACT' --seed-manifest '$RECOVERY_SEEDS' --output '$RECOVERY_ROOT/${candidate}_recovery.pt' --state '$RECOVERY_ROOT/${candidate}_state.json' --heartbeat '$RECOVERY_ROOT/${candidate}_heartbeat.json' --device cuda:0"
+    fi
+  done
+  if ! tmux has-session -t bwa-r12r3-recovery-consolidate 2>/dev/null; then
+    tmux new-session -d -s bwa-r12r3-recovery-consolidate -n consolidate \
+      "while [[ ! -f '$RECOVERY_ROOT/p0_recovery.pt' || ! -f '$RECOVERY_ROOT/p2_recovery.pt' ]]; do sleep 10; done; cd '$FE_ROOT' && exec env PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/consolidate_r12_recovery.py' --p0 '$RECOVERY_ROOT/p0_recovery.pt' --p2 '$RECOVERY_ROOT/p2_recovery.pt' --seed-manifest '$RECOVERY_SEEDS' --output '$RECOVERY_CACHE' --receipt '$RECOVERY_RECEIPT'"
+  fi
+elif [[ ! -f "$RECOVERY_RECEIPT" ]]; then
+  printf 'shared recovery cache exists but this run has no verified receipt; refusing implicit reuse\n' >&2
+  exit 3
+fi
 for candidate in p0 p1 p2 p3; do
   if [[ " ${SELECTED[*]} " != *" $candidate "* ]]; then
     "$PYTHON" "$FE_ROOT/scripts/before_we_act/r12_runtime.py" status --run-root "$RUN_ROOT" --candidate "$candidate" --state NOT_STARTED --stage pending --program run_r12_candidate.sh --detail "not selected by this launch" --pid 0 --child-pid 0 --log "$RUN_ROOT/candidates/$candidate/logs/candidate.log"
@@ -122,8 +173,8 @@ done
 for candidate in "${SELECTED[@]}"; do
   index="${candidate#p}"
   worktree="$WORKTREE_ROOT/$candidate"
-  tmux new-session -d -s "bwa-r12r2-$candidate" -n pipeline \
-    "cd '$worktree' && exec env CUDA_VISIBLE_DEVICES='$index' BWA_R12_RUN_ROOT='$RUN_ROOT' BWA_R12_CANDIDATE='$candidate' '$worktree/scripts/before_we_act/run_r12_candidate.sh' --run-root '$RUN_ROOT' --candidate '$candidate' --gpu-index '$index' --belief-checkpoint '$BELIEF_CHECKPOINT' --normalization-checkpoint '$NORMALIZATION_CHECKPOINT' --action-cache '$ACTION_CACHE' --protocol-root '$PROTOCOL_ROOT' --data-root '$DATA_ROOT' --python '$PYTHON'"
+  tmux new-session -d -s "bwa-r12r3-$candidate" -n pipeline \
+    "cd '$worktree' && exec env CUDA_VISIBLE_DEVICES='$index' BWA_R12_RUN_ROOT='$RUN_ROOT' BWA_R12_CANDIDATE='$candidate' '$worktree/scripts/before_we_act/run_r12_candidate.sh' --run-root '$RUN_ROOT' --candidate '$candidate' --gpu-index '$index' --belief-checkpoint '$BELIEF_CHECKPOINT' --normalization-checkpoint '$NORMALIZATION_CHECKPOINT' --action-cache '$ACTION_CACHE' --spatial-cache '$SPATIAL_CACHE' --recovery-cache '$RECOVERY_CACHE' --recovery-receipt '$RECOVERY_RECEIPT' --vision-artifact '$VISION_ARTIFACT' --representation-probe '$PROBE' --protocol-root '$PROTOCOL_ROOT' --data-root '$DATA_ROOT' --python '$PYTHON'"
 done
 printf 'started R12 candidates: %s\n' "${SELECTED[*]}"
 printf 'monitor once: %s --run-root %s --candidate all --once\n' "$FE_ROOT/scripts/before_we_act/monitor_r12.sh" "$RUN_ROOT"

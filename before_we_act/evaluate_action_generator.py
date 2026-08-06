@@ -16,6 +16,7 @@ import robofactory  # noqa: F401
 
 from before_we_act.action_generator.base import JointActionGenerator, load_r12_config
 from before_we_act.benchmark import TASKS, get_task
+from before_we_act.spatial_observation import R12SpatialObservationEncoder
 from before_we_act.team_belief.base import PredictiveBeliefModel, load_r11_config
 
 
@@ -45,9 +46,13 @@ def observation_row(observation, arms, previous_action):
         images.append(local[0] if local.ndim == 4 else local)
     visual = np.zeros((16, 15), dtype=np.float32)
     view_mask = np.zeros(5, dtype=np.float32)
+    raw_fixed_rgb = np.zeros((5, 3, 480, 640), dtype=np.uint8)
     for index, image in enumerate(images):
+        if tuple(image.shape) != (480, 640, 3):
+            raise ValueError(f"R12 fixed RGB shape differs: {tuple(image.shape)}")
         visual[:, index * 3 : (index + 1) * 3] = patch_means(image)
         view_mask[index] = 1.0
+        raw_fixed_rgb[index] = np.asarray(image, dtype=np.uint8).transpose(2, 0, 1)
     qpos = np.zeros((4, 9), dtype=np.float32)
     actions = np.zeros((4, 8), dtype=np.float32)
     for index, arm in enumerate(arms):
@@ -55,7 +60,7 @@ def observation_row(observation, arms, previous_action):
         qpos[index] = raw[0] if raw.ndim == 2 else raw
         if previous_action is not None:
             actions[index] = previous_action[f"panda-{arm}"]
-    return visual, view_mask, qpos, actions
+    return visual, view_mask, qpos, actions, raw_fixed_rgb
 
 
 class TeamHistory:
@@ -76,6 +81,8 @@ class TeamHistory:
             "qpos": torch.from_numpy(np.stack([item[2] for item in padded])).unsqueeze(0).to(device),
             "actions": torch.from_numpy(np.stack([item[3] for item in padded])).unsqueeze(0).to(device),
             "agent_mask": agent_mask,
+            "raw_fixed_rgb": torch.from_numpy(self.rows[-1][4]).unsqueeze(0).to(device),
+            "spatial_view_mask": torch.from_numpy(self.rows[-1][1]).unsqueeze(0).bool().to(device),
         }
 
 
@@ -106,7 +113,14 @@ class TemporalChunkEnsembler:
         return action
 
 
-def load_models(config_path, checkpoint_path, belief_config_path, belief_checkpoint_path, device):
+def load_models(
+    config_path,
+    checkpoint_path,
+    belief_config_path,
+    belief_checkpoint_path,
+    vision_artifact,
+    device,
+):
     config = load_r12_config(config_path)
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if checkpoint["candidate_id"] != config.candidate_id or not checkpoint.get("core_free_runtime"):
@@ -119,16 +133,27 @@ def load_models(config_path, checkpoint_path, belief_config_path, belief_checkpo
     belief = PredictiveBeliefModel(belief_config).to(device)
     belief.load_state_dict(belief_saved["model"], strict=True)
     belief.eval()
+    spatial = R12SpatialObservationEncoder(
+        config.observation,
+        vision_artifact,
+        inference_batch_size=int(config.observation["max_views"]),
+    ).to(device)
+    spatial.eval()
     stats = {key: torch.as_tensor(value, device=device) for key, value in checkpoint["stats"].items()}
-    return config, generator, belief, stats
+    return config, generator, belief, spatial, stats
 
 
 @torch.no_grad()
-def evaluate(config_path, checkpoint_path, belief_config_path, belief_checkpoint_path, task_name, seeds, device_name, max_steps):
+def evaluate(config_path, checkpoint_path, belief_config_path, belief_checkpoint_path, vision_artifact, task_name, seeds, device_name, max_steps):
     torch.set_num_threads(12)
     device = torch.device(device_name)
-    config, generator, belief, stats = load_models(
-        config_path, checkpoint_path, belief_config_path, belief_checkpoint_path, device
+    config, generator, belief, spatial, stats = load_models(
+        config_path,
+        checkpoint_path,
+        belief_config_path,
+        belief_checkpoint_path,
+        vision_artifact,
+        device,
     )
     specification = get_task(task_name)
     arms = specification["agents"]
@@ -159,11 +184,19 @@ def evaluate(config_path, checkpoint_path, belief_config_path, belief_checkpoint
             started = time.perf_counter_ns()
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
                 belief_state = belief(batch)["belief"]
+                spatial_tokens, spatial_view_mask = spatial(
+                    batch["raw_fixed_rgb"], batch["spatial_view_mask"]
+                )
                 noise_generator = torch.Generator(device=device).manual_seed(
                     int(seed) * 1_000_003 + step
                 )
                 noise = torch.randn((1, 100, 32), generator=noise_generator, device=device)
-                proposals = generator.sample(belief_state, noise=noise)
+                proposals = generator.sample(
+                    belief_state,
+                    spatial_tokens=spatial_tokens,
+                    spatial_view_mask=spatial_view_mask,
+                    noise=noise,
+                )
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             latencies.append((time.perf_counter_ns() - started) / 1e6)
@@ -198,6 +231,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--belief-config", required=True)
     parser.add_argument("--belief-checkpoint", required=True)
+    parser.add_argument("--vision-artifact", required=True)
     parser.add_argument("--task", choices=tuple(TASKS), required=True)
     parser.add_argument("--seed-file", required=True)
     parser.add_argument("--episodes", type=int, default=20)
@@ -238,6 +272,7 @@ def main() -> None:
             args.checkpoint,
             args.belief_config,
             args.belief_checkpoint,
+            args.vision_artifact,
             args.task,
             remaining,
             args.device,
@@ -251,7 +286,7 @@ def main() -> None:
     latency_values = np.asarray(latencies, dtype=np.float64)
     result = {
         "schema_version": 1,
-        "round": "R12",
+        "round": "R12-R3",
         "candidate_id": config.candidate_id,
         "task": args.task,
         "episodes": len(rows),
@@ -263,7 +298,8 @@ def main() -> None:
             "p95": float(np.percentile(latency_values, 95)) if len(latencies) else None,
         },
         "seed_protocol": {"source": str(seed_path), "sha256": hashlib.sha256(raw).hexdigest()},
-        "policy_inputs": "fixed-view RGB patch means, qpos, executed-action history, masks, W11 belief",
+        "policy_inputs": "current raw fixed-view RGB DINOv3 spatial grid + W11 belief from causal RGB/qpos/executed-action history",
+        "observation_mode": config.observation["mode"],
         "privileged_inputs": False,
         "core_free_runtime": True,
         "control_cadence": "one proposal per environment step",

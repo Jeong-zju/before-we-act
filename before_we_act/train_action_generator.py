@@ -102,6 +102,8 @@ def main() -> None:
     parser.add_argument("--belief-config", required=True)
     parser.add_argument("--belief-checkpoint", required=True)
     parser.add_argument("--cache", required=True)
+    parser.add_argument("--spatial-cache", required=True)
+    parser.add_argument("--recovery-cache", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--updates", type=int)
@@ -130,7 +132,14 @@ def main() -> None:
     for parameter in belief.parameters():
         parameter.requires_grad_(False)
 
-    dataset = CachedActionWindows(args.cache, "train")
+    spatial_cache_path = Path(args.spatial_cache).resolve(strict=True)
+    recovery_cache_path = Path(args.recovery_cache).resolve(strict=True)
+    dataset = CachedActionWindows(
+        args.cache,
+        "train",
+        spatial_cache_path=spatial_cache_path,
+        recovery_cache_path=recovery_cache_path,
+    )
     if dataset.metadata["seed"] != int(config.training["seed"]):
         raise ValueError("R12 cache seed differs")
     resume = torch.load(args.resume, map_location="cpu", weights_only=False) if args.resume else None
@@ -139,21 +148,25 @@ def main() -> None:
     if not resume and warm_path:
         resolved_warm_path = Path(warm_path).resolve(strict=True)
         if sha256(resolved_warm_path) != str(config.training["warm_start_sha256"]):
-            raise ValueError("R12-R1 warm-start checkpoint hash differs")
+            raise ValueError("R12-R2 warm-start checkpoint hash differs")
         warm_start = torch.load(resolved_warm_path, map_location="cpu", weights_only=False)
         if warm_start.get("candidate_id") != config.candidate_id:
             raise ValueError("warm-start candidate differs")
         if int(warm_start.get("update", -1)) != int(config.training["warm_start_update"]):
             raise ValueError("warm-start update differs")
-    start_update = (
-        int(resume["update"])
-        if resume
-        else int(config.training["warm_start_update"]) if warm_start else 0
-    )
+    # R12-R3 starts a fresh optimizer/update schedule.  The R12-R2 checkpoint
+    # supplies only the already-trained action core; its historical update is
+    # provenance, not the new round's sampler cursor.
+    start_update = int(resume["update"]) if resume else 0
     if start_update >= target_updates:
         raise ValueError("resume update is not below target")
     sampler = ExactFiveTaskWindowSampler(
-        dataset.data["task_index"], target_updates, int(config.training["seed"]), start_update
+        dataset.task_index,
+        target_updates,
+        int(config.training["seed"]),
+        start_update,
+        source_indices=dataset.source_index,
+        recovery_probability=float(config.training["recovery_sampling_probability"]),
     )
     loader = DataLoader(
         dataset,
@@ -177,7 +190,24 @@ def main() -> None:
         model.load_state_dict(resume["model"], strict=True)
         optimizer.load_state_dict(resume["optimizer"])
     elif warm_start:
-        model.load_state_dict(warm_start["model"], strict=True)
+        incompatible = model.load_state_dict(warm_start["model"], strict=False)
+        allowed_missing_prefixes = (
+            "spatial_norm.",
+            "spatial_projection.",
+            "spatial_view_embedding",
+            "spatial_row_embedding",
+            "spatial_column_embedding",
+            "spatial_cross_attention.",
+            "spatial_gate",
+        )
+        if incompatible.unexpected_keys or any(
+            not name.startswith(allowed_missing_prefixes)
+            for name in incompatible.missing_keys
+        ):
+            raise ValueError(
+                "R12-R2 core warm start differs outside the new spatial adapter: "
+                f"{incompatible}"
+            )
 
     output = Path(args.output).resolve()
     checkpoints = output / "checkpoints"
@@ -185,7 +215,7 @@ def main() -> None:
     progress_path = output / "progress.jsonl"
     identity = {
         "schema_version": 1,
-        "round": "R12",
+        "round": "R12-R3",
         "candidate_id": config.candidate_id,
         "config": str(config_path),
         "config_sha256": sha256(config_path),
@@ -193,14 +223,22 @@ def main() -> None:
         "belief_checkpoint_sha256": sha256(belief_path),
         "action_cache": str(Path(args.cache).resolve()),
         "action_cache_sha256": sha256(Path(args.cache)),
+        "spatial_cache": str(spatial_cache_path),
+        "spatial_cache_sha256": sha256(spatial_cache_path),
+        "spatial_cache_protocol": dataset.spatial_metadata["protocol_variant"],
+        "recovery_cache": str(recovery_cache_path),
+        "recovery_cache_sha256": sha256(recovery_cache_path),
+        "recovery_sampling_probability": float(config.training["recovery_sampling_probability"]),
         "trainable_parameters": [name for name, value in model.named_parameters() if value.requires_grad],
         "core_free_runtime": True,
+        "observation_mode": config.observation["mode"],
         "batch_size": 5,
         "seed": int(config.training["seed"]),
         "precision": config.training["precision"],
         "warm_start_checkpoint": str(Path(warm_path).resolve()) if warm_start else None,
         "warm_start_sha256": str(config.training["warm_start_sha256"]) if warm_start else None,
-        "warm_start_update": start_update if warm_start else 0,
+        "warm_start_update": int(config.training["warm_start_update"]) if warm_start else 0,
+        "warm_start_mode": "r12r2_core_only_zero_gated_spatial_adapter",
         "history_robustification": "deterministic_clean_zero_noise_lag_mixture",
         "learning_rate_schedule": "linear_warmup_cosine_decay",
     }
@@ -223,7 +261,7 @@ def main() -> None:
         atomic_torch_save(
             {
                 "schema_version": 1,
-                "round": "R12",
+                "round": "R12-R3",
                 "candidate_id": config.candidate_id,
                 "update": update,
                 "model": model.state_dict(),
@@ -231,6 +269,9 @@ def main() -> None:
                 "config": dict(config.raw),
                 "stats": dict(dataset.stats),
                 "belief_checkpoint_sha256": sha256(belief_path),
+                "spatial_cache_sha256": identity["spatial_cache_sha256"],
+                "recovery_cache_sha256": identity["recovery_cache_sha256"],
+                "observation_mode": config.observation["mode"],
                 "core_free_runtime": True,
                 "last_metrics": last,
                 "initialization": {
@@ -260,6 +301,8 @@ def main() -> None:
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
             losses = model.training_loss(
                 belief_output,
+                batch["spatial_tokens"],
+                batch["spatial_view_mask"],
                 batch["joint_actions"],
                 batch["action_step_mask"].bool(),
             )

@@ -20,7 +20,7 @@ done
 [[ "$GRACE" =~ ^[0-9]+$ ]] || { printf 'grace must be a nonnegative integer\n' >&2; exit 2; }
 MANIFEST="$RUN_ROOT/run_manifest.json"
 [[ -f "$MANIFEST" ]] || { printf 'missing run manifest: %s\n' "$MANIFEST" >&2; exit 3; }
-[[ "$(jq -r '.round' "$MANIFEST")" == R12 && "$(realpath -m "$(jq -r '.run_root' "$MANIFEST")")" == "$(realpath -m "$RUN_ROOT")" ]] || { printf 'R12 run manifest identity mismatch\n' >&2; exit 3; }
+[[ "$(jq -r '.round' "$MANIFEST")" == R12-R3 && "$(realpath -m "$(jq -r '.run_root' "$MANIFEST")")" == "$(realpath -m "$RUN_ROOT")" ]] || { printf 'R12-R3 run manifest identity mismatch\n' >&2; exit 3; }
 declare -A ALIAS=( [A]=p0 [B]=p1 [C]=p2 [D]=p3 [a]=p0 [b]=p1 [c]=p2 [d]=p3 )
 if [[ "$SELECTION" == all ]]; then
   SELECTED=(p0 p1 p2 p3)
@@ -51,18 +51,41 @@ for candidate in "${SELECTED[@]}"; do
   printf '  %s session=%s pids=%s\n' "$candidate" "$session" "${pids[*]:-none}"
 done
 if ((DRY_RUN)); then
+  if ((${#SELECTED[@]} == 4)); then
+    printf '  shared auxiliary sessions considered only for all-stop: bwa-r12r3-spatial-rank0..3, spatial-consolidate, representation-probe, recovery-p0/p2, recovery-consolidate\n'
+  fi
   printf 'dry-run: no signal sent and no tmux session closed\n'; exit 0
 fi
 for candidate in "${SELECTED[@]}"; do
   session="$(jq -r --arg candidate "$candidate" '.tmux_sessions[$candidate]' "$MANIFEST")"
   tmux has-session -t "$session" 2>/dev/null && tmux send-keys -t "$session" C-c || true
 done
+if ((${#SELECTED[@]} == 4)); then
+  AUXILIARY_SESSIONS=(
+    bwa-r12r3-spatial-rank0 bwa-r12r3-spatial-rank1
+    bwa-r12r3-spatial-rank2 bwa-r12r3-spatial-rank3
+    bwa-r12r3-spatial-consolidate bwa-r12r3-representation-probe
+    bwa-r12r3-recovery-p0 bwa-r12r3-recovery-p2
+    bwa-r12r3-recovery-consolidate
+  )
+  for session in "${AUXILIARY_SESSIONS[@]}"; do
+    tmux has-session -t "$session" 2>/dev/null && tmux send-keys -t "$session" C-c || true
+  done
+fi
 for ((second=0; second<GRACE; second++)); do
   remaining=0
   for candidate in "${SELECTED[@]}"; do mapfile -t pids < <(tagged_pids "$candidate"); remaining=$((remaining + ${#pids[@]})); done
   ((remaining == 0)) && break
   sleep 1
 done
+if ((${#SELECTED[@]} == 4)); then
+  for session in "${AUXILIARY_SESSIONS[@]}"; do
+    if tmux has-session -t "$session" 2>/dev/null; then
+      printf 'closing exact shared R12-R3 auxiliary session: %s\n' "$session"
+      tmux kill-session -t "$session"
+    fi
+  done
+fi
 for signal in TERM KILL; do
   found=0
   for candidate in "${SELECTED[@]}"; do

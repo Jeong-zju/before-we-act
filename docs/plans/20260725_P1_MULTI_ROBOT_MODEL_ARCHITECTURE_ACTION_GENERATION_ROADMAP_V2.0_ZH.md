@@ -3,7 +3,7 @@
 > 文档更新：2026-08-05（V4.5 + R12-R1 因果诊断与 R12-R2 完整终态）
 > 工程起点：`bwa/r9-core-native@06ba780`；R10 四路已全部失败并固定 `W10=B9-CoreNative`；R11 四路于 2026-08-05 完成并全部 PASSED，冻结排名 `P0>P3>P1>P2`
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1。R12-R1 与 R12-R2 均未产生 W12；R12-R2 四路已完整完成 `4×100` Gate20 并全部 FAILED，轮级决定为 `no_winner_no_merge`。当前继续停留在 R12，先修复 representation sufficiency 与 on-policy recovery data，禁止提前进入 R13
+> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1。R12-R1 与 R12-R2 均未产生 W12；R12-R2 四路已完整完成 `4×100` Gate20 并全部 FAILED，轮级决定为 `no_winner_no_merge`。当前继续停留在 R12；R12-R3 已预注册为 `W11 + 当前原始 fixed-view RGB 的 DINOv3 空间网格 + training-only on-policy recovery`，须先通过 representation sufficiency 与 recovery cache 两个 fail-closed 前置门，禁止提前进入 R13
 > 评测原则：S10 原样完成；R11/R13 保持 off-path，R12/R14 会改变动作轨迹。任何候选只要可能改变最终执行动作、候选选择、动作后处理或策略权重，就必须在同一五任务、同一 seeds 上完成**每任务 20 回合**闭环（简称 `Gate20`，即每候选共 `5×20=100` episodes）后才有 winner 资格；其它表征、排序、校准、因果和 oracle 指标降为可选诊断，不再挡住 benchmark 更优候选
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -3489,6 +3489,48 @@ RUN=/workspace/bwa_runs/r12r2-20260805-dense-history-act-dp
 4. **P3 还有目标/采样失配。** diffusion denoising loss 降得很好，但 held-out action MSE 最差且闭环接近零，表明当前条件表示下的 denoising objective/sampler 并未学到可执行的长时序 mode；这不是增加相同 update 能可靠修复的问题。
 
 阶段决策是：**不进入 R13，继续停留在 R12，但不立即做同数据续训。** R13 明确要冻结一个合格 W12；当前没有 W12，提前训练 world model 只会固化失败动作分布。下一步先做两个 fail-closed 前置实验：① representation sufficiency probe，在完全相同 held-out windows 上比较 W11 belief 与合法 fixed-view spatial pretrained features 对 W10 teacher action/stage 的可预测性；若 W11 明显落后，则以 R11b/R12-interface repair 名义恢复空间 token 后重新冻结 W11，而不是在 action core 后补救；②使用训练 seed 的 on-policy recovery-state aggregation，并对 Stack/Pipeline/Photo 做 task/stage 平衡。只有这两项修复完成后才创建 R12-R3 四路；P2 ACT 因最低离线 MSE和最低延迟可作为高效主基线，P0 因本轮最高闭环分保留为独立对照，但二者都必须重新过同一完整 Gate20，验收标准不降低。
+
+#### 10.15.2 R12-R3：W11 + 原始观测空间旁路与 on-policy recovery（预注册，action-affecting / 强制 Gate20）
+
+R12-R2 的共同失败支持“可以同时输入 `TeamBeliefState` 与原始观测”，但这里的“原始观测”不得再次退化为同源 `4×4` RGB 均值。R12-R3 冻结 W11，部署时额外读取**当前时刻**合法 fixed global/agent RGB，经 S10 已缓存且 SHA256 锁定的 DINOv3-B/16 提取 patch features，再按每个命名视角独立 adaptive-pool 为 `4×4` 空间网格。最多五视角因此形成 `5×16` 个有 view/row/column 位置的空间 token；future RGB、task/robot ID、当前 commanded action、simulator state 和 W10 hidden/router 继续禁止。该选择直接参考 [DINOv3 官方高分辨率 dense feature 实现](https://github.com/facebookresearch/dinov3)、[BLIP-2/LAVIS Q-Former](https://github.com/salesforce/LAVIS/blob/main/lavis/models/blip2_models/blip2_qformer.py) 的冻结视觉编码器 + 轻量查询桥接方式，以及 [OpenVLA](https://github.com/openvla/openvla) 使用预训练 dense vision features 投影到策略主干的公开实现。
+
+空间旁路不把 80 个新 token 直接粗暴追加到四种 action core。公共 `JointActionGenerator` 用 21 个现有 W11 token 作 query、DINOv3 空间 token 作 key/value，执行一层 4-head cross-attention；标量 `tanh(spatial_gate)` 初始化为精确 0，因此加载 R12-R2 checkpoint 后、首个 optimizer step 前，action core 的条件输入与旧模型 bit-exact。新轮只热启动各自已有 action core，不恢复旧 optimizer；空间 projection、view/row/column embedding、cross-attention 和 gate 为新参数。四路仍只在各自分支保留原官方 action core，不混入其它候选：
+
+| 候选 / GPU | R12-R3 独立分支 | core 初始化 | 新轮预算 |
+|---|---|---|---:|
+| P0 / 0 | `bwa/r12r3-p0-openpi-spatial-fusion-60k` | R12-R2 P0 120k core-only | 60k |
+| P1 / 1 | `bwa/r12r3-p1-smolvla-spatial-fusion-60k` | R12-R2 P1 60k core-only | 60k |
+| P2 / 2 | `bwa/r12r3-p2-act-spatial-fusion-60k` | R12-R2 P2 120k core-only | 60k |
+| P3 / 3 | `bwa/r12r3-p3-diffusion-spatial-fusion-60k` | R12-R2 P3 120k core-only | 60k |
+
+共享 DINOv3 artifact 固定为 `/workspace/artifacts/dinov3-vitb16-pretrain-lvd1689m/{config.json,model.safetensors}`；weights SHA256 为 `9a21ac3df0c63839d62612dda6f454d816c25611cc7a52966ed5a5a94921dc8b`，canonical config SHA256 为 `69256c4c142d59b0c0ccf5746542d9f2415f6c7db03bd7835a1f7b3afedb77fe`。S10 传输没有保留 gated Hub snapshot revision，因此本轮不伪造 revision claim，artifact 的两个内容 hash 才是权威身份。训练使用四 GPU 分片生成、逐行复算 current RGB `4×4` means 和 view mask 与 R12 action cache 做 exact 对齐；部署从当前 `480×640` uint8 RGB 在线重算相同 DINO 网格，闭环 latency 必须包含该成本。
+
+正式训练前固定两个不可绕过的前置门：
+
+1. **representation sufficiency probe**：在完全相同 train/held-out windows 上，用同容量 attention readout 分别比较 W11-only、DINO-spatial-only、fused；`fused` 的 held-out first-step normalized action MSE 必须比 W11-only 至少降低 `10%`，shared-progress R² 不得比 W11 低超过 `0.02`，validation spatial-row shuffle 必须令 fused action MSE 恶化至少 `5%`，且全部指标 finite。该 probe 只允许决定是否启动 R12-R3，不能替代 Gate20。
+2. **training-only on-policy recovery cache**：按 [DAgger](https://proceedings.mlr.press/v15/ross11a.html) 数据聚合原则，用 R12-R2 P0/P2 在与 Gate20 完全不重叠的冻结训练 seed 上产生学生状态，每四步采样一次；只在离线 cache 构建期由冻结 W10 `checkpoint_120000.pt` 标注 100-step normalized joint-action chunk。缓存必须同时覆盖五任务和两种 student source，保存真实 lagged student executed-action history，W10 teacher 不得进入训练 checkpoint 或 deployment imports。正式 sampler 每个 task 独立以 `0.35` 概率选择 recovery row，其余为原 dense demonstration row，继续保持每 update 五任务各一条。
+
+R12-R3 的工程 hard gates 增加 `representation_sufficiency_probe`、`w11_plus_current_spatial_observation` 和 `on_policy_recovery_cache`；其余 source/license/minimal-patch/parity/train-save-restore/causal-cold-start/core-free/finite-range-mask 全部继承。真实质量门完全不变：每路必须使用同一冻结 seeds、同一 task 顺序、每 environment step 重规划、同一 W10 temporal ensemble 完成 `5×20=100` Gate20；只有总成功数严格大于 W10 `74/100` 才能产生 W12。四路都失败仍为 `no_winner_no_merge`，不得以 probe、offline MSE 或局部任务收益进入 R13。
+
+预注册共享路径和一键入口如下，均不得覆盖 R12-R1/R2 产物：
+
+```bash
+cd /workspace/bwa_worktrees/model-improvements
+scripts/before_we_act/launch_r12_4gpu_tmux.sh \
+  --run-id r12r3-20260806-spatial-recovery \
+  --run-root /workspace/bwa_runs/r12r3-20260806-spatial-recovery \
+  --candidate all
+
+scripts/before_we_act/monitor_r12.sh \
+  --run-root /workspace/bwa_runs/r12r3-20260806-spatial-recovery \
+  --candidate all --once
+
+scripts/before_we_act/stop_r12_4gpu_tmux.sh \
+  --run-root /workspace/bwa_runs/r12r3-20260806-spatial-recovery \
+  --candidates all --dry-run
+```
+
+共享空间缓存为 `/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1.pt`，共享 recovery cache 为 `/workspace/bwa_runs/shared/r12r3_on_policy_recovery_cache_v1.pt`；表征 probe、recovery seed/receipt、四路状态、日志、checkpoint、offline 与 Gate20 结果均落在 `/workspace/bwa_runs/r12r3-20260806-spatial-recovery/`。运行终态、commit/hash、缓存行数、probe 指标、训练/验证指标和逐项 Gate20 将只在实际完成后追加，不预写成功结论。
 
 ### 10.16 R13：四路 Candidate-Conditioned Latent World 组件移植（off-path）
 

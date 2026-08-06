@@ -44,6 +44,8 @@ def main() -> None:
     parser.add_argument("--preflight", required=True)
     parser.add_argument("--offline", required=True)
     parser.add_argument("--core-free", required=True)
+    parser.add_argument("--representation-probe", required=True)
+    parser.add_argument("--recovery-receipt", required=True)
     parser.add_argument("--baseline-summary", required=True)
     parser.add_argument("--baseline", action="append", default=[])
     parser.add_argument("--gate20", action="append", default=[])
@@ -62,6 +64,8 @@ def main() -> None:
     source, license_result, patch = read(args.source), read(args.license), read(args.patch)
     dependency, parity = read(args.dependency), read(args.parity)
     preflight, offline, core_free = read(args.preflight), read(args.offline), read(args.core_free)
+    representation_probe = read(args.representation_probe)
+    recovery_receipt = read(args.recovery_receipt)
     baseline = read(args.baseline_summary)
     baseline_rows = {}
     for item in args.baseline:
@@ -118,8 +122,27 @@ def main() -> None:
             args.offline,
         ),
         check(
+            "representation_sufficiency_probe",
+            representation_probe.get("passed")
+            and representation_probe.get("stage")
+            == "R12-R3-representation-sufficiency",
+            args.representation_probe,
+        ),
+        check(
+            "w11_plus_current_spatial_observation",
+            offline.get("observation_mode")
+            == "w11_plus_current_dinov3_spatial_v1",
+            args.offline,
+        ),
+        check(
+            "on_policy_recovery_cache",
+            recovery_receipt.get("passed")
+            and recovery_receipt.get("stage") == "R12-R3-on-policy-recovery",
+            args.recovery_receipt,
+        ),
+        check(
             "formal_expected_updates_and_offline_smoke",
-            args.expected_updates in (60_000, 120_000)
+            args.expected_updates == 60_000
             and offline.get("checkpoint_update") == args.expected_updates
             and offline.get("finite")
             and offline.get("absent_agent_zero")
@@ -143,7 +166,7 @@ def main() -> None:
     checks = hard_checks + [benchmark_check]
     result = {
         "schema_version": 1,
-        "round": "R12",
+        "round": "R12-R3",
         "candidate_id": args.candidate,
         "branch": args.branch,
         "commit": args.commit,

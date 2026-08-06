@@ -41,6 +41,22 @@ def test_exact_sampler_has_one_window_per_task_and_is_resumable():
     assert all(sorted(indices[row].tolist()) == [0, 1, 2, 3, 4] for row in full)
 
 
+def test_exact_sampler_can_force_task_balanced_recovery_rows():
+    task_indices = torch.tensor([0, 1, 2, 3, 4, 0, 1, 2, 3, 4])
+    sources = torch.tensor([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
+    batches = list(
+        ExactFiveTaskWindowSampler(
+            task_indices,
+            updates=3,
+            seed=9,
+            source_indices=sources,
+            recovery_probability=1.0,
+        )
+    )
+    assert all(sorted(task_indices[row].tolist()) == [0, 1, 2, 3, 4] for row in batches)
+    assert all(sources[row].eq(1).all() for row in batches)
+
+
 def test_causal_history_matches_closed_loop_cold_start_and_lag():
     from scripts.before_we_act.prepare_r12_action_cache import (
         causal_history_indices,
@@ -100,7 +116,7 @@ def test_history_robustification_is_deterministic_causal_and_masked():
     assert first[1, :, 3:].eq(0).all()
 
 
-def test_r12_r2_learning_rate_warmup_and_decay():
+def test_r12_r3_learning_rate_warmup_and_decay():
     from before_we_act.train_action_generator import learning_rate_at_update
 
     training = {
@@ -112,6 +128,36 @@ def test_r12_r2_learning_rate_warmup_and_decay():
     assert learning_rate_at_update(training, 1) == 1e-5
     assert learning_rate_at_update(training, 100) == 1e-3
     assert abs(learning_rate_at_update(training, 1000) - 1e-4) < 1e-12
+
+
+def test_r12_r3_spatial_probe_preserves_view_and_grid_tokens():
+    from scripts.before_we_act.probe_r12_representation import ProbeHead
+
+    batch = {
+        "belief_tokens": torch.randn(2, 21, 96),
+        "belief_mask": torch.ones(2, 21, dtype=torch.bool),
+        "spatial_tokens": torch.randn(2, 5, 16, 768),
+        "spatial_view_mask": torch.tensor(
+            [[True, True, False, False, False], [True, True, True, True, False]]
+        ),
+    }
+    for mode in ("w11", "spatial", "fused"):
+        action, progress = ProbeHead(mode)(batch)
+        assert action.shape == (2, 4, 8)
+        assert progress.shape == (2,)
+        assert torch.isfinite(action).all()
+        assert torch.isfinite(progress).all()
+
+
+def test_r12_r3_spatial_observation_contract_is_hash_locked():
+    from before_we_act.spatial_observation import locked_r12_spatial_observation
+
+    contract = locked_r12_spatial_observation()
+    assert contract["spatial_grid"] == [4, 4]
+    assert contract["max_views"] == 5
+    assert contract["feature_dim"] == 768
+    assert len(contract["weights_sha256"]) == 64
+    assert contract["fusion"] == "zero_gated_cross_attention_into_w11_tokens"
 
 
 def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: Path):
