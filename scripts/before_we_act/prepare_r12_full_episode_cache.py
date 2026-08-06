@@ -261,6 +261,18 @@ def run_shard(args) -> None:
         print(json.dumps({"reused": str(receipt_path), "episodes": len(receipt["episodes"])}))
         return
     observation = locked_r12_full_episode_observation()
+    atomic_json(
+        args.state,
+        {
+            "state": "PREPARING",
+            "stage": "native_rgb_post_dino_feature_cache",
+            "rank": args.rank,
+            "completed_episodes": 0,
+            "total_episodes": len(assigned),
+            "output_bytes": 0,
+            "updated_at": now(),
+        },
+    )
     encoder = R12SpatialObservationEncoder(
         observation,
         args.vision_artifact,
@@ -308,6 +320,10 @@ def run_shard(args) -> None:
         {
             "state": "PASSED",
             "stage": "native_rgb_post_dino_shard_complete",
+            "rank": args.rank,
+            "completed_episodes": len(completed),
+            "total_episodes": len(assigned),
+            "output_bytes": sum(item["size_bytes"] for item in completed),
             "receipt": str(receipt_path),
             "updated_at": now(),
         },
