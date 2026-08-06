@@ -3694,7 +3694,7 @@ env CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. /venv/robofactory-act/bin/python \
   --output /workspace/bwa_runs/r12e1-20260806-agent-slot-v4/round_decision.json
 ```
 
-最终阶段决定：**R12 通过，综合闭环目标已完成；按当前任务的 `[ON_DIAG_PASS]` 写入结果后停止，不进入 R13。** P2 是完整四路终态比较后的唯一合格 W12 候选；本次没有收到 winner merge 授权，因此 `merge_performed=false`，不擅自合并到模型改进主分支。所有在途 R12 探索和 monitor 已完成或安全停止，不再消耗 GPU。
+最终阶段决定：**R12 通过，综合闭环目标已完成；按当前任务的 `[ON_DIAG_PASS]` 写入结果后停止，不进入 R13。** P2 是完整四路终态比较后的唯一合格 W12 候选；冻结排序时尚未收到 winner merge 授权，因此原始决定如实保持 `merge_performed=false`。用户随后另行授权的 winner-only 工程晋级记录见下一节，原始实验决定不追溯改写。所有在途 R12 探索和 monitor 已完成或安全停止，不再消耗 GPU。
 
 ##### 10.15.4.2 后续显式授权的 W12 winner-only 合并（2026-08-06）
 
