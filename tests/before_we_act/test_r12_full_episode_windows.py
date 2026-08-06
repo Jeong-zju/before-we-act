@@ -13,6 +13,7 @@ from before_we_act.data.full_episode_windows import (
     FULL_EPISODE_PROTOCOL,
     FullEpisodeActionWindows,
     SequentialFullEpisodeSampler,
+    TaskWeightedFullEpisodeSampler,
 )
 from before_we_act.data.raw_team_windows import TASKS
 from before_we_act.contracts import TeamBeliefState
@@ -131,6 +132,41 @@ def test_full_episode_sampler_is_balanced_and_resume_stable(tmp_path):
             if dataset.episodes[request[0]]["task_index"] == task
         }
         assert observed == set(dataset.requests_by_task[task])
+
+
+def test_task_weighted_sampler_preserves_every_task_and_resume(tmp_path):
+    episodes = [
+        _episode(tmp_path / f"weighted_{task}.hdf5", task, seed=250 + index)
+        for index, task in enumerate(TASKS)
+    ]
+    dataset = FullEpisodeActionWindows(
+        episodes,
+        {"a_mean": torch.zeros(8), "a_std": torch.ones(8)},
+        split="train",
+    )
+    weights = {task: 1 for task in TASKS}
+    weights["camera_alignment"] = 2
+    weights["three_robots_stack_cube"] = 6
+    complete = list(
+        TaskWeightedFullEpisodeSampler(
+            dataset, updates=5, rows_per_task=weights, seed=29
+        )
+    )
+    resumed = list(
+        TaskWeightedFullEpisodeSampler(
+            dataset,
+            updates=5,
+            rows_per_task=weights,
+            seed=29,
+            start_update=3,
+        )
+    )
+    assert resumed == complete[3:]
+    for batch in complete:
+        tasks = [dataset.episodes[episode]["task_index"] for episode, _ in batch]
+        assert len(batch) == sum(weights.values())
+        for task_index, task in enumerate(TASKS):
+            assert tasks.count(task_index) == weights[task]
 
 
 def test_spatial_query_bridge_has_direct_gradients_and_masks_absent_views():
@@ -252,6 +288,59 @@ def test_r4_generator_bridge_stage_and_core_only_warm_start():
     assert all(parameter.requires_grad for parameter in model.bridge.parameters())
     model.set_training_stage("joint")
     assert all(parameter.requires_grad for parameter in model.parameters())
+
+
+def test_r12e1_task_film_is_bounded_supplemental_conditioning():
+    from before_we_act.action_generator.evolution import (
+        R12EvolutionConfig,
+        TaskConditionedActionGenerator,
+    )
+    from before_we_act.spatial_observation import locked_r12_full_episode_observation
+
+    config = R12EvolutionConfig(
+        {
+            "candidate_id": "p2",
+            "component": {"kind": "act_action_chunk_transformer"},
+            "observation": locked_r12_full_episode_observation(),
+            "action": _r4_config().action,
+            "training": {"task_film_hidden_dim": 32, "task_film_scale": 0.25},
+            "deployment": {},
+        }
+    )
+    model = TaskConditionedActionGenerator(config, core=_DummyR4Core())
+    trainable = model.set_training_stage("bridge")
+    assert "task_embedding.weight" in trainable
+    assert "task_film.3.weight" in trainable
+    assert "core.head.weight" not in trainable
+    belief = TeamBeliefState(
+        tokens=torch.randn(2, 16, 96),
+        agent_tokens=torch.randn(2, 4, 96),
+        consensus_token=torch.randn(2, 96),
+        uncertainty=torch.zeros(2, 1),
+        agent_mask=torch.tensor([[True, True, True, False], [True] * 4]),
+    )
+    spatial = torch.randn(2, 5, 48, 768)
+    view_mask = torch.tensor(
+        [[True, True, True, True, False], [True] * 5], dtype=torch.bool
+    )
+    tokens, mask = model.condition(
+        belief, spatial, view_mask, torch.tensor([1, 2])
+    )
+    assert tokens.shape == (2, 37, 96)
+    assert mask.shape == (2, 37)
+    loss = tokens.square().mean()
+    loss.backward()
+    assert model.task_film[3].weight.grad is not None
+    proposals = model.sample(
+        belief,
+        spatial_tokens=spatial,
+        spatial_view_mask=view_mask,
+        task_index=torch.tensor([1, 2]),
+    )
+    assert proposals.actions.shape == (2, 1, 4, 100, 8)
+    assert torch.equal(
+        proposals.actions[0, :, 3], torch.zeros_like(proposals.actions[0, :, 3])
+    )
 
 
 def test_r4_warm_start_preserves_old_condition_positions_and_new_suffix():

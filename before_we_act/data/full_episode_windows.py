@@ -305,6 +305,72 @@ class ExactFiveTaskFullEpisodeSampler(Sampler[list[tuple[int, int]]]):
             yield batch
 
 
+class TaskWeightedFullEpisodeSampler(Sampler[list[tuple[int, int]]]):
+    """Deterministic full-data cycles with preregistered per-task emphasis.
+
+    Every task must receive at least one row per update, so every task bucket
+    is traversed indefinitely.  Additional rows let an independently routed
+    difficult-task specialist see more Stack/Camera states without discarding
+    any of the five-task training distribution.
+    """
+
+    def __init__(
+        self,
+        dataset: FullEpisodeActionWindows,
+        *,
+        updates: int,
+        rows_per_task: Mapping[str, int],
+        seed: int,
+        start_update: int = 0,
+    ) -> None:
+        if updates <= start_update or set(rows_per_task) != set(TASKS):
+            raise ValueError("invalid task-weighted full-episode sampler budget")
+        self.rows_per_task = {
+            task: int(rows_per_task[task]) for task in TASKS
+        }
+        if any(value < 1 for value in self.rows_per_task.values()):
+            raise ValueError("every task requires at least one row per update")
+        self.dataset = dataset
+        self.updates = int(updates)
+        self.seed = int(seed)
+        self.start_update = int(start_update)
+
+    def __len__(self) -> int:
+        return self.updates - self.start_update
+
+    def __iter__(self):
+        permutations: dict[tuple[int, int], list[tuple[int, int]]] = {}
+        for update in range(self.start_update + 1, self.updates + 1):
+            rng = random.Random(self.seed + 1_000_003 * update)
+            batch: list[tuple[int, int]] = []
+            for task_index, task in enumerate(TASKS):
+                bucket = self.dataset.requests_by_task[task_index]
+                draws = self.rows_per_task[task]
+                for within_update in range(draws):
+                    draw = (update - 1) * draws + within_update
+                    epoch, offset = divmod(draw, len(bucket))
+                    key = (task_index, epoch)
+                    if key not in permutations:
+                        epoch_rng = random.Random(
+                            self.seed
+                            + 10_000_019 * task_index
+                            + 1_000_000_007 * epoch
+                        )
+                        blocks = [
+                            list(bucket[start : start + 16])
+                            for start in range(0, len(bucket), 16)
+                        ]
+                        for block in blocks:
+                            epoch_rng.shuffle(block)
+                        epoch_rng.shuffle(blocks)
+                        permutations[key] = [
+                            request for block in blocks for request in block
+                        ]
+                    batch.append(permutations[key][offset])
+            rng.shuffle(batch)
+            yield batch
+
+
 class SequentialFullEpisodeSampler(Sampler[list[tuple[int, int]]]):
     """Visit every indexed timestep exactly once for full validation."""
 
@@ -334,4 +400,5 @@ __all__ = [
     "FULL_EPISODE_PROTOCOL",
     "FullEpisodeActionWindows",
     "SequentialFullEpisodeSampler",
+    "TaskWeightedFullEpisodeSampler",
 ]
