@@ -231,7 +231,7 @@ def main() -> None:
         "first_step_normalized_mse": first_squared / first_elements,
         "full_chunk_normalized_mse": full_squared / full_elements,
         "per_task": per_task,
-        "observation": "native 480x640 RGB primary; W11 and task ID supplemental",
+        "observation": "native 480x640 RGB primary; W11, task ID and bounded agent-slot ID supplemental",
         "elapsed_seconds": time.monotonic() - started,
         "created_at": now(),
     }

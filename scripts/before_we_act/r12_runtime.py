@@ -241,10 +241,10 @@ def init(args):
                 "candidate qualifies only when valid and total successes strictly exceed W10 74/100",
             ] if round_name == "R12-R3" else ([
                 "native 480x640 multi-view RGB is the primary policy input before post-DINO compression",
-                "W11 TeamBeliefState and explicit task ID are supplemental bounded conditioning",
+                "W11 TeamBeliefState, explicit task ID and agent-slot ID are supplemental bounded conditioning",
                 "all five training tasks remain present with deterministic Stack/Camera emphasis",
-                "10k bridge/task-FiLM alignment followed by 120k joint optimization",
-                "strict restore, finite/range/mask, image effect and task-conditioning effect",
+                "10k bridge/task-FiLM/agent-slot alignment followed by 120k joint optimization",
+                "strict restore, finite/range/mask, image effect, task effect and nonzero agent-slot gradient",
                 "runtime contains no Stereo-CoRE/PAIR/ARCA/forced-role implementation or checkpoint",
                 "full held-out 22475-timestep offline validation is finite",
                 "Lift/Camera/LPD/Photo route through the exact unchanged W10 fallback",
