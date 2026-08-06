@@ -1,4 +1,4 @@
-"""Trainable query bridge from full rectangular DINO tokens to R12 actions."""
+"""Trainable query bridge from native-resolution DINO tokens to R12 actions."""
 from __future__ import annotations
 
 import torch
@@ -8,11 +8,13 @@ from before_we_act.contracts import TeamBeliefState
 
 
 class SpatialQueryBridge(nn.Module):
-    """Compress five ordered 6x8 view grids without a gradient-blocking gate.
+    """Query five ordered 6x8 grids encoded from complete 480x640 images.
 
     The bridge follows the small learned-query pattern used by BLIP-2's
-    Q-Former, adapted to causal robot observations.  It does not consume text,
-    task identity, agent identity, future frames, or simulator state.
+    Q-Former, adapted to causal robot observations.  DINO's native 30x40 patch
+    grid is pooled only after full-resolution encoding.  This bridge does not
+    consume text, task identity, agent identity, future frames, or simulator
+    state.
     """
 
     def __init__(

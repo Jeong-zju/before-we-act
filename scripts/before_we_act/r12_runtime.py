@@ -107,6 +107,17 @@ def update_status(args):
 
 
 def init(args):
+    round_name = getattr(args, "round", "R12-R3")
+    session_prefix = getattr(args, "session_prefix", "bwa-r12r3")
+    formal_updates = int(getattr(args, "formal_updates", 60_000))
+    shared_spatial_cache = getattr(
+        args,
+        "shared_spatial_cache",
+        "/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1.pt",
+    )
+    protocol_variant = getattr(
+        args, "protocol_variant", "causal_lag1_coldstart_dense_v2"
+    )
     manifest = args.run_root / "run_manifest.json"
     worktrees, branches, commits, components = {}, {}, {}, {}
     for item in args.worktree:
@@ -181,7 +192,7 @@ def init(args):
         manifest,
         {
             "schema_version": 1,
-            "round": "R12-R3",
+            "round": round_name,
             "run_id": args.run_id,
             "run_root": str(args.run_root.resolve()),
             "created_at": now(),
@@ -194,20 +205,29 @@ def init(args):
             "commits": commits,
             "components": components,
             "gpu_assignment": GPU_MAP,
-            "tmux_sessions": {candidate: f"bwa-r12r3-{candidate}" for candidate in CANDIDATES},
+            "tmux_sessions": {candidate: f"{session_prefix}-{candidate}" for candidate in CANDIDATES},
             "shared_data": "/workspace/datasets/robofactory_multitask",
             "shared_hf_cache": "/workspace/.cache/huggingface",
             "shared_action_cache": "/workspace/bwa_runs/shared/r12_dense_causal_history_action_cache_v2.pt",
-            "shared_spatial_cache": "/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1.pt",
-            "representation_probe": str(args.run_root / "representation_sufficiency.json"),
-            "shared_recovery_cache": "/workspace/bwa_runs/shared/r12r3_on_policy_recovery_cache_v1.pt",
-            "recovery_receipt": str(args.run_root / "recovery/recovery_receipt.json"),
-            "protocol_variant": "causal_lag1_coldstart_dense_v2",
-            "formal_updates": {candidate: 60_000 for candidate in CANDIDATES},
+            "shared_spatial_cache": shared_spatial_cache,
+            "representation_probe": (
+                str(args.run_root / "representation_sufficiency.json")
+                if round_name == "R12-R3" else None
+            ),
+            "shared_recovery_cache": (
+                "/workspace/bwa_runs/shared/r12r3_on_policy_recovery_cache_v1.pt"
+                if round_name == "R12-R3" else None
+            ),
+            "recovery_receipt": (
+                str(args.run_root / "recovery/recovery_receipt.json")
+                if round_name == "R12-R3" else None
+            ),
+            "protocol_variant": protocol_variant,
+            "formal_updates": {candidate: formal_updates for candidate in CANDIDATES},
             "heartbeat_seconds": 20,
             "stale_after_seconds": 75,
             "action_affecting": True,
-            "acceptance_rules": [
+            "acceptance_rules": ([
                 "official commit/license/source map and unmodified algorithm parity",
                 "minimal component closure; no complete upstream runtime dependency",
                 "two-update train/save/strict-restore; normalization/finite/range/mask smoke",
@@ -219,7 +239,19 @@ def init(args):
                 "candidate-specific preregistered 60k fresh-update budget complete; offline control-cycle smoke is finite",
                 "mandatory five tasks x exactly 20 paired episodes using frozen W10 seeds",
                 "candidate qualifies only when valid and total successes strictly exceed W10 74/100",
-            ],
+            ] if round_name == "R12-R3" else [
+                "official commit/license/source map and unmodified algorithm parity",
+                "minimal component closure; no complete upstream runtime dependency",
+                "native 480x640 RGB enters frozen DINO before any post-encoder 6x8 compression",
+                "all 180448 train and 22475 validation timesteps are indexed without replacement omission",
+                "causal lag-1 history/cold-start and no recovery/privileged input",
+                "10k bridge alignment followed by 120k joint optimization with resume-stable receipt",
+                "strict restore, finite/range/mask, direct bridge gradients and spatial action effect",
+                "runtime contains no Stereo-CoRE/PAIR/ARCA/forced-role implementation or checkpoint",
+                "full held-out 22475-timestep offline validation is finite",
+                "mandatory five tasks x exactly 20 paired episodes using frozen W10 seeds",
+                "candidate qualifies only when valid and total successes strictly exceed W10 74/100",
+            ]),
         },
     )
     for candidate in CANDIDATES:
@@ -309,19 +341,25 @@ def runtime_alerts(state, alive, beat_age, stale_after, recent):
 def render(run_root: Path, selected):
     manifest = read_json(run_root / "run_manifest.json")
     gpus, current_epoch = gpu_rows(), time.time()
-    output = [f"BWA R12-R3 monitor | run={manifest.get('run_id', run_root.name)} | {now()}", f"root={run_root} action_affecting=true W10=74/100"]
-    probe = read_json(run_root / "representation_sufficiency.json")
-    output.append(
-        "representation_probe="
-        + ("PASSED" if probe.get("passed") else "FAILED" if probe else "PENDING")
-        + f" fused_gain={probe.get('fused_action_mse_relative_improvement', '-')} shuffle_drop={probe.get('spatial_shuffle_relative_degradation', '-')}"
-    )
-    recovery = read_json(run_root / "recovery/recovery_receipt.json")
-    output.append(
-        "recovery_cache="
-        + ("PASSED" if recovery.get("passed") else "FAILED" if recovery else "PENDING")
-        + f" rows={recovery.get('rows', '-')} task_counts={recovery.get('task_counts', '-')}"
-    )
+    round_name = manifest.get("round", "R12")
+    output = [f"BWA {round_name} monitor | run={manifest.get('run_id', run_root.name)} | {now()}", f"root={run_root} action_affecting=true W10=74/100"]
+    if round_name == "R12-R3":
+        probe = read_json(run_root / "representation_sufficiency.json")
+        output.append(
+            "representation_probe="
+            + ("PASSED" if probe.get("passed") else "FAILED" if probe else "PENDING")
+            + f" fused_gain={probe.get('fused_action_mse_relative_improvement', '-')} shuffle_drop={probe.get('spatial_shuffle_relative_degradation', '-')}"
+        )
+        recovery = read_json(run_root / "recovery/recovery_receipt.json")
+        output.append(
+            "recovery_cache="
+            + ("PASSED" if recovery.get("passed") else "FAILED" if recovery else "PENDING")
+            + f" rows={recovery.get('rows', '-')} task_counts={recovery.get('task_counts', '-')}"
+        )
+    else:
+        output.append(
+            f"full_data={manifest.get('protocol_variant', '-')} cache={manifest.get('shared_spatial_cache', '-')}"
+        )
     round_complete = True
     for candidate in selected:
         root = root_for(run_root, candidate)
@@ -400,6 +438,11 @@ def main():
     init_parser = sub.add_parser("init")
     init_parser.add_argument("--run-root", type=Path, required=True)
     init_parser.add_argument("--run-id", required=True)
+    init_parser.add_argument("--round", choices=("R12-R3", "R12-R4"), default="R12-R3")
+    init_parser.add_argument("--session-prefix", default="bwa-r12r3")
+    init_parser.add_argument("--formal-updates", type=int, default=60_000)
+    init_parser.add_argument("--shared-spatial-cache", default="/workspace/bwa_runs/shared/r12r3_dinov3_spatial_cache_v1.pt")
+    init_parser.add_argument("--protocol-variant", default="causal_lag1_coldstart_dense_v2")
     init_parser.add_argument("--parent-commit", required=True)
     init_parser.add_argument("--belief-checkpoint", required=True)
     init_parser.add_argument("--belief-checkpoint-sha256", required=True)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build non-overwriting, per-episode full-data DINOv3 feature shards."""
+"""Build non-overwriting full-timestep features from native 480x640 RGB."""
 from __future__ import annotations
 
 import argparse
@@ -43,20 +43,34 @@ def atomic_json(path: Path, payload: dict) -> None:
     os.replace(temporary, path)
 
 
-def atomic_torch_save(path: Path, payload: dict) -> None:
+def atomic_hdf5_save(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.parent / f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp"
-    torch.save(payload, temporary)
+    with h5py.File(temporary, "w") as handle:
+        handle.attrs["schema_version"] = int(payload["schema_version"])
+        handle.attrs["round"] = str(payload["round"])
+        handle.attrs["metadata_json"] = json.dumps(
+            payload["metadata"], sort_keys=True
+        )
+        for key, value in payload.items():
+            if key in ("schema_version", "round", "metadata"):
+                continue
+            array = value.detach().cpu().numpy()
+            handle.create_dataset(
+                key,
+                data=array,
+                chunks=(True if array.ndim > 1 else None),
+            )
+        handle.flush()
     os.replace(temporary, path)
 
 
 def patch_means(image: np.ndarray, grid: int = 4) -> np.ndarray:
-    height, width, channels = image.shape
-    if channels != 3 or height % grid or width % grid:
-        raise ValueError("full-episode RGB does not satisfy the 4x4 belief grid")
-    values = image.reshape(grid, height // grid, grid, width // grid, 3)
+    if tuple(image.shape) != (480, 640, 3):
+        raise ValueError(f"fixed RGB shape differs: {tuple(image.shape)}")
+    value = image.reshape(grid, 480 // grid, grid, 640 // grid, 3)
     return (
-        values.mean(axis=(1, 3), dtype=np.float32).reshape(grid * grid, 3)
+        value.mean(axis=(1, 3), dtype=np.float32).reshape(grid * grid, 3)
         / 127.5
         - 1.0
     )
@@ -66,9 +80,11 @@ def load_episode_rows(data_root: Path) -> list[dict]:
     rows = []
     for task in TASKS:
         manifest_path = data_root / task / "training_manifest.json"
-        manifest_bytes = manifest_path.read_bytes()
-        manifest = json.loads(manifest_bytes)
+        raw = manifest_path.read_bytes()
+        manifest = json.loads(raw)
         for episode in manifest["episodes"]:
+            if episode["split"] not in ("train", "validation"):
+                continue
             rows.append(
                 {
                     "task": task,
@@ -76,8 +92,8 @@ def load_episode_rows(data_root: Path) -> list[dict]:
                     "seed": int(episode["seed"]),
                     "steps": int(episode["steps"]),
                     "hdf5_path": str(data_root / task / episode["hdf5_path"]),
-                    "hdf5_sha256": episode["hdf5_sha256"],
-                    "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                    "hdf5_sha256": str(episode["hdf5_sha256"]),
+                    "manifest_sha256": hashlib.sha256(raw).hexdigest(),
                     "episode_index": int(episode["episode_index"]),
                 }
             )
@@ -97,6 +113,8 @@ def encode_episode(args, encoder, row: dict, output: Path) -> dict:
     with h5py.File(path, "r") as handle:
         data = handle["data"]
         agents = sorted(data["observation/agents"].keys())
+        if not 1 <= len(agents) <= 4:
+            raise ValueError(f"unsupported agent count at {path}")
         views = ["global"] + [f"agent_{index}" for index in range(len(agents))]
         agent_mask = torch.arange(4) < len(agents)
         for agent_index, agent in enumerate(agents):
@@ -116,7 +134,7 @@ def encode_episode(args, encoder, row: dict, output: Path) -> dict:
                 for view_index, view in enumerate(views):
                     image = np.asarray(data[f"observation/images/{view}"][frame])
                     if tuple(image.shape) != (480, 640, 3):
-                        raise ValueError(f"fixed RGB shape differs at {path}:{frame}")
+                        raise ValueError(f"native RGB shape differs at {path}:{frame}")
                     visual[frame, :, view_index * 3 : (view_index + 1) * 3] = (
                         torch.from_numpy(patch_means(image)).to(torch.float16)
                     )
@@ -130,6 +148,8 @@ def encode_episode(args, encoder, row: dict, output: Path) -> dict:
                 dtype=torch.bfloat16,
                 enabled=str(args.device).startswith("cuda"),
             ):
+                # The encoder first sees all 480x640 pixels and emits its native
+                # 30x40 patch grid.  forward_spatial_grid pools only afterwards.
                 tokens = encoder.encoder.forward_spatial_grid(
                     images, grid_height=6, grid_width=8
                 ).spatial_tokens
@@ -139,7 +159,7 @@ def encode_episode(args, encoder, row: dict, output: Path) -> dict:
             atomic_json(
                 args.heartbeat,
                 {
-                    "producer": "prepare_r12_full_episode_cache",
+                    "producer": "prepare_r12_native_rgb_full_cache",
                     "rank": args.rank,
                     "task": row["task"],
                     "split": row["split"],
@@ -164,7 +184,7 @@ def encode_episode(args, encoder, row: dict, output: Path) -> dict:
             "hdf5_sha256": row["hdf5_sha256"],
             "manifest_sha256": row["manifest_sha256"],
             "observation": locked_r12_full_episode_observation(),
-            "legal_inputs": "all current fixed-view RGB plus causal qpos/executed-action history",
+            "legal_inputs": "native 480x640 current fixed-view RGB plus causal qpos/executed-action history",
             "forbidden_inputs": "future RGB, task/robot ID at policy input, simulator state, W10 hidden state",
         },
         "visual": visual,
@@ -176,7 +196,34 @@ def encode_episode(args, encoder, row: dict, output: Path) -> dict:
         "spatial_tokens": spatial,
         "spatial_view_mask": view_mask.clone(),
     }
-    atomic_torch_save(output, payload)
+    atomic_hdf5_save(output, payload)
+    return {
+        "path": str(output.resolve()),
+        "sha256": sha256(output),
+        "size_bytes": output.stat().st_size,
+        **{
+            key: row[key]
+            for key in (
+                "task",
+                "split",
+                "seed",
+                "steps",
+                "hdf5_sha256",
+                "episode_index",
+            )
+        },
+    }
+
+
+def existing_record(output: Path, row: dict) -> dict:
+    with h5py.File(output, "r") as saved:
+        metadata = json.loads(str(saved.attrs["metadata_json"]))
+    if (
+        metadata.get("protocol_variant") != FULL_EPISODE_PROTOCOL
+        or metadata.get("hdf5_sha256") != row["hdf5_sha256"]
+        or int(metadata.get("steps", -1)) != int(row["steps"])
+    ):
+        raise ValueError(f"existing full-episode output differs: {output}")
     return {
         "path": str(output.resolve()),
         "sha256": sha256(output),
@@ -197,12 +244,10 @@ def encode_episode(args, encoder, row: dict, output: Path) -> dict:
 
 def run_shard(args) -> None:
     if not 0 <= args.rank < args.world_size:
-        raise ValueError("rank must be in [0, world_size)")
+        raise ValueError("rank must be in [0, world-size)")
     data_root = args.data_root.resolve(strict=True)
     rows = load_episode_rows(data_root)
-    assigned = [
-        row for index, row in enumerate(rows) if index % args.world_size == args.rank
-    ]
+    assigned = [row for index, row in enumerate(rows) if index % args.world_size == args.rank]
     receipt_path = args.output_root / f"rank_{args.rank:02d}_index.json"
     if receipt_path.is_file():
         receipt = json.loads(receipt_path.read_text())
@@ -210,16 +255,10 @@ def run_shard(args) -> None:
             receipt.get("protocol_variant") != FULL_EPISODE_PROTOCOL
             or receipt.get("rank") != args.rank
             or receipt.get("world_size") != args.world_size
-            or not all(
-                Path(row["path"]).is_file() for row in receipt.get("episodes", [])
-            )
+            or not all(Path(row["path"]).is_file() for row in receipt.get("episodes", []))
         ):
             raise ValueError("existing full-episode rank receipt differs")
-        print(
-            json.dumps(
-                {"reused": str(receipt_path), "episodes": len(receipt["episodes"])}
-            )
-        )
+        print(json.dumps({"reused": str(receipt_path), "episodes": len(receipt["episodes"])}))
         return
     observation = locked_r12_full_episode_observation()
     encoder = R12SpatialObservationEncoder(
@@ -234,40 +273,17 @@ def run_shard(args) -> None:
             / "episodes"
             / row["split"]
             / row["task"]
-            / f"episode_{row['episode_index']:06d}_seed_{row['seed']}.pt"
+            / f"episode_{row['episode_index']:06d}_seed_{row['seed']}.hdf5"
         )
-        if output.exists():
-            saved = torch.load(output, map_location="cpu", weights_only=False)
-            metadata = saved.get("metadata", {})
-            if (
-                metadata.get("protocol_variant") != FULL_EPISODE_PROTOCOL
-                or metadata.get("hdf5_sha256") != row["hdf5_sha256"]
-            ):
-                raise ValueError(f"existing full-episode output differs: {output}")
-            record = {
-                "path": str(output.resolve()),
-                "sha256": sha256(output),
-                "size_bytes": output.stat().st_size,
-                **{
-                    key: row[key]
-                    for key in (
-                        "task",
-                        "split",
-                        "seed",
-                        "steps",
-                        "hdf5_sha256",
-                        "episode_index",
-                    )
-                },
-            }
-        else:
-            record = encode_episode(args, encoder, row, output)
+        record = existing_record(output, row) if output.exists() else encode_episode(
+            args, encoder, row, output
+        )
         completed.append(record)
         atomic_json(
             args.state,
             {
                 "state": "PREPARING",
-                "stage": "full_episode_spatial_cache",
+                "stage": "native_rgb_post_dino_feature_cache",
                 "rank": args.rank,
                 "completed_episodes": index,
                 "total_episodes": len(assigned),
@@ -291,7 +307,7 @@ def run_shard(args) -> None:
         args.state,
         {
             "state": "PASSED",
-            "stage": "full_episode_shard_complete",
+            "stage": "native_rgb_post_dino_shard_complete",
             "receipt": str(receipt_path),
             "updated_at": now(),
         },
@@ -308,7 +324,7 @@ def run_index(args) -> None:
         atomic_json(
             args.heartbeat,
             {
-                "producer": "prepare_r12_full_episode_index",
+                "producer": "prepare_r12_native_rgb_full_index",
                 "ready": sum(path.is_file() for path in receipts),
                 "total": len(receipts),
                 "updated_at": now(),
@@ -317,9 +333,9 @@ def run_index(args) -> None:
         time.sleep(10)
     payloads = [json.loads(path.read_text()) for path in receipts]
     if any(
-        item.get("protocol_variant") != FULL_EPISODE_PROTOCOL
-        or item.get("world_size") != args.world_size
-        for item in payloads
+        payload.get("protocol_variant") != FULL_EPISODE_PROTOCOL
+        or payload.get("world_size") != args.world_size
+        for payload in payloads
     ):
         raise ValueError("full-episode rank receipt identity differs")
     episodes = [row for payload in payloads for row in payload["episodes"]]
@@ -346,6 +362,7 @@ def run_index(args) -> None:
         "protocol_variant": FULL_EPISODE_PROTOCOL,
         "world_size": args.world_size,
         "observation": locked_r12_full_episode_observation(),
+        "cache_semantics": "native_480x640_rgb_encoded_before_post_dino_6x8_pooling",
         "episodes": sorted(
             episodes,
             key=lambda row: (row["split"], row["task"], row["episode_index"]),
@@ -359,7 +376,7 @@ def run_index(args) -> None:
         args.state,
         {
             "state": "PASSED",
-            "stage": "full_episode_index_complete",
+            "stage": "native_rgb_full_index_complete",
             "index": str(args.index),
             "episodes": len(episodes),
             "step_counts": counts,
@@ -380,8 +397,8 @@ def main() -> None:
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--vision-artifact", type=Path)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--frame-batch-size", type=int, default=4)
-    parser.add_argument("--image-batch-size", type=int, default=20)
+    parser.add_argument("--frame-batch-size", type=int, default=1)
+    parser.add_argument("--image-batch-size", type=int, default=1)
     parser.add_argument("--index", type=Path)
     args = parser.parse_args()
     if args.world_size < 1 or args.frame_batch_size < 1 or args.image_batch_size < 1:

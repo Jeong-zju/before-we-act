@@ -246,14 +246,20 @@ def test_r12_r3_spatial_observation_contract_is_hash_locked():
     assert contract["fusion"] == "zero_gated_cross_attention_into_w11_tokens"
 
 
-def test_r12_full_episode_observation_preserves_aspect_ratio_without_more_pixels():
+def test_r12_full_episode_observation_encodes_native_rgb_before_compression():
     from before_we_act.spatial_observation import locked_r12_full_episode_observation
 
     observation = locked_r12_full_episode_observation()
-    assert observation["input_height"] == 192
-    assert observation["input_width"] == 256
-    assert observation["input_height"] * observation["input_width"] < 224 * 224
+    assert observation["input_height"] == 480
+    assert observation["input_width"] == 640
+    assert observation["require_native_input_shape"] is True
+    assert observation["encoder_patch_grid"] == [30, 40]
     assert observation["spatial_grid"] == [6, 8]
+    assert observation["compression_stage"] == (
+        "adaptive_average_after_full_resolution_dinov3"
+    )
+    assert "480x640" in observation["primary_input"]
+    assert observation["supplemental_input"] == "frozen_team_belief_state"
     assert "no_scalar_gate" in observation["fusion"]
 
 

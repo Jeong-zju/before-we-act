@@ -42,26 +42,33 @@ def locked_r12_spatial_observation() -> dict[str, object]:
 
 
 def locked_r12_full_episode_observation() -> dict[str, object]:
-    """Full-data repair contract that preserves the fixed camera aspect ratio.
+    """Full-data contract with native RGB encoding before bounded compression.
 
-    A 192x256 DINO input has the same pixel budget as the failed 224-square
-    adapter while retaining the native 3:4 geometry.  Its 12x16 patch map is
-    pooled to 6x8 rather than the previous 4x4 grid.
+    The source image stays at the environment's native 480x640 resolution.
+    DINO therefore sees and emits a 30x40 patch grid.  Adaptive pooling to 6x8
+    happens only after the frozen backbone; the image encoder never receives a
+    lower-resolution surrogate.  TeamBeliefState is supplemental context.
     """
 
     return {
-        "mode": "w11_plus_current_dinov3_rectangular_6x8_v1",
+        "mode": "native_480x640_dinov3_30x40_to_6x8_plus_w11_v2",
         "encoder_name": "dinov3_vitb16_lvd",
         "model_id": "facebook/dinov3-vitb16-pretrain-lvd1689m",
         "weights_sha256": "9a21ac3df0c63839d62612dda6f454d816c25611cc7a52966ed5a5a94921dc8b",
         "config_sha256": "69256c4c142d59b0c0ccf5746542d9f2415f6c7db03bd7835a1f7b3afedb77fe",
         "preprocess": DINOV3_RECTANGULAR_PREPROCESS_ID,
-        "input_height": 192,
-        "input_width": 256,
+        "input_height": 480,
+        "input_width": 640,
+        "require_native_input_shape": True,
         "feature_dim": 768,
+        "encoder_patch_grid": [30, 40],
         "spatial_grid": [6, 8],
         "max_views": 5,
         "history_frames": 1,
+        "compression_stage": "adaptive_average_after_full_resolution_dinov3",
+        "primary_input": "all_current_fixed_view_rgb_uint8_480x640",
+        "supplemental_input": "frozen_team_belief_state",
+        "training_cache_equivalence": "frozen_dinov3_post_encoder_6x8_tokens",
         "fusion": "direct_candidate_conditioning_no_scalar_gate",
         "fusion_heads": 4,
     }
@@ -110,6 +117,15 @@ class R12SpatialObservationEncoder(nn.Module):
         )
         self.max_views = int(observation["max_views"])
         self.feature_dim = int(observation["feature_dim"])
+        self.require_native_input_shape = bool(
+            observation.get("require_native_input_shape", False)
+        )
+        self.input_height = int(
+            observation.get("input_height", self.encoder.config.image_height)
+        )
+        self.input_width = int(
+            observation.get("input_width", self.encoder.config.image_width)
+        )
 
     def train(self, mode: bool = True) -> "R12SpatialObservationEncoder":
         del mode
@@ -125,6 +141,14 @@ class R12SpatialObservationEncoder(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if images.ndim != 5 or images.shape[1] != self.max_views or images.shape[2] != 3:
             raise ValueError("R12 raw fixed-view RGB must be [batch,view,3,H,W]")
+        if self.require_native_input_shape and tuple(images.shape[-2:]) != (
+            self.input_height,
+            self.input_width,
+        ):
+            raise ValueError(
+                "R12-R4 requires native full-resolution fixed-view RGB before "
+                "visual encoding"
+            )
         if tuple(view_mask.shape) != tuple(images.shape[:2]):
             raise ValueError("R12 raw fixed-view mask shape differs")
         mask = view_mask.bool()
