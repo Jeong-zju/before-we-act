@@ -78,6 +78,7 @@ training:
   recovery_cache: ""
   task_film_hidden_dim: 192
   task_film_scale: 0.25
+  agent_slot_scale: 0.25
 deployment:
   specialist_tasks: [three_robots_stack_cube]
   protected_tasks: [lift_barrier, camera_alignment, long_pipeline_delivery, take_photo]
