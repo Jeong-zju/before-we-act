@@ -36,7 +36,7 @@ def main() -> None:
     )
     result = {
         "schema_version": 1,
-        "round": "R11",
+        "round": lock.get("round", "R11"),
         "candidate_id": lock["candidate_id"],
         "official_repo": lock["official_repo"],
         "declared_commit": lock["upstream_commit_sha"],

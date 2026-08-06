@@ -246,7 +246,7 @@ def acceptance_summary(acceptance, terminal_state):
         status = "FAILED_NO_RESULT" if terminal_state == "FAILED" else "PENDING"
     return {
         "status": status,
-        "progress": f"{len(checks)}/9",
+        "progress": f"{len(checks)}/{len(acceptance.get('acceptance_rules', {}).get('hard_gates', checks))}",
         "passed_count": passed_count,
         "failed": failed,
         "not_evaluated": acceptance.get("not_evaluated", []),
@@ -338,7 +338,7 @@ def render(run_root: Path, selected):
                     f"source={acceptance_view['source']}"
                 ),
                 (
-                    f"  representation_screen_score={acceptance.get('representation_screen_score', '-')} "
+                    f"  representation_screen_score={acceptance.get('world_screen_score', acceptance.get('representation_screen_score', '-'))} "
                     f"Gate20={acceptance.get('gate20', 'N/A pending exact action hash')}"
                 ),
             ]

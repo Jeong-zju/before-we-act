@@ -3727,6 +3727,12 @@ R13 冻结 W12 动作生成器，仅替换 `world_model/core`，读取 W11 belie
 
 R13 仍要求来源/parity、future不进入input、action hash完全相同；`pair accuracy 65%`、`Spearman 0.35`、`AUROC 0.75`、`ECE 0.10`、oracle retention和各类 shuffle阈值全部改为可选诊断。W13 按冻结 `world_screen_score` 在有效候选中选最高者，不设研究阈值；四路均无法稳定 train/restore 时 `no winner/no merge`，不能让 AI 自写一个 world model 填位。
 
+#### 10.16.1 R13 执行前冻结协议（2026-08-06）
+
+R13 的共同父分支选择为 `feat/model-improvements`：`bwa/main` 当前只含 W11，而该分支已经包含正式晋级的 W12 动作生成器，起点为 `8b90d9ef411450afc1b476c230ee3de45b934709`；四候选必须从后续同一个 R13 共同基础 commit 分叉。冻结 W11 checkpoint 为 `/workspace/bwa_runs/shared/w11/checkpoint_010000.pt`（SHA256 `a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49`），冻结 W12 checkpoint 为 `/workspace/bwa_runs/shared/w12/checkpoint_130000.pt`（SHA256 `4c85dcd30058912f4be375af04b65b0f39b365d885883eb29934552b14020e41`）。共同数据来自 `/workspace/bwa_runs/shared/r12r4_native_full_cache_v2/index.json`，R13 只物化 W11 belief、W12 `ActionProposalBatch` 和分离存储的未来监督目标；`future_targets_are_model_inputs=false` 是硬门。
+
+训练前选择规则已冻结于 `experiments/before_we_act/r13/selection_rule.json`：五任务平衡抽取 4096 train / 1024 validation windows，预测 horizons 为 `1/5/15`，四路统一 10000 updates、batch 64、seed `20260806`、BF16；`world_screen_score = 0.50*latent_gain + 0.20*qpos_gain + 0.20*progress_r2 + 0.10*throughput_score`，不设质量阈值。失败类在现有成功 demonstration 中不可识别，因此 AUROC/ECE 明确记为 unavailable，不得据此宣称 failure calibration。protected tasks 的缓存 action 是 off-path W12 specialist counterfactual；实际部署动作仍保持 W12 的显式 Stack specialist / exact-W10 fallback routing，并由独立 action/checkpoint hash 验收证明世界模型不进入 planner、rerank 或 actuator。
+
 ### 10.17 R14：四路 World-Guided Decision 组件移植（action-affecting，强制 Gate20）
 
 R14 冻结 W11/W12/W13，只替换或新增 `planner/decision_core`。所有路都可能改变最终动作，因此必须五任务各跑 20 回合；异常、NaN或超时 fail-closed 回 W12 base，不调用 CoRE。

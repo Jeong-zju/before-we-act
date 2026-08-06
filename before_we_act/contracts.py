@@ -76,3 +76,54 @@ class ActionProposalBatch:
         if bool((self.actions.masked_select(absent) != 0).any()):
             raise ValueError("absent-agent action must be exactly zero")
         return self
+
+
+@dataclass(frozen=True)
+class ConsequencePrediction:
+    """Off-path R13 consequence prediction for a candidate action batch.
+
+    The leading axes are always ``[batch, proposal, horizon]``.  This object
+    intentionally has no action-selection or actuator field: R13 may describe
+    candidate consequences, but it cannot change the frozen W12 action path.
+    """
+
+    latent_by_horizon: torch.Tensor
+    qpos_delta_by_horizon: torch.Tensor
+    progress_by_horizon: torch.Tensor
+    failure_logits_by_horizon: torch.Tensor
+    uncertainty_by_horizon: torch.Tensor
+    valid_mask: torch.Tensor
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
+
+    def validate(self) -> "ConsequencePrediction":
+        if self.latent_by_horizon.ndim != 5:
+            raise ValueError(
+                "latent consequence must be [batch,proposal,horizon,token,dim]"
+            )
+        batch, proposals, horizons = self.latent_by_horizon.shape[:3]
+        if self.qpos_delta_by_horizon.ndim != 5:
+            raise ValueError(
+                "qpos consequence must be [batch,proposal,horizon,agent,qpos]"
+            )
+        if self.qpos_delta_by_horizon.shape[:3] != (batch, proposals, horizons):
+            raise ValueError("qpos consequence leading axes differ")
+        scalar_shape = (batch, proposals, horizons)
+        for name, value in (
+            ("progress", self.progress_by_horizon),
+            ("failure", self.failure_logits_by_horizon),
+            ("uncertainty", self.uncertainty_by_horizon),
+        ):
+            if value.shape != scalar_shape:
+                raise ValueError(f"{name} consequence axes differ")
+        if self.valid_mask.shape != (batch, proposals):
+            raise ValueError("consequence valid mask must be [batch,proposal]")
+        values = (
+            self.latent_by_horizon,
+            self.qpos_delta_by_horizon,
+            self.progress_by_horizon,
+            self.failure_logits_by_horizon,
+            self.uncertainty_by_horizon,
+        )
+        if not all(bool(torch.isfinite(value).all()) for value in values):
+            raise ValueError("consequence prediction contains non-finite values")
+        return self
