@@ -131,7 +131,7 @@ print({"p0":"before_we_act/action_generator/openpi_flow.py","p1":"before_we_act/
 PY
 )"
 run_child PREPARING tests pytest "candidate and common evolution tests" "$TARGET_UPDATES" \
-  "$PYTHON" -m pytest -q "$FE_ROOT/tests/before_we_act/test_r12_$CANDIDATE.py" "$FE_ROOT/tests/before_we_act/test_r12_full_episode_windows.py"
+  "$PYTHON" -m pytest -q "$FE_ROOT/tests/before_we_act/test_r12_$CANDIDATE.py" "$FE_ROOT/tests/before_we_act/test_r12_full_episode_windows.py" "$FE_ROOT/tests/before_we_act/test_r12_common.py"
 run_child PREPARING core_free audit_r12_core_free.py "core-free specialist runtime audit" "$TARGET_UPDATES" \
   "$PYTHON" "$FE_ROOT/scripts/before_we_act/audit_r12_core_free.py" --round R12-E1 --project-root "$FE_ROOT" --candidate-module "$MODULE" --output "$RECEIPTS/core_free.json"
 

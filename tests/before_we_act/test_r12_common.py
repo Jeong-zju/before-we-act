@@ -366,8 +366,8 @@ def test_r12_evolution_runtime_and_launcher_use_e1_identity():
 
 
 def test_r12_evolution_specialist_evaluator_is_core_free():
-    evaluator = (
-        ROOT / "before_we_act/evaluate_action_generator_evolution.py"
+    evaluator = Path(
+        "before_we_act/evaluate_action_generator_evolution.py"
     ).read_text(encoding="utf-8")
     assert "stereo_core" not in evaluator
     assert "isolated exact-W10" in evaluator
