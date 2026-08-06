@@ -93,6 +93,12 @@ done
 if [[ ! -f "$FULL_INDEX" ]]; then
   for index in 0 1 2 3; do
     session="bwa-r12r4-cache-rank$index"
+    state="$FULL_CACHE_ROOT/rank_${index}_state.json"
+    receipt="$(jq -r 'select(.state == "PASSED" and .stage == "native_rgb_post_dino_shard_complete") | .receipt // empty' "$state" 2>/dev/null || true)"
+    if [[ -n "$receipt" && -f "$receipt" ]]; then
+      printf 'reuse completed immutable cache shard rank=%s receipt=%s\n' "$index" "$receipt"
+      continue
+    fi
     if ! tmux has-session -t "$session" 2>/dev/null; then
       tmux new-session -d -s "$session" -n cache \
         "cd '$FE_ROOT' && exec env CUDA_VISIBLE_DEVICES='$index' PYTHONPATH='$FE_ROOT' '$PYTHON' '$FE_ROOT/scripts/before_we_act/prepare_r12_full_episode_cache.py' --mode shard --rank '$index' --world-size 4 --data-root '$DATA_ROOT' --vision-artifact '$VISION_ARTIFACT' --output-root '$FULL_CACHE_ROOT' --state '$FULL_CACHE_ROOT/rank_${index}_state.json' --heartbeat '$FULL_CACHE_ROOT/rank_${index}_heartbeat.json' --frame-batch-size 1 --image-batch-size 5 --device cuda:0"
