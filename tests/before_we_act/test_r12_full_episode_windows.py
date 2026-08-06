@@ -283,6 +283,31 @@ def test_r4_history_augmentation_never_modifies_recovery_source():
     assert metrics["recovery_history_modified_fraction"] == 0.0
 
 
+def test_r4_rng_checkpoint_restores_python_numpy_and_torch():
+    import random
+
+    import numpy as np
+
+    from before_we_act.train_action_generator_r4 import (
+        capture_rng_state,
+        restore_rng_state,
+    )
+
+    random.seed(17)
+    np.random.seed(18)
+    torch.manual_seed(19)
+    state = capture_rng_state()
+    expected = (random.random(), np.random.rand(), torch.rand(3))
+    random.seed(117)
+    np.random.seed(118)
+    torch.manual_seed(119)
+    restore_rng_state(state)
+    actual = (random.random(), np.random.rand(), torch.rand(3))
+    assert actual[0] == expected[0]
+    assert actual[1] == expected[1]
+    assert torch.equal(actual[2], expected[2])
+
+
 def test_sequential_full_episode_sampler_visits_every_row_once(tmp_path):
     rows = [
         _episode(tmp_path / f"sequential_{task}.hdf5", task, seed=400 + index)
