@@ -1,0 +1,44 @@
+schema_version: 1
+round: R13
+candidate_id: p0
+parent_commit: 075d64acc98db931367c98375c0c635f88aa5671
+belief_checkpoint_sha256: a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49
+action_checkpoint_sha256: 4c85dcd30058912f4be375af04b65b0f39b365d885883eb29934552b14020e41
+component:
+  kind: tdmpc2_latent_dynamics
+  embed_dim: 96
+  mlp_dim: 384
+  depth: 2
+  num_q: 2
+  simnorm_dim: 8
+world:
+  belief_dim: 96
+  belief_tokens: 16
+  max_agents: 4
+  action_horizon: 100
+  action_dim: 8
+  action_prefix_steps: 16
+  prediction_horizons: [1, 5, 15]
+  target_tokens: 1
+  future_inputs_forbidden: true
+  planner_enabled: false
+  rerank_enabled: false
+training:
+  batch_size: 64
+  updates: 10000
+  seed: 20260806
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  precision: bfloat16
+  checkpoint_every: 1000
+  progress_every: 20
+  grad_clip: 1.0
+loss_weights: {latent: 0.60, qpos: 0.20, progress: 0.15, failure: 0.05}
+selection_rule:
+  latent_gain: 0.50
+  qpos_gain: 0.20
+  progress_r2: 0.20
+  throughput: 0.10
+  throughput_saturation_windows_per_second: 1024
+  minimum_score: null
+  winner_rule: highest_world_screen_score_among_valid_candidates

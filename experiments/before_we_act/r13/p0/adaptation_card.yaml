@@ -1,0 +1,11 @@
+schema_version: 1
+round: R13
+candidate_id: p0
+source_component: TD-MPC2 implicit WorldModel
+absorbed_idea: encode belief summaries and apply exact latent dynamics, reward and ensemble Q heads conditioned on the W12 candidate action
+legal_input_mapping: W11 belief tokens become the state observation; pooled W12 action prefix becomes the TD-MPC2 action vector
+local_adapter: before_we_act.world_model.tdmpc2_world.TDMPC2WorldCore
+off_path_boundary: consequence output has no action field and planner/rerank remain disabled
+compatibility_edits: [replace one absolute common package import with the vendored relative package]
+algorithm_changed: false
+forbidden_inputs: [future_latent, future_qpos, future_progress, future_failure, simulator_state]
