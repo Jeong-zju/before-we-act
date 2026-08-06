@@ -3565,6 +3565,61 @@ P2 的 learned plan proposal 是本轮唯一额外 action-mechanism 变化：训
 
 R4 工程 hard gates 增加：full timestep count/hash、episode shard无重复无遗漏、原始 `480×640` 输入与 `30×40→6×8` post-encoder 压缩 identity、cache/online 等价、所有 query/projection 参数在 Stage A 有 finite nonzero gradient、spatial shuffle使正式 policy action显著变化、R3 recovery cache未进入 training identity、source-aware history exemption、两阶段 update/optimizer receipt。原 source/license/minimal patch/upstream parity/core-free/causal lag-1/cold-start/finite-range-mask gate 继续适用。质量门完全不变：每路必须跑完同一 `5×20`，总成功数严格大于 W10 `74/100` 才能成为 W12；R11+R12 平均值也据此才会严格高于 W10。若 R4 仍全失败，则根据完整 Gate20 的 task/stage failure 与 attribution 进入新的 R12 修复轮，不进入 R13、不降低标准。
 
+#### 10.15.4 R12-E1：operator 覆盖后的持续演进与无回归 Stack 专家（2026-08-06，运行中）
+
+这里的 `E1` 是 **R12 内部 Evolution round 1**，不是路线图阶段 R4。此前脚本/缓存中的 `R12-R4` 只表示 R12 的第 4 次修复 recipe；为避免与路线图阶段号混淆，从本轮起活动实验统一命名为 `R12-E1/E2/...`，阶段身份始终是 R12。已经生成的 `/workspace/bwa_runs/shared/r12r4_native_full_cache_v2` 只是按内容寻址复用的高分辨率特征缓存，路径保留是为了不重复消耗 GPU/磁盘，不代表退回阶段 R4。
+
+operator 已授权推翻预定义路线并持续演进，唯一终止目标是综合闭环成功率超过 W10，同时再次明确“策略以高分辨率全量图像为主输入，压缩只能发生在完整图像编码之后，其他信息只能补充”。据此冻结以下 E1 决策：
+
+1. R11 off-path 与 W10 动作 hash exact，Gate20 继承 `74/100`；因此 `(R11+R12)/2 > W10` 数学上等价于 R12 必须严格大于 `74/100`，验收线不降低。
+2. W10 Gate20 的 Lift/Camera/LPD/Photo 已是 `20/14/20/20`，而 Stack 为 `0/20`。E1 部署按显式 task ID 路由：四个受保护任务逐元素调用未修改的 W10，只有 Stack 调用新专家。这样新专家不能把已有 74 个成功拖低，只要获得至少 1 个 Stack 成功即可达到 `75/100`。
+3. 专家在线读取全部当前 fixed-view `480×640 uint8 RGB`，冻结 DINOv3-B/16 先产生原生 `30×40` patch grid，之后才 pool 为 `6×8`；W11 `TeamBeliefState` 与 task ID 仅为补充。task ID 通过零初始化、幅度上限 `0.25` 的 FiLM 调制 37 个 image/belief condition token，不替代图像。
+4. 五任务全量 `180,448` 个 train timestep 均保留且每任务每 update 至少一行；Stack/Camera 只获得确定性加权，不删除其他任务。P0/P3 rows 为 `1/2/6/1/1`，P1 为 `1/1/8/1/1`，P2 为 `1/3/6/1/1`。训练仍为 `10k` bridge+task-FiLM 对齐和 `120k` joint，共 `130k`。
+5. 四个 protected task 的 formal paired 结果由冻结 frozen100 前 20 个相同 seed 物化，并要求 row-by-row 与 W10 exact；这是 exact fallback 的等价复用，不冒充新 rollout。每个候选必须真实跑 Stack `20` 回合；最终优胜模型还要直接运行 W10 fallback canary，验证路由实现。
+
+四路独立分支与启动 commit 为：
+
+| 候选 / GPU | E1 分支 | 启动 commit | Stack/Camera 每 update 行数 | 专家机制 |
+|---|---|---|---|---|
+| P0 / 0 | `bwa/r12e1-p0-openpi-stack-specialist` | `3b42c3b824dcd7352247ad55f3bfa78d1edc66f1` | `6/2` | OpenPI continuous flow expert |
+| P1 / 1 | `bwa/r12e1-p1-smolvla-stack-specialist` | `1fa6dec2d52112262e594341ea4e3328761bf923` | `8/1` | SmolVLA continuous flow expert |
+| P2 / 2 | `bwa/r12e1-p2-act-stack-specialist` | `0a3a6d7555f606f9358fd5991771917b0f8e136e` | `6/3` | ACT continuous L1/CVAE chunk expert |
+| P3 / 3 | `bwa/r12e1-p3-diffusion-stack-specialist` | `74bb21289aaf411a0466db5ae84fdbc856ee8ed1` | `6/2` | Diffusion Policy Transformer |
+
+公共工程分支为 `feat/model-improvements@00c904fbc6b4761cd5a3d13e21f957b6b11d6a8e`。本地执行 `py_compile`、Bash `-n`、四个候选配置解析和专属测试均通过；候选测试分别为 P0 `12/12`、P1 `12/12`、P2 `13/13`、P3 `12/12`，公共 runtime/full-data 回归为 `34/34`。所有提交已推送。远程 run root 为 `/workspace/bwa_runs/r12e1-20260806-stack-specialists`，tmux 为 `bwa-r12e1-p0..p3`，GPU 固定为 `0..3`，状态/心跳/日志/checkpoint 分别位于 `candidates/pN/{status.json,heartbeat.json,logs/,train/formal/checkpoints/}`。
+
+截至 UTC `2026-08-06T09:30:11Z`，四路均处于 `PREPARING/cache_wait` 且真实心跳正常、无 OOM/NaN/Traceback/进程消失；完整索引尚未出现，cache rank0/rank2 已 PASSED，rank1 为 `107/169`、rank3 为 `107/168`。pipeline 会等待 index 和独占 GPU 后依次执行专属测试、core-free audit、2-update train/save/strict-restore、130k formal、22,475 timestep offline、Stack Gate20 和 E1 acceptance，不会与 cache/诊断争卡。
+
+W10 Stack 阶段诊断使用两个非 Gate20 held-out 数据 seed `3031/3035`。已完成的 native 路由在 3031 到达 A/B grasp、但未抓 C、未进入 place/stack；3035 未到达任何 grasp；forced-role-0 只在 3031 抓到 A。其余 fixed role 仍在运行。该证据表明 failure 在阶段覆盖/任务条件/闭环恢复，而不是把相同 recipe 机械增加 update 就能解释。
+
+为给 full cache 和四路 checkpoint 留出空间，已在确认无代码/进程依赖后只删除五个已结束旧轮次的 `preflight/checkpoints`：R12 formal-r2 P1/P2、formal-r3 P1/P2、formal-r4 P2，共约 `46.6 GiB`；日志、状态、验收和正式训练输出均保留，磁盘空闲由约 `151 GiB` 增至 `193 GiB`。这些预检权重不可直接恢复，但可由对应已推送 commit 重建；数据集、HF cache、W10/W11、R3 warm-start 和当前 full cache 均未删除。
+
+可复制命令：
+
+```bash
+# 一键部署/训练（四路；可将 all 改成 p0/p1/p2/p3 或 A/B/C/D）
+cd /workspace/bwa_worktrees/model-improvements
+scripts/before_we_act/launch_r12_evolution_4gpu_tmux.sh \
+  --run-id r12e1-20260806-stack-specialists \
+  --run-root /workspace/bwa_runs/r12e1-20260806-stack-specialists \
+  --candidates all
+
+# 单次或持续 monitor
+scripts/before_we_act/monitor_r12_evolution.sh \
+  --run-root /workspace/bwa_runs/r12e1-20260806-stack-specialists \
+  --candidate all --once
+scripts/before_we_act/monitor_r12_evolution.sh \
+  --run-root /workspace/bwa_runs/r12e1-20260806-stack-specialists \
+  --candidate all --interval 30
+
+# 精确安全退出；可将 all 改为单个候选
+scripts/before_we_act/stop_r12_evolution_4gpu_tmux.sh \
+  --run-root /workspace/bwa_runs/r12e1-20260806-stack-specialists \
+  --candidate all
+```
+
+E1 的最终指标、逐项验收、checkpoint hash、直接 fallback canary 与 PASSED/FAILED 只在实际完成后追加；当前“已启动/等待 cache”不写成实验完成。R12-E1 未产生 `>74/100` 的合格 W12 前不得进入 R13。
+
 ### 10.16 R13：四路 Candidate-Conditioned Latent World 组件移植（off-path）
 
 R13 冻结 W12 动作生成器，仅替换 `world_model/core`，读取 W11 belief和 W12 action candidates，预测 latent consequence/progress/failure；planner和rerank关闭。以下候选都只复制 world-model核心及直接依赖，不部署其 agent、environment或完整 RL training stack。
