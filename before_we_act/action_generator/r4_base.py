@@ -302,6 +302,41 @@ def load_r3_core_warm_start(
         for name, value in source.items()
         if name in target and tuple(value.shape) == tuple(target[name].shape)
     }
+    partial_prefix: dict[str, dict[str, object]] = {}
+    for name in ("condition_position.weight", "model.cond_pos_emb"):
+        if name not in source or name not in target or name in compatible:
+            continue
+        value, destination = source[name], target[name]
+        if (
+            name == "condition_position.weight"
+            and value.ndim == destination.ndim == 2
+            and value.shape[1:] == destination.shape[1:]
+            and value.shape[0] < destination.shape[0]
+        ):
+            copied_tokens = int(value.shape[0])
+            expanded = destination.clone()
+            expanded[:copied_tokens].copy_(value)
+        elif (
+            name == "model.cond_pos_emb"
+            and value.ndim == destination.ndim == 3
+            and value.shape[0] == destination.shape[0] == 1
+            and value.shape[2:] == destination.shape[2:]
+            and value.shape[1] < destination.shape[1]
+        ):
+            copied_tokens = int(value.shape[1])
+            expanded = destination.clone()
+            expanded[:, :copied_tokens].copy_(value)
+        else:
+            continue
+        compatible[name] = expanded
+        partial_prefix[name] = {
+            "source_shape": list(value.shape),
+            "target_shape": list(destination.shape),
+            "copied_prefix_tokens": copied_tokens,
+            "new_suffix_tokens": int(destination.numel() // destination.shape[-1])
+            - copied_tokens,
+            "new_suffix_initialization_preserved": True,
+        }
     skipped = sorted(set(source) - set(compatible))
     incompatible = model.core.load_state_dict(compatible, strict=False)
     if incompatible.unexpected_keys:
@@ -312,6 +347,7 @@ def load_r3_core_warm_start(
     return {
         "mode": "r12r3_core_only_shape_compatible",
         "loaded_keys": loaded,
+        "partial_position_prefix": partial_prefix,
         "skipped_source_keys": skipped,
         "new_target_keys": sorted(incompatible.missing_keys),
         "adapter_loaded": False,
