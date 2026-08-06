@@ -27,20 +27,17 @@ from before_we_act.evaluate_action_generator_r4 import (
 )
 from before_we_act.spatial_observation import R12SpatialObservationEncoder
 from before_we_act.team_belief.base import PredictiveBeliefModel, load_r11_config
-from stereo_core.evaluate_no_wrist_pair import (
-    TemporalChunkEnsembler as W10TemporalChunkEnsembler,
-    load_model as load_w10,
-    predict_all as predict_w10,
-    reset_reproducibly,
-)
 
 
-def sha256(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+
+def reset_reproducibly(env, seed: int):
+    """Reset the specialist evaluation without importing the W10 runtime."""
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    return env.reset(seed=seed)
 
 
 def make_env(task_name: str):
@@ -95,54 +92,6 @@ def load_specialist(
         for key, value in checkpoint["stats"].items()
     }
     return generator, belief, spatial, stats, int(checkpoint["update"])
-
-
-@torch.no_grad()
-def evaluate_w10(config, task_name, seeds, device, max_steps):
-    checkpoint = Path(str(config.deployment["w10_checkpoint"])).resolve(strict=True)
-    if sha256(checkpoint) != str(config.deployment["w10_checkpoint_sha256"]):
-        raise ValueError("R12-E1 W10 fallback hash differs")
-    model, stats, _w10_config = load_w10(str(checkpoint), device)
-    specification = get_task(task_name)
-    arms = specification["agents"]
-    env = make_env(task_name)
-    rows, latencies = [], []
-    try:
-        for seed in seeds:
-            observation, _ = reset_reproducibly(env, seed)
-            ensemble = W10TemporalChunkEnsembler(arms)
-            success, info = False, {}
-            for step in range(max_steps):
-                if device.type == "cuda":
-                    torch.cuda.synchronize(device)
-                started = time.perf_counter_ns()
-                chunks = predict_w10(model, stats, observation, arms, device)
-                if device.type == "cuda":
-                    torch.cuda.synchronize(device)
-                latencies.append((time.perf_counter_ns() - started) / 1e6)
-                action = ensemble.append_and_select(step, chunks)
-                observation, _, terminated, truncated, info = env.step(action)
-                success = bool(np.asarray(info.get("success", False)).all())
-                if (
-                    success
-                    or bool(np.asarray(terminated).all())
-                    or bool(np.asarray(truncated).all())
-                ):
-                    break
-            row = {
-                "task": task_name,
-                "seed": int(seed),
-                "success": success,
-                "steps": step + 1,
-                "safety_projections": 0,
-                "terminal_info": terminal_info(info),
-                "route": "exact_w10_fallback",
-            }
-            rows.append(row)
-            print(json.dumps(row, sort_keys=True), flush=True)
-    finally:
-        env.close()
-    return rows, latencies, None
 
 
 @torch.no_grad()
@@ -278,12 +227,7 @@ def main() -> None:
     complete = {row["seed"] for row in recovered}
     remaining = [seed for seed in requested if seed not in complete]
     device = torch.device(args.device)
-    if args.task in config.deployment["protected_tasks"]:
-        evaluated, latencies, update = evaluate_w10(
-            config, args.task, remaining, device, args.max_steps
-        ) if remaining else ([], [], None)
-        route = "exact_w10_fallback"
-    elif args.task in config.deployment["specialist_tasks"]:
+    if args.task in config.deployment["specialist_tasks"]:
         evaluated, latencies, update = evaluate_specialist(
             config,
             args.checkpoint,
@@ -297,6 +241,11 @@ def main() -> None:
             args.max_steps,
         ) if remaining else ([], [], None)
         route = "r12e1_high_resolution_specialist"
+    elif args.task in config.deployment["protected_tasks"]:
+        raise ValueError(
+            "protected tasks must be evaluated by the isolated exact-W10 "
+            "fallback materializer/canary, never the core-free specialist process"
+        )
     else:
         raise ValueError("R12-E1 task has no deployment route")
     rows = recovered + evaluated

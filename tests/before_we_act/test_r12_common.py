@@ -365,6 +365,14 @@ def test_r12_evolution_runtime_and_launcher_use_e1_identity():
     assert "evaluate_action_generator_evolution" in runner
 
 
+def test_r12_evolution_specialist_evaluator_is_core_free():
+    evaluator = (
+        ROOT / "before_we_act/evaluate_action_generator_evolution.py"
+    ).read_text(encoding="utf-8")
+    assert "stereo_core" not in evaluator
+    assert "isolated exact-W10" in evaluator
+
+
 def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: Path):
     from scripts.before_we_act.prepare_r12_action_cache import read_causal_example
 
