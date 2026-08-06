@@ -15,6 +15,7 @@ ALLOWED_PREFIXES = (
     "before_we_act/world_model/",
     "before_we_act/train_team_world.py",
     "before_we_act/evaluate_team_world.py",
+    "before_we_act/upstream_components/",
     "configs/before_we_act/r13_world/",
     "experiments/before_we_act/r13/",
     "scripts/before_we_act/",
