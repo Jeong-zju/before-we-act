@@ -311,6 +311,32 @@ def gate20_progress(root: Path):
     for task in TASKS:
         path = root / "validation/gate20" / f"{task}.json"
         payload = read_json(path)
+        if not payload:
+            # The authoritative task JSON is atomic and appears only after all
+            # 20 seeds finish.  Until then, recover unique structured rows
+            # from the live task log so the monitor shows real eval progress.
+            partial = {}
+            log = root / "logs" / f"gate20_{task}.log"
+            try:
+                lines = log.read_text(errors="replace").splitlines()
+            except OSError:
+                lines = []
+            for line in lines:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (
+                    row.get("task") == task
+                    and isinstance(row.get("seed"), int)
+                    and isinstance(row.get("success"), bool)
+                ):
+                    partial[int(row["seed"])] = row
+            if partial:
+                payload = {
+                    "episodes": len(partial),
+                    "successes": sum(row["success"] for row in partial.values()),
+                }
         reports[task] = payload
         if payload.get("episodes") == 20:
             complete += 1
@@ -323,6 +349,24 @@ def gate20_progress(root: Path):
         if value is not None:
             p95.append(float(value))
     return {"complete_tasks": complete, "episodes": episodes, "successes": successes, "per_task": per_task, "p95": max(p95) if p95 else None}
+
+
+def full_cache_progress(cache_root: Path, current_epoch: float):
+    rows = []
+    for rank in range(4):
+        state = read_json(cache_root / f"rank_{rank}_state.json")
+        beat = read_json(cache_root / f"rank_{rank}_heartbeat.json")
+        beat_epoch = parse_time(beat.get("updated_at"))
+        age = current_epoch - beat_epoch if beat_epoch else None
+        rows.append(
+            f"r{rank}:{state.get('state', 'NOT_STARTED')} "
+            f"{state.get('completed_episodes', 0)}/{state.get('total_episodes', '?')} "
+            f"hb={age:.0f}s" if age is not None else
+            f"r{rank}:{state.get('state', 'NOT_STARTED')} "
+            f"{state.get('completed_episodes', 0)}/{state.get('total_episodes', '?')} hb=-"
+        )
+    index = read_json(cache_root / "index.json")
+    return f"index={'READY' if index else 'PENDING'} ranks=[{' | '.join(rows)}]"
 
 
 def runtime_alerts(state, alive, beat_age, stale_after, recent):
@@ -357,9 +401,11 @@ def render(run_root: Path, selected):
             + f" rows={recovery.get('rows', '-')} task_counts={recovery.get('task_counts', '-')}"
         )
     else:
+        cache_root = Path(manifest.get("shared_spatial_cache", ""))
         output.append(
             f"full_data={manifest.get('protocol_variant', '-')} cache={manifest.get('shared_spatial_cache', '-')}"
         )
+        output.append("cache_progress=" + full_cache_progress(cache_root, current_epoch))
     round_complete = True
     for candidate in selected:
         root = root_for(run_root, candidate)

@@ -263,6 +263,50 @@ def test_r12_full_episode_observation_encodes_native_rgb_before_compression():
     assert "no_scalar_gate" in observation["fusion"]
 
 
+def test_r12_monitor_counts_live_gate20_rows_before_atomic_report(tmp_path: Path):
+    from scripts.before_we_act.r12_runtime import gate20_progress
+
+    log = tmp_path / "logs/gate20_lift_barrier.log"
+    log.parent.mkdir(parents=True)
+    log.write_text(
+        "noise\n"
+        + json.dumps(
+            {"task": "lift_barrier", "seed": 1, "success": True, "steps": 10}
+        )
+        + "\n"
+        + json.dumps(
+            {"task": "lift_barrier", "seed": 2, "success": False, "steps": 20}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    progress = gate20_progress(tmp_path)
+    assert progress["complete_tasks"] == 0
+    assert progress["episodes"] == 2
+    assert progress["successes"] == 1
+    assert progress["per_task"]["lift_barrier"] == "1/2"
+
+
+def test_r12_monitor_exposes_four_cache_rank_states(tmp_path: Path):
+    from scripts.before_we_act.r12_runtime import full_cache_progress
+
+    (tmp_path / "rank_2_state.json").write_text(
+        json.dumps(
+            {
+                "state": "PREPARING",
+                "completed_episodes": 7,
+                "total_episodes": 38,
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = full_cache_progress(tmp_path, 0.0)
+    assert "index=PENDING" in summary
+    assert "r0:NOT_STARTED" in summary
+    assert "r2:PREPARING 7/38" in summary
+    assert "r3:NOT_STARTED" in summary
+
+
 def test_causal_cache_reads_only_prior_actions_and_matches_cold_start(tmp_path: Path):
     from scripts.before_we_act.prepare_r12_action_cache import read_causal_example
 
