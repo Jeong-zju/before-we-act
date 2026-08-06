@@ -88,7 +88,7 @@ for index in 0 1 2 3; do
   [[ -f "$worktree/configs/before_we_act/r12_action/e1_$candidate.yaml" ]] || { printf 'missing R12-E1 config for %s\n' "$candidate" >&2; exit 3; }
   WORKTREE_ARGS+=(--worktree "$candidate=$branch=$commit=$worktree")
 done
-"$PYTHON" "$FE_ROOT/scripts/before_we_act/r12_runtime.py" init --run-root "$RUN_ROOT" --run-id "$RUN_ID" --round R12-E1 --session-prefix bwa-r12e1 --formal-updates 130000 --shared-spatial-cache "$FULL_CACHE_ROOT" --protocol-variant r12_e1_native_image_task_film_exact_w10_fallback_v1 --parent-commit "$BASE_HEAD" --belief-checkpoint "$BELIEF_CHECKPOINT" --belief-checkpoint-sha256 "$BELIEF_SHA256" --normalization-checkpoint "$NORMALIZATION_CHECKPOINT" "${WORKTREE_ARGS[@]}"
+"$PYTHON" "$FE_ROOT/scripts/before_we_act/r12_runtime.py" init --run-root "$RUN_ROOT" --run-id "$RUN_ID" --round R12-E1 --session-prefix bwa-r12e1 --formal-updates 130000 --shared-spatial-cache "$FULL_CACHE_ROOT" --protocol-variant r12_e1_native_image_task_film_agent_slot_exact_w10_fallback_v2 --parent-commit "$BASE_HEAD" --belief-checkpoint "$BELIEF_CHECKPOINT" --belief-checkpoint-sha256 "$BELIEF_SHA256" --normalization-checkpoint "$NORMALIZATION_CHECKPOINT" "${WORKTREE_ARGS[@]}"
 
 if [[ ! -f "$FULL_INDEX" ]]; then
   for index in 0 1 2 3; do

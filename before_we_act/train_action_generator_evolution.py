@@ -209,7 +209,11 @@ def main() -> None:
         "normalization_checkpoint": str(normalization_path),
         "normalization_checkpoint_sha256": sha256(normalization_path),
         "primary_input": "native_480x640_fixed_view_RGB",
-        "supplemental_inputs": ["W11_TeamBeliefState", "task_id"],
+        "supplemental_inputs": [
+            "W11_TeamBeliefState",
+            "task_id",
+            "agent_slot_id",
+        ],
         "deployment": dict(config.deployment),
         "bridge_updates": bridge_updates,
         "joint_updates": int(config.training["updates"]) - bridge_updates,

@@ -1,9 +1,10 @@
 """R12-E1 image-primary, task-conditioned action specialist.
 
 Native 480x640 images remain the primary input and are encoded before spatial
-compression.  Frozen W11 TeamBeliefState and an explicit task identifier are
-supplemental signals.  Deployment uses the specialist only on preregistered
-tasks and routes every protected task through the exact W10 policy.
+compression.  Frozen W11 TeamBeliefState, an explicit task identifier and a
+bounded agent-slot identity are supplemental signals.  Deployment uses the
+specialist only on preregistered tasks and routes every protected task through
+the exact W10 policy.
 """
 from __future__ import annotations
 
@@ -116,6 +117,7 @@ def load_r12_evolution_config(path: str | Path) -> R12EvolutionConfig:
         "recovery_cache",
         "task_film_hidden_dim",
         "task_film_scale",
+        "agent_slot_scale",
     }
     if set(training) != required_training:
         raise ValueError("R12-E1 training keys differ")
@@ -153,6 +155,8 @@ def load_r12_evolution_config(path: str | Path) -> R12EvolutionConfig:
         raise ValueError("R12-E1 task FiLM hidden size must be positive")
     if not 0 < float(training["task_film_scale"]) <= 1:
         raise ValueError("R12-E1 task FiLM scale must be in (0,1]")
+    if not 0 < float(training["agent_slot_scale"]) <= 1:
+        raise ValueError("R12-E1 agent-slot scale must be in (0,1]")
     warm = str(training["warm_start_checkpoint"])
     digest = str(training["warm_start_sha256"])
     if not warm or len(digest) != 64:
@@ -201,7 +205,7 @@ def load_r12_evolution_config(path: str | Path) -> R12EvolutionConfig:
 
 
 class TaskConditionedActionGenerator(R4JointActionGenerator):
-    """Full-resolution R12 specialist with bounded task FiLM modulation."""
+    """Full-resolution R12 specialist with bounded task and slot conditioning."""
 
     def __init__(
         self, config: R12EvolutionConfig, *, core: nn.Module | None = None
@@ -210,7 +214,16 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
         belief_dim = int(config.action["belief_dim"])
         hidden = int(config.training["task_film_hidden_dim"])
         self.task_film_scale = float(config.training["task_film_scale"])
+        self.agent_slot_scale = float(config.training["agent_slot_scale"])
         self.task_embedding = nn.Embedding(len(TASKS), belief_dim)
+        # Stack's four configured camera names are pixel-identical and the
+        # three arms start from identical local qpos.  Preserve the existing
+        # 37-token contract while adding identity only to the four existing
+        # TeamBeliefState agent-token positions.  Native image tokens remain
+        # the high-bandwidth primary input.
+        self.agent_slot_embedding = nn.Parameter(
+            torch.empty(self.max_agents, belief_dim)
+        )
         self.task_film = nn.Sequential(
             nn.LayerNorm(belief_dim),
             nn.Linear(belief_dim, hidden),
@@ -218,6 +231,7 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
             nn.Linear(hidden, belief_dim * 2),
         )
         nn.init.normal_(self.task_embedding.weight, std=0.02)
+        nn.init.normal_(self.agent_slot_embedding, std=0.02)
         nn.init.zeros_(self.task_film[-1].weight)
         nn.init.zeros_(self.task_film[-1].bias)
 
@@ -229,6 +243,22 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
         task_index: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         tokens, mask = self.bridge(belief, spatial_tokens, spatial_view_mask)
+        if belief.agent_tokens.shape[1] != self.max_agents:
+            raise ValueError("R12-E1 agent-slot count differs")
+        agent_start = belief.tokens.shape[1]
+        agent_stop = agent_start + self.max_agents
+        slot_delta = self.agent_slot_scale * self.agent_slot_embedding[None]
+        slot_delta = slot_delta * belief.agent_mask[:, :, None].to(slot_delta.dtype)
+        # Avoid an in-place update so autograd retains a clean path into the
+        # explicit identity embeddings during bridge alignment.
+        tokens = torch.cat(
+            [
+                tokens[:, :agent_start],
+                tokens[:, agent_start:agent_stop] + slot_delta,
+                tokens[:, agent_stop:],
+            ],
+            dim=1,
+        )
         if tuple(task_index.shape) != (len(tokens),):
             raise ValueError("R12-E1 task index must be [batch]")
         if task_index.dtype != torch.long:
@@ -247,6 +277,7 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
     def set_training_stage(self, stage: str) -> list[str]:
         super().set_training_stage(stage)
         if stage == "bridge":
+            self.agent_slot_embedding.requires_grad_(True)
             for parameter in self.task_embedding.parameters():
                 parameter.requires_grad_(True)
             for parameter in self.task_film.parameters():
@@ -308,8 +339,9 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
                 "legacy_core_import": False,
                 "observation_mode": self.config.observation["mode"],
                 "primary_input": "native_480x640_fixed_view_rgb",
-                "supplemental_inputs": "W11_TeamBeliefState+task_id",
+                "supplemental_inputs": "W11_TeamBeliefState+task_id+agent_slot_id",
                 "task_film_scale": self.task_film_scale,
+                "agent_slot_scale": self.agent_slot_scale,
             },
         ).validate()
 
