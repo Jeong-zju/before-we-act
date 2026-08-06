@@ -1,5 +1,5 @@
-schema_version: 1
-round: R12
+schema_version: 2
+round: R12-R3
 candidate_id: p2
 parent_commit: fdc228189c7fc8556acba9ab9462998ffb967c71
 belief_checkpoint_sha256: a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49
@@ -16,6 +16,20 @@ component:
   condition_tokens: 21
   chunk_size: 100
   temporal_ensemble: true
+observation:
+  mode: w11_plus_current_dinov3_spatial_v1
+  encoder_name: dinov3_vitb16_lvd
+  model_id: facebook/dinov3-vitb16-pretrain-lvd1689m
+  weights_sha256: 9a21ac3df0c63839d62612dda6f454d816c25611cc7a52966ed5a5a94921dc8b
+  config_sha256: 69256c4c142d59b0c0ccf5746542d9f2415f6c7db03bd7835a1f7b3afedb77fe
+  preprocess: dinov3_imagenet_rgb_resize_square_antialias_v1
+  input_size: 224
+  feature_dim: 768
+  spatial_grid: [4, 4]
+  max_views: 5
+  history_frames: 1
+  fusion: zero_gated_cross_attention_into_w11_tokens
+  fusion_heads: 4
 action:
   horizon: 100
   max_agents: 4
@@ -25,7 +39,7 @@ action:
   normalized_clip: 5.0
   num_proposals: 1
 training:
-  updates: 120000
+  updates: 60000
   batch_size: 5
   seed: 20260805
   learning_rate: 0.0001
@@ -34,15 +48,16 @@ training:
   checkpoint_every: 10000
   progress_every: 50
   grad_clip: 1.0
-  warm_start_checkpoint: ''
-  warm_start_sha256: ''
-  warm_start_update: 0
+  warm_start_checkpoint: /workspace/bwa_runs/r12r2-20260805-dense-history-act-dp/candidates/p2/train/formal/checkpoints/checkpoint_120000.pt
+  warm_start_sha256: bc96f4ca62bd5b9a7c6b60794fc1cdcf8433842646310f322820cd75f105fd27
+  warm_start_update: 120000
   warmup_steps: 1000
-  decay_steps: 120000
+  decay_steps: 60000
   decay_lr_ratio: 0.1
   history_augmentation_probability: 0.75
   history_augmentation_ramp_updates: 10000
   history_noise_scale: 0.25
+  recovery_sampling_probability: 0.35
 selection_rule:
   gate20_tasks: [lift_barrier, camera_alignment, three_robots_stack_cube, long_pipeline_delivery, take_photo]
   episodes_per_task: 20
