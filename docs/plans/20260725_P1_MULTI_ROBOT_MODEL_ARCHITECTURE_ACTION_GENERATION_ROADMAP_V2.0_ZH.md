@@ -4201,6 +4201,8 @@ e23 fixed-threshold reactive 完整 discovery20=`1/20 vs 1/20`、paired=`+0/-0`�
 
 同一 session 冲突审计已提前扩展到尚未启动的后备 promotion：RETAIN `9f50e63` 固定 e35/e36 为 `bwa-r15s-retain-e35/e36`，本地/远端相关 `12 passed`；phase-balanced `d4cdf51` 固定 e31/e32 为 `bwa-r15s-phase-e31/e32`，本地/远端相关 `13 passed`。两条旧等待器只包含可确认的 sleep shell、无 GPU/child evaluator，已按精确 session 优雅中断并用新 commit 重启；没有停止任何训练/验证进程，也没有删除或覆盖结果。
 
+GPU3 连续晋级也已在独立 `bwa/r15-pace-promotion@dbeb2948e160` 实现并部署为等待 session `bwa-r15-handoff-pace-promote-e37`。e24 若 discovery 通过，按 e37 validation→e38 formal 晋级；任一层失败则先测试互补证据最强的 e20 expert checkpoint + true-stochastic AAC（e39→e40→e41），再测试 e20 expert checkpoint + PACE（e42→e43→e44）。每条新组合仍从 discovery 开始，只有严格通过才进入 validation/formal；既有 run 仅在 split/checkpoint/label/session manifest 全部匹配时复用。分支本地/远端均为 `22 passed`，三个 shell syntax 通过；控制器不占 GPU，不修改运行中的 e24 commit。
+
 当前远程为四张 RTX 5090；UTC `12:48Z` 的占用为 GPU0=`r15e20 expert-e9 discovery`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。磁盘 `/workspace` 可用约 `145 GiB`、inode 使用约 `1%`，当前无需清理；既有实验、数据集、缓存和 checkpoint 均未删除。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
 
 ```bash
