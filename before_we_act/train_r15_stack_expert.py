@@ -36,7 +36,7 @@ from before_we_act.train_action_generator_r4 import (
 
 
 TASK = "three_robots_stack_cube"
-PROTOCOL = "r15_stack_original_plus_raw_success_expert_50_50_v1"
+PROTOCOL = "r15_stack_original_plus_raw_success_expert_source_aware_v2"
 
 
 class OriginalExpertStackSampler(Sampler[list[tuple[int, int]]]):

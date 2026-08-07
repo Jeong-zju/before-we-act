@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 
 RUN_ROOT=""; CANDIDATE=p1; GPU_INDEX=""; EXPERT_INDEX=""
-UPDATES=10000; PYTHON=/venv/robofactory-act/bin/python
+UPDATES=10000; BATCH_SIZE=12; EXPERT_ROWS=6; LEARNING_RATE=2e-5; WARMUP=500
+PYTHON=/venv/robofactory-act/bin/python
 PARENT_CHECKPOINT=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p2/train/formal/checkpoints/checkpoint_130000.pt
 BELIEF_CHECKPOINT=/workspace/bwa_runs/shared/w11/checkpoint_010000.pt
 while (($#)); do
@@ -12,11 +13,16 @@ while (($#)); do
     --gpu-index) GPU_INDEX="$2"; shift 2 ;;
     --expert-index) EXPERT_INDEX="$2"; shift 2 ;;
     --updates) UPDATES="$2"; shift 2 ;;
+    --batch-size) BATCH_SIZE="$2"; shift 2 ;;
+    --expert-rows) EXPERT_ROWS="$2"; shift 2 ;;
+    --learning-rate) LEARNING_RATE="$2"; shift 2 ;;
+    --warmup) WARMUP="$2"; shift 2 ;;
     --python) PYTHON="$2"; shift 2 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$RUN_ROOT" && "$CANDIDATE" =~ ^p[1-3]$ && "$GPU_INDEX" =~ ^[0-3]$ && -n "$EXPERT_INDEX" && "$UPDATES" =~ ^[1-9][0-9]*$ ]] || { printf 'valid run/candidate/GPU/expert index/update budget required\n' >&2; exit 2; }
+[[ -n "$RUN_ROOT" && "$CANDIDATE" =~ ^p[1-3]$ && "$GPU_INDEX" =~ ^[0-3]$ && -n "$EXPERT_INDEX" && "$UPDATES" =~ ^[1-9][0-9]*$ && "$BATCH_SIZE" =~ ^[1-9][0-9]*$ && "$EXPERT_ROWS" =~ ^[1-9][0-9]*$ && "$WARMUP" =~ ^[1-9][0-9]*$ && "$LEARNING_RATE" =~ ^[0-9]+([.][0-9]+)?([eE]-?[0-9]+)?$ ]] || { printf 'valid run/candidate/GPU/expert training budget required\n' >&2; exit 2; }
+((BATCH_SIZE >= 2 && EXPERT_ROWS < BATCH_SIZE && WARMUP <= UPDATES)) || { printf 'invalid expert sampling or warmup budget\n' >&2; exit 2; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNTIME="$ROOT/scripts/before_we_act/r15_runtime.py"
 MANIFEST="$RUN_ROOT/run_manifest.json"
@@ -68,14 +74,16 @@ heartbeat_loop & HEARTBEAT_PID=$!
 
 RESUME_ARGS=()
 [[ -f "$TRAIN_ROOT/checkpoints/checkpoint_latest.pt" ]] && RESUME_ARGS=(--resume "$TRAIN_ROOT/checkpoints/checkpoint_latest.pt")
-status TRAINING stack_expert_finetune train_r15_stack_expert.py "50/50 original/new Stack rows; low-LR W12 continuation"
+status TRAINING stack_expert_finetune train_r15_stack_expert.py "source-aware Stack continuation; batch=$BATCH_SIZE expert_rows=$EXPERT_ROWS lr=$LEARNING_RATE"
 (
   cd "$ROOT"
   exec env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROOT" "$PYTHON" -m before_we_act.train_r15_stack_expert \
     --config "$CONFIG" --parent-checkpoint "$PARENT_CHECKPOINT" \
     --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" \
     --expert-index "$EXPERT_INDEX" --output "$TRAIN_ROOT" --device cuda:0 \
-    --updates "$UPDATES" --heartbeat "$HEARTBEAT" "${RESUME_ARGS[@]}"
+    --updates "$UPDATES" --batch-size "$BATCH_SIZE" --expert-rows "$EXPERT_ROWS" \
+    --learning-rate "$LEARNING_RATE" --warmup "$WARMUP" \
+    --heartbeat "$HEARTBEAT" "${RESUME_ARGS[@]}"
 ) >>"$TRAIN_LOG" 2>&1 &
 CHILD_PID=$!; printf '%s\n' "$CHILD_PID" >"$CHILD_FILE"; wait "$CHILD_PID"
 CHILD_PID=0; printf '0\n' >"$CHILD_FILE"
