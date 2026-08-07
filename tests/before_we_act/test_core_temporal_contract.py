@@ -60,11 +60,16 @@ def test_r15_recent_ensemble_emphasizes_latest_and_latest_chunk_is_exact():
     chunks0 = np.zeros((1, 4, 8), dtype=np.float32)
     chunks1 = np.ones((1, 4, 8), dtype=np.float32)
     frozen = TemporalChunkEnsembler((0,), decay=0.01)
+    balanced = TemporalChunkEnsembler((0,), decay=0.05)
     recent = TemporalChunkEnsembler((0,), decay=0.10)
     frozen.append_and_select(0, chunks0)
+    balanced.append_and_select(0, chunks0)
     recent.append_and_select(0, chunks0)
     frozen_value = frozen.append_and_select(1, chunks1)["panda-0"]
+    balanced_value = balanced.append_and_select(1, chunks1)["panda-0"]
     recent_value = recent.append_and_select(1, chunks1)["panda-0"]
+    assert np.all(balanced_value > frozen_value)
+    assert np.all(recent_value > balanced_value)
     assert np.all(recent_value > frozen_value)
     np.testing.assert_array_equal(chunks1[0, 0], np.ones(8, dtype=np.float32))
 

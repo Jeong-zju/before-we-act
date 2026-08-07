@@ -23,7 +23,7 @@ done
 RUN_ROOT="${RUN_ROOT:-/workspace/bwa_runs/$RUN_ID}"
 [[ "$RUN_ID" =~ ^[A-Za-z0-9_.-]+$ && "$SPLIT" =~ ^(discovery20|validation20|reserve20|final20)$ && -n "$REFERENCE_RUN" ]] || { printf 'valid run/split and reference run root required\n' >&2; exit 2; }
 IFS=',' read -r -a SELECTED <<<"$SELECTION"
-for candidate in "${SELECTED[@]}"; do [[ "$candidate" =~ ^p[12]$ ]] || { printf 'temporal candidates are p1,p2\n' >&2; exit 2; }; done
+for candidate in "${SELECTED[@]}"; do [[ "$candidate" =~ ^p[1-3]$ ]] || { printf 'temporal candidates are p1,p2,p3\n' >&2; exit 2; }; done
 if [[ -n "$GPU_OVERRIDE" ]]; then
   [[ "${#SELECTED[@]}" -eq 1 && "$GPU_OVERRIDE" =~ ^[0-3]$ ]] || { printf -- '--gpu-index requires one candidate and GPU 0..3\n' >&2; exit 2; }
 fi
@@ -39,6 +39,7 @@ REFERENCE_MANIFEST="$REFERENCE_RUN/run_manifest.json"
 declare -A LABEL GPU MODE
 LABEL[p1]=w12_recent_decay_0p10; GPU[p1]=1; MODE[p1]=recent_temporal_ensemble
 LABEL[p2]=w12_latest_chunk; GPU[p2]=3; MODE[p2]=latest_chunk
+LABEL[p3]=w12_balanced_decay_0p05; GPU[p3]=2; MODE[p3]=balanced_temporal_ensemble
 [[ -n "$GPU_OVERRIDE" ]] && GPU["${SELECTED[0]}"]="$GPU_OVERRIDE"
 for candidate in "${SELECTED[@]}"; do
   session="bwa-r15s-$candidate"; gpu="${GPU[$candidate]}"
