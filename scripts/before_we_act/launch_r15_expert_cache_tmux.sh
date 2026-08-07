@@ -23,7 +23,7 @@ git -C "$ROOT" fetch origin --prune; [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$
 tmux has-session -t "$SESSION" 2>/dev/null && { printf 'session already exists: %s\n' "$SESSION" >&2; exit 3; }
 nvidia-smi -i "$GPU_INDEX" --query-compute-apps=pid --format=csv,noheader | grep -Eq '[0-9]' && { printf 'GPU %s is in use\n' "$GPU_INDEX" >&2; exit 3; } || true
 AVAILABLE_KB="$(df -Pk /workspace | awk 'NR==2 {print $4}')"; [[ "$AVAILABLE_KB" -ge 20971520 ]] || { printf 'expert cache requires at least 20 GiB free\n' >&2; exit 3; }
-env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROOT" "$PYTHON" "$ROOT/scripts/before_we_act/prepare_r15_expert_full_cache.py" --raw-hdf5 "$RAW_HDF5" --raw-json "$RAW_JSON" --base-index /workspace/bwa_runs/shared/r12r4_native_full_cache_v2/index.json --output-root "$CACHE_ROOT/dry-run" --vision-artifact /workspace/artifacts/dinov3-vitb16-pretrain-lvd1689m --episodes "$EPISODES" --device cuda:0 --dry-run
+env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROOT" "$PYTHON" "$ROOT/scripts/before_we_act/prepare_r15_expert_full_cache.py" --raw-hdf5 "$RAW_HDF5" --raw-json "$RAW_JSON" --base-index /workspace/bwa_runs/shared/r12r4_native_full_cache_v2/index.json --output-root "$CACHE_ROOT/dry-run" --vision-artifact /workspace/artifacts/dinov3-vitb16-pretrain-lvd1689m --action-codec "$ROOT/configs/action_codecs/robofactory_3panda_pd_joint_pos_24d.json" --episodes "$EPISODES" --device cuda:0 --dry-run
 printf 'R15 expert cache preflight output=%s episodes=%s GPU=%s free_kB=%s\n' "$CACHE_ROOT" "$EPISODES" "$GPU_INDEX" "$AVAILABLE_KB"
 if ((DRY_RUN)); then printf 'dry-run passed; no output/tmux created\n'; exit 0; fi
 tmux new-session -d -s "$SESSION" -n cache \
