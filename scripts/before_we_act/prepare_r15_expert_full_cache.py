@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -30,7 +31,6 @@ from before_we_act.spatial_observation import (
     R12SpatialObservationEncoder,
     locked_r12_full_episode_observation,
 )
-from data.robofactory import RoboFactoryDataset, RoboFactoryEpisode
 from models.wam.action_codec import AffineActionCodec, AffineActionCodecConfig
 from scripts.before_we_act.prepare_r12_full_episode_cache import (
     atomic_hdf5_save,
@@ -41,6 +41,13 @@ from scripts.before_we_act.prepare_r12_full_episode_cache import (
 TASK = "three_robots_stack_cube"
 EXPECTED_ENV_ID = "ThreeRobotsStackCube-rf"
 EXPECTED_CAMERAS = ("global", "agent_0", "agent_1", "agent_2")
+SOURCE_AGENTS = ("panda-0", "panda-1", "panda-2")
+SOURCE_CAMERAS = {
+    "global": "head_camera_global",
+    "agent_0": "head_camera_agent0",
+    "agent_1": "head_camera_agent1",
+    "agent_2": "head_camera_agent2",
+}
 EXPECTED_CODEC_SHA256 = (
     "38b9d91640dcb9f7a33d7f05ea0d3cab47fc843fb5cfb18859ceece3314b2eb5"
 )
@@ -67,6 +74,59 @@ def atomic_json(path: Path, payload: Mapping[str, object]) -> None:
     os.replace(temporary, path)
 
 
+@dataclass(frozen=True)
+class RawEpisode:
+    source_id: int
+    source_key: str
+    seed: int
+    success: bool
+
+
+class RawStackSource:
+    """Minimal task-locked reader that avoids importing simulator packages."""
+
+    def __init__(self, hdf5_path: Path, metadata_path: Path) -> None:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        env_info = metadata.get("env_info", {})
+        self.env_id = str(env_info.get("env_id", ""))
+        self.handle = h5py.File(hdf5_path, "r")
+        try:
+            rows = metadata.get("episodes")
+            if not isinstance(rows, list) or not rows:
+                raise ValueError("raw expert sidecar has no episode list")
+            episodes = []
+            for row in rows:
+                source_id = int(row["episode_id"])
+                source_key = f"traj_{source_id}"
+                if source_key not in self.handle:
+                    raise ValueError(f"raw sidecar references missing {source_key}")
+                seed_value = row.get("episode_seed", row.get("reset_kwargs", {}).get("seed"))
+                if seed_value is None:
+                    raise ValueError(f"raw episode {source_id} has no seed")
+                success = bool(
+                    row.get(
+                        "success",
+                        np.asarray(self.handle[source_key].get("success", [False])).any(),
+                    )
+                )
+                episodes.append(
+                    RawEpisode(source_id, source_key, int(seed_value), success)
+                )
+            self.episodes = tuple(episodes)
+        except BaseException:
+            self.handle.close()
+            raise
+
+    def close(self) -> None:
+        self.handle.close()
+
+    def __enter__(self) -> "RawStackSource":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+
 def terminal_steps(group: h5py.Group) -> int:
     """Return the first terminal transition, inclusive.
 
@@ -89,27 +149,32 @@ def terminal_steps(group: h5py.Group) -> int:
     return steps
 
 
-def validate_source(source: RoboFactoryDataset, codec: AffineActionCodec) -> None:
+def validate_source(source: RawStackSource, codec: AffineActionCodec) -> None:
     if source.env_id != EXPECTED_ENV_ID:
         raise ValueError(f"expert source env differs: {source.env_id!r}")
-    if len(source.layout.agents) != 3:
-        raise ValueError("R15 Stack expert source must contain exactly three agents")
-    if [agent.action_shape for agent in source.layout.agents] != [(8,), (8,), (8,)]:
-        raise ValueError("R15 Stack expert action layout differs")
-    if [agent.qpos_shape for agent in source.layout.agents] != [(9,), (9,), (9,)]:
-        raise ValueError("R15 Stack expert qpos layout differs")
-    cameras = {camera.target_name: camera for camera in source.layout.cameras}
-    if set(cameras) != set(EXPECTED_CAMERAS):
-        raise ValueError(f"R15 Stack expert cameras differ: {sorted(cameras)}")
-    if any(tuple(cameras[name].image_shape) != (480, 640, 3) for name in cameras):
-        raise ValueError("R15 Stack expert RGB is not native 480x640")
     if codec.action_dim != 24 or codec.semantic_sha256 != EXPECTED_CODEC_SHA256:
         raise ValueError("R15 Stack expert action codec identity differs")
+    first = source.handle[source.episodes[0].source_key]
+    if set(first["actions"].keys()) != set(SOURCE_AGENTS):
+        raise ValueError("R15 Stack expert agent names differ")
+    for agent in SOURCE_AGENTS:
+        if tuple(first[f"actions/{agent}"].shape[1:]) != (8,):
+            raise ValueError("R15 Stack expert action layout differs")
+        if tuple(first[f"obs/agent/{agent}/qpos"].shape[1:]) != (9,):
+            raise ValueError("R15 Stack expert qpos layout differs")
+    sensor_data = first["obs/sensor_data"]
+    if set(sensor_data.keys()) != set(SOURCE_CAMERAS.values()):
+        raise ValueError(f"R15 Stack expert cameras differ: {sorted(sensor_data.keys())}")
+    if any(
+        tuple(sensor_data[source_name]["rgb"].shape[1:]) != (480, 640, 3)
+        for source_name in SOURCE_CAMERAS.values()
+    ):
+        raise ValueError("R15 Stack expert RGB is not native 480x640")
 
 
 def selected_episodes(
-    source: RoboFactoryDataset, max_episodes: int
-) -> tuple[RoboFactoryEpisode, ...]:
+    source: RawStackSource, max_episodes: int
+) -> tuple[RawEpisode, ...]:
     episodes = tuple(
         episode for episode in source.episodes if episode.success is True
     )[:max_episodes]
@@ -117,17 +182,15 @@ def selected_episodes(
         raise ValueError(
             f"requested {max_episodes} successful episodes, found {len(episodes)}"
         )
-    if any(episode.seed is None for episode in episodes):
-        raise ValueError("R15 expert episodes require recorded seeds")
-    seeds = [int(episode.seed) for episode in episodes]
+    seeds = [episode.seed for episode in episodes]
     if len(set(seeds)) != len(seeds):
         raise ValueError("R15 expert source contains duplicate successful seeds")
     return episodes
 
 
 def source_plan(
-    source: RoboFactoryDataset,
-    episodes: tuple[RoboFactoryEpisode, ...],
+    source: RawStackSource,
+    episodes: tuple[RawEpisode, ...],
     base_index: Mapping[str, object],
 ) -> list[dict[str, object]]:
     existing_seeds = {
@@ -146,12 +209,12 @@ def source_plan(
     )
     rows = []
     for offset, episode in enumerate(episodes, 1):
-        group = source._file[episode.source_key]
+        group = source.handle[episode.source_key]
         rows.append(
             {
                 "source_id": episode.source_id,
                 "source_key": episode.source_key,
-                "seed": int(episode.seed),
+                "seed": episode.seed,
                 "steps": terminal_steps(group),
                 "episode_index": maximum_index + offset,
             }
@@ -162,7 +225,7 @@ def source_plan(
 @torch.inference_mode()
 def encode_episode(
     args: argparse.Namespace,
-    source: RoboFactoryDataset,
+    source: RawStackSource,
     codec: AffineActionCodec,
     encoder: R12SpatialObservationEncoder,
     row: Mapping[str, object],
@@ -170,18 +233,17 @@ def encode_episode(
     source_hdf5_sha256: str,
     source_json_sha256: str,
 ) -> dict[str, object]:
-    group = source._file[str(row["source_key"])]
+    group = source.handle[str(row["source_key"])]
     steps = int(row["steps"])
     spatial = torch.zeros((steps, 5, 48, 768), dtype=torch.float16)
     visual = torch.zeros((steps, 16, 15), dtype=torch.float16)
     view_mask = torch.zeros((steps, 5), dtype=torch.bool)
     qpos = torch.zeros((steps, 4, 9), dtype=torch.float32)
     commanded = torch.zeros((steps, 4, 8), dtype=torch.float32)
-    agents = tuple(source.layout.agents)
     raw_actions = np.concatenate(
         [
-            np.asarray(group[f"actions/{agent.source_name}"][:steps], dtype=np.float32)
-            for agent in agents
+            np.asarray(group[f"actions/{agent}"][:steps], dtype=np.float32)
+            for agent in SOURCE_AGENTS
         ],
         axis=-1,
     )
@@ -189,21 +251,20 @@ def encode_episode(
         steps, 3, 8
     )
     commanded[:, :3] = torch.from_numpy(canonical)
-    for agent_index, agent in enumerate(agents):
+    for agent_index, agent in enumerate(SOURCE_AGENTS):
         qpos[:, agent_index] = torch.from_numpy(
             np.asarray(
-                group[f"obs/agent/{agent.source_name}/qpos"][:steps],
+                group[f"obs/agent/{agent}/qpos"][:steps],
                 dtype=np.float32,
             )
         )
-    cameras = {camera.target_name: camera.source_name for camera in source.layout.cameras}
     for start in range(0, steps, args.frame_batch_size):
         end = min(steps, start + args.frame_batch_size)
         requests: list[tuple[int, int, np.ndarray]] = []
         for frame in range(start, end):
             for view_index, view in enumerate(EXPECTED_CAMERAS):
                 image = np.asarray(
-                    group[f"obs/sensor_data/{cameras[view]}/rgb"][frame],
+                    group[f"obs/sensor_data/{SOURCE_CAMERAS[view]}/rgb"][frame],
                     dtype=np.uint8,
                 )
                 visual[frame, :, view_index * 3 : (view_index + 1) * 3] = (
@@ -367,7 +428,7 @@ def main() -> None:
     args.heartbeat = (args.heartbeat or args.output_root / "heartbeat.json").resolve()
     base_index = json.loads(args.base_index.read_text(encoding="utf-8"))
     codec = AffineActionCodec(AffineActionCodecConfig.load(args.action_codec))
-    with RoboFactoryDataset(args.raw_hdf5, metadata_path=args.raw_json) as source:
+    with RawStackSource(args.raw_hdf5, args.raw_json) as source:
         validate_source(source, codec)
         episodes = selected_episodes(source, args.episodes)
         plan = source_plan(source, episodes, base_index)
