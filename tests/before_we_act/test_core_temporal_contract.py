@@ -130,6 +130,7 @@ def test_cogact_transplant_source_and_license_are_pinned():
     source = component / "adaptive_ensemble.py"
     license_path = component / "LICENSE"
     source_map = json.loads((component / "SOURCE_MAP.json").read_text())
+    component_lock = json.loads((component / "COMPONENT_LOCK.json").read_text())
     assert hashlib.sha256(source.read_bytes()).hexdigest() == (
         "41fb978ff46cca961690f67df54ea89873412040e0a8d117fa8f0ccff90fc927"
     )
@@ -140,6 +141,13 @@ def test_cogact_transplant_source_and_license_are_pinned():
         "b174a1b86deedfab4d198d935207e7bb0527994e"
     )
     assert source_map["files"][0]["algorithm_changes"] == 0
+    assert component_lock["full_repo_runtime_dependency"] is False
+    assert component_lock["frozen_deployment"] == {
+        "adaptive_ensemble_alpha": 0.1,
+        "pred_action_horizon": 2,
+        "candidate_actions": "physical pd_joint_pos W12 ACT chunks",
+        "refined_actions": False,
+    }
 
 
 def test_cogact_team_adapter_preserves_arm_keys_and_route_identity():
