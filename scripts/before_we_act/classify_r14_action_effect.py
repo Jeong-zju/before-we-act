@@ -17,8 +17,15 @@ def main() -> None:
         ("git", "diff", "--name-only", args.parent, args.head),
         check=True, text=True, capture_output=True,
     ).stdout.splitlines()
-    planner = any(path.startswith("before_we_act/planner/") for path in changed)
-    evaluator = "before_we_act/evaluate_world_guided_decision.py" in changed
+    # The shared evaluator/safety shell is intentionally frozen in the R14
+    # engineering parent, while each sibling branch adds only its decision
+    # core.  Classification therefore checks the complete checked-out runtime,
+    # not only the candidate-vs-engineering-parent diff.
+    planner = (
+        Path("before_we_act/planner/candidate.py").is_file()
+        and any(path == "before_we_act/planner/candidate.py" for path in changed)
+    )
+    evaluator = Path("before_we_act/evaluate_world_guided_decision.py").is_file()
     forbidden = [path for path in changed if "stereo_core" in path.lower()]
     passed = planner and evaluator and not forbidden
     result = {
@@ -30,6 +37,7 @@ def main() -> None:
         "runtime_core_forbidden": True,
         "forbidden_changed_paths": forbidden,
         "changed_files": changed,
+        "shared_evaluator_present": evaluator,
         "passed": passed,
     }
     output = Path(args.output)
