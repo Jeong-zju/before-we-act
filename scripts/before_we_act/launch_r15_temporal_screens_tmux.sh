@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-RUN_ID="r15-temporal-$(date -u +%Y%m%dT%H%M%SZ)"; RUN_ROOT=""; SELECTION="p1,p2"; SPLIT=discovery20; REFERENCE_RUN=""; DRY_RUN=0
+RUN_ID="r15-temporal-$(date -u +%Y%m%dT%H%M%SZ)"; RUN_ROOT=""; SELECTION="p1,p2"; SPLIT=discovery20; REFERENCE_RUN=""; GPU_OVERRIDE=""; DRY_RUN=0
 PYTHON=/venv/robofactory-act/bin/python
 PROTOCOL_ROOT=/workspace/bwa_runs/shared/r15_stack_protocol_v1
 CHECKPOINT=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p2/train/formal/checkpoints/checkpoint_130000.pt
@@ -13,6 +13,8 @@ while (($#)); do
     --candidate|--candidates) SELECTION="$2"; shift 2 ;;
     --split) SPLIT="$2"; shift 2 ;;
     --reference-run-root) REFERENCE_RUN="$2"; shift 2 ;;
+    --checkpoint) CHECKPOINT="$2"; shift 2 ;;
+    --gpu-index) GPU_OVERRIDE="$2"; shift 2 ;;
     --python) PYTHON="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
@@ -22,6 +24,9 @@ RUN_ROOT="${RUN_ROOT:-/workspace/bwa_runs/$RUN_ID}"
 [[ "$RUN_ID" =~ ^[A-Za-z0-9_.-]+$ && "$SPLIT" =~ ^(discovery20|validation20|reserve20|final20)$ && -n "$REFERENCE_RUN" ]] || { printf 'valid run/split and reference run root required\n' >&2; exit 2; }
 IFS=',' read -r -a SELECTED <<<"$SELECTION"
 for candidate in "${SELECTED[@]}"; do [[ "$candidate" =~ ^p[12]$ ]] || { printf 'temporal candidates are p1,p2\n' >&2; exit 2; }; done
+if [[ -n "$GPU_OVERRIDE" ]]; then
+  [[ "${#SELECTED[@]}" -eq 1 && "$GPU_OVERRIDE" =~ ^[0-3]$ ]] || { printf -- '--gpu-index requires one candidate and GPU 0..3\n' >&2; exit 2; }
+fi
 for command in git tmux nvidia-smi sha256sum jq; do command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }; done
 [[ "$(git -C "$ROOT" branch --show-current)" == bwa/r15-closed-loop-evolution && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires clean R15 branch\n' >&2; exit 3; }
 git -C "$ROOT" fetch origin --prune
@@ -34,6 +39,7 @@ REFERENCE_MANIFEST="$REFERENCE_RUN/run_manifest.json"
 declare -A LABEL GPU MODE
 LABEL[p1]=w12_recent_decay_0p10; GPU[p1]=1; MODE[p1]=recent_temporal_ensemble
 LABEL[p2]=w12_latest_chunk; GPU[p2]=3; MODE[p2]=latest_chunk
+[[ -n "$GPU_OVERRIDE" ]] && GPU["${SELECTED[0]}"]="$GPU_OVERRIDE"
 for candidate in "${SELECTED[@]}"; do
   session="bwa-r15s-$candidate"; gpu="${GPU[$candidate]}"
   tmux has-session -t "$session" 2>/dev/null && { printf 'session already exists: %s\n' "$session" >&2; exit 3; }
