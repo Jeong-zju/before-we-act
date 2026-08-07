@@ -82,8 +82,12 @@ mapfile -t JSON_FILES < <(find "$RAW_ROOT" -type f -name '*.json' -print)
 "$PYTHON" - "${JSON_FILES[0]}" "$EPISODES" "$OUTPUT_ROOT/receipt.json" <<'PY'
 import datetime,hashlib,json,os,sys
 source,expected,target=sys.argv[1:]; d=json.load(open(source)); episodes=d.get("episodes",[])
-if len(episodes)!=int(expected) or not all(bool(row.get("success")) for row in episodes.values() if isinstance(episodes,dict)):
-    if not isinstance(episodes,list) or len(episodes)!=int(expected): raise SystemExit("expert episode receipt differs")
+if (
+    not isinstance(episodes,list)
+    or len(episodes)!=int(expected)
+    or not all(isinstance(row,dict) and bool(row.get("success")) for row in episodes)
+):
+    raise SystemExit("expert episode receipt differs")
 h=hashlib.sha256(open(source,"rb").read()).hexdigest()
 out={"schema_version":1,"status":"PASSED","episodes":int(expected),"metadata_json":source,"metadata_sha256":h,"created_at":datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")}
 tmp=target+f".{os.getpid()}.tmp"; open(tmp,"w").write(json.dumps(out,indent=2,sort_keys=True)+"\n"); os.replace(tmp,target)
