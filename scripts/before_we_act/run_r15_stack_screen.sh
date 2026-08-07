@@ -82,6 +82,10 @@ case "$LABEL" in
     EXECUTION_ARGS=(--execution-mode responsive_temporal_ensemble)
     EXECUTION_DETAIL="responsive temporal ensemble decay=0.20"
     ;;
+  cogact_adaptive_alpha0p1_h2)
+    EXECUTION_ARGS=(--execution-mode cogact_adaptive_ensemble)
+    EXECUTION_DETAIL="CogACT adaptive action ensemble alpha=0.1 horizon=2"
+    ;;
   w12_latest_chunk)
     EXECUTION_ARGS=(--execution-mode latest_chunk)
     EXECUTION_DETAIL="latest chunk first action; replan each step"

@@ -27,6 +27,7 @@ from before_we_act.evaluate_action_generator_r4 import (
 )
 from before_we_act.spatial_observation import R12SpatialObservationEncoder
 from before_we_act.team_belief.base import PredictiveBeliefModel, load_r11_config
+from before_we_act.upstream_components.cogact import AdaptiveEnsembler
 
 
 
@@ -54,6 +55,24 @@ def make_env(task_name: str):
         human_render_camera_configs=dict(shader_pack="default"),
         viewer_camera_configs=dict(shader_pack="default"),
     )
+
+
+class CogACTAdaptiveTeamEnsembler:
+    """Per-arm adapter around the pinned CogACT inference component."""
+
+    def __init__(self, arms, horizon: int = 2, alpha: float = 0.1):
+        self.arms = tuple(arms)
+        self.ensemblers = [
+            AdaptiveEnsembler(horizon, alpha) for _ in self.arms
+        ]
+
+    def append_and_select(self, _step: int, chunks: np.ndarray):
+        return {
+            f"panda-{arm}": self.ensemblers[local_index]
+            .ensemble_action(chunks[local_index])
+            .copy()
+            for local_index, arm in enumerate(self.arms)
+        }
 
 
 def load_specialist(
@@ -126,16 +145,20 @@ def evaluate_specialist(
         for seed in seeds:
             observation, _ = reset_reproducibly(env, seed)
             history = TeamHistory(arms)
-            ensemble = TemporalChunkEnsembler(
-                arms,
-                decay={
-                    "act_temporal_ensemble": 0.01,
-                    "mild_temporal_ensemble": 0.02,
-                    "balanced_temporal_ensemble": 0.05,
-                    "recent_temporal_ensemble": 0.10,
-                    "responsive_temporal_ensemble": 0.20,
-                    "latest_chunk": 0.01,
-                }[execution_mode],
+            ensemble = (
+                CogACTAdaptiveTeamEnsembler(arms, horizon=2, alpha=0.1)
+                if execution_mode == "cogact_adaptive_ensemble"
+                else TemporalChunkEnsembler(
+                    arms,
+                    decay={
+                        "act_temporal_ensemble": 0.01,
+                        "mild_temporal_ensemble": 0.02,
+                        "balanced_temporal_ensemble": 0.05,
+                        "recent_temporal_ensemble": 0.10,
+                        "responsive_temporal_ensemble": 0.20,
+                        "latest_chunk": 0.01,
+                    }[execution_mode],
+                )
             )
             previous_action = None
             success, info = False, {}
@@ -200,6 +223,7 @@ def evaluate_specialist(
                     "balanced_temporal_ensemble": "r15_w12_balanced_decay_0p05_stack_specialist",
                     "recent_temporal_ensemble": "r15_w12_recent_decay_0p10_stack_specialist",
                     "responsive_temporal_ensemble": "r15_w12_responsive_decay_0p20_stack_specialist",
+                    "cogact_adaptive_ensemble": "r15_cogact_adaptive_alpha0p1_h2_stack_specialist",
                     "latest_chunk": "r15_w12_latest_chunk_stack_specialist",
                 }[execution_mode],
             }
@@ -233,6 +257,7 @@ def main() -> None:
             "balanced_temporal_ensemble",
             "recent_temporal_ensemble",
             "responsive_temporal_ensemble",
+            "cogact_adaptive_ensemble",
             "latest_chunk",
         ),
         default="act_temporal_ensemble",
@@ -285,6 +310,7 @@ def main() -> None:
             "balanced_temporal_ensemble": "r15_w12_balanced_decay_0p05_stack_specialist",
             "recent_temporal_ensemble": "r15_w12_recent_decay_0p10_stack_specialist",
             "responsive_temporal_ensemble": "r15_w12_responsive_decay_0p20_stack_specialist",
+            "cogact_adaptive_ensemble": "r15_cogact_adaptive_alpha0p1_h2_stack_specialist",
             "latest_chunk": "r15_w12_latest_chunk_stack_specialist",
         }[args.execution_mode]
     elif args.task in config.deployment["protected_tasks"]:
@@ -326,6 +352,7 @@ def main() -> None:
             "balanced_temporal_ensemble": "balanced exponential chunk ensemble decay=0.05",
             "recent_temporal_ensemble": "exponential chunk ensemble decay=0.10",
             "responsive_temporal_ensemble": "responsive exponential chunk ensemble decay=0.20",
+            "cogact_adaptive_ensemble": "Microsoft CogACT Adaptive Action Ensemble alpha=0.1 horizon=2",
             "latest_chunk": "latest predicted chunk first action; replan every environment step",
         }[args.execution_mode],
     }

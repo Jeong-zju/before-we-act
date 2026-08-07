@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "component": "CogACT Adaptive Action Ensemble",
+  "repository": "https://github.com/microsoft/CogACT.git",
+  "repository_commit": "b174a1b86deedfab4d198d935207e7bb0527994e",
+  "source_file_commit": "c1712bf11ddb764e4fee2fca0236848514cfb4f0",
+  "license": "MIT",
+  "license_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+  "files": [
+    {
+      "local": "adaptive_ensemble.py",
+      "upstream": "sim_cogact/adaptive_ensemble.py",
+      "upstream_sha256": "50ff24b1bb33d5bc53fe0cb8d79f3cf4e9cedd039f25d5fd0adf8902bf7d9609",
+      "local_sha256": "41fb978ff46cca961690f67df54ea89873412040e0a8d117fa8f0ccff90fc927",
+      "normalization": "one final newline added; source otherwise byte-identical",
+      "algorithm_changes": 0
+    }
+  ]
+}

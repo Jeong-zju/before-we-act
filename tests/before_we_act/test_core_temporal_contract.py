@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
 import sys
 import types
 
@@ -82,8 +85,6 @@ def test_r15_recent_ensemble_emphasizes_latest_and_latest_chunk_is_exact():
 
 
 def test_r15_temporal_grid_has_distinct_resume_routes():
-    from pathlib import Path
-
     source = (
         Path(__file__).resolve().parents[2]
         / "before_we_act/evaluate_action_generator_evolution.py"
@@ -97,6 +98,66 @@ def test_r15_temporal_grid_has_distinct_resume_routes():
         assert mode in source
         assert route in source
         assert f"decay={decay}" in source
+
+
+def test_cogact_adaptive_ensemble_matches_pinned_equation_and_horizon():
+    from before_we_act.upstream_components.cogact import AdaptiveEnsembler
+
+    ensembler = AdaptiveEnsembler(pred_action_horizon=2, adaptive_ensemble_alpha=0.1)
+    chunks = [
+        np.arange(32, dtype=np.float32).reshape(4, 8),
+        np.arange(32, 64, dtype=np.float32).reshape(4, 8),
+        np.arange(64, 96, dtype=np.float32).reshape(4, 8),
+    ]
+    np.testing.assert_array_equal(ensembler.ensemble_action(chunks[0]), chunks[0][0])
+    candidates = np.stack([chunks[0][1], chunks[1][0]])
+    reference = candidates[-1]
+    cosine = np.sum(candidates * reference, axis=1) / (
+        np.linalg.norm(candidates, axis=1) * np.linalg.norm(reference) + 1e-7
+    )
+    weights = np.exp(0.1 * cosine)
+    expected = np.sum((weights / weights.sum())[:, None] * candidates, axis=0)
+    np.testing.assert_allclose(
+        ensembler.ensemble_action(chunks[1]), expected, rtol=0, atol=0
+    )
+    ensembler.ensemble_action(chunks[2])
+    assert len(ensembler.action_history) == 2
+
+
+def test_cogact_transplant_source_and_license_are_pinned():
+    root = Path(__file__).resolve().parents[2]
+    component = root / "before_we_act/upstream_components/cogact"
+    source = component / "adaptive_ensemble.py"
+    license_path = component / "LICENSE"
+    source_map = json.loads((component / "SOURCE_MAP.json").read_text())
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == (
+        "41fb978ff46cca961690f67df54ea89873412040e0a8d117fa8f0ccff90fc927"
+    )
+    assert hashlib.sha256(license_path.read_bytes()).hexdigest() == (
+        "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+    )
+    assert source_map["repository_commit"] == (
+        "b174a1b86deedfab4d198d935207e7bb0527994e"
+    )
+    assert source_map["files"][0]["algorithm_changes"] == 0
+
+
+def test_cogact_team_adapter_preserves_arm_keys_and_route_identity():
+    from before_we_act.evaluate_action_generator_evolution import (
+        CogACTAdaptiveTeamEnsembler,
+    )
+
+    team = CogACTAdaptiveTeamEnsembler((0, 2), horizon=2, alpha=0.1)
+    chunks = np.arange(2 * 4 * 8, dtype=np.float32).reshape(2, 4, 8)
+    selected = team.append_and_select(0, chunks)
+    assert set(selected) == {"panda-0", "panda-2"}
+    np.testing.assert_array_equal(selected["panda-0"], chunks[0, 0])
+    np.testing.assert_array_equal(selected["panda-2"], chunks[1, 0])
+    root = Path(__file__).resolve().parents[2]
+    evaluator = (root / "before_we_act/evaluate_action_generator_evolution.py").read_text()
+    launcher = (root / "scripts/before_we_act/launch_r15_temporal_screens_tmux.sh").read_text()
+    assert "r15_cogact_adaptive_alpha0p1_h2_stack_specialist" in evaluator
+    assert "cogact_adaptive_alpha0p1_h2" in launcher
 
 
 def test_prepare_and_denormalize_preserve_exact_contract():
