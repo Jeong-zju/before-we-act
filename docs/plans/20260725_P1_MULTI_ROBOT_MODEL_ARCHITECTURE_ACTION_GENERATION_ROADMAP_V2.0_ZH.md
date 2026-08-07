@@ -4187,6 +4187,10 @@ TRACT 启发的阶段诊断使用成功 expert HDF5 SHA256 `7d2c4151...` 与 nat
 
 phase-balanced expert 路线已在独立分支实现：真实 20-expert manifest 的两批只读审计均精确得到 `{original:3, phase0:3, phase1:3, phase2:3}`；本地相关 `18 passed`、远端 `18 passed`、后续 promotion 脚本远端 `6 passed`，Python compile、ruff、两个 runner/launcher 与 promotion shell 均通过。e20 若 discovery 失败则直接进入 `/workspace/bwa_runs/r15e30-20260807-phase-balanced-e9-ft5k-discovery20`；若 e20 已通过 discovery、但 validation/formal 失败，则先运行更贴合“新成功但遗忘 control seed”证据的 e25 RETAIN。e25 再按 e35 validation→e36 formal 晋级，失败后进入 e30；e30 自身按 e31 validation→e32 formal 晋级，失败才恢复 e21/e22 搜索。等待 session `bwa-r15-handoff-expert-promote-e28`、`bwa-r15-handoff-retain-promote-e35` 与 `bwa-r15-handoff-phase-balanced-promote-e31` 均不占 GPU。
 
+**UTC `2026-08-07T13:08Z` 增量终态与接力。** e16 true stochastic AAC 完整 discovery20=`2/20 vs 1/20`、delta=`+1`、paired=`+2/-1`，结构化 acceptance/status 均为 `PASSED`；成功 seed `1223853321/1314179287`，与 e20 当时三个成功仅重合前者。`bwa-r15-handoff-stochastic-promote-e33` 在终态后约 2 秒执行相同 commit/mode 的 dry-run 并通过，随后启动 `/workspace/bwa_runs/r15e33-20260807-aac-stochastic-validation20`（GPU2、tmux `bwa-r15s-p1`、PID `559530/559546`）；本快照 `0/20`、heartbeat 正常。只有 validation20 `>1/20` 才能进入 e34 原始 Gate20，失败才回到 e19 BID。
+
+e23 fixed-threshold reactive 完整 discovery20=`1/20 vs 1/20`、paired=`+0/-0`，结构化结论 `FAILED`。终态 robust replay 读取全部 `20` episodes/`5747` checks：原阈值 triggers=`839`，robust triggers=`0`，q99 floor violation=`0`，信号级 receipt `PASSED`；它仍不是闭环验收。随后 e26 dry-run 通过并启动 `/workspace/bwa_runs/r15e26-20260807-world-reactive-robust-discovery20`（GPU1、tmux `bwa-r15s-p3`、PID `560111/560130`），本快照 `0/20`。同期 e20 expert=`18/20,3 success`，e18 replicated-batch original formal=`16/20,0 success`；四张卡均有新鲜 producer heartbeat、约 `1.9 GiB` 显存且无 OOM/NaN/异常重启。
+
 当前远程为四张 RTX 5090；UTC `12:48Z` 的占用为 GPU0=`r15e20 expert-e9 discovery`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。磁盘 `/workspace` 可用约 `145 GiB`、inode 使用约 `1%`，当前无需清理；既有实验、数据集、缓存和 checkpoint 均未删除。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
 
 ```bash
