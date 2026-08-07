@@ -44,10 +44,13 @@ for path in "$PYTHON" "$BELIEF_CHECKPOINT" "$ACTION_CHECKPOINT" "$WORLD_CHECKPOI
 git -C "$ROOT" fetch origin --prune
 BASE_HEAD="$(git -C "$ROOT" rev-parse HEAD)"
 [[ "$BASE_HEAD" == "$(git -C "$ROOT" rev-parse origin/feat/model-improvements)" ]] || { printf 'local base differs from origin\n' >&2; exit 3; }
+PARENT_COMMIT=""
 for index in 0 1 2 3; do
   branch="${BRANCHES[index]}"; git -C "$ROOT" show-ref --verify --quiet "refs/remotes/origin/$branch" || { printf 'missing remote branch %s\n' "$branch" >&2; exit 3; }
   value="$(git -C "$ROOT" show "origin/$branch:configs/before_we_act/r14_decision/p$index.yaml" | "$PYTHON" -c 'import sys,yaml; print(yaml.safe_load(sys.stdin)["parent_commit"])')"
-  [[ "$value" == "$BASE_HEAD" ]] || { printf '%s has wrong parent %s\n' "$branch" "$value" >&2; exit 3; }
+  [[ -n "$PARENT_COMMIT" ]] || PARENT_COMMIT="$value"
+  [[ "$value" == "$PARENT_COMMIT" ]] || { printf '%s has inconsistent parent %s\n' "$branch" "$value" >&2; exit 3; }
+  git -C "$ROOT" merge-base --is-ancestor "$PARENT_COMMIT" "origin/$branch" || { printf '%s does not descend from frozen R14 parent\n' "$branch" >&2; exit 3; }
 done
 for task in lift_barrier camera_alignment three_robots_stack_cube long_pipeline_delivery take_photo; do
   [[ -f "$PROTOCOL_ROOT/seeds/$task.json" && -f "$W12_RUN/validation/gate20/$task.json" ]] || { printf 'missing paired seed/W12 report for %s\n' "$task" >&2; exit 3; }
@@ -57,7 +60,7 @@ for candidate in "${SELECTED[@]}"; do
   tmux has-session -t "$session" 2>/dev/null && { printf 'session already exists: %s\n' "$session" >&2; exit 3; }
   nvidia-smi -i "$index" --query-compute-apps=pid --format=csv,noheader | grep -Eq '[0-9]' && { printf 'GPU %s is in use\n' "$index" >&2; exit 3; } || true
 done
-printf 'R14 preflight run=%s root=%s parent=%s selected=%s baseline=W12-77/100\n' "$RUN_ID" "$RUN_ROOT" "$BASE_HEAD" "${SELECTED[*]}"
+printf 'R14 preflight run=%s root=%s parent=%s selected=%s baseline=W12-77/100\n' "$RUN_ID" "$RUN_ROOT" "$PARENT_COMMIT" "${SELECTED[*]}"
 for candidate in "${SELECTED[@]}"; do index="${candidate#p}"; printf '  %s branch=%s GPU=%s session=bwa-r14-%s\n' "$candidate" "${BRANCHES[index]}" "$index" "$candidate"; done
 if ((DRY_RUN)); then printf 'dry-run passed; no worktree/output/tmux created\n'; exit 0; fi
 mkdir -p "$WORKTREE_ROOT" "$RUN_ROOT" /workspace/.cache/huggingface /workspace/bwa_upstream/r14
@@ -73,7 +76,7 @@ for index in 0 1 2 3; do
   [[ -f "$worktree/configs/before_we_act/r14_decision/$candidate.yaml" && -f "$worktree/experiments/before_we_act/r14/$candidate/component_lock.yaml" ]] || { printf 'missing R14 contract for %s\n' "$candidate" >&2; exit 3; }
   WORKTREE_ARGS+=(--worktree "$candidate=$branch=$commit=$worktree")
 done
-"$PYTHON" "$ROOT/scripts/before_we_act/r14_runtime.py" init --run-root "$RUN_ROOT" --run-id "$RUN_ID" --parent-commit "$BASE_HEAD" --belief-checkpoint "$BELIEF_CHECKPOINT" --action-checkpoint "$ACTION_CHECKPOINT" --world-checkpoint "$WORLD_CHECKPOINT" "${WORKTREE_ARGS[@]}"
+"$PYTHON" "$ROOT/scripts/before_we_act/r14_runtime.py" init --run-root "$RUN_ROOT" --run-id "$RUN_ID" --parent-commit "$PARENT_COMMIT" --belief-checkpoint "$BELIEF_CHECKPOINT" --action-checkpoint "$ACTION_CHECKPOINT" --world-checkpoint "$WORLD_CHECKPOINT" "${WORKTREE_ARGS[@]}"
 for candidate in p0 p1 p2 p3; do
   if [[ " ${SELECTED[*]} " != *" $candidate "* ]]; then
     "$PYTHON" "$ROOT/scripts/before_we_act/r14_runtime.py" status --run-root "$RUN_ROOT" --candidate "$candidate" --state NOT_STARTED --stage pending --program run_r14_candidate.sh --detail "not selected by launch" --pid 0 --child-pid 0 --total-steps 100 --log "$RUN_ROOT/candidates/$candidate/logs/candidate.log"
