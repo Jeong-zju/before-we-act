@@ -66,6 +66,10 @@ heartbeat_loop & HEARTBEAT_PID=$!
 EXECUTION_ARGS=()
 EXECUTION_DETAIL="W10 temporal ensemble decay=0.01"
 case "$LABEL" in
+  w12_mild_decay_0p02)
+    EXECUTION_ARGS=(--execution-mode mild_temporal_ensemble)
+    EXECUTION_DETAIL="mild temporal ensemble decay=0.02"
+    ;;
   w12_balanced_decay_0p05)
     EXECUTION_ARGS=(--execution-mode balanced_temporal_ensemble)
     EXECUTION_DETAIL="balanced temporal ensemble decay=0.05"
@@ -73,6 +77,10 @@ case "$LABEL" in
   w12_recent_decay_0p10)
     EXECUTION_ARGS=(--execution-mode recent_temporal_ensemble)
     EXECUTION_DETAIL="recent-weighted temporal ensemble decay=0.10"
+    ;;
+  w12_responsive_decay_0p20)
+    EXECUTION_ARGS=(--execution-mode responsive_temporal_ensemble)
+    EXECUTION_DETAIL="responsive temporal ensemble decay=0.20"
     ;;
   w12_latest_chunk)
     EXECUTION_ARGS=(--execution-mode latest_chunk)

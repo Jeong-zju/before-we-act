@@ -130,8 +130,10 @@ def evaluate_specialist(
                 arms,
                 decay={
                     "act_temporal_ensemble": 0.01,
+                    "mild_temporal_ensemble": 0.02,
                     "balanced_temporal_ensemble": 0.05,
                     "recent_temporal_ensemble": 0.10,
+                    "responsive_temporal_ensemble": 0.20,
                     "latest_chunk": 0.01,
                 }[execution_mode],
             )
@@ -194,8 +196,10 @@ def evaluate_specialist(
                 "terminal_info": terminal_info(info),
                 "route": {
                     "act_temporal_ensemble": "r12e1_high_resolution_specialist",
+                    "mild_temporal_ensemble": "r15_w12_mild_decay_0p02_stack_specialist",
                     "balanced_temporal_ensemble": "r15_w12_balanced_decay_0p05_stack_specialist",
                     "recent_temporal_ensemble": "r15_w12_recent_decay_0p10_stack_specialist",
+                    "responsive_temporal_ensemble": "r15_w12_responsive_decay_0p20_stack_specialist",
                     "latest_chunk": "r15_w12_latest_chunk_stack_specialist",
                 }[execution_mode],
             }
@@ -225,8 +229,10 @@ def main() -> None:
         "--execution-mode",
         choices=(
             "act_temporal_ensemble",
+            "mild_temporal_ensemble",
             "balanced_temporal_ensemble",
             "recent_temporal_ensemble",
+            "responsive_temporal_ensemble",
             "latest_chunk",
         ),
         default="act_temporal_ensemble",
@@ -275,8 +281,10 @@ def main() -> None:
         ) if remaining else ([], [], None)
         route = {
             "act_temporal_ensemble": "r12e1_high_resolution_specialist",
+            "mild_temporal_ensemble": "r15_w12_mild_decay_0p02_stack_specialist",
             "balanced_temporal_ensemble": "r15_w12_balanced_decay_0p05_stack_specialist",
             "recent_temporal_ensemble": "r15_w12_recent_decay_0p10_stack_specialist",
+            "responsive_temporal_ensemble": "r15_w12_responsive_decay_0p20_stack_specialist",
             "latest_chunk": "r15_w12_latest_chunk_stack_specialist",
         }[args.execution_mode]
     elif args.task in config.deployment["protected_tasks"]:
@@ -314,8 +322,10 @@ def main() -> None:
         "control_cadence": "one proposal per environment step",
         "temporal_aggregation": {
             "act_temporal_ensemble": "W10 exponential chunk ensemble decay=0.01",
+            "mild_temporal_ensemble": "mild exponential chunk ensemble decay=0.02",
             "balanced_temporal_ensemble": "balanced exponential chunk ensemble decay=0.05",
             "recent_temporal_ensemble": "exponential chunk ensemble decay=0.10",
+            "responsive_temporal_ensemble": "responsive exponential chunk ensemble decay=0.20",
             "latest_chunk": "latest predicted chunk first action; replan every environment step",
         }[args.execution_mode],
     }

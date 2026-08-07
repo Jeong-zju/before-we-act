@@ -60,18 +60,43 @@ def test_r15_recent_ensemble_emphasizes_latest_and_latest_chunk_is_exact():
     chunks0 = np.zeros((1, 4, 8), dtype=np.float32)
     chunks1 = np.ones((1, 4, 8), dtype=np.float32)
     frozen = TemporalChunkEnsembler((0,), decay=0.01)
+    mild = TemporalChunkEnsembler((0,), decay=0.02)
     balanced = TemporalChunkEnsembler((0,), decay=0.05)
     recent = TemporalChunkEnsembler((0,), decay=0.10)
+    responsive = TemporalChunkEnsembler((0,), decay=0.20)
     frozen.append_and_select(0, chunks0)
+    mild.append_and_select(0, chunks0)
     balanced.append_and_select(0, chunks0)
     recent.append_and_select(0, chunks0)
+    responsive.append_and_select(0, chunks0)
     frozen_value = frozen.append_and_select(1, chunks1)["panda-0"]
+    mild_value = mild.append_and_select(1, chunks1)["panda-0"]
     balanced_value = balanced.append_and_select(1, chunks1)["panda-0"]
     recent_value = recent.append_and_select(1, chunks1)["panda-0"]
-    assert np.all(balanced_value > frozen_value)
+    responsive_value = responsive.append_and_select(1, chunks1)["panda-0"]
+    assert np.all(mild_value > frozen_value)
+    assert np.all(balanced_value > mild_value)
     assert np.all(recent_value > balanced_value)
-    assert np.all(recent_value > frozen_value)
+    assert np.all(responsive_value > recent_value)
     np.testing.assert_array_equal(chunks1[0, 0], np.ones(8, dtype=np.float32))
+
+
+def test_r15_temporal_grid_has_distinct_resume_routes():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "before_we_act/evaluate_action_generator_evolution.py"
+    ).read_text()
+    for mode, route, decay in (
+        ("mild_temporal_ensemble", "r15_w12_mild_decay_0p02", "0.02"),
+        ("balanced_temporal_ensemble", "r15_w12_balanced_decay_0p05", "0.05"),
+        ("recent_temporal_ensemble", "r15_w12_recent_decay_0p10", "0.10"),
+        ("responsive_temporal_ensemble", "r15_w12_responsive_decay_0p20", "0.20"),
+    ):
+        assert mode in source
+        assert route in source
+        assert f"decay={decay}" in source
 
 
 def test_prepare_and_denormalize_preserve_exact_contract():

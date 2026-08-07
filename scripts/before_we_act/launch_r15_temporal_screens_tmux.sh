@@ -29,7 +29,7 @@ if [[ -n "$GPU_OVERRIDE" ]]; then
   [[ "${#SELECTED[@]}" -eq 1 && "$GPU_OVERRIDE" =~ ^[0-3]$ ]] || { printf -- '--gpu-index requires one candidate and GPU 0..3\n' >&2; exit 2; }
 fi
 if [[ -n "$MODE_OVERRIDE" ]]; then
-  [[ "${#SELECTED[@]}" -eq 1 && "$MODE_OVERRIDE" =~ ^(act_temporal_ensemble|balanced_temporal_ensemble|recent_temporal_ensemble|latest_chunk)$ ]] || { printf -- '--execution-mode requires one candidate and a registered mode\n' >&2; exit 2; }
+  [[ "${#SELECTED[@]}" -eq 1 && "$MODE_OVERRIDE" =~ ^(act_temporal_ensemble|mild_temporal_ensemble|balanced_temporal_ensemble|recent_temporal_ensemble|responsive_temporal_ensemble|latest_chunk)$ ]] || { printf -- '--execution-mode requires one candidate and a registered mode\n' >&2; exit 2; }
 fi
 for command in git tmux nvidia-smi sha256sum jq; do command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }; done
 [[ "$(git -C "$ROOT" branch --show-current)" == bwa/r15-closed-loop-evolution && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires clean R15 branch\n' >&2; exit 3; }
@@ -48,8 +48,10 @@ LABEL[p3]=w12_balanced_decay_0p05; GPU[p3]=2; MODE[p3]=balanced_temporal_ensembl
 if [[ -n "$MODE_OVERRIDE" ]]; then
   selected="${SELECTED[0]}"; MODE["$selected"]="$MODE_OVERRIDE"
   case "$MODE_OVERRIDE" in
+    mild_temporal_ensemble) LABEL["$selected"]=w12_mild_decay_0p02 ;;
     balanced_temporal_ensemble) LABEL["$selected"]=w12_balanced_decay_0p05 ;;
     recent_temporal_ensemble) LABEL["$selected"]=w12_recent_decay_0p10 ;;
+    responsive_temporal_ensemble) LABEL["$selected"]=w12_responsive_decay_0p20 ;;
     latest_chunk) LABEL["$selected"]=w12_latest_chunk ;;
     *) LABEL["$selected"]=checkpoint_act_temporal_ensemble ;;
   esac
