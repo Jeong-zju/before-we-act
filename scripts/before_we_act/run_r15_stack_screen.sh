@@ -60,8 +60,11 @@ cleanup() {
 trap on_signal INT TERM; trap cleanup EXIT
 heartbeat_loop & HEARTBEAT_PID=$!
 status VALIDATING closed_loop evaluate_action_generator_evolution.py "$SPLIT paired Stack screen; 20 live episodes"
-env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$WORKTREE" BWA_R15_RUN_ROOT="$RUN_ROOT" BWA_R15_CANDIDATE="$CANDIDATE" \
-  "$PYTHON" -m before_we_act.evaluate_action_generator_evolution --config "$CONFIG" --checkpoint "$CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --vision-artifact "$VISION_ARTIFACT" --vision-batch-size 5 --task three_robots_stack_cube --seed-file "$SEED_FILE" --episodes 20 --max-steps 1500 --device cuda:0 --output "$OUTPUT" --resume-log "$EVAL_LOG" >>"$EVAL_LOG" 2>&1 &
+(
+  cd "$WORKTREE"
+  exec env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$WORKTREE" BWA_R15_RUN_ROOT="$RUN_ROOT" BWA_R15_CANDIDATE="$CANDIDATE" \
+    "$PYTHON" -m before_we_act.evaluate_action_generator_evolution --config "$CONFIG" --checkpoint "$CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --vision-artifact "$VISION_ARTIFACT" --vision-batch-size 5 --task three_robots_stack_cube --seed-file "$SEED_FILE" --episodes 20 --max-steps 1500 --device cuda:0 --output "$OUTPUT" --resume-log "$EVAL_LOG"
+) >>"$EVAL_LOG" 2>&1 &
 CHILD_PID=$!; status VALIDATING closed_loop evaluate_action_generator_evolution.py "$SPLIT paired Stack screen; 20 live episodes"
 wait "$CHILD_PID"; CHILD_PID=0
 if ((REFERENCE == 0)); then
