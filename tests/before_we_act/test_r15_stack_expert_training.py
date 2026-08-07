@@ -147,3 +147,15 @@ def test_phase_balanced_launcher_carries_manifest_to_trainer():
     assert "phase-balanced-expert" in launcher
     assert "--phase-manifest" in launcher
     assert "--phase-manifest" in runner
+
+
+def test_phase_balanced_promotion_precedes_e21_search():
+    root = Path(__file__).resolve().parents[2]
+    handoff = (
+        root / "scripts/before_we_act/handoff_r15_phase_balanced_promotion.sh"
+    ).read_text()
+    assert handoff.index("DISCOVERY_ACCEPTANCE=") < handoff.index(
+        "VALIDATION_ACCEPTANCE="
+    ) < handoff.index("FORMAL_ACCEPTANCE=")
+    assert "r15e21-20260807-expert20-e6-ft5k-discovery20" in handoff
+    assert "launch_r15_formal_stack_tmux.sh" in handoff
