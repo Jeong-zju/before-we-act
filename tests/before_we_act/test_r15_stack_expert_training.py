@@ -159,3 +159,6 @@ def test_phase_balanced_promotion_precedes_e21_search():
     ) < handoff.index("FORMAL_ACCEPTANCE=")
     assert "r15e21-20260807-expert20-e6-ft5k-discovery20" in handoff
     assert "launch_r15_formal_stack_tmux.sh" in handoff
+    assert "--session bwa-r15s-phase-e31" in handoff
+    assert "--session bwa-r15s-phase-e32" in handoff
+    assert "wait_for_gpu0 bwa-r15s-p1" not in handoff

@@ -52,29 +52,33 @@ cd "$VALIDATION_ROOT"
 ./scripts/before_we_act/launch_r15_temporal_screens_tmux.sh \
   --run-id "$(basename "$VALIDATION")" --candidate p1 --split validation20 \
   --reference-run-root "$VALIDATION_REFERENCE" --checkpoint "$CHECKPOINT" \
-  --gpu-index 0 --execution-mode act_temporal_ensemble --dry-run
+  --gpu-index 0 --session bwa-r15s-phase-e31 \
+  --execution-mode act_temporal_ensemble --dry-run
 ./scripts/before_we_act/launch_r15_temporal_screens_tmux.sh \
   --run-id "$(basename "$VALIDATION")" --candidate p1 --split validation20 \
   --reference-run-root "$VALIDATION_REFERENCE" --checkpoint "$CHECKPOINT" \
-  --gpu-index 0 --execution-mode act_temporal_ensemble
+  --gpu-index 0 --session bwa-r15s-phase-e31 \
+  --execution-mode act_temporal_ensemble
 
 VALIDATION_ACCEPTANCE="$VALIDATION/candidates/p1/acceptance.json"
 wait_for_file "$VALIDATION_ACCEPTANCE"
 if [[ "$(acceptance_status "$VALIDATION_ACCEPTANCE")" != PASSED ]]; then
   printf '[%s] e30 validation failed; launching e21 search\n' "$(date -u +%FT%TZ)"
-  wait_for_gpu0 bwa-r15s-p1
+  wait_for_gpu0 bwa-r15s-phase-e31
   launch_e21_search
 fi
 
 printf '[%s] e30 validation passed; starting original formal Gate20\n' "$(date -u +%FT%TZ)"
-wait_for_gpu0 bwa-r15s-p1
+wait_for_gpu0 bwa-r15s-phase-e31
 cd "$VALIDATION_ROOT"
 ./scripts/before_we_act/launch_r15_formal_stack_tmux.sh \
   --run-id "$(basename "$FORMAL")" --candidate p1 --gpu-index 0 \
-  --checkpoint "$CHECKPOINT" --execution-mode act_temporal_ensemble --dry-run
+  --checkpoint "$CHECKPOINT" --session bwa-r15s-phase-e32 \
+  --execution-mode act_temporal_ensemble --dry-run
 ./scripts/before_we_act/launch_r15_formal_stack_tmux.sh \
   --run-id "$(basename "$FORMAL")" --candidate p1 --gpu-index 0 \
-  --checkpoint "$CHECKPOINT" --execution-mode act_temporal_ensemble
+  --checkpoint "$CHECKPOINT" --session bwa-r15s-phase-e32 \
+  --execution-mode act_temporal_ensemble
 
 FORMAL_ACCEPTANCE="$FORMAL/candidates/p1/acceptance.json"
 wait_for_file "$FORMAL_ACCEPTANCE"
@@ -83,5 +87,5 @@ if [[ "$(acceptance_status "$FORMAL_ACCEPTANCE")" == PASSED ]]; then
   exit 0
 fi
 printf '[%s] e30 formal Gate20 failed; launching e21 search\n' "$(date -u +%FT%TZ)"
-wait_for_gpu0 bwa-r15s-p1
+wait_for_gpu0 bwa-r15s-phase-e32
 launch_e21_search
