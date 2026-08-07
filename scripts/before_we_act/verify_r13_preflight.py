@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--cache", required=True)
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--expected-update", type=int, default=2)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -51,7 +52,7 @@ def main() -> None:
         "checkpoint_identity": (
             saved.get("round") == "R13"
             and saved.get("candidate_id") == config.candidate_id
-            and int(saved.get("update", -1)) == 2
+            and int(saved.get("update", -1)) == args.expected_update
         ),
         "strict_restore": not incompatible.missing_keys and not incompatible.unexpected_keys,
         "prediction_finite": bool(torch.isfinite(first.latent_by_horizon).all()),
@@ -66,6 +67,7 @@ def main() -> None:
         "schema_version": 1,
         "round": "R13",
         "candidate_id": config.candidate_id,
+        "expected_update": args.expected_update,
         "action_condition_delta": delta,
         "checks": checks,
         "passed": all(checks.values()),
