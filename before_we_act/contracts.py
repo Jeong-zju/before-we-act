@@ -127,3 +127,33 @@ class ConsequencePrediction:
         if not all(bool(torch.isfinite(value).all()) for value in values):
             raise ValueError("consequence prediction contains non-finite values")
         return self
+
+
+@dataclass(frozen=True)
+class PlannerDecision:
+    """R14 fail-closed decision over a frozen W12 action proposal.
+
+    ``actions`` is the selected normalized joint chunk ``[B,A,H,D]``.  A
+    fallback decision must be bit-exact to the caller-provided W12 base.
+    """
+
+    actions: torch.Tensor
+    selected_source: str
+    fallback: bool
+    utility_gain: float
+    latency_ms: float
+    reason: str
+    diagnostics: Mapping[str, Any] = field(default_factory=dict)
+
+    def validate(self) -> "PlannerDecision":
+        if self.actions.ndim != 4:
+            raise ValueError("planner actions must be [batch,agent,horizon,dim]")
+        if not bool(torch.isfinite(self.actions).all()):
+            raise ValueError("planner decision contains non-finite actions")
+        if not self.selected_source or not self.reason:
+            raise ValueError("planner decision requires source and reason")
+        if not float("-inf") < float(self.utility_gain) < float("inf"):
+            raise ValueError("planner utility gain must be finite")
+        if not 0 <= float(self.latency_ms) < float("inf"):
+            raise ValueError("planner latency must be finite and non-negative")
+        return self
