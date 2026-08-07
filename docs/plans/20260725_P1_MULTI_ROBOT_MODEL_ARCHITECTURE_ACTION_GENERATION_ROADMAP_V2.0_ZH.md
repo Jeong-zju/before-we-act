@@ -4102,7 +4102,7 @@ cd /workspace/bwa_worktrees/model-improvements
 - `validation20.json` SHA256 `c6292f4c9be292d0cd4f6d93141022f013d7fffd9c8782911eb8d753a534b50b`；冻结 W12 control 为 `/workspace/bwa_runs/r15e7-20260807-w12-validation20-control`，`1/20`；
 - 候选必须先在 identical-seed discovery20 **严格高于** W12，再以完全冻结的方法在 validation20 严格高于 W12，之后才有资格运行原 Gate20 Stack seeds；最终仍必须使五任务总成功数严格高于 `77/100`。筛选失败不覆盖目录、不修改 seed，也不能调低验收门槛。
 
-**Git 与实现工作台。** 公共进化账本分支为 `bwa/r15-closed-loop-evolution@59d0005`，所有完成修改均先本地测试、检查 diff、提交并推送，再由远程独立 worktree fast-forward。各条可归因路线不混合：
+**Git 与实现工作台。** 公共进化账本分支为 `bwa/r15-closed-loop-evolution`（本次增量记录前为 `67d41f048519`），所有完成修改均先本地测试、检查 diff、提交并推送，再由远程独立 worktree fast-forward。各条可归因路线不混合：
 
 | 路线 | 分支 / commit | 作用与隔离 |
 |---|---|---|
@@ -4115,6 +4115,7 @@ cd /workspace/bwa_worktrees/model-improvements
 | native expert evolution | `bwa/r15-expert-evolution@7aa19f0c6044` | 原始成功规划轨迹转 native RGB+DINO 物理动作 cache，再从 W12 做 source-aware expert fine-tune；不把规划器作为 runtime policy；并发 session 身份已隔离 |
 | BID backward coherence | `bwa/r15-bid-coherence@ba69b62` | 从 BID LeRobot `823a6137...` 固定 Apache-2.0 来源，只移植 backward coherence；先以真实 stochastic ACT plan 作候选，不伪造 strong/weak policy |
 | W13 reactive monitor | `bwa/r15-world-reactive-monitor@c50395908908` | 按 DREAM-Chunk/VLA-Corrector 的预测—实际偏差思路，用冻结 W13 h1/h5 latent error 触发丢弃余下 queue 与重规划；阈值只来自 R13 validation Stack q99 |
+| W13 robust reactive monitor | `bwa/r15-world-reactive-robust@c9306e7838b8` | 固定 VLA-Corrector 官方 `9d23a0b...`/Apache-2.0，移植独立 h1/h5 EWMA、median+MAD、滞回、连续检查和 cooldown；冻结 R13 q99 仍是不可降低的 noise floor |
 | PACE execution | `bwa/r15-pace-execution@3cde7d6315ba` | PACE v2 论文公式的独立复现（未复制未发布源码）；用 20 条成功 expert、8124 windows 的 joint-speed valley prominence 校准动态 horizon |
 | RETAIN expert merge | `bwa/r15-retain-expert-merge@14f55a58980b` | 固定 RETAIN 官方 `0bbc6cf...`/Apache-2.0；对 W12 与 e20 expert checkpoint 做预注册 `0.5/0.5` 参数插值，以降低少量专项数据微调的遗忘；不读取 discovery 结果调 alpha |
 
@@ -4164,7 +4165,13 @@ cd /workspace/bwa_worktrees/model-improvements
 
 论文路线继续扩大但保持适配边界：RETAIN 适合当前“少量成功 Stack expert + 强 W12 parent”的数据形态；FutureRTC/A2C2 面向异步推理延迟，不匹配当前同步仿真主瓶颈；DVAC 依赖 flow denoising 轨迹，不能把 ACT latent proposal 伪装为其信号。所有后续尝试仍优先查找官方代码与许可证，但按任务/架构适配性和 paired screen 证据决定是否运行。
 
-当前远程为四张 RTX 5090；UTC `11:27Z` 的占用为 GPU0=`r15e20 expert-e9 validation`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e15 replicated-batch validation20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
+**UTC `2026-08-07T12:08Z` 增量快照。** `r15e15-20260807-aac-degenerate-validation20` 已完整结束并由结构化 acceptance 判为 `PASSED`：candidate=`2/20`、control=`1/20`、delta=`+1`、paired=`+2/-1`；candidate 新成功 seed 为 `1097437900/1458907303`，丢失 control 成功 seed `1258508954`。P50/P95 推理 latency 分别为 `24.695625/65.66075545 ms`，无 OOM、NaN、心跳中断或异常重启。它仍只能称为 replicated-batch 数值路径，不能称为 stochastic AAC。终态通过后交接器已按冻结规则自动启动原始 Gate20 `r15e18-20260807-aac-degenerate-formal20`（GPU3/tmux `bwa-r15s-p2`，W12 checkpoint SHA256 `4c85dcd...`，原始 Stack seed 文件 SHA256 `47cd37ae...`）；本快照为 `3/20,0 success`，正式验收保持 Stack `>3/20`、受保护任务 `74` exact、总分 `>77/100`，当前仍为 `PENDING`。
+
+e23 固定阈值 reactive 在 seed `1502503267` 单回合出现 `737` 次 queue-discard trigger，而相邻回合只有 `1–6` 次；这暴露 R13 validation q99 在闭环局部域偏移下的阈值崩溃。新增 `bwa/r15-world-reactive-robust@c9306e7` 固定 VLA-Corrector 官方 commit `9d23a0ba6fad562d3ed1a68fc52c8a12459abb41`、源文件 SHA256 `fe8a2879...` 与 Apache-2.0 LICENSE SHA256 `0583375a...`，只移植其 robust online threshold 思路；本项目 adapter 保持 h1/h5 独立状态、15-check bootstrap、EWMA `0.35`、median+MAD `k_on/k_off=3/2`、连续 5 次才触发、12-check cooldown，并强制原 q99 为下限。新增代码本地相关 `19 passed`、全目录 `109 passed/1 skipped`（工作树缺 `.venv` 导致的两项 R10 启动失败，在临时复用主工作树 `.venv` 后 `2 passed`）；远端相关 `19 passed`，Python compile 与三个 shell 的 `bash -n` 通过。远端不安装 ruff，因此 ruff 只在本地执行并通过。
+
+信号级回放 `/workspace/bwa_runs/r15e23-20260807-world-reactive-discovery20/diagnostics/robust_threshold_replay_at_8.json` 实际读取当时已完成的 9 个 episode/2905 checks：固定门累计 `762` triggers，robust replay=`0`、ratio=`0.0`、q99 floor violation=`0`，诊断为 `PASSED`。该回放明确标注 `signal_level_replay_not_closed_loop_acceptance`，不能冒充闭环结果。持久交接 session `bwa-r15-handoff-world-reactive-e26` 正等待 e23 自然终态和 GPU1 释放；届时先对终态日志重新回放并 dry-run，只有回放仍通过才启动 `/workspace/bwa_runs/r15e26-20260807-world-reactive-robust-discovery20`。同期 e16 true stochastic 为 `7/20,0 success`；e18/e16/e23 心跳新鲜、显存约 `1.9 GiB/GPU`，没有运行告警。
+
+当前远程为四张 RTX 5090；UTC `12:08Z` 的占用为 GPU0=`r15e20 expert-e9 validation`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
 
 ```bash
 # 单路线 discovery20；mode 可替换为 aac_stochastic_plan_chunk 或 fixed6_base_chunk
@@ -4209,6 +4216,25 @@ cd /workspace/bwa_worktrees/r15/world-reactive
   --run-id r15-world-reactive-$(date -u +%Y%m%dT%H%M%SZ) \
   --candidate p3 --split discovery20 --gpu-index 1 \
   --execution-mode world_reactive_aac_chunk \
+  --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2'
+
+# VLA-Corrector robust threshold 的信号级回放（不是闭环验收）
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/world-reactive-robust
+PYTHONPATH=$PWD /venv/robofactory-act/bin/python \
+  scripts/before_we_act/replay_r15_world_reactive_threshold.py \
+  --input-log /workspace/bwa_runs/r15e23-20260807-world-reactive-discovery20/candidates/p3/logs/discovery20.log \
+  --config configs/before_we_act/r15_evolution/world_reactive_robust_monitor.yaml \
+  --output /workspace/bwa_runs/r15e23-20260807-world-reactive-discovery20/diagnostics/robust_threshold_replay_manual.json'
+
+# robust reactive 独立 discovery20（需等待 GPU1 空闲；当前已由 handoff 自动排队）
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/world-reactive-robust
+./scripts/before_we_act/launch_r15_temporal_screens_tmux.sh \
+  --run-id r15-world-reactive-robust-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidate p3 --split discovery20 --gpu-index 1 \
+  --execution-mode world_reactive_robust_aac_chunk \
+  --checkpoint /workspace/bwa_runs/shared/w12/checkpoint_130000.pt \
   --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2'
 
 # expert-only 校准的 PACE dynamic horizon（需空闲 GPU）
