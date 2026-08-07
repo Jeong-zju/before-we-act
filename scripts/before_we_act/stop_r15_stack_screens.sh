@@ -22,15 +22,22 @@ tagged_pids() {
     grep -Fzqx "BWA_R15_RUN_ROOT=$RUN_ROOT" "$environment" 2>/dev/null && grep -Fzqx "BWA_R15_CANDIDATE=$candidate" "$environment" 2>/dev/null && printf '%s\n' "$pid"
   done
 }
+registered_session() {
+  local candidate="$1" session
+  session="$(jq -r --arg candidate "$candidate" '.candidates[$candidate].session // empty' "$RUN_ROOT/run_manifest.json")"
+  [[ "$session" =~ ^bwa-r15s-[A-Za-z0-9_.-]+$ ]] || { printf 'invalid registered session for %s\n' "$candidate" >&2; return 3; }
+  printf '%s\n' "$session"
+}
 printf 'Exact R15 screen stop targets (outputs remain intact):\n'
-for candidate in "${SELECTED[@]}"; do mapfile -t pids < <(tagged_pids "$candidate"); printf '  %s session=bwa-r15s-%s pids=%s\n' "$candidate" "$candidate" "${pids[*]:-none}"; done
+for candidate in "${SELECTED[@]}"; do mapfile -t pids < <(tagged_pids "$candidate"); session="$(registered_session "$candidate")"; printf '  %s session=%s pids=%s\n' "$candidate" "$session" "${pids[*]:-none}"; done
 if ((DRY_RUN)); then printf 'dry-run: no signal/session change\n'; exit 0; fi
-for candidate in "${SELECTED[@]}"; do tmux has-session -t "bwa-r15s-$candidate" 2>/dev/null && tmux send-keys -t "bwa-r15s-$candidate" C-c || true; done
+for candidate in "${SELECTED[@]}"; do session="$(registered_session "$candidate")"; tmux has-session -t "$session" 2>/dev/null && tmux send-keys -t "$session" C-c || true; done
 for ((second=0; second<GRACE; second++)); do remaining=0; for candidate in "${SELECTED[@]}"; do mapfile -t pids < <(tagged_pids "$candidate"); remaining=$((remaining+${#pids[@]})); done; ((remaining==0)) && break; sleep 1; done
 for signal in TERM KILL; do targets=(); for candidate in "${SELECTED[@]}"; do mapfile -t pids < <(tagged_pids "$candidate"); targets+=("${pids[@]}"); done; ((${#targets[@]})) || break; printf 'sending SIG%s only to tagged R15 PIDs: %s\n' "$signal" "${targets[*]}"; kill "-$signal" "${targets[@]}" 2>/dev/null || true; sleep 5; done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 for candidate in "${SELECTED[@]}"; do
-  tmux has-session -t "bwa-r15s-$candidate" 2>/dev/null && tmux kill-session -t "bwa-r15s-$candidate" || true
+  session="$(registered_session "$candidate")"
+  tmux has-session -t "$session" 2>/dev/null && tmux kill-session -t "$session" || true
   state="$(jq -r '.state // "UNKNOWN"' "$RUN_ROOT/candidates/$candidate/status.json" 2>/dev/null || true)"
   if [[ ! "$state" =~ ^(REFERENCE|PASSED|FAILED|STOPPED)$ ]]; then
     "$PYTHON" "$ROOT/scripts/before_we_act/r15_runtime.py" status --run-root "$RUN_ROOT" --candidate "$candidate" --state STOPPED --stage stopped --program stop_r15_stack_screens.sh --detail "graceful exact-run stop; artifacts preserved" --pid 0 --child-pid 0 --exit-code 130 --log "$RUN_ROOT/candidates/$candidate/logs/candidate.log"

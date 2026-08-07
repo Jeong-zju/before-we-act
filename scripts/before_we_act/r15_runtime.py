@@ -92,6 +92,9 @@ def register(args) -> None:
                 "shared_hf_cache": "/workspace/.cache/huggingface",
                 "candidates": {},
             }
+        session = str(getattr(args, "session", "") or f"bwa-r15s-{args.candidate}")
+        if not re.fullmatch(r"bwa-r15s-[A-Za-z0-9_.-]+", session):
+            raise ValueError("R15 tmux session identity is invalid")
         identity = {
             "label": args.label,
             "gpu": args.gpu,
@@ -100,7 +103,7 @@ def register(args) -> None:
             "commit": args.commit,
             "config": str(Path(args.config).resolve()),
             "checkpoint": str(Path(args.checkpoint).resolve()),
-            "session": f"bwa-r15s-{args.candidate}",
+            "session": session,
             "reference": args.reference,
         }
         current = manifest["candidates"].get(args.candidate)
@@ -447,6 +450,7 @@ def main() -> None:
     register_parser.add_argument("--commit", required=True)
     register_parser.add_argument("--config", required=True)
     register_parser.add_argument("--checkpoint", required=True)
+    register_parser.add_argument("--session", default="")
     register_parser.add_argument("--reference", action="store_true")
     register_parser.add_argument("--formal", action="store_true")
     register_parser.add_argument("--protected-successes", type=int, default=0)

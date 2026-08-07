@@ -38,6 +38,7 @@ def register_args(tmp_path, candidate, reference=False):
         commit=candidate * 20,
         config=str(config),
         checkpoint=str(artifact),
+        session="",
         reference=reference,
     )
 
@@ -66,6 +67,18 @@ def test_paired_screen_requires_strict_gain(tmp_path):
     assert r15_runtime.accept(argparse.Namespace(run_root=tmp_path / "run", candidate="p2")) == 10
     p1 = json.loads((tmp_path / "run/candidates/p1/acceptance.json").read_text())
     assert (p1["delta_successes"], p1["paired_wins"], p1["paired_losses"]) == (1, 1, 0)
+
+
+def test_register_supports_run_unique_session_without_changing_default(tmp_path):
+    (tmp_path / "seeds.json").write_text(json.dumps({"seeds": list(range(20))}))
+    default = register_args(tmp_path, "p0", True)
+    r15_runtime.register(default)
+    custom = register_args(tmp_path, "p1")
+    custom.session = "bwa-r15s-expert-e9"
+    r15_runtime.register(custom)
+    manifest = json.loads((tmp_path / "run/run_manifest.json").read_text())
+    assert manifest["candidates"]["p0"]["session"] == "bwa-r15s-p0"
+    assert manifest["candidates"]["p1"]["session"] == "bwa-r15s-expert-e9"
 
 
 def test_formal_gate_composes_protected_tasks_and_requires_baseline_identity(tmp_path):

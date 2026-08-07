@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUN_ID="r15-expert-ft-$(date -u +%Y%m%dT%H%M%SZ)"; RUN_ROOT=""; EXPERT_INDEX=""; REFERENCE_RUN=""
-CANDIDATE=p1; GPU_INDEX=""; UPDATES=10000; SPLIT=discovery20; DRY_RUN=0
+CANDIDATE=p1; GPU_INDEX=""; UPDATES=10000; SPLIT=discovery20; SESSION=""; DRY_RUN=0
 BATCH_SIZE=12; EXPERT_ROWS=6; LEARNING_RATE=2e-5; WARMUP=500
 PYTHON=/venv/robofactory-act/bin/python; PROTOCOL_ROOT=/workspace/bwa_runs/shared/r15_stack_protocol_v1
 while (($#)); do
@@ -20,13 +20,15 @@ while (($#)); do
     --learning-rate) LEARNING_RATE="$2"; shift 2 ;;
     --warmup) WARMUP="$2"; shift 2 ;;
     --split) SPLIT="$2"; shift 2 ;;
+    --session) SESSION="$2"; shift 2 ;;
     --python) PYTHON="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
 RUN_ROOT="${RUN_ROOT:-/workspace/bwa_runs/$RUN_ID}"
-[[ "$RUN_ID" =~ ^[A-Za-z0-9_.-]+$ && "$CANDIDATE" =~ ^p[1-3]$ && "$GPU_INDEX" =~ ^[0-3]$ && "$UPDATES" =~ ^[1-9][0-9]*$ && "$BATCH_SIZE" =~ ^[1-9][0-9]*$ && "$EXPERT_ROWS" =~ ^[1-9][0-9]*$ && "$WARMUP" =~ ^[1-9][0-9]*$ && "$LEARNING_RATE" =~ ^[0-9]+([.][0-9]+)?([eE]-?[0-9]+)?$ && "$SPLIT" =~ ^(discovery20|validation20|reserve20|final20)$ && -n "$EXPERT_INDEX" && -n "$REFERENCE_RUN" ]] || { printf 'valid run/candidate/GPU/training/expert index/reference required\n' >&2; exit 2; }
+SESSION="${SESSION:-bwa-r15s-$CANDIDATE}"
+[[ "$RUN_ID" =~ ^[A-Za-z0-9_.-]+$ && "$CANDIDATE" =~ ^p[1-3]$ && "$GPU_INDEX" =~ ^[0-3]$ && "$UPDATES" =~ ^[1-9][0-9]*$ && "$BATCH_SIZE" =~ ^[1-9][0-9]*$ && "$EXPERT_ROWS" =~ ^[1-9][0-9]*$ && "$WARMUP" =~ ^[1-9][0-9]*$ && "$LEARNING_RATE" =~ ^[0-9]+([.][0-9]+)?([eE]-?[0-9]+)?$ && "$SPLIT" =~ ^(discovery20|validation20|reserve20|final20)$ && "$SESSION" =~ ^bwa-r15s-[A-Za-z0-9_.-]+$ && -n "$EXPERT_INDEX" && -n "$REFERENCE_RUN" ]] || { printf 'valid run/candidate/GPU/training/expert index/reference/session required\n' >&2; exit 2; }
 ((BATCH_SIZE >= 2 && EXPERT_ROWS < BATCH_SIZE && WARMUP <= UPDATES)) || { printf 'expert rows/warmup exceed training budget\n' >&2; exit 2; }
 for command in git tmux nvidia-smi sha256sum jq; do command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }; done
 BRANCH="$(git -C "$ROOT" branch --show-current)"
@@ -38,7 +40,7 @@ REFERENCE_MANIFEST="$REFERENCE_RUN/run_manifest.json"; [[ -f "$REFERENCE_MANIFES
 [[ "$(jq -r .split "$REFERENCE_MANIFEST")" == "$SPLIT" && "$(jq -r .seed_file_sha256 "$REFERENCE_MANIFEST")" == "$SEED_SHA" && "$(jq -r .candidates.p0.reference "$REFERENCE_MANIFEST")" == true ]] || { printf 'reference is not identical paired W12 control\n' >&2; exit 3; }
 [[ "$(jq -r .extension.protocol "$EXPERT_INDEX")" == r15_raw_success_expert_physical_pd_joint_pos_direct_dinov3_v2 && "$(jq -r .extension.expert_episodes "$EXPERT_INDEX")" -ge 1 ]] || { printf 'expert cache identity differs\n' >&2; exit 3; }
 [[ ! -e "$RUN_ROOT" ]] || { printf 'run root already exists: %s\n' "$RUN_ROOT" >&2; exit 3; }
-SESSION="bwa-r15s-$CANDIDATE"; tmux has-session -t "$SESSION" 2>/dev/null && { printf 'session already exists: %s\n' "$SESSION" >&2; exit 3; }
+tmux has-session -t "$SESSION" 2>/dev/null && { printf 'session already exists: %s\n' "$SESSION" >&2; exit 3; }
 nvidia-smi -i "$GPU_INDEX" --query-compute-apps=pid --format=csv,noheader | grep -Eq '[0-9]' && { printf 'GPU %s is in use\n' "$GPU_INDEX" >&2; exit 3; } || true
 CHECKPOINT="$RUN_ROOT/candidates/$CANDIDATE/train/stack_expert/checkpoints/checkpoint_$(printf '%06d' "$UPDATES").pt"
 printf 'R15 expert fine-tune preflight run=%s candidate=%s GPU=%s updates=%s batch=%s expert_rows=%s lr=%s warmup=%s expert=%s commit=%s\n' "$RUN_ID" "$CANDIDATE" "$GPU_INDEX" "$UPDATES" "$BATCH_SIZE" "$EXPERT_ROWS" "$LEARNING_RATE" "$WARMUP" "$EXPERT_INDEX" "$COMMIT"
@@ -50,7 +52,7 @@ P0_CHECKPOINT="$(jq -r .candidates.p0.checkpoint "$REFERENCE_MANIFEST")"
 "$PYTHON" "$ROOT/scripts/before_we_act/r15_runtime.py" register --run-root "$RUN_ROOT" --run-id "$RUN_ID" --split "$SPLIT" --seed-file "$SEED_FILE" --seed-file-sha256 "$SEED_SHA" --candidate p0 --label w12_control --gpu 0 --worktree "$P0_WORKTREE" --branch "$P0_BRANCH" --commit "$P0_COMMIT" --config "$P0_CONFIG" --checkpoint "$P0_CHECKPOINT" --reference
 ln -s "$REFERENCE_RUN/candidates/p0/validation" "$RUN_ROOT/candidates/p0/validation"
 CONFIG="$ROOT/configs/before_we_act/r12_action/e1_p2.yaml"
-"$PYTHON" "$ROOT/scripts/before_we_act/r15_runtime.py" register --run-root "$RUN_ROOT" --run-id "$RUN_ID" --split "$SPLIT" --seed-file "$SEED_FILE" --seed-file-sha256 "$SEED_SHA" --candidate "$CANDIDATE" --label "w12_expert_ft_b${BATCH_SIZE}_e${EXPERT_ROWS}" --gpu "$GPU_INDEX" --worktree "$ROOT" --branch "$BRANCH" --commit "$COMMIT" --config "$CONFIG" --checkpoint "$CHECKPOINT"
+"$PYTHON" "$ROOT/scripts/before_we_act/r15_runtime.py" register --run-root "$RUN_ROOT" --run-id "$RUN_ID" --split "$SPLIT" --seed-file "$SEED_FILE" --seed-file-sha256 "$SEED_SHA" --candidate "$CANDIDATE" --label "w12_expert_ft_b${BATCH_SIZE}_e${EXPERT_ROWS}" --gpu "$GPU_INDEX" --worktree "$ROOT" --branch "$BRANCH" --commit "$COMMIT" --config "$CONFIG" --checkpoint "$CHECKPOINT" --session "$SESSION"
 "$PYTHON" - "$RUN_ROOT/candidates/$CANDIDATE/expert_finetune.json" "$EXPERT_INDEX" "$REFERENCE_RUN" "$UPDATES" "$BATCH_SIZE" "$EXPERT_ROWS" "$LEARNING_RATE" "$WARMUP" <<'PY'
 import datetime,hashlib,json,os,sys
 target,index,reference,updates,batch,expert_rows,learning_rate,warmup=sys.argv[1:]
