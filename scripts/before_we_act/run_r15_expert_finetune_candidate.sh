@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-RUN_ROOT=""; CANDIDATE=p1; GPU_INDEX=""; EXPERT_INDEX=""
+RUN_ROOT=""; CANDIDATE=p1; GPU_INDEX=""; EXPERT_INDEX=""; PHASE_MANIFEST=""
 UPDATES=10000; BATCH_SIZE=12; EXPERT_ROWS=6; LEARNING_RATE=2e-5; WARMUP=500
 PYTHON=/venv/robofactory-act/bin/python
 PARENT_CHECKPOINT=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p2/train/formal/checkpoints/checkpoint_130000.pt
@@ -12,6 +12,7 @@ while (($#)); do
     --candidate) CANDIDATE="$2"; shift 2 ;;
     --gpu-index) GPU_INDEX="$2"; shift 2 ;;
     --expert-index) EXPERT_INDEX="$2"; shift 2 ;;
+    --phase-manifest) PHASE_MANIFEST="$2"; shift 2 ;;
     --updates) UPDATES="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
     --expert-rows) EXPERT_ROWS="$2"; shift 2 ;;
@@ -50,6 +51,13 @@ CURRENT_BRANCH="$(git -C "$ROOT" branch --show-current)"
 for path in "$PYTHON" "$RUNTIME" "$CONFIG" "$BELIEF_CONFIG" "$BELIEF_CHECKPOINT" "$PARENT_CHECKPOINT" "$EXPERT_INDEX"; do
   [[ -e "$path" ]] || { printf 'missing R15 expert input: %s\n' "$path" >&2; exit 3; }
 done
+PHASE_ARGS=()
+DETAIL="source-aware Stack continuation"
+if [[ -n "$PHASE_MANIFEST" ]]; then
+  [[ -f "$PHASE_MANIFEST" && $((EXPERT_ROWS % 3)) -eq 0 ]] || { printf 'phase-balanced manifest/rows differ\n' >&2; exit 3; }
+  PHASE_ARGS=(--phase-manifest "$PHASE_MANIFEST")
+  DETAIL="three-phase-balanced source-aware Stack continuation"
+fi
 
 CHILD_PID=0; HEARTBEAT_PID=0; STOP_REQUESTED=0; TERMINAL_WRITTEN=0
 printf '0\n' >"$CHILD_FILE"
@@ -75,13 +83,14 @@ heartbeat_loop & HEARTBEAT_PID=$!
 
 RESUME_ARGS=()
 [[ -f "$TRAIN_ROOT/checkpoints/checkpoint_latest.pt" ]] && RESUME_ARGS=(--resume "$TRAIN_ROOT/checkpoints/checkpoint_latest.pt")
-status TRAINING stack_expert_finetune train_r15_stack_expert.py "source-aware Stack continuation; batch=$BATCH_SIZE expert_rows=$EXPERT_ROWS lr=$LEARNING_RATE"
+status TRAINING stack_expert_finetune train_r15_stack_expert.py "$DETAIL; batch=$BATCH_SIZE expert_rows=$EXPERT_ROWS lr=$LEARNING_RATE"
 (
   cd "$ROOT"
   exec env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROOT" "$PYTHON" -m before_we_act.train_r15_stack_expert \
     --config "$CONFIG" --parent-checkpoint "$PARENT_CHECKPOINT" \
     --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" \
     --expert-index "$EXPERT_INDEX" --output "$TRAIN_ROOT" --device cuda:0 \
+    "${PHASE_ARGS[@]}" \
     --updates "$UPDATES" --batch-size "$BATCH_SIZE" --expert-rows "$EXPERT_ROWS" \
     --learning-rate "$LEARNING_RATE" --warmup "$WARMUP" \
     --heartbeat "$HEARTBEAT" "${RESUME_ARGS[@]}"

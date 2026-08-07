@@ -37,6 +37,8 @@ from before_we_act.train_action_generator_r4 import (
 
 TASK = "three_robots_stack_cube"
 PROTOCOL = "r15_stack_original_plus_raw_success_expert_source_aware_v2"
+PHASE_PROTOCOL = "r15_stack_expert_monotone_three_phase_v1"
+PHASE_BALANCED_PROTOCOL = "r15_stack_phase_balanced_expert_source_aware_v1"
 
 
 class OriginalExpertStackSampler(Sampler[list[tuple[int, int]]]):
@@ -87,6 +89,96 @@ class OriginalExpertStackSampler(Sampler[list[tuple[int, int]]]):
             yield batch
 
 
+def phase_for_timestep(boundaries: list[int], timestep: int) -> int:
+    values = tuple(int(value) for value in boundaries)
+    if (
+        len(values) != 4
+        or values[0] != 0
+        or not values[0] < values[1] < values[2] < values[3]
+        or not 0 <= timestep < values[3]
+    ):
+        raise ValueError("phase boundary/timestep contract differs")
+    if timestep < values[1]:
+        return 0
+    return 1 if timestep < values[2] else 2
+
+
+class PhaseBalancedOriginalExpertStackSampler(Sampler[list[tuple[int, int]]]):
+    """Keep the original/expert ratio while balancing expert rows by phase."""
+
+    def __init__(
+        self,
+        dataset: FullEpisodeActionWindows,
+        phase_manifest: dict,
+        *,
+        updates: int,
+        batch_size: int,
+        expert_rows: int,
+        seed: int,
+        start_update: int = 0,
+    ) -> None:
+        if (
+            not 0 <= start_update < updates
+            or not 0 < expert_rows < batch_size
+            or expert_rows % 3
+            or phase_manifest.get("protocol") != PHASE_PROTOCOL
+            or phase_manifest.get("training_only_privileged_labels") is not True
+        ):
+            raise ValueError("invalid R15 phase-balanced expert sampler contract")
+        labels = {
+            int(row["source_episode_id"]): row
+            for row in phase_manifest.get("episodes", [])
+        }
+        stack_index = TASKS.index(TASK)
+        original: list[tuple[int, int]] = []
+        phase_rows: dict[int, list[tuple[int, int]]] = {0: [], 1: [], 2: []}
+        seen_sources = set()
+        for episode_index, timestep in dataset.requests_by_task[stack_index]:
+            episode = dataset.episodes[episode_index]
+            if "source_episode_id" not in episode:
+                original.append((episode_index, timestep))
+                continue
+            source_id = int(episode["source_episode_id"])
+            label = labels.get(source_id)
+            if label is None or any(
+                int(label[key]) != int(episode[key])
+                for key in ("episode_index", "seed", "steps")
+            ):
+                raise ValueError("phase manifest/expert episode identity differs")
+            phase = phase_for_timestep(label["phase_boundaries"], timestep)
+            phase_rows[phase].append((episode_index, timestep))
+            seen_sources.add(source_id)
+        if (
+            not original
+            or seen_sources != set(labels)
+            or any(not values for values in phase_rows.values())
+        ):
+            raise ValueError("phase-balanced sampler lacks original/expert phase rows")
+        self.original = tuple(original)
+        self.phase_rows = {phase: tuple(values) for phase, values in phase_rows.items()}
+        self.updates = int(updates)
+        self.batch_size = int(batch_size)
+        self.expert_rows = int(expert_rows)
+        self.seed = int(seed)
+        self.start_update = int(start_update)
+
+    def __len__(self) -> int:
+        return self.updates - self.start_update
+
+    def __iter__(self):
+        original_rows = self.batch_size - self.expert_rows
+        rows_per_phase = self.expert_rows // 3
+        for update in range(self.start_update + 1, self.updates + 1):
+            rng = random.Random(self.seed + 1_000_003 * update)
+            batch = [rng.choice(self.original) for _ in range(original_rows)]
+            for phase in range(3):
+                batch.extend(
+                    rng.choice(self.phase_rows[phase]) for _ in range(rows_per_phase)
+                )
+            rng.shuffle(batch)
+            yield batch
+
+
 def learning_rate(update: int, updates: int, base: float, warmup: int) -> float:
     if update <= warmup:
         return base * update / warmup
@@ -101,6 +193,7 @@ def main() -> None:
     parser.add_argument("--belief-config", required=True)
     parser.add_argument("--belief-checkpoint", required=True)
     parser.add_argument("--expert-index", required=True)
+    parser.add_argument("--phase-manifest", default="")
     parser.add_argument("--output", required=True)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--updates", type=int, default=10_000)
@@ -179,14 +272,38 @@ def main() -> None:
     start_update = int(resume.get("fine_tune_update", 0)) if resume else 0
     if start_update >= args.updates:
         raise ValueError("R15 expert resume is already complete")
-    sampler = OriginalExpertStackSampler(
-        dataset,
-        updates=args.updates,
-        batch_size=args.batch_size,
-        expert_rows=args.expert_rows,
-        seed=seed,
-        start_update=start_update,
+    phase_path = (
+        Path(args.phase_manifest).resolve(strict=True) if args.phase_manifest else None
     )
+    phase_manifest = (
+        json.loads(phase_path.read_text(encoding="utf-8")) if phase_path else None
+    )
+    if phase_manifest is not None:
+        if (
+            args.expert_rows % 3
+            or phase_manifest.get("expert_index_sha256") != sha256(index_path)
+        ):
+            raise ValueError("phase manifest/expert sampling identity differs")
+        sampler = PhaseBalancedOriginalExpertStackSampler(
+            dataset,
+            phase_manifest,
+            updates=args.updates,
+            batch_size=args.batch_size,
+            expert_rows=args.expert_rows,
+            seed=seed,
+            start_update=start_update,
+        )
+        run_protocol = PHASE_BALANCED_PROTOCOL
+    else:
+        sampler = OriginalExpertStackSampler(
+            dataset,
+            updates=args.updates,
+            batch_size=args.batch_size,
+            expert_rows=args.expert_rows,
+            seed=seed,
+            start_update=start_update,
+        )
+        run_protocol = PROTOCOL
     loader = DataLoader(
         dataset,
         batch_sampler=sampler,
@@ -203,7 +320,7 @@ def main() -> None:
         weight_decay=float(config.training["weight_decay"]),
     )
     if resume:
-        if resume.get("r15_protocol") != PROTOCOL:
+        if resume.get("r15_protocol") != run_protocol:
             raise ValueError("R15 expert resume protocol differs")
         model.load_state_dict(resume["model"], strict=True)
         optimizer.load_state_dict(resume["optimizer"])
@@ -219,13 +336,16 @@ def main() -> None:
     identity = {
         "schema_version": 1,
         "round": "R15-Evolution",
-        "protocol": PROTOCOL,
+        "protocol": run_protocol,
         "config": str(config_path),
         "config_sha256": sha256(config_path),
         "parent_checkpoint": str(parent_path),
         "parent_checkpoint_sha256": sha256(parent_path),
         "expert_index": str(index_path),
         "expert_index_sha256": sha256(index_path),
+        "phase_manifest": str(phase_path) if phase_path else None,
+        "phase_manifest_sha256": sha256(phase_path) if phase_path else None,
+        "phase_balanced_expert_rows": bool(phase_path),
         "expert_episodes": int(extension["expert_episodes"]),
         "expert_steps": int(extension["expert_steps"]),
         "updates": args.updates,
@@ -260,7 +380,7 @@ def main() -> None:
                 "update": int(parent["update"]) + update,
                 "fine_tune_update": update,
                 "stage": "r15_expert_finetune",
-                "r15_protocol": PROTOCOL,
+                "r15_protocol": run_protocol,
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "config": dict(config.raw),
@@ -268,6 +388,7 @@ def main() -> None:
                 "core_free_runtime": True,
                 "parent_checkpoint_sha256": identity["parent_checkpoint_sha256"],
                 "expert_index_sha256": identity["expert_index_sha256"],
+                "phase_manifest_sha256": identity["phase_manifest_sha256"],
                 "last_metrics": last,
                 "rng_state": capture_rng_state(),
             },
