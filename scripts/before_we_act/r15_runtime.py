@@ -349,6 +349,20 @@ def render(run_root: Path, selected: tuple[str, ...]) -> str:
         } if result else logged_rows(eval_log)
         completed = len(live_rows)
         successes = sum(bool(row["success"]) for row in live_rows.values())
+        stack_stages = {
+            "cubeB_placed": sum(
+                bool(row.get("terminal_info", {}).get("cubeB_placed"))
+                for row in live_rows.values()
+            ),
+            "A_on_B": sum(
+                bool(row.get("terminal_info", {}).get("is_cubeA_on_cubeB"))
+                for row in live_rows.values()
+            ),
+            "C_on_A": sum(
+                bool(row.get("terminal_info", {}).get("is_cubeC_on_cubeA"))
+                for row in live_rows.values()
+            ),
+        }
         progress = read_json(root / "validation" / "closed_loop_progress.json")
         training = last_jsonl(root / "train" / "aligned_world" / "progress.jsonl")
         if not training:
@@ -360,6 +374,7 @@ def render(run_root: Path, selected: tuple[str, ...]) -> str:
                 f"  branch={identity['branch']} commit={identity['commit']} gpu={identity['gpu']} tmux={identity['session']}",
                 f"  pid={pid} child={child} alive={process_alive(pid)} started={status.get('created_at', '-')} heartbeat={beat.get('updated_at', '-')} age={age if age is not None else '-'}s",
                 f"  GPU={gpus.get(identity['gpu'], 'unavailable')} episodes={completed}/20 successes={successes} current_episode={progress.get('episode_index', '-')} step={progress.get('step', '-')}/{progress.get('max_steps', '-')}",
+                f"  stack_stages={stack_stages} planner=interventions:{progress.get('interventions', '-')},fallbacks:{progress.get('fallbacks', '-')},timeouts:{progress.get('planner_timeouts', '-')},exceptions:{progress.get('planner_exceptions', '-')}",
                 f"  train_update={training.get('update', training.get('fine_tune_update', '-'))} loss={training.get('loss', '-')} eta={training.get('eta_hours', '-')}h cache={cache.get('split', '-')}:{cache.get('rows', '-')}/{cache.get('total_rows', '-')}",
                 f"  checkpoint={identity['checkpoint']}",
                 f"  result={root / 'validation' / (manifest['split'] + '.json')} acceptance={acceptance.get('status', 'PENDING')}",

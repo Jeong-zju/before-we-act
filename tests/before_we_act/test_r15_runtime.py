@@ -111,3 +111,37 @@ def test_monitor_reads_stack_expert_finetune_progress(tmp_path, monkeypatch):
     monkeypatch.setattr(r15_runtime, "gpu_rows", lambda: {})
     rendered = r15_runtime.render(tmp_path / "run", ("p1",))
     assert "train_update=725 loss=0.03125 eta=0.5h" in rendered
+
+
+def test_monitor_summarizes_stack_stages_and_planner(tmp_path, monkeypatch):
+    (tmp_path / "seeds.json").write_text(json.dumps({"seeds": list(range(20))}))
+    r15_runtime.register(register_args(tmp_path, "p1"))
+    result = tmp_path / "run/candidates/p1/validation/discovery20.json"
+    result.parent.mkdir(parents=True)
+    result.write_text(
+        json.dumps(
+            {
+                "rows": [
+                    {
+                        "seed": 7,
+                        "success": False,
+                        "steps": 800,
+                        "terminal_info": {
+                            "cubeB_placed": True,
+                            "is_cubeA_on_cubeB": True,
+                            "is_cubeC_on_cubeA": False,
+                        },
+                    }
+                ]
+            }
+        )
+        + "\n"
+    )
+    progress = result.parent / "closed_loop_progress.json"
+    progress.write_text(
+        json.dumps({"interventions": 4, "fallbacks": 5, "planner_timeouts": 0})
+    )
+    monkeypatch.setattr(r15_runtime, "gpu_rows", lambda: {})
+    rendered = r15_runtime.render(tmp_path / "run", ("p1",))
+    assert "'cubeB_placed': 1, 'A_on_B': 1, 'C_on_A': 0" in rendered
+    assert "planner=interventions:4,fallbacks:5,timeouts:0,exceptions:-" in rendered
