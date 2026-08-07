@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import h5py
 import pytest
@@ -34,3 +35,11 @@ def test_native_expert_receipt_rejects_old_240x320_capture(tmp_path):
     hdf5, metadata = write_source(tmp_path, shape=(1, 240, 320, 3))
     with pytest.raises(ValueError, match="RGB differs"):
         validate_recorded_source(hdf5, metadata, 1)
+
+
+def test_collection_runner_anchors_project_root_before_driver_use():
+    runner = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/before_we_act/run_r15_expert_collection.sh"
+    ).read_text()
+    assert runner.index('ROOT="$(cd ') < runner.index('DRIVER="$ROOT/')

@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 OUTPUT_ROOT=""; EPISODES=1; START_SEED=5000; GPU_INDEX=""; PYTHON=/venv/robofactory-act/bin/python
 ROBOFACTORY=/workspace/RoboFactory
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 while (($#)); do
   case "$1" in
     --output-root) OUTPUT_ROOT="$2"; shift 2 ;;
