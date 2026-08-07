@@ -106,6 +106,7 @@ def evaluate_specialist(
     seeds,
     device,
     max_steps,
+    execution_mode="act_temporal_ensemble",
 ):
     generator, belief, spatial, stats, update = load_specialist(
         config,
@@ -125,7 +126,9 @@ def evaluate_specialist(
         for seed in seeds:
             observation, _ = reset_reproducibly(env, seed)
             history = TeamHistory(arms)
-            ensemble = TemporalChunkEnsembler(arms)
+            ensemble = TemporalChunkEnsembler(
+                arms, decay=0.1 if execution_mode == "recent_temporal_ensemble" else 0.01
+            )
             previous_action = None
             success, info = False, {}
             for step in range(max_steps):
@@ -158,7 +161,15 @@ def evaluate_specialist(
                 latencies.append((time.perf_counter_ns() - started) / 1e6)
                 normalized = proposals.actions[0, 0, : len(arms)]
                 raw = normalized * stats["a_std"][None, None] + stats["a_mean"][None, None]
-                action = ensemble.append_and_select(step, raw.float().cpu().numpy())
+                raw_actions = raw.float().cpu().numpy()
+                action = (
+                    {
+                        f"panda-{arm}": raw_actions[local_index, 0].copy()
+                        for local_index, arm in enumerate(arms)
+                    }
+                    if execution_mode == "latest_chunk"
+                    else ensemble.append_and_select(step, raw_actions)
+                )
                 previous_action = {key: value.copy() for key, value in action.items()}
                 observation, _, terminated, truncated, info = env.step(action)
                 success = bool(np.asarray(info.get("success", False)).all())
@@ -175,7 +186,11 @@ def evaluate_specialist(
                 "steps": step + 1,
                 "safety_projections": 0,
                 "terminal_info": terminal_info(info),
-                "route": "r12e1_high_resolution_specialist",
+                "route": {
+                    "act_temporal_ensemble": "r12e1_high_resolution_specialist",
+                    "recent_temporal_ensemble": "r15_w12_recent_decay_0p10_stack_specialist",
+                    "latest_chunk": "r15_w12_latest_chunk_stack_specialist",
+                }[execution_mode],
             }
             rows.append(row)
             print(json.dumps(row, sort_keys=True), flush=True)
@@ -199,6 +214,15 @@ def main() -> None:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--output", required=True)
     parser.add_argument("--resume-log", default="")
+    parser.add_argument(
+        "--execution-mode",
+        choices=(
+            "act_temporal_ensemble",
+            "recent_temporal_ensemble",
+            "latest_chunk",
+        ),
+        default="act_temporal_ensemble",
+    )
     args = parser.parse_args()
     if args.vision_batch_size < 1:
         raise ValueError("R12-E1 vision batch size must be positive")
@@ -239,8 +263,13 @@ def main() -> None:
             remaining,
             device,
             args.max_steps,
+            args.execution_mode,
         ) if remaining else ([], [], None)
-        route = "r12e1_high_resolution_specialist"
+        route = {
+            "act_temporal_ensemble": "r12e1_high_resolution_specialist",
+            "recent_temporal_ensemble": "r15_w12_recent_decay_0p10_stack_specialist",
+            "latest_chunk": "r15_w12_latest_chunk_stack_specialist",
+        }[args.execution_mode]
     elif args.task in config.deployment["protected_tasks"]:
         raise ValueError(
             "protected tasks must be evaluated by the isolated exact-W10 "
@@ -274,7 +303,11 @@ def main() -> None:
         "policy_inputs": "native 480x640 RGB first; W11 TeamBeliefState, task ID and bounded agent-slot ID supplemental on specialist route",
         "privileged_inputs": False,
         "control_cadence": "one proposal per environment step",
-        "temporal_aggregation": "W10 exponential chunk ensemble decay=0.01",
+        "temporal_aggregation": {
+            "act_temporal_ensemble": "W10 exponential chunk ensemble decay=0.01",
+            "recent_temporal_ensemble": "exponential chunk ensemble decay=0.10",
+            "latest_chunk": "latest predicted chunk first action; replan every environment step",
+        }[args.execution_mode],
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -54,6 +54,21 @@ def test_temporal_chunk_ensembler_is_bit_exact_to_parent_loop():
             np.testing.assert_array_equal(actual[key], expected[key])
 
 
+def test_r15_recent_ensemble_emphasizes_latest_and_latest_chunk_is_exact():
+    from before_we_act.evaluate_action_generator_r4 import TemporalChunkEnsembler
+
+    chunks0 = np.zeros((1, 4, 8), dtype=np.float32)
+    chunks1 = np.ones((1, 4, 8), dtype=np.float32)
+    frozen = TemporalChunkEnsembler((0,), decay=0.01)
+    recent = TemporalChunkEnsembler((0,), decay=0.10)
+    frozen.append_and_select(0, chunks0)
+    recent.append_and_select(0, chunks0)
+    frozen_value = frozen.append_and_select(1, chunks1)["panda-0"]
+    recent_value = recent.append_and_select(1, chunks1)["panda-0"]
+    assert np.all(recent_value > frozen_value)
+    np.testing.assert_array_equal(chunks1[0, 0], np.ones(8, dtype=np.float32))
+
+
 def test_prepare_and_denormalize_preserve_exact_contract():
     from stereo_core.evaluate_no_wrist_pair import (
         denormalize_action_chunks,

@@ -20,15 +20,15 @@ MANIFEST="$RUN_ROOT/run_manifest.json"
 readarray -t IDENTITY < <("$PYTHON" - "$MANIFEST" "$CANDIDATE" <<'PY'
 import json, sys
 d=json.load(open(sys.argv[1])); c=d["candidates"][sys.argv[2]]
-for key in ("worktree","branch","commit","config","checkpoint"):
+for key in ("worktree","branch","commit","config","checkpoint","label"):
     print(c[key])
 print("1" if c["reference"] else "0")
 print(d["split"]); print(d["seed_file"])
 PY
 )
 WORKTREE="${IDENTITY[0]}"; BRANCH="${IDENTITY[1]}"; COMMIT="${IDENTITY[2]}"
-CONFIG="${IDENTITY[3]}"; CHECKPOINT="${IDENTITY[4]}"; REFERENCE="${IDENTITY[5]}"
-SPLIT="${IDENTITY[6]}"; SEED_FILE="${IDENTITY[7]}"
+CONFIG="${IDENTITY[3]}"; CHECKPOINT="${IDENTITY[4]}"; LABEL="${IDENTITY[5]}"; REFERENCE="${IDENTITY[6]}"
+SPLIT="${IDENTITY[7]}"; SEED_FILE="${IDENTITY[8]}"
 BELIEF_CONFIG="$WORKTREE/configs/before_we_act/r11_belief/p0.yaml"
 CANDIDATE_ROOT="$RUN_ROOT/candidates/$CANDIDATE"; LOG_ROOT="$CANDIDATE_ROOT/logs"
 MAIN_LOG="$LOG_ROOT/candidate.log"; EVAL_LOG="$LOG_ROOT/$SPLIT.log"
@@ -63,14 +63,26 @@ cleanup() {
 }
 trap on_signal INT TERM; trap cleanup EXIT
 heartbeat_loop & HEARTBEAT_PID=$!
-status VALIDATING closed_loop evaluate_action_generator_evolution.py "$SPLIT paired Stack screen; 20 live episodes"
+EXECUTION_ARGS=()
+EXECUTION_DETAIL="W10 temporal ensemble decay=0.01"
+case "$LABEL" in
+  w12_recent_decay_0p10)
+    EXECUTION_ARGS=(--execution-mode recent_temporal_ensemble)
+    EXECUTION_DETAIL="recent-weighted temporal ensemble decay=0.10"
+    ;;
+  w12_latest_chunk)
+    EXECUTION_ARGS=(--execution-mode latest_chunk)
+    EXECUTION_DETAIL="latest chunk first action; replan each step"
+    ;;
+esac
+status VALIDATING closed_loop evaluate_action_generator_evolution.py "$SPLIT paired Stack screen; $EXECUTION_DETAIL"
 (
   cd "$WORKTREE"
   exec env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$WORKTREE" BWA_R15_RUN_ROOT="$RUN_ROOT" BWA_R15_CANDIDATE="$CANDIDATE" \
-    "$PYTHON" -m before_we_act.evaluate_action_generator_evolution --config "$CONFIG" --checkpoint "$CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --vision-artifact "$VISION_ARTIFACT" --vision-batch-size 5 --task three_robots_stack_cube --seed-file "$SEED_FILE" --episodes 20 --max-steps 1500 --device cuda:0 --output "$OUTPUT" --resume-log "$EVAL_LOG"
+    "$PYTHON" -m before_we_act.evaluate_action_generator_evolution --config "$CONFIG" --checkpoint "$CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --vision-artifact "$VISION_ARTIFACT" --vision-batch-size 5 --task three_robots_stack_cube --seed-file "$SEED_FILE" --episodes 20 --max-steps 1500 --device cuda:0 --output "$OUTPUT" --resume-log "$EVAL_LOG" "${EXECUTION_ARGS[@]}"
 ) >>"$EVAL_LOG" 2>&1 &
 CHILD_PID=$!; printf '%s\n' "$CHILD_PID" >"$CHILD_FILE"
-status VALIDATING closed_loop evaluate_action_generator_evolution.py "$SPLIT paired Stack screen; 20 live episodes"
+status VALIDATING closed_loop evaluate_action_generator_evolution.py "$SPLIT paired Stack screen; $EXECUTION_DETAIL"
 wait "$CHILD_PID"; CHILD_PID=0; printf '0\n' >"$CHILD_FILE"
 if ((REFERENCE == 0)); then
   status ACCEPTING paired_screen r15_runtime.py "waiting for identical-seed W12 reference"
