@@ -41,13 +41,17 @@ for path in "$PYTHON" "$RUNTIME" "$CONFIG" "$CHECKPOINT" "$BELIEF_CONFIG" "$BELI
 done
 
 CHILD_PID=0; HEARTBEAT_PID=0; STOP_REQUESTED=0; TERMINAL_WRITTEN=0
+CHILD_FILE="$CANDIDATE_ROOT/child.pid"
+printf '0\n' >"$CHILD_FILE"
 status() {
   "$PYTHON" "$RUNTIME" status --run-root "$RUN_ROOT" --candidate "$CANDIDATE" --state "$1" --stage "$2" --program "$3" --detail "$4" --pid "$$" --child-pid "$CHILD_PID" --log "$MAIN_LOG" ${5:+--exit-code "$5"}
   case "$1" in REFERENCE|PASSED|FAILED|STOPPED) TERMINAL_WRITTEN=1 ;; esac
 }
 heartbeat_loop() {
   while kill -0 "$$" 2>/dev/null; do
-    "$PYTHON" "$RUNTIME" heartbeat --run-root "$RUN_ROOT" --candidate "$CANDIDATE" --pid "$$" --child-pid "$CHILD_PID" >/dev/null 2>&1 || true
+    local observed=0
+    [[ -f "$CHILD_FILE" ]] && observed="$(<"$CHILD_FILE")"
+    "$PYTHON" "$RUNTIME" heartbeat --run-root "$RUN_ROOT" --candidate "$CANDIDATE" --pid "$$" --child-pid "$observed" >/dev/null 2>&1 || true
     sleep 20
   done
 }
@@ -65,8 +69,9 @@ status VALIDATING closed_loop evaluate_action_generator_evolution.py "$SPLIT pai
   exec env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$WORKTREE" BWA_R15_RUN_ROOT="$RUN_ROOT" BWA_R15_CANDIDATE="$CANDIDATE" \
     "$PYTHON" -m before_we_act.evaluate_action_generator_evolution --config "$CONFIG" --checkpoint "$CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --vision-artifact "$VISION_ARTIFACT" --vision-batch-size 5 --task three_robots_stack_cube --seed-file "$SEED_FILE" --episodes 20 --max-steps 1500 --device cuda:0 --output "$OUTPUT" --resume-log "$EVAL_LOG"
 ) >>"$EVAL_LOG" 2>&1 &
-CHILD_PID=$!; status VALIDATING closed_loop evaluate_action_generator_evolution.py "$SPLIT paired Stack screen; 20 live episodes"
-wait "$CHILD_PID"; CHILD_PID=0
+CHILD_PID=$!; printf '%s\n' "$CHILD_PID" >"$CHILD_FILE"
+status VALIDATING closed_loop evaluate_action_generator_evolution.py "$SPLIT paired Stack screen; 20 live episodes"
+wait "$CHILD_PID"; CHILD_PID=0; printf '0\n' >"$CHILD_FILE"
 if ((REFERENCE == 0)); then
   status ACCEPTING paired_screen r15_runtime.py "waiting for identical-seed W12 reference"
   for _ in $(seq 1 4320); do [[ -f "$RUN_ROOT/candidates/p0/validation/$SPLIT.json" ]] && break; sleep 20; done
