@@ -32,9 +32,10 @@ if [[ -n "$MODE_OVERRIDE" ]]; then
   [[ "${#SELECTED[@]}" -eq 1 && "$MODE_OVERRIDE" =~ ^(act_temporal_ensemble|mild_temporal_ensemble|balanced_temporal_ensemble|recent_temporal_ensemble|responsive_temporal_ensemble|cogact_adaptive_ensemble|aac_entropy_chunk|latest_chunk)$ ]] || { printf -- '--execution-mode requires one candidate and a registered mode\n' >&2; exit 2; }
 fi
 for command in git tmux nvidia-smi sha256sum jq; do command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }; done
-[[ "$(git -C "$ROOT" branch --show-current)" == bwa/r15-closed-loop-evolution && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires clean R15 branch\n' >&2; exit 3; }
+BRANCH="$(git -C "$ROOT" branch --show-current)"
+[[ "$BRANCH" =~ ^bwa/r15-(closed-loop-evolution|aac-entropy-chunk)$ && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires a clean R15 evolution branch\n' >&2; exit 3; }
 git -C "$ROOT" fetch origin --prune
-COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; [[ "$COMMIT" == "$(git -C "$ROOT" rev-parse origin/bwa/r15-closed-loop-evolution)" ]] || { printf 'R15 branch differs from origin\n' >&2; exit 3; }
+COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; [[ "$COMMIT" == "$(git -C "$ROOT" rev-parse "origin/$BRANCH")" ]] || { printf 'R15 branch differs from origin\n' >&2; exit 3; }
 SEED_FILE="$PROTOCOL_ROOT/$SPLIT.json"; SEED_SHA="$(sha256sum "$SEED_FILE" | awk '{print $1}')"
 REFERENCE_MANIFEST="$REFERENCE_RUN/run_manifest.json"
 [[ -f "$REFERENCE_MANIFEST" && -f "$CHECKPOINT" ]] || { printf 'reference manifest or W12 checkpoint missing\n' >&2; exit 3; }
@@ -62,7 +63,7 @@ for candidate in "${SELECTED[@]}"; do
   session="bwa-r15s-$candidate"; gpu="${GPU[$candidate]}"
   tmux has-session -t "$session" 2>/dev/null && { printf 'session already exists: %s\n' "$session" >&2; exit 3; }
   nvidia-smi -i "$gpu" --query-compute-apps=pid --format=csv,noheader | grep -Eq '[0-9]' && { printf 'GPU %s is in use\n' "$gpu" >&2; exit 3; } || true
-  printf '%s label=%s mode=%s branch=%s commit=%s GPU=%s\n' "$candidate" "${LABEL[$candidate]}" "${MODE[$candidate]}" bwa/r15-closed-loop-evolution "$COMMIT" "$gpu"
+  printf '%s label=%s mode=%s branch=%s commit=%s GPU=%s\n' "$candidate" "${LABEL[$candidate]}" "${MODE[$candidate]}" "$BRANCH" "$COMMIT" "$gpu"
 done
 printf 'R15 temporal preflight run=%s split=%s reference=%s root=%s\n' "$RUN_ID" "$SPLIT" "$REFERENCE_RUN" "$RUN_ROOT"
 if ((DRY_RUN)); then printf 'dry-run passed; no output/tmux created\n'; exit 0; fi
@@ -82,7 +83,7 @@ t=path+".tmp"; open(t,"w").write(json.dumps(p,indent=2,sort_keys=True)+"\n"); os
 PY
 CONFIG="$ROOT/configs/before_we_act/r12_action/e1_p2.yaml"
 for candidate in "${SELECTED[@]}"; do
-  "$PYTHON" "$ROOT/scripts/before_we_act/r15_runtime.py" register --run-root "$RUN_ROOT" --run-id "$RUN_ID" --split "$SPLIT" --seed-file "$SEED_FILE" --seed-file-sha256 "$SEED_SHA" --candidate "$candidate" --label "${LABEL[$candidate]}" --gpu "${GPU[$candidate]}" --worktree "$ROOT" --branch bwa/r15-closed-loop-evolution --commit "$COMMIT" --config "$CONFIG" --checkpoint "$CHECKPOINT"
+  "$PYTHON" "$ROOT/scripts/before_we_act/r15_runtime.py" register --run-root "$RUN_ROOT" --run-id "$RUN_ID" --split "$SPLIT" --seed-file "$SEED_FILE" --seed-file-sha256 "$SEED_SHA" --candidate "$candidate" --label "${LABEL[$candidate]}" --gpu "${GPU[$candidate]}" --worktree "$ROOT" --branch "$BRANCH" --commit "$COMMIT" --config "$CONFIG" --checkpoint "$CHECKPOINT"
 done
 for candidate in "${SELECTED[@]}"; do
   tmux new-session -d -s "bwa-r15s-$candidate" -n screen \
