@@ -4193,6 +4193,10 @@ phase-balanced expert 路线已在独立分支实现：真实 20-expert manifest
 
 e23 fixed-threshold reactive 完整 discovery20=`1/20 vs 1/20`、paired=`+0/-0`，结构化结论 `FAILED`。终态 robust replay 读取全部 `20` episodes/`5747` checks：原阈值 triggers=`839`，robust triggers=`0`，q99 floor violation=`0`，信号级 receipt `PASSED`；它仍不是闭环验收。随后 e26 dry-run 通过并启动 `/workspace/bwa_runs/r15e26-20260807-world-reactive-robust-discovery20`（GPU1、tmux `bwa-r15s-p3`、PID `560111/560130`），本快照 `0/20`。同期 e20 expert=`18/20,3 success`，e18 replicated-batch original formal=`16/20,0 success`；四张卡均有新鲜 producer heartbeat、约 `1.9 GiB` 显存且无 OOM/NaN/异常重启。
 
+**UTC `2026-08-07T13:24Z` expert 终态、编排故障与恢复。** e20 完整 discovery20=`3/20 vs 1/20`、delta=`+2`、paired=`+3/-1`，结构化 acceptance/status=`PASSED`；P50/P95 latency=`26.765851/74.687682 ms`，训练仍为 `5000/5000`、末次 loss=`0.04648296`。首次 promotion 尝试绑定 GPU0，却沿用通用 tmux 名 `bwa-r15s-p1`，与 GPU2 正运行的 e33 同名；launcher 在创建 run root 前正确 fail-fast，故没有覆盖结果或启动错误进程。独立修复 commit `bwa/r15-expert-validation@1a76b8e0c3c1` 为 temporal/formal launcher 增加受校验的 `--session`，把 session 写入 manifest，并将 e28/e29 固定为 `bwa-r15s-expert-e28/e29`；本地/远端相关测试均 `20 passed`、ruff 与三个 shell syntax 通过。随后 dry-run 通过并启动 `/workspace/bwa_runs/r15e28-20260807-expert20-e9-ft5k-validation20`（GPU0、commit `1a76b8e`、PID `562989/563006`），本快照 `0/20`、heartbeat 正常。
+
+为让首个 handoff 退出后仍可无人值守晋级，`fef9db3` 又把 promotion 改为可恢复：只有既有 manifest 的 split/session/checkpoint 全部精确匹配才复用，否则 fail-fast，绝不重建或覆盖目录；本地再次 `20 passed`。等待 session `bwa-r15-handoff-expert-promote-e28` 先等 e28 process/session 与 GPU0 自然释放，再 fast-forward 控制 worktree并复用 e28，随后按 validation 结果进入 e29 formal 或 e25 RETAIN；它不修改正在运行的 e28 worktree commit，也不占 GPU。
+
 当前远程为四张 RTX 5090；UTC `12:48Z` 的占用为 GPU0=`r15e20 expert-e9 discovery`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。磁盘 `/workspace` 可用约 `145 GiB`、inode 使用约 `1%`，当前无需清理；既有实验、数据集、缓存和 checkpoint 均未删除。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
 
 ```bash
