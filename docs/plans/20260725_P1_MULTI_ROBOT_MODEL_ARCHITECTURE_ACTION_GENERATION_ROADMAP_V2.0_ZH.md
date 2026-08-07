@@ -4118,8 +4118,10 @@ cd /workspace/bwa_worktrees/model-improvements
 | W13 robust reactive monitor | `bwa/r15-world-reactive-robust@c9306e7838b8` | 固定 VLA-Corrector 官方 `9d23a0b...`/Apache-2.0，移植独立 h1/h5 EWMA、median+MAD、滞回、连续检查和 cooldown；冻结 R13 q99 仍是不可降低的 noise floor |
 | PACE execution | `bwa/r15-pace-execution@3cde7d6315ba` | PACE v2 论文公式的独立复现（未复制未发布源码）；用 20 条成功 expert、8124 windows 的 joint-speed valley prominence 校准动态 horizon |
 | RETAIN expert merge | `bwa/r15-retain-expert-merge@14f55a58980b` | 固定 RETAIN 官方 `0bbc6cf...`/Apache-2.0；对 W12 与 e20 expert checkpoint 做预注册 `0.5/0.5` 参数插值，以降低少量专项数据微调的遗忘；不读取 discovery 结果调 alpha |
-| expert checkpoint promotion | `bwa/r15-expert-validation@614edf94e76e` | 不重训、复用 e20 checkpoint；按 discovery→独立 validation→原始 Gate20 严格串联，任一层失败才继续 e21 搜索；独立 worktree 保持运行中的 e20 commit 不变 |
+| expert checkpoint promotion | `bwa/r15-expert-validation@e2863e597968` | 不重训、复用 e20 checkpoint；按 discovery→独立 validation→原始 Gate20 严格串联，任一层失败才继续 phase-balanced/e21 搜索；独立 worktree 保持运行中的 e20 commit 不变 |
 | TRACT-inspired phase diagnostic | `bwa/r15-tract-phase-balanced@fc443beeb718` | TRACT 尚未找到可 pin 官方代码，故不复制实现；只用训练期 privileged state 生成三阶段标签，以冻结 W11 legal observation belief 训练小型 phase head，先证伪阶段路由是否可行 |
+| phase-balanced expert continuation | `bwa/r15-phase-balanced-expert@1aa0114fa83f` | 保持 e20 的模型、`3 original + 9 expert`、LR、5k updates 和 runtime 全部不变；唯一变化是 9 条 expert 按三个训练期阶段各取 3 条 |
+| stochastic AAC promotion | `bwa/r15-aac-stochastic-promotion@a3e9cfaac30c` | e16 discovery 通过后先复用完全相同 stochastic route 跑独立 validation 和原始 Gate20；任一层失败才启动 BID，等待脚本不改变 evaluator |
 
 世界重排版新增 `configs/before_we_act/r15_evolution/world_aac_utility.yaml`、`world_reranked_aac_plan_chunk` evaluator/route、checkpoint SHA256 硬校验、投影率/eligible/utility/intervention 诊断及 launcher/runner 白名单。它只读 W13 `checkpoint_010000.pt`（SHA256 `6f98120d...`）并完整计入 W12 action generator + W13 utility latency。2026-08-07 本地执行 common temporal/R13/R14/runtime/protocol 测试为 `30 passed`，远程 worktree `/workspace/bwa_worktrees/r15/world-aac@0cbbf74e2b1c` 再执行相关测试为 `22 passed`；三个 shell 入口通过 `bash -n`，`git diff --check` 无错误。
 
@@ -4179,7 +4181,13 @@ e23 固定阈值 reactive 在 seed `1502503267` 单回合出现 `737` 次 queue-
 
 TRACT 启发的阶段诊断使用成功 expert HDF5 SHA256 `7d2c4151...` 与 native feature index SHA256 `e71eb8f3...` 生成 `/workspace/bwa_runs/shared/r15_stack_phase_manifest_v1.json`（SHA256 `11bbda5381d6a3811b2fc5a17b91d74572cc23289abd61d6f9abc31ebc2c24e4`）。20 条成功轨迹按 task planner 的单调完成边界得到训练期三阶段标签，原始可用样本数为 `2536/3332/2256`；source episode `{4,9,14,19}` 完全留出。`StackPhaseHead` 只读取冻结 W11 belief，采用三相均衡 batch、2000 updates，并以 5-step 单调 authority 解码；预注册门为 raw accuracy `>=0.85`、每相 recall `>=0.80`、authority accuracy `>=0.90`、boundary MAE `<=20 steps`、`4/4` 留出链完整。该诊断通过也不等于闭环提升，只允许进入 legal-observation phase-routed specialist；失败则淘汰该路线。分支本地相关 `16 passed`，远端实际路径复测 `7 passed`、Python compile 和四个 shell `bash -n` 通过；`bwa-r15-handoff-phase-e27` 已在 e16→e19 BID 链之后排队，等待 shell 不占 GPU2。
 
-当前远程为四张 RTX 5090；UTC `12:36Z` 的占用为 GPU0=`r15e20 expert-e9 discovery`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
+**SARM/RA-BC 官方代码审计与淘汰。** 按“每次进化优先查论文官方开源实现”的新增原则，固定 Hugging Face LeRobot `2c1adc378e6a0555c5e7cf322a2a608af5f64d2d`、Apache-2.0 LICENSE SHA256 `0583375a...`、官方 `rabc.py` SHA256 `e789cd59...`。先不改训练器，按官方 Eq.8/9 用当前 phase manifest 构造单调 progress，并以 ACT horizon `100` 对 8124 个 expert frame 计算 delta/weight：delta mean/std=`0.21385688/0.06306767`，`8044` 个权重为 `1`、`80` 个为 `0`、中间权重 `0` 个，mean weight=`0.99015263`；分阶段 mean weight=`1.0/1.0/0.964539`。它在本数据上只去掉每条成功轨迹末尾少量静止帧，近似现有训练，故在复制代码或占用 GPU 前淘汰，不把“来自优秀论文”当作上卡理由。
+
+**UTC `2026-08-07T12:48Z` 增量快照。** e16 true stochastic AAC 已到 `16/20,2 success`，阶段累计 `5/3/2`，相对 discovery control `1/20` 的严格领先已不可逆；原无条件 BID handoff 已精确替换为 `bwa-r15-handoff-stochastic-promote-e33`，没有停止 e16。终态通过后将在 GPU2 先启动 e33 validation20，若再通过则启动 e34 原始 Gate20，失败才回到 e19 BID。该 orchestration 分支本地/远端均为 `14 passed` 且 shell `bash -n` 通过。同期 e20=`14/20,2 success`、e18 formal=`11/20,0 success`、e23=`16/20,1 success`，四路心跳新鲜且无告警。
+
+phase-balanced expert 路线已在独立分支实现：真实 20-expert manifest 的两批只读审计均精确得到 `{original:3, phase0:3, phase1:3, phase2:3}`；本地相关 `18 passed`、远端 `18 passed`、后续 promotion 脚本远端 `6 passed`，Python compile、ruff、两个 runner/launcher 与 promotion shell 均通过。e20 任一 promotion 层失败后，不再直接启动 e21，而是先启动 `/workspace/bwa_runs/r15e30-20260807-phase-balanced-e9-ft5k-discovery20`；e30 自身再按 e31 validation→e32 formal 严格晋级，任一层失败才恢复 e21/e22/RETAIN 搜索。等待 session `bwa-r15-handoff-expert-promote-e28` 与 `bwa-r15-handoff-phase-balanced-promote-e31` 均不占 GPU。
+
+当前远程为四张 RTX 5090；UTC `12:48Z` 的占用为 GPU0=`r15e20 expert-e9 discovery`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。磁盘 `/workspace` 可用约 `145 GiB`、inode 使用约 `1%`，当前无需清理；既有实验、数据集、缓存和 checkpoint 均未删除。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
 
 ```bash
 # 单路线 discovery20；mode 可替换为 aac_stochastic_plan_chunk 或 fixed6_base_chunk
