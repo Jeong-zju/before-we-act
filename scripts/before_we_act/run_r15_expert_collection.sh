@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-OUTPUT_ROOT=""; EPISODES=1; START_SEED=5000; PYTHON=/venv/robofactory-act/bin/python
+OUTPUT_ROOT=""; EPISODES=1; START_SEED=5000; GPU_INDEX=""; PYTHON=/venv/robofactory-act/bin/python
 ROBOFACTORY=/workspace/RoboFactory
 while (($#)); do
   case "$1" in
     --output-root) OUTPUT_ROOT="$2"; shift 2 ;;
     --episodes) EPISODES="$2"; shift 2 ;;
     --start-seed) START_SEED="$2"; shift 2 ;;
+    --gpu-index) GPU_INDEX="$2"; shift 2 ;;
     --python) PYTHON="$2"; shift 2 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
-[[ -n "$OUTPUT_ROOT" && "$EPISODES" =~ ^[1-9][0-9]*$ && "$START_SEED" =~ ^[1-9][0-9]*$ ]] || { printf 'valid output/episodes/seed required\n' >&2; exit 2; }
+[[ -n "$OUTPUT_ROOT" && "$EPISODES" =~ ^[1-9][0-9]*$ && "$START_SEED" =~ ^[1-9][0-9]*$ && "$GPU_INDEX" =~ ^[0-3]$ ]] || { printf 'valid output/episodes/seed/GPU required\n' >&2; exit 2; }
 STATUS="$OUTPUT_ROOT/status.json"; HEARTBEAT="$OUTPUT_ROOT/heartbeat.json"; CHILD_FILE="$OUTPUT_ROOT/child.pid"
 LOG="$OUTPUT_ROOT/collector.log"; RAW_ROOT="$OUTPUT_ROOT/raw"
 mkdir -p "$OUTPUT_ROOT" "$RAW_ROOT"
@@ -57,21 +58,21 @@ EXPECTED_COMMIT=5868242322414a91454e22f1dd9641f613ba1bcf
 CONFIG="$ROBOFACTORY/robofactory/configs/table/three_robots_stack_cube.yaml"
 SOLVER="$ROBOFACTORY/robofactory/planner/solutions/three_robots_stack_cube.py"
 for path in "$PYTHON" "$CONFIG" "$SOLVER"; do [[ -e "$path" ]] || { printf 'missing expert source: %s\n' "$path" >&2; exit 3; }; done
-"$PYTHON" - "$OUTPUT_ROOT/identity.json" "$EXPECTED_COMMIT" "$CONFIG" "$SOLVER" "$EPISODES" "$START_SEED" <<'PY'
+"$PYTHON" - "$OUTPUT_ROOT/identity.json" "$EXPECTED_COMMIT" "$CONFIG" "$SOLVER" "$EPISODES" "$START_SEED" "$GPU_INDEX" <<'PY'
 import datetime,hashlib,json,os,sys
-target,commit,config,solver,episodes,seed=sys.argv[1:]
+target,commit,config,solver,episodes,seed,gpu=sys.argv[1:]
 def digest(path):
  h=hashlib.sha256()
  with open(path,"rb") as f:
   for b in iter(lambda:f.read(1024*1024),b""): h.update(b)
  return h.hexdigest()
-d={"schema_version":1,"round":"R15-Evolution","source":"RoboFactory motion-planning oracle","source_commit":commit,"config":config,"config_sha256":digest(config),"solver":solver,"solver_sha256":digest(solver),"requested_success_episodes":int(episodes),"start_seed":int(seed),"seed_exclusions":"original demonstrations 3000:3149 and all frozen evaluation seeds","created_at":datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")}
+d={"schema_version":1,"round":"R15-Evolution","source":"RoboFactory motion-planning oracle","source_commit":commit,"config":config,"config_sha256":digest(config),"solver":solver,"solver_sha256":digest(solver),"requested_success_episodes":int(episodes),"start_seed":int(seed),"gpu":int(gpu),"seed_exclusions":"original demonstrations 3000:3149 and all frozen evaluation seeds","created_at":datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")}
 tmp=target+f".{os.getpid()}.tmp"; open(tmp,"w").write(json.dumps(d,indent=2,sort_keys=True)+"\n"); os.replace(tmp,target)
 PY
 atomic_state PREPARING collecting "motion-planning oracle; success-only; raw RGB HDF5"
 (
   cd "$ROBOFACTORY"
-  exec env CUDA_VISIBLE_DEVICES="" PYTHONPATH="$ROBOFACTORY" "$PYTHON" -m robofactory.planner.run --env-id ThreeRobotsStackCube-rf --config "$CONFIG" --obs-mode rgb --num-traj "$EPISODES" --seed "$START_SEED" --only-count-success --sim-backend cpu --render-mode sensors --traj-name "r15_stack_expert_seed_${START_SEED}" --record-dir "$RAW_ROOT"
+  exec env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROBOFACTORY" "$PYTHON" -m robofactory.planner.run --env-id ThreeRobotsStackCube-rf --config "$CONFIG" --obs-mode rgb --num-traj "$EPISODES" --seed "$START_SEED" --only-count-success --sim-backend cpu --render-mode sensors --traj-name "r15_stack_expert_seed_${START_SEED}" --record-dir "$RAW_ROOT"
 ) &
 CHILD_PID=$!; printf '%s\n' "$CHILD_PID" >"$CHILD_FILE"; atomic_state PREPARING collecting "motion-planning oracle; success-only; raw RGB HDF5"
 wait "$CHILD_PID"; CHILD_PID=0; printf '0\n' >"$CHILD_FILE"
