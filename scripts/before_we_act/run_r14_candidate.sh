@@ -121,7 +121,7 @@ for task in "${TASKS[@]}"; do
   else
     eval_log="$LOG_ROOT/gate20_${task}.log"
     run_child VALIDATING gate20 evaluate_world_guided_decision.py "$task paired Gate20; 20 live episodes" \
-      env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROOT" "$PYTHON" -m before_we_act.evaluate_world_guided_decision --config "$CONFIG" --action-config "$ACTION_CONFIG" --action-checkpoint "$ACTION_CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --world-config "$WORLD_CONFIG" --world-checkpoint "$WORLD_CHECKPOINT" --vision-artifact "$VISION_ARTIFACT" --vision-batch-size 5 --task "$task" --seed-file "$seed_file" --episodes 20 --max-steps 1500 --device cuda:0 --output "$GATE_ROOT/$task.json" --resume-log "$eval_log" >>"$eval_log" 2>&1
+      env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROOT" "$PYTHON" -m before_we_act.evaluate_world_guided_decision --config "$CONFIG" --action-config "$ACTION_CONFIG" --action-checkpoint "$ACTION_CHECKPOINT" --belief-config "$BELIEF_CONFIG" --belief-checkpoint "$BELIEF_CHECKPOINT" --world-config "$WORLD_CONFIG" --world-checkpoint "$WORLD_CHECKPOINT" --vision-artifact "$VISION_ARTIFACT" --vision-batch-size 5 --task "$task" --seed-file "$seed_file" --episodes 20 --max-steps 1500 --device cuda:0 --output "$GATE_ROOT/$task.json" --resume-log "$eval_log" --progress "$CANDIDATE_ROOT/validation/gate20_progress.json" >>"$eval_log" 2>&1
   fi
 done
 

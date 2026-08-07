@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import time
 
@@ -24,11 +26,22 @@ from before_we_act.evaluate_action_generator_evolution import (
 from before_we_act.planner.base import WorldGuidedDecisionPlanner, load_r14_config
 
 
+def write_progress(path: Path | None, payload: dict) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    payload = dict(payload)
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    temporary.write_text(json.dumps(payload, sort_keys=True) + "\n")
+    os.replace(temporary, path)
+
+
 @torch.no_grad()
 def evaluate(
     *, decision_config, action_config, action_checkpoint, belief_config,
     belief_checkpoint, world_config, world_checkpoint, vision_artifact,
-    vision_batch_size, task_name, seeds, device, max_steps,
+    vision_batch_size, task_name, seeds, device, max_steps, progress_path=None,
 ):
     if task_name not in decision_config.deployment["specialist_tasks"]:
         raise ValueError("R14 live evaluator is restricted to the W12 specialist route")
@@ -45,7 +58,7 @@ def evaluate(
     env = make_env(task_name)
     rows, latencies = [], []
     try:
-        for seed in seeds:
+        for episode_index, seed in enumerate(seeds):
             observation, _ = reset_reproducibly(env, seed)
             history = TeamHistory(arms)
             ensemble = TemporalChunkEnsembler(arms)
@@ -55,6 +68,11 @@ def evaluate(
             fallbacks = interventions = exceptions = timeouts = 0
             gains, planner_latencies = [], []
             reasons: dict[str, int] = {}
+            write_progress(progress_path, {
+                "schema_version": 1, "task": task_name, "seed": int(seed),
+                "episode_index": episode_index + 1, "episodes_total": len(seeds),
+                "step": 0, "max_steps": max_steps, "state": "VALIDATING",
+            })
             for step in range(max_steps):
                 batch = history.batch(observation, previous_action, device)
                 if device.type == "cuda":
@@ -93,6 +111,14 @@ def evaluate(
                 exceptions += int(decision.reason.startswith("planner_exception:"))
                 timeouts += int(decision.reason == "planner_deadline_exceeded")
                 reasons[decision.reason] = reasons.get(decision.reason, 0) + 1
+                if step % 10 == 0:
+                    write_progress(progress_path, {
+                        "schema_version": 1, "task": task_name, "seed": int(seed),
+                        "episode_index": episode_index + 1, "episodes_total": len(seeds),
+                        "step": step + 1, "max_steps": max_steps, "state": "VALIDATING",
+                        "interventions": interventions, "fallbacks": fallbacks,
+                        "planner_exceptions": exceptions, "planner_timeouts": timeouts,
+                    })
                 normalized = decision.actions[0, : len(arms)]
                 raw = normalized * stats["a_std"][None, None] + stats["a_mean"][None, None]
                 action = ensemble.append_and_select(step, raw.float().cpu().numpy())
@@ -120,6 +146,12 @@ def evaluate(
                 "terminal_info": terminal_info(info),
             }
             rows.append(row)
+            write_progress(progress_path, {
+                "schema_version": 1, "task": task_name, "seed": int(seed),
+                "episode_index": episode_index + 1, "episodes_total": len(seeds),
+                "step": step + 1, "max_steps": max_steps, "state": "EPISODE_COMPLETE",
+                "success": success, "interventions": interventions, "fallbacks": fallbacks,
+            })
             print(json.dumps(row, sort_keys=True), flush=True)
     finally:
         env.close()
@@ -144,6 +176,7 @@ def main() -> None:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--output", required=True)
     parser.add_argument("--resume-log", default="")
+    parser.add_argument("--progress", default="")
     args = parser.parse_args()
     decision_config = load_r14_config(args.config)
     action_config = load_r12_evolution_config(args.action_config)
@@ -184,6 +217,7 @@ def main() -> None:
             seeds=remaining,
             device=torch.device(args.device),
             max_steps=args.max_steps,
+            progress_path=Path(args.progress) if args.progress else None,
         )
     else:
         evaluated, latencies, update = [], [], None

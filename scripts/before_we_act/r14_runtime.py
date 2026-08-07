@@ -96,6 +96,29 @@ def init(args) -> None:
         })
 
 
+def heartbeat(run_root: Path, candidate: str, pid=None, child_pid=None) -> None:
+    base.heartbeat(run_root, candidate, pid, child_pid)
+    progress = base.read_json(
+        base.root_for(run_root, candidate) / "validation/gate20_progress.json"
+    )
+    if not progress:
+        return
+    status_path = base.root_for(run_root, candidate) / "status.json"
+    status = base.read_json(status_path)
+    status.update(
+        epoch=progress.get("episode_index"),
+        step=progress.get("step"),
+        total_steps=progress.get("max_steps"),
+        acceptance_progress=(
+            f"Stack episode {progress.get('episode_index', '?')}/"
+            f"{progress.get('episodes_total', '?')} step "
+            f"{progress.get('step', '?')}/{progress.get('max_steps', '?')}"
+        ),
+        updated_at=base.now(),
+    )
+    base.atomic_json(status_path, status)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -123,7 +146,7 @@ def main() -> None:
     elif args.command == "status":
         base.update_status(args)
     elif args.command == "heartbeat":
-        base.heartbeat(args.run_root, args.candidate, args.pid, args.child_pid)
+        heartbeat(args.run_root, args.candidate, args.pid, args.child_pid)
     else:
         selected = CANDIDATES if args.candidate == "all" else (args.candidate,)
         while True:
