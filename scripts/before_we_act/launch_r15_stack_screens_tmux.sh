@@ -31,7 +31,7 @@ SEED_SHA="$(sha256sum "$SEED_FILE" | awk '{print $1}')"
 declare -A LABEL GPU WORKTREE BRANCH CONFIG CHECKPOINT REFERENCE
 LABEL[p0]=w12_control; GPU[p0]=0; WORKTREE[p0]=/workspace/bwa_worktrees/r12r4/p2; BRANCH[p0]=bwa/r12e1-p2-act-stack-specialist; CONFIG[p0]="${WORKTREE[p0]}/configs/before_we_act/r12_action/e1_p2.yaml"; CHECKPOINT[p0]=/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p2/train/formal/checkpoints/checkpoint_130000.pt; REFERENCE[p0]=1
 LABEL[p1]=e2_p0_causal_phase; GPU[p1]=1; WORKTREE[p1]=/workspace/bwa_worktrees/r12e2/p0; BRANCH[p1]=bwa/r12e2-p0-causal-phase-stack-specialist; CONFIG[p1]="${WORKTREE[p1]}/configs/before_we_act/r12_action/e1_p0.yaml"; CHECKPOINT[p1]=/workspace/bwa_runs/r12e2-20260806-causal-phase-p0-v2/candidates/p0/train/formal/checkpoints/checkpoint_phase_030000.pt; REFERENCE[p1]=0
-LABEL[p2]=e3_p2_act_causal_phase; GPU[p2]=2; WORKTREE[p2]=/workspace/bwa_worktrees/r12e3/p2; BRANCH[p2]=bwa/r12e3-p2-act-causal-phase-stack-specialist; CONFIG[p2]="${WORKTREE[p2]}/configs/before_we_act/r12_action/e1_p2.yaml"; CHECKPOINT[p2]=/workspace/bwa_runs/r15e0-20260807-causal-phase-p2-resume/candidates/p2/train/formal/checkpoints/checkpoint_phase_030000.pt; REFERENCE[p2]=0
+LABEL[p2]=e3_p2_act_causal_phase; GPU[p2]=3; WORKTREE[p2]=/workspace/bwa_worktrees/r12e3/p2; BRANCH[p2]=bwa/r12e3-p2-act-causal-phase-stack-specialist; CONFIG[p2]="${WORKTREE[p2]}/configs/before_we_act/r12_action/e1_p2.yaml"; CHECKPOINT[p2]=/workspace/bwa_runs/r15e0-20260807-causal-phase-p2-resume/candidates/p2/train/formal/checkpoints/checkpoint_phase_030000.pt; REFERENCE[p2]=0
 
 for candidate in "${SELECTED[@]}"; do
   worktree="${WORKTREE[$candidate]}"; branch="${BRANCH[$candidate]}"; session="bwa-r15s-$candidate"; gpu="${GPU[$candidate]}"
