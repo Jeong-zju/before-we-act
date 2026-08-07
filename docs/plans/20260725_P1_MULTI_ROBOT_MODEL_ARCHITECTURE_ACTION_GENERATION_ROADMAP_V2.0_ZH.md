@@ -4102,7 +4102,7 @@ cd /workspace/bwa_worktrees/model-improvements
 - `validation20.json` SHA256 `c6292f4c9be292d0cd4f6d93141022f013d7fffd9c8782911eb8d753a534b50b`；冻结 W12 control 为 `/workspace/bwa_runs/r15e7-20260807-w12-validation20-control`，`1/20`；
 - 候选必须先在 identical-seed discovery20 **严格高于** W12，再以完全冻结的方法在 validation20 严格高于 W12，之后才有资格运行原 Gate20 Stack seeds；最终仍必须使五任务总成功数严格高于 `77/100`。筛选失败不覆盖目录、不修改 seed，也不能调低验收门槛。
 
-**Git 与实现工作台。** 公共进化分支为 `bwa/r15-closed-loop-evolution@eb7f428`，所有完成修改均先本地测试、检查 diff、提交并推送，再由远程独立 worktree fast-forward。各条可归因路线不混合：
+**Git 与实现工作台。** 公共进化账本分支为 `bwa/r15-closed-loop-evolution@59d0005`，所有完成修改均先本地测试、检查 diff、提交并推送，再由远程独立 worktree fast-forward。各条可归因路线不混合：
 
 | 路线 | 分支 / commit | 作用与隔离 |
 |---|---|---|
@@ -4116,6 +4116,7 @@ cd /workspace/bwa_worktrees/model-improvements
 | BID backward coherence | `bwa/r15-bid-coherence@ba69b62` | 从 BID LeRobot `823a6137...` 固定 Apache-2.0 来源，只移植 backward coherence；先以真实 stochastic ACT plan 作候选，不伪造 strong/weak policy |
 | W13 reactive monitor | `bwa/r15-world-reactive-monitor@c50395908908` | 按 DREAM-Chunk/VLA-Corrector 的预测—实际偏差思路，用冻结 W13 h1/h5 latent error 触发丢弃余下 queue 与重规划；阈值只来自 R13 validation Stack q99 |
 | PACE execution | `bwa/r15-pace-execution@3cde7d6315ba` | PACE v2 论文公式的独立复现（未复制未发布源码）；用 20 条成功 expert、8124 windows 的 joint-speed valley prominence 校准动态 horizon |
+| RETAIN expert merge | `bwa/r15-retain-expert-merge@14f55a58980b` | 固定 RETAIN 官方 `0bbc6cf...`/Apache-2.0；对 W12 与 e20 expert checkpoint 做预注册 `0.5/0.5` 参数插值，以降低少量专项数据微调的遗忘；不读取 discovery 结果调 alpha |
 
 世界重排版新增 `configs/before_we_act/r15_evolution/world_aac_utility.yaml`、`world_reranked_aac_plan_chunk` evaluator/route、checkpoint SHA256 硬校验、投影率/eligible/utility/intervention 诊断及 launcher/runner 白名单。它只读 W13 `checkpoint_010000.pt`（SHA256 `6f98120d...`）并完整计入 W12 action generator + W13 utility latency。2026-08-07 本地执行 common temporal/R13/R14/runtime/protocol 测试为 `30 passed`，远程 worktree `/workspace/bwa_worktrees/r15/world-aac@0cbbf74e2b1c` 再执行相关测试为 `22 passed`；三个 shell 入口通过 `bash -n`，`git diff --check` 无错误。
 
@@ -4156,6 +4157,12 @@ cd /workspace/bwa_worktrees/model-improvements
 - PACE 校准只读取上述 20 条成功 expert：8124 windows、15720 prominence，q05 threshold=`1.832603296544888e-10`，receipt `/workspace/bwa_runs/shared/r15_pace_calibration_v1.json` SHA256 `61324a4c...`。分支本地 `33 passed`、远端 `33 passed`；e24 在 GPU3 的 AAC validation/formal 链之后先做 32-step phase-diversity smoke，只有 horizon 非退化才启动 discovery20。
 
 **论文开源检索与移植取舍。** 除已运行 CogACT/AAC 外，已经 pin：BID LeRobot 官方仓库 `823a6137...`（Apache-2.0；`single.py` coherence 与 `multi.py` bidirectional sampler）、VLA-Corrector `9d23a0b...`（Apache-2.0）、DREAM-Chunk Kinetix `0aae0757...`、Mixture of Horizons `5da35004...` 和 PACE arXiv v2 source SHA256 `5f856ed8...`。BID backward coherence 已做最小移植；strong/weak forward contrast 仍需真实早期 checkpoint，不能把同一个模型伪装成两个 policy。VLA-Corrector 的 cosine error/circuit breaker 与 DREAM-Chunk 的 observed/predicted latent matching 只转化为本项目 W13 reactive adapter；DREAM 仓库未见允许复制的 LICENSE，因此没有复制其源码。MoH GitHub 根目录暂未找到与模型卡一致的 LICENSE 文件，许可证证据解决前不复制源码。PACE 未发布可 pin 的官方实现，当前明确标记为论文公式独立复现而非代码移植。每个后续尝试继续优先检索优秀论文的官方代码，固定 repo commit、license、复制文件 SHA 与适配差异；“来自论文”不豁免本项目 paired screen。
+
+**UTC `2026-08-07T11:45Z` 增量快照。** e15 已运行 `18/20` 且为 `2 success vs validation control 1 success`；两个新成功 seed 为 `1097437900/1458907303`，同时丢失 control 成功 seed `1258508954`，故当前 paired=`+2/-1`、净 `+1`。计数优势已不可逆，但仍等待满 20 回合与结构化 acceptance；只有其终态 `PASSED` 才由 `bwa-r15-handoff-aac-e18-formal` 启动原始 Gate20，正式规则仍是 Stack `>3/20` 且受保护四任务 exact `74`，总分严格 `>77/100`。同期 e16 true stochastic=`2/20,0 success`、e20 expert-e9=`2/20,0 success`、e23 world-reactive=`4/20,0 success`，四路均保持真实心跳且无 OOM/NaN。
+
+新增 RETAIN 备用路线固定官方仓库 `0bbc6cf0cc56...`、Apache-2.0 与 `model_merging.py` SHA256 `7bb404a3...`；本项目为独立 PyTorch 适配，不复制 JAX 代码。合并器强制同名 key/shape/dtype、非浮点 buffer exact，并写入 base/finetuned/output SHA。`bwa/r15-retain-expert-merge@14f55a5` 本地相关 `10 passed`、远端初版相关 `9 passed` 后又对隔离 session 修订执行远端 `4 passed`；真实 e20 checkpoint dry-run 匹配 `256` 个浮点张量、`20,500,896` elements。e25 handoff `bwa-r15-handoff-retain-e25` 已排在 e22 后，只在 GPU0 空闲后生成 `W12 0.5 + e20 0.5` checkpoint 并运行 discovery20；等待 shell 不占 GPU。
+
+论文路线继续扩大但保持适配边界：RETAIN 适合当前“少量成功 Stack expert + 强 W12 parent”的数据形态；FutureRTC/A2C2 面向异步推理延迟，不匹配当前同步仿真主瓶颈；DVAC 依赖 flow denoising 轨迹，不能把 ACT latent proposal 伪装为其信号。所有后续尝试仍优先查找官方代码与许可证，但按任务/架构适配性和 paired screen 证据决定是否运行。
 
 当前远程为四张 RTX 5090；UTC `11:27Z` 的占用为 GPU0=`r15e20 expert-e9 validation`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e15 replicated-batch validation20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
 
@@ -4211,6 +4218,16 @@ cd /workspace/bwa_worktrees/r15/pace-execution
   --run-id r15-pace-$(date -u +%Y%m%dT%H%M%SZ) \
   --candidate p2 --split discovery20 --gpu-index 3 \
   --execution-mode pace_replicated_batch20 \
+  --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2'
+
+# RETAIN W12/expert checkpoint merge + discovery20；0.5/0.5 在看结果前冻结
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/retain-expert
+./scripts/before_we_act/launch_r15_retain_merge_tmux.sh \
+  --run-id r15-retain-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidate p1 --gpu-index 0 --session bwa-r15s-retain-p1 \
+  --finetuned-checkpoint /workspace/bwa_runs/r15e20-20260807-expert20-e9-ft5k-discovery20/candidates/p1/train/stack_expert/checkpoints/checkpoint_005000.pt \
+  --finetuned-weight 0.5 --split discovery20 \
   --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2'
 ```
 
