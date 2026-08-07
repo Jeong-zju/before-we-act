@@ -71,12 +71,12 @@ def digest(path):
 d={"schema_version":1,"round":"R15-Evolution","source":"RoboFactory motion-planning oracle recorded at explicit native 480x640","source_commit":commit,"config":config,"config_sha256":digest(config),"solver":solver,"solver_sha256":digest(solver),"driver":driver,"driver_sha256":digest(driver),"requested_success_episodes":int(episodes),"start_seed":int(seed),"gpu":int(gpu),"rgb_shape":[480,640,3],"seed_exclusions":"original demonstrations 3000:3149 and all frozen evaluation seeds","created_at":datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")}
 tmp=target+f".{os.getpid()}.tmp"; open(tmp,"w").write(json.dumps(d,indent=2,sort_keys=True)+"\n"); os.replace(tmp,target)
 PY
-atomic_state PREPARING collecting "motion-planning oracle; success-only; raw RGB HDF5"
+atomic_state TRAINING collecting "motion-planning oracle; success-only; raw RGB HDF5"
 (
   cd "$ROOT"
   exec env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROOT:$ROBOFACTORY" "$PYTHON" -m before_we_act.collect_r15_stack_expert --config "$CONFIG" --output-root "$RAW_ROOT" --episodes "$EPISODES" --start-seed "$START_SEED" --trajectory-name "r15_stack_expert_seed_${START_SEED}"
 ) &
-CHILD_PID=$!; printf '%s\n' "$CHILD_PID" >"$CHILD_FILE"; atomic_state PREPARING collecting "motion-planning oracle; success-only; raw RGB HDF5"
+CHILD_PID=$!; printf '%s\n' "$CHILD_PID" >"$CHILD_FILE"; atomic_state TRAINING collecting "motion-planning oracle; success-only; raw RGB HDF5"
 wait "$CHILD_PID"; CHILD_PID=0; printf '0\n' >"$CHILD_FILE"
 mapfile -t H5_FILES < <(find "$RAW_ROOT" -type f -name '*.h5' -print)
 mapfile -t JSON_FILES < <(find "$RAW_ROOT" -type f -name '*.json' -print)
