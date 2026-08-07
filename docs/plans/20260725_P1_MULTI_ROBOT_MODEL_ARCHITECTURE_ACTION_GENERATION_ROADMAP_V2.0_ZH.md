@@ -4092,6 +4092,98 @@ cd /workspace/bwa_worktrees/model-improvements
 
 终态 monitor 显示四路 `FAILED / complete / acceptance=FAILED`、`5/5 tasks`、`100/100 episodes`，GPU 均为 `0%` utilization、约 `2 MiB` 占用且无 compute process；四个 tmux session 已随任务自然退出。stop `--dry-run` 对四路均报告 `pids=none`，没有发送信号、删除数据或关闭无关 session。最终结论为：**R14 未通过；四路均无资格成为 winner；no winner/no merge；按本次 `[NEXT_STAGE]=无` 和通过后停止约束，不进入任何下一阶段。** 若未来另行授权新研究轮，优先保留 P0/P1 的保守性，同时重新校准“能产生净 paired win”的 utility/干预判据；不得降低 `>77/100` 门槛或把工程门通过写成模型质量通过。
 
+#### 10.17.2 R14 后授权的闭环持续进化工作台（2026-08-07，进行中）
+
+**授权、目标与不可降低的门。** R14 正式 `no_winner_no_merge` 结论完成后，用户另行明确授权：可以推翻预定义路线、自由使用四卡、在磁盘不足时清理可再生实验产物，并持续尝试论文开源代码移植；唯一研究目标改为“让 R13/R14 所在完整系统的综合闭环性能高于冻结 W12/R14 基线”。这项后续授权不追溯修改 10.17.1 的正式 R14 结论，也不允许把工程 smoke、loss 下降或单一 seed 成功写成正式提升。当前先保留 `three_robots_stack_cube`：该任务已经出现可复现成功和两个新增 paired win 信号，尚无证据支持承担从零换数据集的成本；只有多条训练、推理和恢复路线在独立 seeds 上均失败后，才重新评估 `camera_alignment`、`pick_meat`、`place_food` 等合法 observation 差异任务。
+
+为减少 20 回合小样本偶然性，新建只读 seed 协议 `/workspace/bwa_runs/shared/r15_stack_protocol_v1`：
+
+- `discovery20.json` SHA256 `8793ec7d862a1aa8332f06e05cb8da5497fdf667f9d83818a38a1eb96e1c6536`；冻结 W12 control 为 `/workspace/bwa_runs/r15e1-20260807-discovery20-v2`，`1/20`；
+- `validation20.json` SHA256 `c6292f4c9be292d0cd4f6d93141022f013d7fffd9c8782911eb8d753a534b50b`；冻结 W12 control 为 `/workspace/bwa_runs/r15e7-20260807-w12-validation20-control`，`1/20`；
+- 候选必须先在 identical-seed discovery20 **严格高于** W12，再以完全冻结的方法在 validation20 严格高于 W12，之后才有资格运行原 Gate20 Stack seeds；最终仍必须使五任务总成功数严格高于 `77/100`。筛选失败不覆盖目录、不修改 seed，也不能调低验收门槛。
+
+**Git 与实现工作台。** 公共进化分支为 `bwa/r15-closed-loop-evolution@4286139fcdc4`，所有完成修改均先本地测试、检查 diff、提交并推送，再由远程独立 worktree fast-forward。各条可归因路线不混合：
+
+| 路线 | 分支 / commit | 作用与隔离 |
+|---|---|---|
+| P3 aligned-world / RNG parity | `bwa/r15-p3-aligned-world-decision@329238636920` | 修正 world evaluator 对冻结 W12 base 的 mutation 及 CPU/CUDA RNG 污染；模型仍是独立 aligned-world checkpoint |
+| CogACT | `bwa/r15-closed-loop-evolution@77d34926e3c1` | 从 Microsoft CogACT `b174a1b...` 移植 MIT Adaptive Action Ensemble；只改变时间集成 |
+| AAC replicated batch | `bwa/r15-aac-entropy-chunk@d3fa450467c3` | 从官方 AAC RoboCasa `fed3e6b...` 移植 MIT entropy horizon；20 路复制 batch，和后续真实随机采样严格分支隔离 |
+| true stochastic AAC | `bwa/r15-aac-stochastic-plan@4286139fcdc4` | sample 0 为 ACT prior mean/W12 anchor，sample 1..19 为 learned plan prior 随机 latent，再由 AAC entropy 定 horizon |
+| fixed-six attribution | `bwa/r15-fixed6-base-chunk@a214cb08f585` | 单个 W12 base、固定 6-step open-loop，检验 AAC 结果是否只来自执行 cadence |
+| W13 world-reranked AAC | `bwa/r15-world-aac-rerank@0cbbf74e2b1c` | 20 个 ACT prior plans 先投影到冻结 R14 `±0.12` trust region，W13 P0 utility 重排；增益 `<0.003` fail-closed 到 W12 anchor，AAC 只选执行 horizon |
+| native expert evolution | `bwa/r15-expert-evolution@935564e` | 原始成功规划轨迹转 native RGB+DINO 物理动作 cache，再从 W12 做 source-aware expert fine-tune；不把规划器作为 runtime policy |
+
+世界重排版新增 `configs/before_we_act/r15_evolution/world_aac_utility.yaml`、`world_reranked_aac_plan_chunk` evaluator/route、checkpoint SHA256 硬校验、投影率/eligible/utility/intervention 诊断及 launcher/runner 白名单。它只读 W13 `checkpoint_010000.pt`（SHA256 `6f98120d...`）并完整计入 W12 action generator + W13 utility latency。2026-08-07 本地执行 common temporal/R13/R14/runtime/protocol 测试为 `30 passed`，远程 worktree `/workspace/bwa_worktrees/r15/world-aac@0cbbf74e2b1c` 再执行相关测试为 `22 passed`；三个 shell 入口通过 `bash -n`，`git diff --check` 无错误。
+
+**已完成闭环结果（discovery/validation 都和各自 W12 control 成对）。** 下表中的失败全部保留；`PASSED` 只表示该级 screen，不等于正式 Gate20 通过。
+
+| run / 方法 | split | Stack | paired win/loss | 结论与证据 |
+|---|---|---:|---:|---|
+| `r15e1.../p1` R12-E2 causal phase | discovery | `0/20` vs `1/20` | `0/1` | FAILED；旧 causal checkpoint 没有迁移收益 |
+| `r15e1...v3-axisfix/p3` aligned W13+R14 direct | discovery | `1/20` vs `1/20` | `0/0` | FAILED/tie；offline world gain 未转成闭环增益 |
+| `r15e2.../p2` latest chunk | discovery | `0/20` vs `1/20` | `0/1` | FAILED；完全取消时间集成有害 |
+| `r15e3.../p1` decay `0.10` | discovery | `2/20` vs `1/20` | `1/0` | screen PASSED；但 `r15e8` 独立 validation 为 `0/20` vs `1/20`，最终 FAILED |
+| `r15e4.../p3` aligned-world + decay `0.10` | discovery | `1/20` vs `1/20` | `1/1` | FAILED/tie |
+| `r15e6.../p2` 单条 native expert、2k update | discovery | `0/20` vs `1/20` | `0/1` | FAILED；数据量不足，不外推到 20 条 expert |
+| `r15e9.../p3` pre-parity world guard | discovery | `1/20` vs `1/20` | `1/1` | 无效于方法判断；随后发现并修复 evaluator RNG/base mutation |
+| `r15e10.../p2` decay `0.05` | discovery | `0/20` vs `1/20` | `0/1` | FAILED |
+| `r15e11.../p1` CogACT adaptive | discovery | `0/20` vs `1/20` | `0/1` | FAILED；20 回合完成，无 OOM/NaN |
+
+**关键诊断与当前进度（UTC `2026-08-07T10:46Z` 快照）。** `r15e12-20260807-aac-entropy-discovery20` 已自然完成 `20/20`、成功 `3` 次；其中 seed `1583240340` 与 `1223853321` 是 W12 未成功的新 paired wins，seed `1532829668` 与 W12 同时成功，结构化验收为 `PASSED`、paired `+2/-0`。但源码审计和在线诊断证明官方接入的 `ACTActionChunkCore.sample()` 删除 `noise`，20 个输出逐值相同；每次 chunk 都是 6，selected entropy 恒为约 `-115.265`。故该 run 必须准确记为“replicated-batch 数值执行路径”，不能宣称 AAC stochastic selection 生效。`bwa-r15-handoff-aac-e15` 已在终态后自动启动完全相同 `bwa/r15-aac-entropy-chunk@d3fa450` 的 `r15e15-20260807-aac-degenerate-validation20`，独立 validation20 正在 GPU3/tmux `bwa-r15s-p2` 运行；交接日志为 `/workspace/bwa_runs/r15e15-20260807-aac-degenerate-validation20-handoff.log`。
+
+同期归因对照 `r15e14-20260807-fixed6-single-discovery20` 为 `6/20, 0 success`，说明“固定每 6 步重规划”本身尚不能解释 replicated-batch 的 3 次成功；对照必须自然跑完。修复 RNG 后的 `r15e13-20260807-world-guarded-isolated-discovery20` 为 `13/20, 1 success`：已完成回合的大多数 step 仍回退，代表性 800-step 回合仅 `1/800` 次实际 intervention、平均 predicted gain `0.000687 < 0.003`，显示旧 R14 小扰动守卫过于保守；这直接驱动了 W13 world-reranked AAC，而不是降低门槛。
+
+两个机制 smoke/full-run 交接器已经在独立 tmux 中等待，不占当前 GPU：
+
+- `bwa-r15-handoff-stochastic-e16` 等 GPU2 对照自然结束，先运行 `episodes=1,max_steps=1`；只有 decoded sample std、plan-prior std 为正且 clip fraction 有效才启动 `r15e16-20260807-aac-stochastic-discovery20`；
+- `bwa-r15-handoff-worldaac-e17` 等 GPU1 parity run 自然结束，先校验 20 个候选全部在 trust region、projection fraction 为正且 world gain finite，才启动 `r15e17-20260807-world-aac-discovery20`。
+
+20 条 RoboFactory native motion-planning expert 已自然采集为 `20/20 success`、`0 failed plan`、原始 `9028` steps，HDF5 为 `/workspace/bwa_runs/r15_stack_expert20_seed5100_native640/raw/ThreeRobotsStackCube-rf/motionplanning/r15_stack_expert_seed_5100.h5`（SHA256 `7d2c4151...`）。`bwa-r15-expert-cache` 正在 GPU0 生成逐帧 native RGB+DINO cache；上述快照为 `9/20` 完成、当前 seed `5109`，dry-run 预计 `8124` usable steps。cache 完成后计划从同一 W12 parent 并行比较 batch `12` 中 expert rows `3/6/9`、`5k updates`、LR `2e-5`、warmup `500`，每路训练后自动接 discovery20；所有输出/checkpoint/log/state/tmux 均独立。
+
+**论文开源检索与移植取舍。** 除已运行 CogACT/AAC 外，已经 pin：BID LeRobot 官方仓库 `823a6137...`（Apache-2.0；`single.py` coherence 与 `multi.py` bidirectional sampler）、Mixture of Horizons `5da35004...` 和 PACE。BID 的 backward coherence + strong/weak forward contrast 与真实 ACT 多样候选最匹配，待 stochastic smoke 证明候选有效后做最小选择器移植；strong/weak 需要真实早期 checkpoint，不能把同一个模型伪装成两个 policy。MoH GitHub 根目录暂未找到与模型卡一致的 LICENSE 文件，许可证证据解决前不复制源码。PACE 暂未找到可 pin 的官方实现，只保留为原理候选。每个后续尝试继续优先检索优秀论文的官方代码，固定 repo commit、license、复制文件 SHA 与适配差异；“来自论文”不豁免本项目 paired screen。
+
+当前远程为四张 RTX 5090；GPU0=`bwa-r15-expert-cache`（`10/20`），GPU1=`r15e13/p3`，GPU2=`r15e14/p1`，GPU3=`r15e15/p2 validation20`。最近心跳连续，显存约 `1.3--1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
+
+```bash
+# 单路线 discovery20；mode 可替换为 aac_stochastic_plan_chunk 或 fixed6_base_chunk
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/world-aac
+./scripts/before_we_act/launch_r15_temporal_screens_tmux.sh \
+  --run-id r15-world-aac-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidate p3 --split discovery20 --gpu-index 1 \
+  --execution-mode world_reranked_aac_plan_chunk \
+  --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2'
+
+# 统一 portfolio 单次快照（各 --screen 参数也可只保留一路）
+ssh -p 10328 root@69.176.92.104 '
+/workspace/bwa_worktrees/r15/expert-evolution/scripts/before_we_act/monitor_r15_portfolio.sh \
+  --screen /workspace/bwa_runs/r15e15-20260807-aac-degenerate-validation20:p2 \
+  --screen /workspace/bwa_runs/r15e13-20260807-world-guarded-isolated-discovery20:p3 \
+  --screen /workspace/bwa_runs/r15e14-20260807-fixed6-single-discovery20:p1 \
+  --expert-cache /workspace/bwa_runs/r15_stack_expert20_cache_20260807-v1-physical \
+  --once'
+
+# 精确安全退出示例；只匹配 run root + candidate，优先 INT 并保留全部输出
+ssh -p 10328 root@69.176.92.104 '
+/workspace/bwa_worktrees/r15/aac-entropy/scripts/before_we_act/stop_r15_stack_screens.sh \
+  --run-root /workspace/bwa_runs/r15e12-20260807-aac-entropy-discovery20 \
+  --candidate p2 --dry-run'
+
+# expert cache 完成后的一路可复现实验
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/expert-evolution
+./scripts/before_we_act/launch_r15_expert_finetune_tmux.sh \
+  --run-id r15-expert-e6-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidate p2 --gpu-index 0 --updates 5000 --batch-size 12 \
+  --expert-rows 6 --learning-rate 2e-5 --warmup 500 \
+  --expert-index /workspace/bwa_runs/r15_stack_expert20_cache_20260807-v1-physical/index.json \
+  --split discovery20 \
+  --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2'
+```
+
+本节是持续更新的实验账本，不是终态成功声明。当前尚无候选完成 discovery+validation+formal Gate20 三层门，因此总体状态仍为 **RUNNING / 尚未证明综合闭环提升**。
+
 ### 10.18 R15：冻结组件组合的四种子正式复现
 
 R15 不改结构。四卡分别从同一 W14 recipe 独立训练 seeds `101/202/303/404`；所有复制文件 SHA、component patch、adapter配置和本项目 trainer/evaluator commit完全相同。每个 seed 的权重都会改变动作，因此每个 seed 都必须五任务各跑 20 回合，之后按 benchmark/投稿资源做 frozen-100。
