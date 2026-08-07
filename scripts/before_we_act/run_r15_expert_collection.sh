@@ -57,39 +57,36 @@ EXPECTED_COMMIT=5868242322414a91454e22f1dd9641f613ba1bcf
 [[ "$(git -C "$ROBOFACTORY" rev-parse HEAD)" == "$EXPECTED_COMMIT" && -z "$(git -C "$ROBOFACTORY" status --porcelain)" ]] || { printf 'RoboFactory source identity differs\n' >&2; exit 3; }
 CONFIG="$ROBOFACTORY/robofactory/configs/table/three_robots_stack_cube.yaml"
 SOLVER="$ROBOFACTORY/robofactory/planner/solutions/three_robots_stack_cube.py"
-for path in "$PYTHON" "$CONFIG" "$SOLVER"; do [[ -e "$path" ]] || { printf 'missing expert source: %s\n' "$path" >&2; exit 3; }; done
-"$PYTHON" - "$OUTPUT_ROOT/identity.json" "$EXPECTED_COMMIT" "$CONFIG" "$SOLVER" "$EPISODES" "$START_SEED" "$GPU_INDEX" <<'PY'
+DRIVER="$ROOT/before_we_act/collect_r15_stack_expert.py"
+for path in "$PYTHON" "$CONFIG" "$SOLVER" "$DRIVER"; do [[ -e "$path" ]] || { printf 'missing expert source: %s\n' "$path" >&2; exit 3; }; done
+"$PYTHON" - "$OUTPUT_ROOT/identity.json" "$EXPECTED_COMMIT" "$CONFIG" "$SOLVER" "$DRIVER" "$EPISODES" "$START_SEED" "$GPU_INDEX" <<'PY'
 import datetime,hashlib,json,os,sys
-target,commit,config,solver,episodes,seed,gpu=sys.argv[1:]
+target,commit,config,solver,driver,episodes,seed,gpu=sys.argv[1:]
 def digest(path):
  h=hashlib.sha256()
  with open(path,"rb") as f:
   for b in iter(lambda:f.read(1024*1024),b""): h.update(b)
  return h.hexdigest()
-d={"schema_version":1,"round":"R15-Evolution","source":"RoboFactory motion-planning oracle","source_commit":commit,"config":config,"config_sha256":digest(config),"solver":solver,"solver_sha256":digest(solver),"requested_success_episodes":int(episodes),"start_seed":int(seed),"gpu":int(gpu),"seed_exclusions":"original demonstrations 3000:3149 and all frozen evaluation seeds","created_at":datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")}
+d={"schema_version":1,"round":"R15-Evolution","source":"RoboFactory motion-planning oracle recorded at explicit native 480x640","source_commit":commit,"config":config,"config_sha256":digest(config),"solver":solver,"solver_sha256":digest(solver),"driver":driver,"driver_sha256":digest(driver),"requested_success_episodes":int(episodes),"start_seed":int(seed),"gpu":int(gpu),"rgb_shape":[480,640,3],"seed_exclusions":"original demonstrations 3000:3149 and all frozen evaluation seeds","created_at":datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")}
 tmp=target+f".{os.getpid()}.tmp"; open(tmp,"w").write(json.dumps(d,indent=2,sort_keys=True)+"\n"); os.replace(tmp,target)
 PY
 atomic_state PREPARING collecting "motion-planning oracle; success-only; raw RGB HDF5"
 (
-  cd "$ROBOFACTORY"
-  exec env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROBOFACTORY" "$PYTHON" -m robofactory.planner.run --env-id ThreeRobotsStackCube-rf --config "$CONFIG" --obs-mode rgb --num-traj "$EPISODES" --seed "$START_SEED" --only-count-success --sim-backend cpu --render-mode sensors --traj-name "r15_stack_expert_seed_${START_SEED}" --record-dir "$RAW_ROOT"
+  cd "$ROOT"
+  exec env CUDA_VISIBLE_DEVICES="$GPU_INDEX" PYTHONPATH="$ROOT:$ROBOFACTORY" "$PYTHON" -m before_we_act.collect_r15_stack_expert --config "$CONFIG" --output-root "$RAW_ROOT" --episodes "$EPISODES" --start-seed "$START_SEED" --trajectory-name "r15_stack_expert_seed_${START_SEED}"
 ) &
 CHILD_PID=$!; printf '%s\n' "$CHILD_PID" >"$CHILD_FILE"; atomic_state PREPARING collecting "motion-planning oracle; success-only; raw RGB HDF5"
 wait "$CHILD_PID"; CHILD_PID=0; printf '0\n' >"$CHILD_FILE"
 mapfile -t H5_FILES < <(find "$RAW_ROOT" -type f -name '*.h5' -print)
 mapfile -t JSON_FILES < <(find "$RAW_ROOT" -type f -name '*.json' -print)
 [[ "${#H5_FILES[@]}" == 1 && "${#JSON_FILES[@]}" == 1 ]] || { printf 'expert collector output pair is incomplete\n' >&2; exit 3; }
-"$PYTHON" - "${JSON_FILES[0]}" "$EPISODES" "$OUTPUT_ROOT/receipt.json" <<'PY'
+PYTHONPATH="$ROOT" "$PYTHON" - "${H5_FILES[0]}" "${JSON_FILES[0]}" "$EPISODES" "$OUTPUT_ROOT/receipt.json" <<'PY'
 import datetime,hashlib,json,os,sys
-source,expected,target=sys.argv[1:]; d=json.load(open(source)); episodes=d.get("episodes",[])
-if (
-    not isinstance(episodes,list)
-    or len(episodes)!=int(expected)
-    or not all(isinstance(row,dict) and bool(row.get("success")) for row in episodes)
-):
-    raise SystemExit("expert episode receipt differs")
+from before_we_act.collect_r15_stack_expert import validate_recorded_source
+hdf5,source,expected,target=sys.argv[1:]
+validation=validate_recorded_source(hdf5,source,int(expected))
 h=hashlib.sha256(open(source,"rb").read()).hexdigest()
-out={"schema_version":1,"status":"PASSED","episodes":int(expected),"metadata_json":source,"metadata_sha256":h,"created_at":datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")}
+out={"schema_version":1,"status":"PASSED","episodes":int(expected),"metadata_json":source,"metadata_sha256":h,**validation,"created_at":datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00","Z")}
 tmp=target+f".{os.getpid()}.tmp"; open(tmp,"w").write(json.dumps(out,indent=2,sort_keys=True)+"\n"); os.replace(tmp,target)
 PY
 TERMINAL_WRITTEN=1; atomic_state PASSED complete "expert raw collection complete; schema conversion remains separate"
