@@ -168,6 +168,61 @@ def test_cogact_team_adapter_preserves_arm_keys_and_route_identity():
     assert "cogact_adaptive_alpha0p1_h2" in launcher
 
 
+def test_aac_entropy_elbow_and_mean_nearest_sample_are_pinned():
+    from before_we_act.upstream_components.aac import select_joint_action_chunk
+
+    rng = np.random.default_rng(20260807)
+    actions = rng.normal(size=(20, 3, 100, 8)).astype(np.float32)
+    selection = select_joint_action_chunk(actions)
+    expected_chunk = max(
+        int(np.argmax(np.diff(selection.chunk_mean_entropy))) + 1, 2
+    )
+    flattened = actions[:, :, : selection.chunk_size].reshape(20, -1)
+    expected_sample = int(
+        np.argmin(np.linalg.norm(flattened - flattened.mean(0), axis=1))
+    )
+    assert selection.chunk_size == expected_chunk
+    assert selection.sample_index == expected_sample
+    assert selection.step_entropy.shape == (16,)
+    assert selection.chunk_mean_entropy.shape == (16,)
+
+
+def test_aac_transplant_and_runtime_route_are_pinned():
+    root = Path(__file__).resolve().parents[2]
+    component = root / "before_we_act/upstream_components/aac"
+    source_map = json.loads((component / "SOURCE_MAP.json").read_text())
+    component_lock = json.loads((component / "COMPONENT_LOCK.json").read_text())
+    assert hashlib.sha256((component / "LICENSE").read_bytes()).hexdigest() == (
+        "6e673d7d323a92f054e673fd51439ffdd2cb33235e7f8fac4cbd0c349698ea1f"
+    )
+    assert source_map["repository_commit"] == (
+        "fed3e6b5eb348160dd0570f326f726758fee9056"
+    )
+    assert source_map["source_file_sha256"] == (
+        "80abe7e1c316c81694b24f9efb9517f89406ec5b2a96a11c49abc0c217d26355"
+    )
+    assert component_lock["frozen_deployment"]["samples"] == 20
+    assert component_lock["frozen_deployment"]["selection_horizon"] == 16
+    evaluator = (root / "before_we_act/evaluate_action_generator_evolution.py").read_text()
+    launcher = (root / "scripts/before_we_act/launch_r15_temporal_screens_tmux.sh").read_text()
+    assert "r15_aac_entropy20_h16_stack_specialist" in evaluator
+    assert "aac_entropy20_h16" in launcher
+
+
+def test_aac_noise_keeps_sample_zero_equal_to_w12_base_noise():
+    from before_we_act.evaluate_action_generator_evolution import aac_noise
+
+    seed, step = 17, 23
+    expanded = aac_noise(
+        seed=seed, step=step, samples=20, device=torch.device("cpu")
+    )
+    reference = torch.randn(
+        (1, 100, 32),
+        generator=torch.Generator().manual_seed(seed * 1_000_003 + step),
+    )
+    torch.testing.assert_close(expanded[:1], reference, rtol=0, atol=0)
+
+
 def test_prepare_and_denormalize_preserve_exact_contract():
     from stereo_core.evaluate_no_wrist_pair import (
         denormalize_action_chunks,

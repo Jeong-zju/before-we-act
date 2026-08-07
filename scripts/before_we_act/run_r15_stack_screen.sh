@@ -86,6 +86,10 @@ case "$LABEL" in
     EXECUTION_ARGS=(--execution-mode cogact_adaptive_ensemble)
     EXECUTION_DETAIL="CogACT adaptive action ensemble alpha=0.1 horizon=2"
     ;;
+  aac_entropy20_h16)
+    EXECUTION_ARGS=(--execution-mode aac_entropy_chunk)
+    EXECUTION_DETAIL="CVPR 2026 AAC entropy chunking samples=20 horizon=16"
+    ;;
   w12_latest_chunk)
     EXECUTION_ARGS=(--execution-mode latest_chunk)
     EXECUTION_DETAIL="latest chunk first action; replan each step"
