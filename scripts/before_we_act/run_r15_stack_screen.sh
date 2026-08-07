@@ -97,8 +97,8 @@ ACCEPT_STATUS="$($PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))
 if [[ "$ACCEPT_STATUS" == REFERENCE ]]; then
   status REFERENCE complete r15_runtime.py "W12 identical-seed reference complete; screen-only"
 elif ((ACCEPT_CODE == 0)); then
-  status PASSED complete r15_runtime.py "strict paired discovery gain over W12; screen-only"
+  status PASSED complete r15_runtime.py "strict paired $SPLIT gain over W12"
 else
-  status FAILED complete r15_runtime.py "no strict paired discovery gain over W12; screen-only" "$ACCEPT_CODE"
+  status FAILED complete r15_runtime.py "no strict paired $SPLIT gain over W12" "$ACCEPT_CODE"
 fi
 exit "$ACCEPT_CODE"

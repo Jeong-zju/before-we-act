@@ -42,8 +42,8 @@ def register_args(tmp_path, candidate, reference=False):
     )
 
 
-def write_result(run_root, candidate, successes):
-    path = run_root / "candidates" / candidate / "validation" / "discovery20.json"
+def write_result(run_root, candidate, successes, split="discovery20"):
+    path = run_root / "candidates" / candidate / "validation" / f"{split}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = [
         {"seed": seed, "success": seed < successes, "steps": 800}
@@ -66,6 +66,28 @@ def test_paired_screen_requires_strict_gain(tmp_path):
     assert r15_runtime.accept(argparse.Namespace(run_root=tmp_path / "run", candidate="p2")) == 10
     p1 = json.loads((tmp_path / "run/candidates/p1/acceptance.json").read_text())
     assert (p1["delta_successes"], p1["paired_wins"], p1["paired_losses"]) == (1, 1, 0)
+
+
+def test_formal_gate_composes_protected_tasks_and_requires_baseline_identity(tmp_path):
+    (tmp_path / "seeds.json").write_text(json.dumps({"seeds": list(range(20))}))
+    for candidate, reference in (("p0", True), ("p1", False)):
+        args = register_args(tmp_path, candidate, reference)
+        args.split = "formal_gate20"
+        args.formal = True
+        args.protected_successes = 74
+        args.baseline_total = 77
+        r15_runtime.register(args)
+    write_result(tmp_path / "run", "p0", 3, "formal_gate20")
+    write_result(tmp_path / "run", "p1", 4, "formal_gate20")
+    assert r15_runtime.accept(
+        argparse.Namespace(run_root=tmp_path / "run", candidate="p1")
+    ) == 0
+    result = json.loads(
+        (tmp_path / "run/candidates/p1/acceptance.json").read_text()
+    )
+    assert result["screen_only"] is False
+    assert result["control_total_successes"] == 77
+    assert result["candidate_total_successes"] == 78
 
 
 def test_status_preserves_created_at(tmp_path):

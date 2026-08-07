@@ -49,6 +49,9 @@ def candidate_root(run_root: Path, candidate: str) -> Path:
 
 
 def register(args) -> None:
+    formal = bool(getattr(args, "formal", False))
+    protected_successes = int(getattr(args, "protected_successes", 0))
+    baseline_total = int(getattr(args, "baseline_total", 0))
     args.run_root.mkdir(parents=True, exist_ok=True)
     lock_path = args.run_root / ".manifest.lock"
     with lock_path.open("a", encoding="utf-8") as lock:
@@ -72,12 +75,17 @@ def register(args) -> None:
                 "split": args.split,
                 "seed_file": str(Path(args.seed_file).resolve()),
                 "seed_file_sha256": args.seed_file_sha256,
-                "screen_only": True,
+                "screen_only": not formal,
                 "control": "p0",
                 "acceptance_rule": (
-                    "on identical discovery/validation seeds, candidate successes "
+                    "on the original R14 Gate20 seeds, protected tasks remain exact "
+                    "and the candidate total must be strictly greater than W12"
+                    if formal
+                    else "on identical discovery/validation seeds, candidate successes "
                     "must be strictly greater than W12 control; this is not formal promotion"
                 ),
+                "protected_successes": protected_successes,
+                "baseline_total": baseline_total,
                 "heartbeat_seconds": 20,
                 "stale_after_seconds": 75,
                 "shared_data": "/workspace/datasets/robofactory_multitask",
@@ -218,15 +226,21 @@ def accept(args) -> int:
         root / "validation" / f"{split}.json"
     )
     if manifest["candidates"][args.candidate]["reference"]:
+        successes = sum(bool(row["success"]) for row in candidate_rows.values())
         result = {
             "schema_version": 1,
             "round": "R15-Evolution",
             "candidate": args.candidate,
             "status": "REFERENCE",
-            "screen_only": True,
+            "screen_only": bool(manifest.get("screen_only", True)),
             "split": split,
             "episodes": len(candidate_rows),
-            "successes": sum(bool(row["success"]) for row in candidate_rows.values()),
+            "successes": successes,
+            "formal_total_successes": (
+                int(manifest.get("protected_successes", 0)) + successes
+                if not manifest.get("screen_only", True)
+                else None
+            ),
             "rule": "W12 control reference; no promotion decision",
         }
         if len(candidate_rows) != 20:
@@ -250,18 +264,27 @@ def accept(args) -> int:
         bool(control_rows[seed]["success"]) and not bool(candidate_rows[seed]["success"])
         for seed in candidate_rows
     )
-    passed = candidate_successes > control_successes
+    formal = not bool(manifest.get("screen_only", True))
+    protected = int(manifest.get("protected_successes", 0))
+    candidate_total = protected + candidate_successes
+    control_total = protected + control_successes
+    if formal and control_total != int(manifest.get("baseline_total", -1)):
+        raise ValueError("R15 formal W12 baseline total differs")
+    passed = candidate_total > control_total if formal else candidate_successes > control_successes
     result = {
         "schema_version": 1,
         "round": "R15-Evolution",
         "candidate": args.candidate,
         "status": "PASSED" if passed else "FAILED",
-        "screen_only": True,
+        "screen_only": not formal,
         "split": split,
         "episodes": 20,
         "candidate_successes": candidate_successes,
         "control_successes": control_successes,
         "delta_successes": candidate_successes - control_successes,
+        "protected_successes": protected if formal else None,
+        "candidate_total_successes": candidate_total if formal else None,
+        "control_total_successes": control_total if formal else None,
         "paired_wins": wins,
         "paired_losses": losses,
         "rule": manifest["acceptance_rule"],
@@ -319,7 +342,7 @@ def render(run_root: Path, selected: tuple[str, ...]) -> str:
     gpus = gpu_rows()
     lines = [
         f"BWA R15-Evolution screen | run={manifest.get('run_id', '?')} | {now()}",
-        f"split={manifest.get('split', '?')} screen_only=true control={manifest.get('control', '?')}",
+        f"split={manifest.get('split', '?')} screen_only={str(manifest.get('screen_only', True)).lower()} control={manifest.get('control', '?')}",
         f"rule={manifest.get('acceptance_rule', '?')}",
         "",
     ]
@@ -425,6 +448,9 @@ def main() -> None:
     register_parser.add_argument("--config", required=True)
     register_parser.add_argument("--checkpoint", required=True)
     register_parser.add_argument("--reference", action="store_true")
+    register_parser.add_argument("--formal", action="store_true")
+    register_parser.add_argument("--protected-successes", type=int, default=0)
+    register_parser.add_argument("--baseline-total", type=int, default=0)
     status_parser = sub.add_parser("status")
     add_common_status(status_parser)
     beat_parser = sub.add_parser("heartbeat")
