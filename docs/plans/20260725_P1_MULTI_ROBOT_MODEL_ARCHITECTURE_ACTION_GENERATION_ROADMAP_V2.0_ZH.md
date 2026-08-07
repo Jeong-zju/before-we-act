@@ -3,7 +3,7 @@
 > 文档更新：2026-08-07（V4.5 + R13-P0 winner-only 晋级为唯一 W13）
 > 工程起点：`bwa/r9-core-native@06ba780`；R10 四路已全部失败并固定 `W10=B9-CoreNative`；R11 四路于 2026-08-05 完成并全部 PASSED，冻结排名 `P0>P3>P1>P2`
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1，W12 晋级见 10.15.5。R13 四路 Candidate-Conditioned Latent World 组件移植已于 2026-08-06 完成，四路均通过 `11/11` 工程硬门；冻结 `world_screen_score` 排序为 `P0 > P1 > P2 > P3`。2026-08-07 收到后续显式授权后，仅 P0 TD-MPC2 winner-only 代码与正式 checkpoint 晋级为唯一 W13；P1/P2/P3 未合入。W13 仍为 off-path、W12 action hash bit-exact；R14 尚未启动
+> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1，W12 晋级见 10.15.5。R13 四路 Candidate-Conditioned Latent World 组件移植已于 2026-08-06 完成，四路均通过 `11/11` 工程硬门；冻结 `world_screen_score` 排序为 `P0 > P1 > P2 > P3`。2026-08-07 收到后续显式授权后，仅 P0 TD-MPC2 winner-only 代码与正式 checkpoint 晋级为唯一 W13；P1/P2/P3 未合入。W13 仍为 off-path、W12 action hash bit-exact。R14 四路 World-Guided Decision 正式 Gate20 已于 2026-08-07 完成：P0/P1/P2/P3 分别为 `77/77/75/76`，均未严格高于 W12 `77/100`，故 `no winner/no merge`，不进入下一阶段
 > 评测原则：S10 原样完成；R11/R13 保持 off-path，R12/R14 会改变动作轨迹。任何候选只要可能改变最终执行动作、候选选择、动作后处理或策略权重，就必须在同一五任务、同一 seeds 上完成**每任务 20 回合**闭环（简称 `Gate20`，即每候选共 `5×20=100` episodes）后才有 winner 资格；其它表征、排序、校准、因果和 oracle 指标降为可选诊断，不再挡住 benchmark 更优候选
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -3953,6 +3953,144 @@ R14 冻结 W11/W12/W13，只替换或新增 `planner/decision_core`。所有路�
 DynaGuide（MIT）作为 reserve：只有 W12 winner 是其官方 denoising hook可直接支持的 diffusion/consistency policy时，才可在 R14 任何结果产生前替换 extraction infeasible候选；若 W12 是 flow policy，不得让 AI 改写出“flow版DynaGuide”。
 
 R14 的唯一质量强门是 Gate20：normal macro 严格高于同 seeds 的 W12 即可合并最佳者。不再要求同时高于 W10、Camera+Stack `+6/40`、固定 intervention rate、world/intent shuffle CI、AUROC/ECE或oracle retention；这些保留为解释收益的可选论文实验。frozen-100 aspirational目标仍为 macro `>=80%`、Camera `>=80%`、Stack `>=50%`，未达到不得写“大幅提升/贴近同事”。
+
+#### 10.17.1 R14 四路正式诊断、验收与停止记录（2026-08-07）
+
+**阶段决定与冻结基线。** 本轮目标是诊断四种 world-guided decision 组件能否在保持冻结 W11/W12/W13 的前提下，以同 seeds 的完整 `5×20` 闭环严格超过 W12。共同基础选择 `feat/model-improvements`，因为该分支已经包含唯一 W13-P0 winner-only 晋级，而 `bwa/main` 未包含该正式 W13；候选配置冻结父 commit 为 `cf305eb0c7b2710e1d0e9ba9f52d89dfa03d549b`，公共执行代码终态为 `feat/model-improvements@f6e987bd523046dbe5443d1bf58edd8715e317be`。W11/W12/W13 checkpoint 及 SHA256 分别为：
+
+- `/workspace/bwa_runs/shared/w11/checkpoint_010000.pt`：`a453f3d0c8ab46b8d0874f74af5856050d5e9b57caaba9416c86fd8fd6f54c49`；
+- `/workspace/bwa_runs/shared/w12/checkpoint_130000.pt`：`4c85dcd30058912f4be375af04b65b0f39b365d885883eb29934552b14020e41`；
+- `/workspace/bwa_runs/shared/w13/checkpoint_010000.pt`：`6f98120d087d0f93969c697b2a041d338bd9e235adf136a690bb10689cb19b64`。
+
+训练前冻结的唯一质量强门为：五任务必须各完成 20 个同 seed 回合，W12 必须复算为 `77/100`，候选总成功数必须**严格大于** `77/100`。四个 protected tasks 逐 seed 精确复用 W12 路由；只有 `three_robots_stack_cube` 实际调用 R14 planner。异常、非有限值、越界、低 utility 或 deadline 触发 bit-exact W12 fallback。候选通过来源、许可证、patch、依赖、action-effect、parity、preflight、method separation 等工程门，只代表实现可信，不替代闭环质量门。
+
+**Git、组件与实现 identity。** 四个候选分支从同一冻结父节点独立建立，未混入其它候选，均已推送到 `origin`：
+
+| 候选 / GPU | 分支与正式 commit | 官方源 commit | 实际复制并调用的核心 |
+|---|---|---|---|
+| P0 / GPU0 | `bwa/r14-p0-worldinworld-revision-component@05cc14afab826a092488b7411fc6056e394416a5` | World-In-World `6ac81ef12451c29d22cdec9ac96e3fe46b22ac2a` | `ActionIgenexPlanner.query_igenex` proposal/prediction/revision loop |
+| P1 / GPU1 | `bwa/r14-p1-dinowm-cem-component@1c9bfb07bdf43fb81ec5f163ce9319048f13c605` | DINO-WM `0a9492fa12044b852ae9e001cc74604b79c8bb0c` | `CEMPlanner.plan` optimization/scoring loop |
+| P2 / GPU2 | `bwa/r14-p2-tdmpc2-mpc-component@33edd068ee76aa21e1978a393325cccdbfaf1666` | TD-MPC2 `e9f59321933cbc8e11a002b842adc7d4ffae8ff1` | `TDMPC2._plan` latent MPC sampling/value update |
+| P3 / GPU3 | `bwa/r14-p3-mbrllib-optimizer-component@a278624c54fcf1bd859fb2d5fcb983d17272a4df` | mbrl-lib `3f93cccfc8d635f74e335a2f07aab6e9a48fc021` | `CEMOptimizer.optimize` trajectory optimizer；上游 archived 风险已登记 |
+
+公共实现新增 `PlannerDecision` 合同、planner 基类、闭环 evaluator、冻结规则、accept/decision/preflight/provenance/separation 工具及统一 launcher/monitor/stop；候选实现分别新增最小官方源码与 MIT LICENSE、`before_we_act/planner/candidate.py` adapter、`configs/before_we_act/r14_decision/pN.yaml`、component lock、SOURCE_MAP、adaptation/paper card、parity 和单测。公共修改集中在 `before_we_act/{contracts.py,evaluate_world_guided_decision.py}`、`before_we_act/planner/{__init__.py,base.py}`、`experiments/before_we_act/r14/selection_rule.json`、`scripts/before_we_act/{accept_r14.py,decide_r14_winner.py,r14_runtime.py,run_r14_candidate.sh,launch_r14_4gpu_tmux.sh,monitor_r14.sh,stop_r14_4gpu_tmux.sh}` 和 `tests/before_we_act/test_r14_common.py`。
+
+模型/命令白名单与完整调用链检查位置为：`before_we_act/planner/base.py::build_planner` 的 `p0..p3` registry、`configs/before_we_act/r14_decision/pN.yaml::candidate_id` 校验、`scripts/before_we_act/r14_runtime.py::CANDIDATES`、`accept_r14.py --candidate choices`、launcher 的 `BRANCHES` 与 `A-D/p0-p3` alias、candidate runner 的 candidate/GPU identity 校验。训练、评测、验收、monitor 和 stop 均覆盖四路，没有只修改单一白名单。
+
+**本地与远程验证。** 公共代码在本地执行 `test_r14_common.py` 为 `4 passed`，四个候选各自执行 common + candidate test 均为 `5 passed`；shell 入口通过 `bash -n`，工作树通过 `git diff --check`。远程正式 run 内四路再次各得 `5 passed`，source checkout clean、官方 commit 与许可证 hash-pinned、复制源码 byte exact/核心 code object exact、`algorithmic_lines_changed=0`、`full_repo_runtime_dependency=false`、synthetic preflight finite/effective/shape-safe/trust-region-safe、runtime CoRE import/checkpoint 均为 false。可复制的验证命令为：
+
+```bash
+cd /home/jeong/zeno/wam/before-we-act
+uv run pytest -q tests/before_we_act/test_r14_common.py
+bash -n scripts/before_we_act/launch_r14_4gpu_tmux.sh \
+  scripts/before_we_act/monitor_r14.sh \
+  scripts/before_we_act/stop_r14_4gpu_tmux.sh \
+  scripts/before_we_act/run_r14_candidate.sh
+git diff --check
+
+ssh -p 10328 root@69.176.92.104 '
+set -Eeuo pipefail
+for c in p0 p1 p2 p3; do
+  wt=/workspace/bwa_worktrees/r14/$c
+  cd "$wt"
+  PYTHONPATH="$wt" /venv/robofactory-act/bin/python -m pytest -q \
+    tests/before_we_act/test_r14_common.py \
+    "tests/before_we_act/test_r14_$c.py"
+done'
+```
+
+**运行环境、输入与目录。** 正式 run 为 `/workspace/bwa_runs/r14-20260807-decision-v3`，UTC `2026-08-07T03:16:36.709239Z` 启动，最后验收与 round decision 于 `04:03:59.805496Z` 完成（北京时间 `11:16:36`–`12:03:59`），最慢单路约 `0.79 h`、合计约 `3.11 GPU-hours`。远程为 Linux `6.8.0-60-generic`、Python `3.10.20`、torch `2.7.1+cu128`、CUDA runtime `12.8`、driver `570.169`，四张 `NVIDIA GeForce RTX 5090 32607 MiB`。沿用 S0 的共享数据 `/workspace/datasets/robofactory_multitask`、HF cache `/workspace/.cache/huggingface`、空间缓存 `/workspace/bwa_runs/shared/r12r4_native_full_cache_v2`、既有镜像/断点续传/离线缓存与鉴权机制；本轮缓存足够，无新增 HF 下载，也没有把 token 写入 argv、代码、配置、日志、文档或 Git。
+
+- seed 协议：`/workspace/bwa_runs/shared/r10_gate20/seeds/{lift_barrier,camera_alignment,three_robots_stack_cube,long_pipeline_delivery,take_photo}.json`；冻结 W12 报告：`/workspace/bwa_runs/r12e1-20260806-agent-slot-v4/candidates/p2/validation/gate20/*.json`；
+- 四路输出：`/workspace/bwa_runs/r14-20260807-decision-v3/candidates/pN/`；Gate20：`validation/gate20/*.json`；权威验收：`acceptance.json`；round 结论：`round_decision.json`；
+- 日志：`candidates/pN/logs/candidate.log` 与 `gate20_three_robots_stack_cube.log`；状态/心跳：`candidates/pN/{status.json,heartbeat.json}`；
+- tmux：`bwa-r14-p0`、`bwa-r14-p1`、`bwa-r14-p2`、`bwa-r14-p3`，分别绑定 GPU `0/1/2/3`；候选 worktree 为 `/workspace/bwa_worktrees/r14/p0..p3`；
+- R14 planner 无训练参数，`formal_updates=0`，不生成新的 checkpoint；当前/最佳 checkpoint 均为 N/A，运行只读使用上述冻结 W11/W12/W13 checkpoint。
+
+正式启动命令为：
+
+```bash
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+./scripts/before_we_act/launch_r14_4gpu_tmux.sh \
+  --run-id r14-20260807-decision-v3 --candidate all'
+```
+
+**正式 Gate20 结果。** 四路各完成五任务各 20 回合；protected tasks 均保持 `Lift=20/20, Camera=14/20, LPD=20/20, Photo=20/20`。仅 Stack 发生动作改变：
+
+| 候选 | 五任务成功数（Lift/Camera/Stack/LPD/Photo） | 总成功 / macro | paired wins / losses | planner calls / interventions / fallbacks | exceptions / timeouts | P95 latency | 质量结论 |
+|---|---|---:|---:|---:|---:|---:|---|
+| P0 World-In-World | `20/14/3/20/20` | `77/100 = 0.77` | `0 / 0` | `14804 / 655 / 14149` | `0 / 0` | `83.483 ms` | 未严格高于 77，FAILED |
+| P1 DINO-WM CEM | `20/14/3/20/20` | `77/100 = 0.77` | `0 / 0` | `14803 / 52 / 14751` | `0 / 0` | `82.128 ms` | 未严格高于 77，FAILED |
+| P2 TD-MPC2 MPC | `20/14/1/20/20` | `75/100 = 0.75` | `0 / 2` | `15603 / 1188 / 14415` | `0 / 1` | `82.846 ms` | 低于 W12 2 次成功，FAILED |
+| P3 mbrl-lib CEM | `20/14/2/20/20` | `76/100 = 0.76` | `0 / 1` | `15204 / 165 / 15039` | `0 / 0` | `83.343 ms` | 低于 W12 1 次成功，FAILED |
+
+P2 的唯一 timeout 出现在 Stack seed `1387131595`，`planner_deadline_exceeded=1` 后按合同 fail-closed；该 seed 的 W12 和候选均失败，不形成 paired loss。四路日志均无 OOM、NaN、traceback 或异常重启，所有正式 source/test/preflight/Gate20/acceptance 程序均执行到终态。FAILED 候选的 `accept_r14.py` 按设计返回 code `1`，runner 以同一 code 自然退出；日志末行与结构化状态一致。运行期间 20 秒 producer heartbeat 持续更新，现场 monitor 轮询均未越过 75 秒 stale 门；最终 heartbeat 依次为 UTC `04:02:40.764389Z`、`04:02:50.714411Z`、`04:03:59.767472Z`、`04:03:27.283518Z`。
+
+**特殊验收逐项结果。** 每路共有 12 项结构化检查；前 11 项全部 PASS，只有最终严格质量门 FAIL：
+
+| 验收项 | P0 | P1 | P2 | P3 |
+|---|---|---|---|---|
+| official source commit pinned | PASS | PASS | PASS | PASS |
+| license preserved/verified | PASS | PASS | PASS | PASS |
+| minimal patch audited，algorithmic lines=0 | PASS | PASS | PASS | PASS |
+| no full upstream runtime dependency | PASS | PASS | PASS | PASS |
+| action-affecting classified，Gate20 mandatory | PASS | PASS | PASS | PASS |
+| upstream parity exact | PASS | PASS | PASS | PASS |
+| finite/effective/shape/trust-region preflight | PASS | PASS | PASS | PASS |
+| CoRE/runtime separation + fail-closed | PASS | PASS | PASS | PASS |
+| frozen W12 baseline exactly 77/100 | PASS | PASS | PASS | PASS |
+| complete paired same-seed 5×20 | PASS | PASS | PASS | PASS |
+| four protected tasks exact W12 | PASS | PASS | PASS | PASS |
+| candidate successes strictly >77 | **FAIL (77)** | **FAIL (77)** | **FAIL (75)** | **FAIL (76)** |
+
+因此失败不是来源、代码、配置、数据或运行环境问题。P0/P1 属于模型能力问题：在 frozen Gate20 上只保存 W12 表现、没有任何 paired win；P2/P3 属于模型能力与决策/干预策略问题：没有 paired win，并分别破坏 2/1 个 W12 成功，P2 的 `1188` 次干预尤其激进。单次 P2 deadline 已正确 fail-closed，不足以解释其 paired loss。冻结 `round_decision.json` 为 `decision=no_winner_no_merge`、`winner=null`、`merge_performed=false`、`next_stage_started=false`；不创建 W14、不合并任何候选，也不进入 R15 或其它下一阶段。
+
+**保留的 setup 失败审计。** 正式结果只使用 v3；为避免选择性隐藏失败，前两次启动原样保留且不覆盖：
+
+- `/workspace/bwa_runs/r14-20260807-decision-v1` 在 UTC `03:06:58Z` 启动后，action-effect 审计遗漏公共 evaluator，四路在 Gate20 前 fail-fast；修复 commit `9a37651` 增加 evaluator/action-effect 证据。
+- `/workspace/bwa_runs/r14-20260807-decision-v2` 在 UTC `03:09:24Z` 启动，首个 Stack episode 暴露公共 world utility 的候选 batch shape 校验错误，导致每 step `ValueError` 并全部按 W12 fallback。确认是公共 evaluator 问题后，只对精确 v2 tagged PID/session 执行安全停止，四路于 `03:15:15Z` 记为 STOPPED；修复 commit `f6e987bd523046dbe5443d1bf58edd8715e317be` 增加完整 W12 base shape 校验与回归测试。另有 `14c90bb` 保持冻结 candidate parent、`5523f52` 增加真实 Gate20 episode/step progress。v1/v2 日志、状态和 receipts 全部保留；未作为质量结果。
+
+**一键操作与终态。** launcher 支持 `--candidate A/B/C/D` 单路、`--candidates A,C` 任意两路、`all` 四路及 `--dry-run`，校验分支/commit/checkpoint/data/cache/GPU 并拒绝重复 session；monitor 支持单次/持续及单路/四路；stop 只识别 `BWA_R14_RUN_ROOT` 与 candidate 双标签，先优雅停止再精确 TERM/KILL。可直接复制：
+
+```bash
+# 新 run 一键部署/诊断；all 可改为 A、B、C、D，或用 --candidates A,C
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+RUN_ID=r14-$(date -u +%Y%m%dT%H%M%SZ)
+./scripts/before_we_act/launch_r14_4gpu_tmux.sh \
+  --run-id "$RUN_ID" --candidate all'
+
+# 只做安全检查，不创建 output/worktree/session
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+./scripts/before_we_act/launch_r14_4gpu_tmux.sh \
+  --run-id r14-dryrun-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidates A,C --dry-run'
+
+# 四路单次快照；all 改为 p0 可看单路
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+./scripts/before_we_act/monitor_r14.sh \
+  --run-root /workspace/bwa_runs/r14-20260807-decision-v3 \
+  --candidate all --once'
+
+# 四路持续刷新
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+./scripts/before_we_act/monitor_r14.sh \
+  --run-root /workspace/bwa_runs/r14-20260807-decision-v3 \
+  --candidate all --interval 30'
+
+# 精确安全退出；先加 --dry-run 只列目标，all 可改为 A/B/C/D
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/model-improvements
+./scripts/before_we_act/stop_r14_4gpu_tmux.sh \
+  --run-root /workspace/bwa_runs/r14-20260807-decision-v3 \
+  --candidate all --dry-run'
+```
+
+终态 monitor 显示四路 `FAILED / complete / acceptance=FAILED`、`5/5 tasks`、`100/100 episodes`，GPU 均为 `0%` utilization、约 `2 MiB` 占用且无 compute process；四个 tmux session 已随任务自然退出。stop `--dry-run` 对四路均报告 `pids=none`，没有发送信号、删除数据或关闭无关 session。最终结论为：**R14 未通过；四路均无资格成为 winner；no winner/no merge；按本次 `[NEXT_STAGE]=无` 和通过后停止约束，不进入任何下一阶段。** 若未来另行授权新研究轮，优先保留 P0/P1 的保守性，同时重新校准“能产生净 paired win”的 utility/干预判据；不得降低 `>77/100` 门槛或把工程门通过写成模型质量通过。
 
 ### 10.18 R15：冻结组件组合的四种子正式复现
 
