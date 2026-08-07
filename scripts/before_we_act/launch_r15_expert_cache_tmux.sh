@@ -17,8 +17,9 @@ while (($#)); do
 done
 [[ -n "$CACHE_ROOT" && -f "$RAW_HDF5" && -f "$RAW_JSON" && "$EPISODES" =~ ^[1-9][0-9]*$ && "$GPU_INDEX" =~ ^[0-3]$ ]] || { printf 'valid cache/raw/episodes/GPU required\n' >&2; exit 2; }
 for command in git tmux nvidia-smi jq df; do command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }; done
-[[ "$(git -C "$ROOT" branch --show-current)" == bwa/r15-closed-loop-evolution && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires clean R15 branch\n' >&2; exit 3; }
-git -C "$ROOT" fetch origin --prune; [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$(git -C "$ROOT" rev-parse origin/bwa/r15-closed-loop-evolution)" ]] || { printf 'R15 branch differs from origin\n' >&2; exit 3; }
+BRANCH="$(git -C "$ROOT" branch --show-current)"
+[[ "$BRANCH" =~ ^bwa/r15-(closed-loop-evolution|expert-evolution)$ && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires a clean R15 expert branch\n' >&2; exit 3; }
+git -C "$ROOT" fetch origin --prune; [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$(git -C "$ROOT" rev-parse "origin/$BRANCH")" ]] || { printf 'R15 branch differs from origin\n' >&2; exit 3; }
 [[ ! -e "$CACHE_ROOT" ]] || { printf 'cache root already exists: %s\n' "$CACHE_ROOT" >&2; exit 3; }
 tmux has-session -t "$SESSION" 2>/dev/null && { printf 'session already exists: %s\n' "$SESSION" >&2; exit 3; }
 nvidia-smi -i "$GPU_INDEX" --query-compute-apps=pid --format=csv,noheader | grep -Eq '[0-9]' && { printf 'GPU %s is in use\n' "$GPU_INDEX" >&2; exit 3; } || true

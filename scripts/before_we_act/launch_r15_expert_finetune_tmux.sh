@@ -29,9 +29,10 @@ RUN_ROOT="${RUN_ROOT:-/workspace/bwa_runs/$RUN_ID}"
 [[ "$RUN_ID" =~ ^[A-Za-z0-9_.-]+$ && "$CANDIDATE" =~ ^p[1-3]$ && "$GPU_INDEX" =~ ^[0-3]$ && "$UPDATES" =~ ^[1-9][0-9]*$ && "$BATCH_SIZE" =~ ^[1-9][0-9]*$ && "$EXPERT_ROWS" =~ ^[1-9][0-9]*$ && "$WARMUP" =~ ^[1-9][0-9]*$ && "$LEARNING_RATE" =~ ^[0-9]+([.][0-9]+)?([eE]-?[0-9]+)?$ && "$SPLIT" =~ ^(discovery20|validation20|reserve20|final20)$ && -n "$EXPERT_INDEX" && -n "$REFERENCE_RUN" ]] || { printf 'valid run/candidate/GPU/training/expert index/reference required\n' >&2; exit 2; }
 ((BATCH_SIZE >= 2 && EXPERT_ROWS < BATCH_SIZE && WARMUP <= UPDATES)) || { printf 'expert rows/warmup exceed training budget\n' >&2; exit 2; }
 for command in git tmux nvidia-smi sha256sum jq; do command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }; done
-[[ "$(git -C "$ROOT" branch --show-current)" == bwa/r15-closed-loop-evolution && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires clean R15 branch\n' >&2; exit 3; }
+BRANCH="$(git -C "$ROOT" branch --show-current)"
+[[ "$BRANCH" =~ ^bwa/r15-(closed-loop-evolution|expert-evolution)$ && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires a clean R15 expert branch\n' >&2; exit 3; }
 git -C "$ROOT" fetch origin --prune
-COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; [[ "$COMMIT" == "$(git -C "$ROOT" rev-parse origin/bwa/r15-closed-loop-evolution)" ]] || { printf 'R15 branch differs from origin\n' >&2; exit 3; }
+COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; [[ "$COMMIT" == "$(git -C "$ROOT" rev-parse "origin/$BRANCH")" ]] || { printf 'R15 branch differs from origin\n' >&2; exit 3; }
 SEED_FILE="$PROTOCOL_ROOT/$SPLIT.json"; SEED_SHA="$(sha256sum "$SEED_FILE" | awk '{print $1}')"
 REFERENCE_MANIFEST="$REFERENCE_RUN/run_manifest.json"; [[ -f "$REFERENCE_MANIFEST" && -f "$EXPERT_INDEX" ]] || { printf 'reference manifest or expert index missing\n' >&2; exit 3; }
 [[ "$(jq -r .split "$REFERENCE_MANIFEST")" == "$SPLIT" && "$(jq -r .seed_file_sha256 "$REFERENCE_MANIFEST")" == "$SEED_SHA" && "$(jq -r .candidates.p0.reference "$REFERENCE_MANIFEST")" == true ]] || { printf 'reference is not identical paired W12 control\n' >&2; exit 3; }
@@ -49,7 +50,7 @@ P0_CHECKPOINT="$(jq -r .candidates.p0.checkpoint "$REFERENCE_MANIFEST")"
 "$PYTHON" "$ROOT/scripts/before_we_act/r15_runtime.py" register --run-root "$RUN_ROOT" --run-id "$RUN_ID" --split "$SPLIT" --seed-file "$SEED_FILE" --seed-file-sha256 "$SEED_SHA" --candidate p0 --label w12_control --gpu 0 --worktree "$P0_WORKTREE" --branch "$P0_BRANCH" --commit "$P0_COMMIT" --config "$P0_CONFIG" --checkpoint "$P0_CHECKPOINT" --reference
 ln -s "$REFERENCE_RUN/candidates/p0/validation" "$RUN_ROOT/candidates/p0/validation"
 CONFIG="$ROOT/configs/before_we_act/r12_action/e1_p2.yaml"
-"$PYTHON" "$ROOT/scripts/before_we_act/r15_runtime.py" register --run-root "$RUN_ROOT" --run-id "$RUN_ID" --split "$SPLIT" --seed-file "$SEED_FILE" --seed-file-sha256 "$SEED_SHA" --candidate "$CANDIDATE" --label "w12_expert_ft_b${BATCH_SIZE}_e${EXPERT_ROWS}" --gpu "$GPU_INDEX" --worktree "$ROOT" --branch bwa/r15-closed-loop-evolution --commit "$COMMIT" --config "$CONFIG" --checkpoint "$CHECKPOINT"
+"$PYTHON" "$ROOT/scripts/before_we_act/r15_runtime.py" register --run-root "$RUN_ROOT" --run-id "$RUN_ID" --split "$SPLIT" --seed-file "$SEED_FILE" --seed-file-sha256 "$SEED_SHA" --candidate "$CANDIDATE" --label "w12_expert_ft_b${BATCH_SIZE}_e${EXPERT_ROWS}" --gpu "$GPU_INDEX" --worktree "$ROOT" --branch "$BRANCH" --commit "$COMMIT" --config "$CONFIG" --checkpoint "$CHECKPOINT"
 "$PYTHON" - "$RUN_ROOT/candidates/$CANDIDATE/expert_finetune.json" "$EXPERT_INDEX" "$REFERENCE_RUN" "$UPDATES" "$BATCH_SIZE" "$EXPERT_ROWS" "$LEARNING_RATE" "$WARMUP" <<'PY'
 import datetime,hashlib,json,os,sys
 target,index,reference,updates,batch,expert_rows,learning_rate,warmup=sys.argv[1:]

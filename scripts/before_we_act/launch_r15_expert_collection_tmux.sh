@@ -16,9 +16,10 @@ while (($#)); do
 done
 [[ -n "$OUTPUT_ROOT" && "$EPISODES" =~ ^[1-9][0-9]*$ && "$EPISODES" -le 50 && "$START_SEED" =~ ^[1-9][0-9]*$ && "$GPU_INDEX" =~ ^[0-3]$ ]] || { printf 'output/GPU required; episodes must be 1..50\n' >&2; exit 2; }
 for command in git tmux df nvidia-smi; do command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }; done
-[[ "$(git -C "$ROOT" branch --show-current)" == bwa/r15-closed-loop-evolution && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires clean R15 orchestration branch\n' >&2; exit 3; }
+BRANCH="$(git -C "$ROOT" branch --show-current)"
+[[ "$BRANCH" =~ ^bwa/r15-(closed-loop-evolution|expert-evolution)$ && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires clean R15 expert branch\n' >&2; exit 3; }
 git -C "$ROOT" fetch origin --prune
-[[ "$(git -C "$ROOT" rev-parse HEAD)" == "$(git -C "$ROOT" rev-parse origin/bwa/r15-closed-loop-evolution)" ]] || { printf 'R15 orchestration differs from origin\n' >&2; exit 3; }
+[[ "$(git -C "$ROOT" rev-parse HEAD)" == "$(git -C "$ROOT" rev-parse "origin/$BRANCH")" ]] || { printf 'R15 orchestration differs from origin\n' >&2; exit 3; }
 [[ "$(git -C "$ROBOFACTORY" rev-parse HEAD)" == 5868242322414a91454e22f1dd9641f613ba1bcf && -z "$(git -C "$ROBOFACTORY" status --porcelain)" ]] || { printf 'RoboFactory source identity differs\n' >&2; exit 3; }
 [[ "$START_SEED" -gt 3149 && "$START_SEED" -lt 1000000000 ]] || { printf 'start seed overlaps original demonstrations or frozen eval range\n' >&2; exit 3; }
 tmux has-session -t "$SESSION" 2>/dev/null && { printf 'session already exists: %s\n' "$SESSION" >&2; exit 3; }
