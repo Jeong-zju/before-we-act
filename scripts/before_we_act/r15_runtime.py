@@ -175,6 +175,41 @@ def result_rows(path: Path) -> tuple[dict, dict[int, dict]]:
     return payload, mapped
 
 
+def logged_rows(path: Path) -> dict[int, dict]:
+    """Recover completed episodes from the append-only evaluator log."""
+
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except FileNotFoundError:
+        return {}
+    rows = {}
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(row.get("seed"), int)
+            and isinstance(row.get("success"), bool)
+            and isinstance(row.get("steps"), int)
+        ):
+            rows[int(row["seed"])] = row
+    return rows
+
+
+def last_jsonl(path: Path) -> dict:
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except FileNotFoundError:
+        return {}
+    for line in reversed(lines):
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    return {}
+
+
 def accept(args) -> int:
     root = candidate_root(args.run_root, args.candidate)
     manifest = read_json(args.run_root / "run_manifest.json")
@@ -309,14 +344,21 @@ def render(run_root: Path, selected: tuple[str, ...]) -> str:
             state = "FAILED"
         eval_log = root / "logs" / f"{manifest['split']}.log"
         alerts, tail = tail_alerts(eval_log)
-        completed = len(result.get("rows", []))
-        successes = result.get("successes", "-")
+        live_rows = {
+            int(row["seed"]): row for row in result.get("rows", [])
+        } if result else logged_rows(eval_log)
+        completed = len(live_rows)
+        successes = sum(bool(row["success"]) for row in live_rows.values())
+        progress = read_json(root / "validation" / "closed_loop_progress.json")
+        training = last_jsonl(root / "train" / "aligned_world" / "progress.jsonl")
+        cache = read_json(root / "cache_heartbeat.json")
         lines.extend(
             [
                 f"{candidate.upper()} {identity['label']} | state={state} stage={status.get('stage', '-')} program={status.get('program', '-')}",
                 f"  branch={identity['branch']} commit={identity['commit']} gpu={identity['gpu']} tmux={identity['session']}",
                 f"  pid={pid} child={child} alive={process_alive(pid)} started={status.get('created_at', '-')} heartbeat={beat.get('updated_at', '-')} age={age if age is not None else '-'}s",
-                f"  GPU={gpus.get(identity['gpu'], 'unavailable')} episodes={completed}/20 successes={successes}",
+                f"  GPU={gpus.get(identity['gpu'], 'unavailable')} episodes={completed}/20 successes={successes} current_episode={progress.get('episode_index', '-')} step={progress.get('step', '-')}/{progress.get('max_steps', '-')}",
+                f"  train_update={training.get('update', '-')} loss={training.get('loss', '-')} eta={training.get('eta_hours', '-')}h cache={cache.get('split', '-')}:{cache.get('rows', '-')}/{cache.get('total_rows', '-')}",
                 f"  checkpoint={identity['checkpoint']}",
                 f"  result={root / 'validation' / (manifest['split'] + '.json')} acceptance={acceptance.get('status', 'PENDING')}",
                 f"  log={eval_log} alerts={alerts or ['NONE']} detail={status.get('detail', '-')}",

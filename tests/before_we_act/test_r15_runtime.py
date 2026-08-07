@@ -75,3 +75,19 @@ def test_status_preserves_created_at(tmp_path):
     path.write_text(json.dumps({"created_at": "2026-01-01T00:00:00Z"}))
     r15_runtime.update_status(status_args(run_root, "p0"))
     assert json.loads(path.read_text())["created_at"] == "2026-01-01T00:00:00Z"
+
+
+def test_logged_rows_deduplicates_resume_attempts(tmp_path):
+    path = tmp_path / "eval.log"
+    path.write_text(
+        "warning\n"
+        + json.dumps({"seed": 7, "success": False, "steps": 800})
+        + "\n"
+        + json.dumps({"seed": 7, "success": True, "steps": 401})
+        + "\n"
+        + json.dumps({"seed": 8, "success": False, "steps": 800})
+        + "\n"
+    )
+    rows = r15_runtime.logged_rows(path)
+    assert set(rows) == {7, 8}
+    assert rows[7]["success"] is True
