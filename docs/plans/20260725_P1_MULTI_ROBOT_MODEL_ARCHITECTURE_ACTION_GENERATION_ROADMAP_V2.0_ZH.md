@@ -4102,7 +4102,7 @@ cd /workspace/bwa_worktrees/model-improvements
 - `validation20.json` SHA256 `c6292f4c9be292d0cd4f6d93141022f013d7fffd9c8782911eb8d753a534b50b`；冻结 W12 control 为 `/workspace/bwa_runs/r15e7-20260807-w12-validation20-control`，`1/20`；
 - 候选必须先在 identical-seed discovery20 **严格高于** W12，再以完全冻结的方法在 validation20 严格高于 W12，之后才有资格运行原 Gate20 Stack seeds；最终仍必须使五任务总成功数严格高于 `77/100`。筛选失败不覆盖目录、不修改 seed，也不能调低验收门槛。
 
-**Git 与实现工作台。** 公共进化分支为 `bwa/r15-closed-loop-evolution@4286139fcdc4`，所有完成修改均先本地测试、检查 diff、提交并推送，再由远程独立 worktree fast-forward。各条可归因路线不混合：
+**Git 与实现工作台。** 公共进化分支为 `bwa/r15-closed-loop-evolution@eb7f428`，所有完成修改均先本地测试、检查 diff、提交并推送，再由远程独立 worktree fast-forward。各条可归因路线不混合：
 
 | 路线 | 分支 / commit | 作用与隔离 |
 |---|---|---|
@@ -4112,7 +4112,10 @@ cd /workspace/bwa_worktrees/model-improvements
 | true stochastic AAC | `bwa/r15-aac-stochastic-plan@4286139fcdc4` | sample 0 为 ACT prior mean/W12 anchor，sample 1..19 为 learned plan prior 随机 latent，再由 AAC entropy 定 horizon |
 | fixed-six attribution | `bwa/r15-fixed6-base-chunk@a214cb08f585` | 单个 W12 base、固定 6-step open-loop，检验 AAC 结果是否只来自执行 cadence |
 | W13 world-reranked AAC | `bwa/r15-world-aac-rerank@0cbbf74e2b1c` | 20 个 ACT prior plans 先投影到冻结 R14 `±0.12` trust region，W13 P0 utility 重排；增益 `<0.003` fail-closed 到 W12 anchor，AAC 只选执行 horizon |
-| native expert evolution | `bwa/r15-expert-evolution@935564e` | 原始成功规划轨迹转 native RGB+DINO 物理动作 cache，再从 W12 做 source-aware expert fine-tune；不把规划器作为 runtime policy |
+| native expert evolution | `bwa/r15-expert-evolution@7aa19f0c6044` | 原始成功规划轨迹转 native RGB+DINO 物理动作 cache，再从 W12 做 source-aware expert fine-tune；不把规划器作为 runtime policy；并发 session 身份已隔离 |
+| BID backward coherence | `bwa/r15-bid-coherence@ba69b62` | 从 BID LeRobot `823a6137...` 固定 Apache-2.0 来源，只移植 backward coherence；先以真实 stochastic ACT plan 作候选，不伪造 strong/weak policy |
+| W13 reactive monitor | `bwa/r15-world-reactive-monitor@c50395908908` | 按 DREAM-Chunk/VLA-Corrector 的预测—实际偏差思路，用冻结 W13 h1/h5 latent error 触发丢弃余下 queue 与重规划；阈值只来自 R13 validation Stack q99 |
+| PACE execution | `bwa/r15-pace-execution@3cde7d6315ba` | PACE v2 论文公式的独立复现（未复制未发布源码）；用 20 条成功 expert、8124 windows 的 joint-speed valley prominence 校准动态 horizon |
 
 世界重排版新增 `configs/before_we_act/r15_evolution/world_aac_utility.yaml`、`world_reranked_aac_plan_chunk` evaluator/route、checkpoint SHA256 硬校验、投影率/eligible/utility/intervention 诊断及 launcher/runner 白名单。它只读 W13 `checkpoint_010000.pt`（SHA256 `6f98120d...`）并完整计入 W12 action generator + W13 utility latency。2026-08-07 本地执行 common temporal/R13/R14/runtime/protocol 测试为 `30 passed`，远程 worktree `/workspace/bwa_worktrees/r15/world-aac@0cbbf74e2b1c` 再执行相关测试为 `22 passed`；三个 shell 入口通过 `bash -n`，`git diff --check` 无错误。
 
@@ -4141,9 +4144,20 @@ cd /workspace/bwa_worktrees/model-improvements
 
 20 条 RoboFactory native motion-planning expert 已自然采集为 `20/20 success`、`0 failed plan`、原始 `9028` steps，HDF5 为 `/workspace/bwa_runs/r15_stack_expert20_seed5100_native640/raw/ThreeRobotsStackCube-rf/motionplanning/r15_stack_expert_seed_5100.h5`（SHA256 `7d2c4151...`）。`bwa-r15-expert-cache` 正在 GPU0 生成逐帧 native RGB+DINO cache；上述快照为 `9/20` 完成、当前 seed `5109`，dry-run 预计 `8124` usable steps。cache 完成后计划从同一 W12 parent 并行比较 batch `12` 中 expert rows `3/6/9`、`5k updates`、LR `2e-5`、warmup `500`，每路训练后自动接 discovery20；所有输出/checkpoint/log/state/tmux 均独立。
 
-**论文开源检索与移植取舍。** 除已运行 CogACT/AAC 外，已经 pin：BID LeRobot 官方仓库 `823a6137...`（Apache-2.0；`single.py` coherence 与 `multi.py` bidirectional sampler）、Mixture of Horizons `5da35004...` 和 PACE。BID 的 backward coherence + strong/weak forward contrast 与真实 ACT 多样候选最匹配，待 stochastic smoke 证明候选有效后做最小选择器移植；strong/weak 需要真实早期 checkpoint，不能把同一个模型伪装成两个 policy。MoH GitHub 根目录暂未找到与模型卡一致的 LICENSE 文件，许可证证据解决前不复制源码。PACE 暂未找到可 pin 的官方实现，只保留为原理候选。每个后续尝试继续优先检索优秀论文的官方代码，固定 repo commit、license、复制文件 SHA 与适配差异；“来自论文”不豁免本项目 paired screen。
+**UTC `2026-08-07T11:27Z` 增量快照。** 下列状态均来自结构化 acceptance/status、实际日志行和进程检查，不覆盖上面的历史快照：
 
-当前远程为四张 RTX 5090；GPU0=`bwa-r15-expert-cache`（`10/20`），GPU1=`r15e13/p3`，GPU2=`r15e14/p1`，GPU3=`r15e15/p2 validation20`。最近心跳连续，显存约 `1.3--1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
+- `r15e13-20260807-world-guarded-isolated-discovery20` 已终局 `1/20 vs 1/20`、paired `+1/-1`、`FAILED`；R14 utility 只调 temporal decay 没有净收益。
+- `r15e14-20260807-fixed6-single-discovery20` 已终局 `1/20 vs 1/20`、`FAILED`。因此 e12 的 `3/20` 不能只归因于固定 6-step cadence，replicated batch=20 数值路径仍是必要差异。
+- `r15e15-20260807-aac-degenerate-validation20` 为 `14/20, 1 success`；独立 validation control 为 `1/20`，尚未严格超过。只有最终 `>1/20` 才允许自动进入 e18 formal。
+- true stochastic smoke 已确认 decoded sample std/plan-prior std 为正；`r15e16-20260807-aac-stochastic-discovery20` 已在 GPU2/tmux `bwa-r15s-p1` 启动。BID e19 继续等待 e16 终态，不抢卡。
+- world-AAC smoke 的 sample std 为 `0.001437`，但 projection fraction=`0`、utility gain=`0.000143 < 0.003`，按预注册 fail-closed 全部回到 anchor；因此 e17 没有启动 20 回合，避免无效占卡。
+- W13 reactive 的精确投影 artifact SHA256 为 `bcf9c276...`；h1/h5 阈值分别为 `0.0099791/0.00717234`。两步 smoke 实际执行 `1` 次 h1 check，error=`0.0255392`、触发=`1`、monitor latency p95=`127.62 ms`，随后 `r15e23-20260807-world-reactive-discovery20` 在 GPU1 启动，当前 `2/20, 0 success`。
+- expert cache 已以 `20 episodes/8124 steps` 完整 `PASSED`，index `/workspace/bwa_runs/r15_stack_expert20_cache_20260807-v1-physical/features/index.json` SHA256 `e71eb8f3...`。e20（expert rows `9/12`）已完成 `5000/5000` update 并在 GPU0 进入 discovery20；e21/e22 以正确 `features/index.json` 串行接力。
+- PACE 校准只读取上述 20 条成功 expert：8124 windows、15720 prominence，q05 threshold=`1.832603296544888e-10`，receipt `/workspace/bwa_runs/shared/r15_pace_calibration_v1.json` SHA256 `61324a4c...`。分支本地 `33 passed`、远端 `33 passed`；e24 在 GPU3 的 AAC validation/formal 链之后先做 32-step phase-diversity smoke，只有 horizon 非退化才启动 discovery20。
+
+**论文开源检索与移植取舍。** 除已运行 CogACT/AAC 外，已经 pin：BID LeRobot 官方仓库 `823a6137...`（Apache-2.0；`single.py` coherence 与 `multi.py` bidirectional sampler）、VLA-Corrector `9d23a0b...`（Apache-2.0）、DREAM-Chunk Kinetix `0aae0757...`、Mixture of Horizons `5da35004...` 和 PACE arXiv v2 source SHA256 `5f856ed8...`。BID backward coherence 已做最小移植；strong/weak forward contrast 仍需真实早期 checkpoint，不能把同一个模型伪装成两个 policy。VLA-Corrector 的 cosine error/circuit breaker 与 DREAM-Chunk 的 observed/predicted latent matching 只转化为本项目 W13 reactive adapter；DREAM 仓库未见允许复制的 LICENSE，因此没有复制其源码。MoH GitHub 根目录暂未找到与模型卡一致的 LICENSE 文件，许可证证据解决前不复制源码。PACE 未发布可 pin 的官方实现，当前明确标记为论文公式独立复现而非代码移植。每个后续尝试继续优先检索优秀论文的官方代码，固定 repo commit、license、复制文件 SHA 与适配差异；“来自论文”不豁免本项目 paired screen。
+
+当前远程为四张 RTX 5090；UTC `11:27Z` 的占用为 GPU0=`r15e20 expert-e9 validation`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e15 replicated-batch validation20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
 
 ```bash
 # 单路线 discovery20；mode 可替换为 aac_stochastic_plan_chunk 或 fixed6_base_chunk
@@ -4177,8 +4191,26 @@ cd /workspace/bwa_worktrees/r15/expert-evolution
   --run-id r15-expert-e6-$(date -u +%Y%m%dT%H%M%SZ) \
   --candidate p2 --gpu-index 0 --updates 5000 --batch-size 12 \
   --expert-rows 6 --learning-rate 2e-5 --warmup 500 \
-  --expert-index /workspace/bwa_runs/r15_stack_expert20_cache_20260807-v1-physical/index.json \
+  --expert-index /workspace/bwa_runs/r15_stack_expert20_cache_20260807-v1-physical/features/index.json \
   --split discovery20 \
+  --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2'
+
+# W13 reactive replicated-batch 路线（需空闲 GPU）
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/world-reactive
+./scripts/before_we_act/launch_r15_temporal_screens_tmux.sh \
+  --run-id r15-world-reactive-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidate p3 --split discovery20 --gpu-index 1 \
+  --execution-mode world_reactive_aac_chunk \
+  --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2'
+
+# expert-only 校准的 PACE dynamic horizon（需空闲 GPU）
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/pace-execution
+./scripts/before_we_act/launch_r15_temporal_screens_tmux.sh \
+  --run-id r15-pace-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidate p2 --split discovery20 --gpu-index 3 \
+  --execution-mode pace_replicated_batch20 \
   --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2'
 ```
 
