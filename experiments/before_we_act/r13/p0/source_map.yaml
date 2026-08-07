@@ -1,0 +1,29 @@
+schema_version: 1
+candidate_id: p0
+official_repo: https://github.com/nicklashansen/tdmpc2.git
+upstream_commit_sha: e9f59321933cbc8e11a002b842adc7d4ffae8ff1
+license:
+  code: MIT
+  weights: not_used
+  data: not_used
+files:
+- upstream_path: LICENSE
+  local_path: before_we_act/upstream_components/r13_tdmpc2/LICENSE
+  sha256_before_adaptation: 440d4088a83d19c522dff58918bd92ccb9701c278a35295b92db2456373c4759
+  sha256_after_copy: 440d4088a83d19c522dff58918bd92ccb9701c278a35295b92db2456373c4759
+- upstream_path: tdmpc2/common/world_model.py
+  local_path: before_we_act/upstream_components/r13_tdmpc2/tdmpc2/common/world_model.py
+  sha256_before_adaptation: 55b85a9481d131b6b42265e15ece17bcc05f4ddf83dfd12c5be74e3a04f0d737
+  sha256_after_copy: 55b85a9481d131b6b42265e15ece17bcc05f4ddf83dfd12c5be74e3a04f0d737
+- upstream_path: tdmpc2/common/layers.py
+  local_path: before_we_act/upstream_components/r13_tdmpc2/tdmpc2/common/layers.py
+  sha256_before_adaptation: 3f453053f3a5abf459667b5270e4bd6c564d40966afd2b9e3510368857628696
+  sha256_after_copy: 3f453053f3a5abf459667b5270e4bd6c564d40966afd2b9e3510368857628696
+- upstream_path: tdmpc2/common/math.py
+  local_path: before_we_act/upstream_components/r13_tdmpc2/tdmpc2/common/math.py
+  sha256_before_adaptation: 8b25faa5ee22311e82f445e50efb4594b2e5dfa61d9efe82dc40940c668a4186
+  sha256_after_copy: 8b25faa5ee22311e82f445e50efb4594b2e5dfa61d9efe82dc40940c668a4186
+- upstream_path: tdmpc2/common/init.py
+  local_path: before_we_act/upstream_components/r13_tdmpc2/tdmpc2/common/init.py
+  sha256_before_adaptation: 3f085f2d11439312ce765bc0c4332048147d6540d7ca30cdeddacf2d70180ea4
+  sha256_after_copy: 3f085f2d11439312ce765bc0c4332048147d6540d7ca30cdeddacf2d70180ea4
