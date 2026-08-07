@@ -4118,6 +4118,8 @@ cd /workspace/bwa_worktrees/model-improvements
 | W13 robust reactive monitor | `bwa/r15-world-reactive-robust@c9306e7838b8` | 固定 VLA-Corrector 官方 `9d23a0b...`/Apache-2.0，移植独立 h1/h5 EWMA、median+MAD、滞回、连续检查和 cooldown；冻结 R13 q99 仍是不可降低的 noise floor |
 | PACE execution | `bwa/r15-pace-execution@3cde7d6315ba` | PACE v2 论文公式的独立复现（未复制未发布源码）；用 20 条成功 expert、8124 windows 的 joint-speed valley prominence 校准动态 horizon |
 | RETAIN expert merge | `bwa/r15-retain-expert-merge@14f55a58980b` | 固定 RETAIN 官方 `0bbc6cf...`/Apache-2.0；对 W12 与 e20 expert checkpoint 做预注册 `0.5/0.5` 参数插值，以降低少量专项数据微调的遗忘；不读取 discovery 结果调 alpha |
+| expert checkpoint promotion | `bwa/r15-expert-validation@614edf94e76e` | 不重训、复用 e20 checkpoint；按 discovery→独立 validation→原始 Gate20 严格串联，任一层失败才继续 e21 搜索；独立 worktree 保持运行中的 e20 commit 不变 |
+| TRACT-inspired phase diagnostic | `bwa/r15-tract-phase-balanced@fc443beeb718` | TRACT 尚未找到可 pin 官方代码，故不复制实现；只用训练期 privileged state 生成三阶段标签，以冻结 W11 legal observation belief 训练小型 phase head，先证伪阶段路由是否可行 |
 
 世界重排版新增 `configs/before_we_act/r15_evolution/world_aac_utility.yaml`、`world_reranked_aac_plan_chunk` evaluator/route、checkpoint SHA256 硬校验、投影率/eligible/utility/intervention 诊断及 launcher/runner 白名单。它只读 W13 `checkpoint_010000.pt`（SHA256 `6f98120d...`）并完整计入 W12 action generator + W13 utility latency。2026-08-07 本地执行 common temporal/R13/R14/runtime/protocol 测试为 `30 passed`，远程 worktree `/workspace/bwa_worktrees/r15/world-aac@0cbbf74e2b1c` 再执行相关测试为 `22 passed`；三个 shell 入口通过 `bash -n`，`git diff --check` 无错误。
 
@@ -4171,7 +4173,13 @@ e23 固定阈值 reactive 在 seed `1502503267` 单回合出现 `737` 次 queue-
 
 信号级回放 `/workspace/bwa_runs/r15e23-20260807-world-reactive-discovery20/diagnostics/robust_threshold_replay_at_8.json` 实际读取当时已完成的 9 个 episode/2905 checks：固定门累计 `762` triggers，robust replay=`0`、ratio=`0.0`、q99 floor violation=`0`，诊断为 `PASSED`。该回放明确标注 `signal_level_replay_not_closed_loop_acceptance`，不能冒充闭环结果。持久交接 session `bwa-r15-handoff-world-reactive-e26` 正等待 e23 自然终态和 GPU1 释放；届时先对终态日志重新回放并 dry-run，只有回放仍通过才启动 `/workspace/bwa_runs/r15e26-20260807-world-reactive-robust-discovery20`。同期 e16 true stochastic 为 `7/20,0 success`；e18/e16/e23 心跳新鲜、显存约 `1.9 GiB/GPU`，没有运行告警。
 
-当前远程为四张 RTX 5090；UTC `12:08Z` 的占用为 GPU0=`r15e20 expert-e9 validation`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
+**UTC `2026-08-07T12:36Z` 增量快照与条件调度。** e20 expert rows `9/12` 已完成训练 `5000/5000`，末次 loss=`0.04648296`；closed-loop 当前 `12/20,2 success`，阶段覆盖累计 `cubeB_placed=8, A_on_B=3, C_on_A=2`，已经高于 discovery control `1/20`，但 acceptance 仍为 `PENDING`。为避免 e20 一结束就被 e21 抢占 GPU0，原只等待的 `bwa-r15-handoff-expert-e21` 已精确关闭；没有终止训练、验证或其它 session。替代交接器 `bwa-r15-handoff-expert-promote-e28` 使用 `bwa/r15-expert-validation@614edf9`：e20 终态若 `PASSED`，先在 `/workspace/bwa_runs/r15e28-20260807-expert20-e9-ft5k-validation20` 复用同一 `checkpoint_005000.pt` 跑 frozen validation20；若再 `PASSED`，才在 `/workspace/bwa_runs/r15e29-20260807-expert20-e9-ft5k-formal20` 跑原始 Gate20。任何一层失败后才启动 e21（expert rows `6/12`）。该分支本地相关 `13 passed`、远端 `13 passed`，两个 launcher 与条件交接器均通过 `bash -n`；运行代码与 e20 的 `bwa/r15-expert-evolution@7aa19f0` 保持隔离。
+
+同期 e18 replicated-batch 原始 Gate20=`9/20,0 success`（正式所需 `>3/20`），e16 true stochastic AAC=`13/20,1 success`（等于 discovery control，尚未通过），e23 fixed-threshold reactive=`14/20,1 success`（等于 control，且将在终态后由 robust 版本接力）。四路 producer heartbeat 均在 20 秒合同内刷新，显存各约 `1.9 GiB`，未见 OOM、NaN、进程消失或异常重启。
+
+TRACT 启发的阶段诊断使用成功 expert HDF5 SHA256 `7d2c4151...` 与 native feature index SHA256 `e71eb8f3...` 生成 `/workspace/bwa_runs/shared/r15_stack_phase_manifest_v1.json`（SHA256 `11bbda5381d6a3811b2fc5a17b91d74572cc23289abd61d6f9abc31ebc2c24e4`）。20 条成功轨迹按 task planner 的单调完成边界得到训练期三阶段标签，原始可用样本数为 `2536/3332/2256`；source episode `{4,9,14,19}` 完全留出。`StackPhaseHead` 只读取冻结 W11 belief，采用三相均衡 batch、2000 updates，并以 5-step 单调 authority 解码；预注册门为 raw accuracy `>=0.85`、每相 recall `>=0.80`、authority accuracy `>=0.90`、boundary MAE `<=20 steps`、`4/4` 留出链完整。该诊断通过也不等于闭环提升，只允许进入 legal-observation phase-routed specialist；失败则淘汰该路线。分支本地相关 `16 passed`，远端实际路径复测 `7 passed`、Python compile 和四个 shell `bash -n` 通过；`bwa-r15-handoff-phase-e27` 已在 e16→e19 BID 链之后排队，等待 shell 不占 GPU2。
+
+当前远程为四张 RTX 5090；UTC `12:36Z` 的占用为 GPU0=`r15e20 expert-e9 discovery`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
 
 ```bash
 # 单路线 discovery20；mode 可替换为 aac_stochastic_plan_chunk 或 fixed6_base_chunk
@@ -4255,6 +4263,24 @@ cd /workspace/bwa_worktrees/r15/retain-expert
   --finetuned-checkpoint /workspace/bwa_runs/r15e20-20260807-expert20-e9-ft5k-discovery20/candidates/p1/train/stack_expert/checkpoints/checkpoint_005000.pt \
   --finetuned-weight 0.5 --split discovery20 \
   --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2'
+
+# TRACT-inspired frozen-belief phase-head 诊断；通过不等于闭环通过
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/tract-phase-balanced
+./scripts/before_we_act/launch_r15_phase_head_tmux.sh \
+  --output /workspace/bwa_runs/r15-phase-head-manual-$(date -u +%Y%m%dT%H%M%SZ) \
+  --gpu-index 2 --session bwa-r15-phase-head-manual \
+  --updates 2000 --batch-size 96 --learning-rate 3e-4 --dry-run'
+
+# e20 checkpoint 的独立 validation20；通常由条件交接器自动执行
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/expert-validation
+./scripts/before_we_act/launch_r15_temporal_screens_tmux.sh \
+  --run-id r15-expert-validation-manual-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidate p1 --split validation20 --gpu-index 0 \
+  --execution-mode act_temporal_ensemble \
+  --checkpoint /workspace/bwa_runs/r15e20-20260807-expert20-e9-ft5k-discovery20/candidates/p1/train/stack_expert/checkpoints/checkpoint_005000.pt \
+  --reference-run-root /workspace/bwa_runs/r15e7-20260807-w12-validation20-control --dry-run'
 ```
 
 本节是持续更新的实验账本，不是终态成功声明。当前尚无候选完成 discovery+validation+formal Gate20 三层门，因此总体状态仍为 **RUNNING / 尚未证明综合闭环提升**。
