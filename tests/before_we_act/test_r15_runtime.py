@@ -91,3 +91,23 @@ def test_logged_rows_deduplicates_resume_attempts(tmp_path):
     rows = r15_runtime.logged_rows(path)
     assert set(rows) == {7, 8}
     assert rows[7]["success"] is True
+
+
+def test_monitor_reads_stack_expert_finetune_progress(tmp_path, monkeypatch):
+    (tmp_path / "seeds.json").write_text(json.dumps({"seeds": list(range(20))}))
+    r15_runtime.register(register_args(tmp_path, "p1"))
+    progress = tmp_path / "run/candidates/p1/train/stack_expert/progress.jsonl"
+    progress.parent.mkdir(parents=True)
+    progress.write_text(
+        json.dumps(
+            {
+                "fine_tune_update": 725,
+                "loss": 0.03125,
+                "eta_hours": 0.5,
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(r15_runtime, "gpu_rows", lambda: {})
+    rendered = r15_runtime.render(tmp_path / "run", ("p1",))
+    assert "train_update=725 loss=0.03125 eta=0.5h" in rendered

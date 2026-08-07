@@ -351,6 +351,8 @@ def render(run_root: Path, selected: tuple[str, ...]) -> str:
         successes = sum(bool(row["success"]) for row in live_rows.values())
         progress = read_json(root / "validation" / "closed_loop_progress.json")
         training = last_jsonl(root / "train" / "aligned_world" / "progress.jsonl")
+        if not training:
+            training = last_jsonl(root / "train" / "stack_expert" / "progress.jsonl")
         cache = read_json(root / "cache_heartbeat.json")
         lines.extend(
             [
@@ -358,7 +360,7 @@ def render(run_root: Path, selected: tuple[str, ...]) -> str:
                 f"  branch={identity['branch']} commit={identity['commit']} gpu={identity['gpu']} tmux={identity['session']}",
                 f"  pid={pid} child={child} alive={process_alive(pid)} started={status.get('created_at', '-')} heartbeat={beat.get('updated_at', '-')} age={age if age is not None else '-'}s",
                 f"  GPU={gpus.get(identity['gpu'], 'unavailable')} episodes={completed}/20 successes={successes} current_episode={progress.get('episode_index', '-')} step={progress.get('step', '-')}/{progress.get('max_steps', '-')}",
-                f"  train_update={training.get('update', '-')} loss={training.get('loss', '-')} eta={training.get('eta_hours', '-')}h cache={cache.get('split', '-')}:{cache.get('rows', '-')}/{cache.get('total_rows', '-')}",
+                f"  train_update={training.get('update', training.get('fine_tune_update', '-'))} loss={training.get('loss', '-')} eta={training.get('eta_hours', '-')}h cache={cache.get('split', '-')}:{cache.get('rows', '-')}/{cache.get('total_rows', '-')}",
                 f"  checkpoint={identity['checkpoint']}",
                 f"  result={root / 'validation' / (manifest['split'] + '.json')} acceptance={acceptance.get('status', 'PENDING')}",
                 f"  log={eval_log} alerts={alerts or ['NONE']} detail={status.get('detail', '-')}",
