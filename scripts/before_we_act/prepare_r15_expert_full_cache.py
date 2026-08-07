@@ -4,9 +4,10 @@
 The legacy conversion writes current and next 480x640 RGB into one HDF5 file per
 episode.  That representation is useful as a generic interchange format but is
 unnecessarily large for R12/R15 action training.  This builder reads the raw
-ManiSkill trajectory groups directly, applies the frozen action codec, encodes
-native RGB with the frozen DINOv3 backbone, and appends immutable feature shards
-to a copy of the existing full-episode index.
+ManiSkill trajectory groups directly, preserves the physical ``pd_joint_pos``
+commands used by the frozen R12 cache, encodes native RGB with the frozen DINOv3
+backbone, and appends immutable feature shards to a copy of the existing
+full-episode index.
 """
 from __future__ import annotations
 
@@ -50,6 +51,9 @@ SOURCE_CAMERAS = {
 }
 EXPECTED_CODEC_SHA256 = (
     "38b9d91640dcb9f7a33d7f05ea0d3cab47fc843fb5cfb18859ceece3314b2eb5"
+)
+EXPERT_EXTENSION_PROTOCOL = (
+    "r15_raw_success_expert_physical_pd_joint_pos_direct_dinov3_v2"
 )
 
 
@@ -188,6 +192,23 @@ def selected_episodes(
     return episodes
 
 
+def physical_commanded_actions(group: h5py.Group, steps: int) -> torch.Tensor:
+    """Preserve the source physical commands under the R12 cache contract."""
+
+    raw_actions = np.concatenate(
+        [
+            np.asarray(group[f"actions/{agent}"][:steps], dtype=np.float32)
+            for agent in SOURCE_AGENTS
+        ],
+        axis=-1,
+    )
+    if raw_actions.shape != (steps, 24) or not np.isfinite(raw_actions).all():
+        raise ValueError("R15 Stack expert physical actions are invalid")
+    commanded = torch.zeros((steps, 4, 8), dtype=torch.float32)
+    commanded[:, :3] = torch.from_numpy(raw_actions.reshape(steps, 3, 8))
+    return commanded
+
+
 def source_plan(
     source: RawStackSource,
     episodes: tuple[RawEpisode, ...],
@@ -239,18 +260,7 @@ def encode_episode(
     visual = torch.zeros((steps, 16, 15), dtype=torch.float16)
     view_mask = torch.zeros((steps, 5), dtype=torch.bool)
     qpos = torch.zeros((steps, 4, 9), dtype=torch.float32)
-    commanded = torch.zeros((steps, 4, 8), dtype=torch.float32)
-    raw_actions = np.concatenate(
-        [
-            np.asarray(group[f"actions/{agent}"][:steps], dtype=np.float32)
-            for agent in SOURCE_AGENTS
-        ],
-        axis=-1,
-    )
-    canonical = np.asarray(codec.encode(raw_actions), dtype=np.float32).reshape(
-        steps, 3, 8
-    )
-    commanded[:, :3] = torch.from_numpy(canonical)
+    commanded = physical_commanded_actions(group, steps)
     for agent_index, agent in enumerate(SOURCE_AGENTS):
         qpos[:, agent_index] = torch.from_numpy(
             np.asarray(
@@ -299,7 +309,7 @@ def encode_episode(
     metadata = {
         "created_at": now(),
         "protocol_variant": FULL_EPISODE_PROTOCOL,
-        "extension_protocol": "r15_raw_success_expert_direct_dinov3_v1",
+        "extension_protocol": EXPERT_EXTENSION_PROTOCOL,
         "task": TASK,
         "split": "train",
         "seed": int(row["seed"]),
@@ -311,7 +321,8 @@ def encode_episode(
         "hdf5_sha256": source_hdf5_sha256,
         "source_metadata_json_sha256": source_json_sha256,
         "action_codec_sha256": codec.semantic_sha256,
-        "action_semantics": "raw_pd_joint_pos encoded to canonical_unit_action; command echo",
+        "action_codec_applied": False,
+        "action_semantics": "raw physical pd_joint_pos command preserved; command echo",
         "terminal_policy": "first terminated_or_truncated transition inclusive",
         "observation": locked_r12_full_episode_observation(),
         "legal_inputs": "native 480x640 current fixed-view RGB plus causal qpos/executed-action history",
@@ -383,7 +394,7 @@ def compose_index(
         int(row["steps"]) for row in expert_rows
     )
     combined["extension"] = {
-        "protocol": "r15_raw_success_expert_direct_dinov3_v1",
+        "protocol": EXPERT_EXTENSION_PROTOCOL,
         "base_index": str(base_index_path.resolve()),
         "base_index_sha256": sha256(base_index_path),
         "expert_receipt": str(receipt_path.resolve()),
@@ -503,7 +514,7 @@ def main() -> None:
     receipt = {
         "schema_version": 1,
         "round": "R15-Evolution",
-        "protocol": "r15_raw_success_expert_direct_dinov3_v1",
+        "protocol": EXPERT_EXTENSION_PROTOCOL,
         "source_hdf5": str(args.raw_hdf5),
         "source_hdf5_sha256": source_hdf5_sha256,
         "source_metadata_json": str(args.raw_json),

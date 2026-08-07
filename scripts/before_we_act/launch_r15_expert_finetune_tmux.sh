@@ -29,7 +29,7 @@ COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; [[ "$COMMIT" == "$(git -C "$ROOT" rev
 SEED_FILE="$PROTOCOL_ROOT/$SPLIT.json"; SEED_SHA="$(sha256sum "$SEED_FILE" | awk '{print $1}')"
 REFERENCE_MANIFEST="$REFERENCE_RUN/run_manifest.json"; [[ -f "$REFERENCE_MANIFEST" && -f "$EXPERT_INDEX" ]] || { printf 'reference manifest or expert index missing\n' >&2; exit 3; }
 [[ "$(jq -r .split "$REFERENCE_MANIFEST")" == "$SPLIT" && "$(jq -r .seed_file_sha256 "$REFERENCE_MANIFEST")" == "$SEED_SHA" && "$(jq -r .candidates.p0.reference "$REFERENCE_MANIFEST")" == true ]] || { printf 'reference is not identical paired W12 control\n' >&2; exit 3; }
-[[ "$(jq -r .extension.protocol "$EXPERT_INDEX")" == r15_raw_success_expert_direct_dinov3_v1 && "$(jq -r .extension.expert_episodes "$EXPERT_INDEX")" -ge 1 ]] || { printf 'expert cache identity differs\n' >&2; exit 3; }
+[[ "$(jq -r .extension.protocol "$EXPERT_INDEX")" == r15_raw_success_expert_physical_pd_joint_pos_direct_dinov3_v2 && "$(jq -r .extension.expert_episodes "$EXPERT_INDEX")" -ge 1 ]] || { printf 'expert cache identity differs\n' >&2; exit 3; }
 [[ ! -e "$RUN_ROOT" ]] || { printf 'run root already exists: %s\n' "$RUN_ROOT" >&2; exit 3; }
 SESSION="bwa-r15s-$CANDIDATE"; tmux has-session -t "$SESSION" 2>/dev/null && { printf 'session already exists: %s\n' "$SESSION" >&2; exit 3; }
 nvidia-smi -i "$GPU_INDEX" --query-compute-apps=pid --format=csv,noheader | grep -Eq '[0-9]' && { printf 'GPU %s is in use\n' "$GPU_INDEX" >&2; exit 3; } || true

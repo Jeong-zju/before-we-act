@@ -159,7 +159,8 @@ def main() -> None:
     extension = index.get("extension", {})
     if (
         index.get("protocol_variant") != FULL_EPISODE_PROTOCOL
-        or extension.get("protocol") != "r15_raw_success_expert_direct_dinov3_v1"
+        or extension.get("protocol")
+        != "r15_raw_success_expert_physical_pd_joint_pos_direct_dinov3_v2"
         or int(extension.get("expert_episodes", 0)) < 1
     ):
         raise ValueError("R15 expert full-episode index identity differs")
