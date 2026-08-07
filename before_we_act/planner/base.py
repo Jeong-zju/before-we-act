@@ -131,7 +131,7 @@ class WorldUtility:
     def __call__(
         self, belief: TeamBeliefState, candidates: torch.Tensor, base: torch.Tensor
     ) -> torch.Tensor:
-        if candidates.ndim != 4 or tuple(candidates.shape[1:]) != tuple(base.shape[1:]):
+        if candidates.ndim != 4 or tuple(candidates.shape[1:]) != tuple(base.shape):
             raise ValueError("R14 utility candidates must be [P,A,H,D]")
         batch = len(candidates)
         actions = candidates.unsqueeze(0)
