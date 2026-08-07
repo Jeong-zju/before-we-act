@@ -1,9 +1,9 @@
 # P1 多机器人 Before-We-Act 技术路线 V4.5（S10 冻结 / 上游组件代码移植优先 / Benchmark-First Gate20）
 
-> 文档更新：2026-08-05（V4.5 + R12-R1 因果诊断与 R12-R2 完整终态）
+> 文档更新：2026-08-07（V4.5 + R13-P0 winner-only 晋级为唯一 W13）
 > 工程起点：`bwa/r9-core-native@06ba780`；R10 四路已全部失败并固定 `W10=B9-CoreNative`；R11 四路于 2026-08-05 完成并全部 PASSED，冻结排名 `P0>P3>P1>P2`
 > 投稿目标：ICRA 2027，[官方 Call for Papers](https://2027.ieee-icra.org/contribute/call-for-icra-2027-papers-now-accepting-submissions/) 截稿时间为 2026-09-15 11:59 PM PST
-> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1，W12 晋级见 10.15.5。R13 四路 Candidate-Conditioned Latent World 组件移植已于 2026-08-06 完成，四路均通过 `11/11` 工程硬门；冻结 `world_screen_score` 排序为 `P0 > P1 > P2 > P3`，P0 TD-MPC2 为唯一排序胜者。R13 全程 off-path、W12 action hash bit-exact，未授权也未执行 winner merge；按本轮任务的 `[ON_DIAG_PASS]` 仅写入结果后停止，未进入 R14
+> 当前状态：历史 M0–R8 与 R10 结论已冻结；`Peer-NoWrist=71.4%`；R11 终态审计见 10.14.1，W12 晋级见 10.15.5。R13 四路 Candidate-Conditioned Latent World 组件移植已于 2026-08-06 完成，四路均通过 `11/11` 工程硬门；冻结 `world_screen_score` 排序为 `P0 > P1 > P2 > P3`。2026-08-07 收到后续显式授权后，仅 P0 TD-MPC2 winner-only 代码与正式 checkpoint 晋级为唯一 W13；P1/P2/P3 未合入。W13 仍为 off-path、W12 action hash bit-exact；R14 尚未启动
 > 评测原则：S10 原样完成；R11/R13 保持 off-path，R12/R14 会改变动作轨迹。任何候选只要可能改变最终执行动作、候选选择、动作后处理或策略权重，就必须在同一五任务、同一 seeds 上完成**每任务 20 回合**闭环（简称 `Gate20`，即每候选共 `5×20=100` episodes）后才有 winner 资格；其它表征、排序、校准、因果和 oracle 指标降为可选诊断，不再挡住 benchmark 更优候选
 > 相关长期方案：[Intent-Grounded Decentralized World-Action Models 多机器人协作研究方案](20260724_INTENT_GROUNDED_DECENTRALIZED_WORLD_ACTION_MODELS_MULTI_ROBOT_COLLABORATION_RESEARCH_PLAN_V2.0_ZH.md)
 
@@ -3892,6 +3892,52 @@ cd /workspace/bwa_worktrees/model-improvements
 ```
 
 终态 stop `--dry-run` 显示 P0–P3 和 shared-prepare 的 tagged PID 均为 `none`，没有发送信号或关闭任何 session。最终结论为：**R13 通过；P0 TD-MPC2 是冻结 screen 的唯一排序胜者；本轮不授权合并、不进入 R14，整体状态为完成并停止。** 后续若另行授权晋级，应只从 winner pack 指定的 P0 最小组件/checkpoint 建立 winner-only merge，并在进入任何 action-affecting R14 前另行冻结父 commit 与 Gate20 协议。
+
+#### 10.16.3 后续显式授权的 R13-P0 winner-only 晋级（唯一 W13，2026-08-07）
+
+**授权与唯一性。** 10.16.2 记录的是当时真实的“未授权、未合并”终态，不作追溯修改。2026-08-07 用户随后明确要求“将 R13-P0 winner-only 晋级为唯一 W13”，因此从 `feat/model-improvements@977ec6453dba239bd9b2b6613506eaf8a88d823b` 创建 `bwa/merge-r13-winner`，仅以 merge commit `cef37b00d8a4ffc5b9a67f049f00eef783bf0325` 接入 P0 终态 `0d9a8afebcd233b8ff0d9a731d445d717ee38623`。相对共同基础只增加 17 个文件、887 行：TD-MPC2 最小上游闭包及许可证、P0 adapter/config/证据卡/parity/test；没有 P1 LPWM、P2 V-JEPA2-AC、P3 DINO-WM，也没有任何 R14 planner。正式 W13 定义为：**冻结 W11 team belief + 冻结 W12 action candidates + R13-P0 TD-MPC2 candidate-conditioned latent world component**。其世界输出不进入 planner、rerank 或 actuator，因此本次晋级不产生闭环性能提升主张。
+
+**本地与远程复验。** 本地 `.venv` 以及远程 S0 环境 `/venv/robofactory-act/bin/python` 均执行以下同一回归集，结果各为 `41 passed`；同时通过 `git diff --check`、P1/P2/P3/R14 文件缺席审计和上游依赖闭包审计：
+
+```bash
+cd /home/jeong/zeno/wam/before-we-act
+.venv/bin/python -m pytest -q \
+  tests/before_we_act/test_r13_world_contract.py \
+  tests/before_we_act/test_r13_p0.py \
+  tests/before_we_act/test_r12_p2.py \
+  tests/before_we_act/test_r12_common.py \
+  tests/before_we_act/test_r12_full_episode_windows.py
+
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/merge-r13-winner
+PYTHONPATH=. /venv/robofactory-act/bin/python -m pytest -q \
+  tests/before_we_act/test_r13_world_contract.py \
+  tests/before_we_act/test_r13_p0.py \
+  tests/before_we_act/test_r12_p2.py \
+  tests/before_we_act/test_r12_common.py \
+  tests/before_we_act/test_r12_full_episode_windows.py'
+```
+
+远程复验根目录为 `/workspace/bwa_runs/w13-promotion-20260807-v1`。官方来源再次解析为 TD-MPC2 `https://github.com/nicklashansen/tdmpc2.git@e9f59321933cbc8e11a002b842adc7d4ffae8ff1`，MIT LICENSE 被保留；适配 patch 审计为 `algorithmic_lines_changed=0`，37 个运行文件无完整上游仓库依赖；encoder/dynamics/reward/value/termination numerical parity 均为 exact、`max_abs=0.0`。原 P0 10000-update checkpoint 严格恢复后重跑 screen 得 `world_screen_score=0.4721306451559686`，与冻结选择分数完全相同；11 项硬门仍为 `11/11 PASSED`。action tensor before/after 均为 `99621ac9ac1fd9bd00ea235879dd4adac078f5117bd6a4074beeac725a8babda`，冻结 W12 checkpoint before/after 均为 `4c85dcd30058912f4be375af04b65b0f39b365d885883eb29934552b14020e41`，planner/rerank 均关闭，故 Gate20 仍合法记为 `N/A`。
+
+**checkpoint 晋级与审计链。** P0 正式产物 `/workspace/bwa_runs/r13-20260806-world-v1/candidates/p0/train/formal/checkpoints/checkpoint_010000.pt` 以同文件系统 hard link 晋级为 `/workspace/bwa_runs/shared/w13/checkpoint_010000.pt`；两路径 SHA256 均为 `6f98120d087d0f93969c697b2a041d338bd9e235adf136a690bb10689cb19b64`、inode `2320448734`、link count `2`、大小 `19247916` bytes、权限 `0444`，没有复制或覆盖 checkpoint。首次用原 preflight verifier 检查正式 checkpoint 时，该工具把 checkpoint update 写死为 2，因正式 update 为 10000 而只在 `checkpoint_identity` 项失败；失败 receipt `/workspace/bwa_runs/w13-promotion-20260807-v1/receipts/promoted_checkpoint_restore.json` 被原样保留。commit `5de2b935775aa43dad821510278a90c901fdb00f` 增加向后兼容的 `--expected-update`（默认仍为 2），随后以 `--expected-update 10000` 生成 `promoted_checkpoint_restore_v2.json`，strict restore、identity、future-target 拒绝、finite prediction、action conditioning 和 off-path 检查全部通过，receipt SHA256 为 `4bb9ea96f7d2704f7cb46f97b00d4b5db524c58e430c0032808129960de84842`。不可变选择、来源、commit、checkpoint、指标、receipt 与 claim boundary 固定在 `experiments/before_we_act/r13/w13/winner_manifest.yaml`。
+
+可直接复查唯一 W13 状态：
+
+```bash
+ssh -p 10328 root@69.176.92.104 '
+set -Eeuo pipefail
+cd /workspace/bwa_worktrees/model-improvements
+git status --short --branch
+sha256sum \
+  /workspace/bwa_runs/r13-20260806-world-v1/candidates/p0/train/formal/checkpoints/checkpoint_010000.pt \
+  /workspace/bwa_runs/shared/w13/checkpoint_010000.pt
+stat -c "%n inode=%i links=%h mode=%a size=%s" \
+  /workspace/bwa_runs/r13-20260806-world-v1/candidates/p0/train/formal/checkpoints/checkpoint_010000.pt \
+  /workspace/bwa_runs/shared/w13/checkpoint_010000.pt'
+```
+
+最终晋级流程为：winner 分支完成验证与文档提交并推送后，`feat/model-improvements` 只允许执行 `git merge --ff-only bwa/merge-r13-winner` 再推送；不做 squash、cherry-pick 或混入 loser 组件。该 fast-forward 后的 canonical HEAD 是后续若获单独授权启动 R14 时唯一合法的共同父 commit；**本次只形成唯一 W13，不创建、不训练、不验收 R14 的任何分支。**
 
 ### 10.17 R14：四路 World-Guided Decision 组件移植（action-affecting，强制 Gate20）
 
