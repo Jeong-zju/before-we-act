@@ -4197,6 +4197,10 @@ e23 fixed-threshold reactive 完整 discovery20=`1/20 vs 1/20`、paired=`+0/-0`�
 
 为让首个 handoff 退出后仍可无人值守晋级，`fef9db3` 又把 promotion 改为可恢复：只有既有 manifest 的 split/session/checkpoint 全部精确匹配才复用，否则 fail-fast，绝不重建或覆盖目录；本地再次 `20 passed`。等待 session `bwa-r15-handoff-expert-promote-e28` 先等 e28 process/session 与 GPU0 自然释放，再 fast-forward 控制 worktree并复用 e28，随后按 validation 结果进入 e29 formal 或 e25 RETAIN；它不修改正在运行的 e28 worktree commit，也不占 GPU。
 
+**UTC `2026-08-07T13:30Z` replicated AAC 正式淘汰与 PACE 接力。** e18 已完整跑完原始 Gate20：Stack=`0/20 vs 3/20`、paired=`+0/-3`，protected=`74` exact，candidate total=`74/100 vs 77/100`，结构化 acceptance/status=`FAILED`。这说明 e12/e15 的 discovery/validation 优势未迁移到正式 seeds，replicated-batch AAC 被正式淘汰，不能以小样本结果宣称综合提升。GPU3 释放后，e24 handoff 先完成 32-step PACE phase-diversity smoke：chunk sizes=`[16,13,5]`、mean=`11.3333`、fallback fraction=`0.3333`、mean candidate boundaries=`2.0`、mean selected prominence=`0.000948688`，通过预注册非退化门后于 `13:27:45Z` 启动 `/workspace/bwa_runs/r15e24-20260807-pace-discovery20`（GPU3、tmux `bwa-r15s-p2`、commit `3cde7d6`、PID `564390/564410`）；本快照 `0/20`，heartbeat 正常。
+
+同一 session 冲突审计已提前扩展到尚未启动的后备 promotion：RETAIN `9f50e63` 固定 e35/e36 为 `bwa-r15s-retain-e35/e36`，本地/远端相关 `12 passed`；phase-balanced `d4cdf51` 固定 e31/e32 为 `bwa-r15s-phase-e31/e32`，本地/远端相关 `13 passed`。两条旧等待器只包含可确认的 sleep shell、无 GPU/child evaluator，已按精确 session 优雅中断并用新 commit 重启；没有停止任何训练/验证进程，也没有删除或覆盖结果。
+
 当前远程为四张 RTX 5090；UTC `12:48Z` 的占用为 GPU0=`r15e20 expert-e9 discovery`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。磁盘 `/workspace` 可用约 `145 GiB`、inode 使用约 `1%`，当前无需清理；既有实验、数据集、缓存和 checkpoint 均未删除。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
 
 ```bash
