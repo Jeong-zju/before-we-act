@@ -71,7 +71,7 @@ PY
 atomic_state PREPARING collecting "motion-planning oracle; success-only; raw RGB HDF5"
 (
   cd "$ROBOFACTORY"
-  exec env PYTHONPATH="$ROBOFACTORY" "$PYTHON" -m robofactory.planner.run --env-id ThreeRobotsStackCube-rf --config "$CONFIG" --obs-mode rgb --num-traj "$EPISODES" --seed "$START_SEED" --only-count-success --sim-backend cpu --render-mode sensors --traj-name "r15_stack_expert_seed_${START_SEED}" --record-dir "$RAW_ROOT"
+  exec env CUDA_VISIBLE_DEVICES="" PYTHONPATH="$ROBOFACTORY" "$PYTHON" -m robofactory.planner.run --env-id ThreeRobotsStackCube-rf --config "$CONFIG" --obs-mode rgb --num-traj "$EPISODES" --seed "$START_SEED" --only-count-success --sim-backend cpu --render-mode sensors --traj-name "r15_stack_expert_seed_${START_SEED}" --record-dir "$RAW_ROOT"
 ) &
 CHILD_PID=$!; printf '%s\n' "$CHILD_PID" >"$CHILD_FILE"; atomic_state PREPARING collecting "motion-planning oracle; success-only; raw RGB HDF5"
 wait "$CHILD_PID"; CHILD_PID=0; printf '0\n' >"$CHILD_FILE"
