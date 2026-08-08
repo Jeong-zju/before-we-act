@@ -4207,7 +4207,49 @@ GPU3 连续晋级也已在独立 `bwa/r15-pace-promotion@dbeb2948e160` 实现并
 
 TRACT-inspired legal-observation phase head e27 已完整 `PASSED`：raw accuracy=`0.9721707`、各 phase recall=`0.9960/0.9638/0.9581`，authority accuracy=`0.9598021`，boundary MAE/max=`8.125/17 steps`，`4/4` 留出链完整，全部高于预注册门。随后旧 e30 phase-balanced run 只完成 manifest 注册便在训练前报 `R15 expert run identity differs`；根因为 candidate runner 白名单漏掉自身 `bwa/r15-phase-balanced-expert`，故该目录是 setup failure，不是训练或模型质量结果。修复 `79fb35320668` 将分支加入 launcher→runner 完整身份链，本地/远端相关 `13 passed`、shell/ruff 通过，并保留 e30 不覆盖。fresh root `/workspace/bwa_runs/r15e45-20260808-phase-balanced-e9-ft5k-discovery20` 已在 GPU0/tmux `bwa-r15s-phase-e45` 启动；`04:40:37Z` 快照为 `TRAINING update=1/5000`、loss=`0.08106463`、ETA=`2.40h`、PID `643295/643317`、显存约 `1.35 GiB`、heartbeat 新鲜且无告警。`bwa-r15-handoff-phase-balanced-promote-e31` 已改为等待 e45，训练后自动 discovery→e31 validation→e32 formal。
 
-当前远程为四张 RTX 5090；UTC `12:48Z` 的占用为 GPU0=`r15e20 expert-e9 discovery`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。磁盘 `/workspace` 可用约 `145 GiB`、inode 使用约 `1%`，当前无需清理；既有实验、数据集、缓存和 checkpoint 均未删除。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
+**UTC `2026-08-08T04:49Z` 四卡再并行与遗漏 promotion 修复。** e45 phase-balanced 已完成 `5000/5000` 更新，末次 loss=`0.05187033`，checkpoint=`/workspace/bwa_runs/r15e45-20260808-phase-balanced-e9-ft5k-discovery20/candidates/p1/train/stack_expert/checkpoints/checkpoint_005000.pt`；现已进入 discovery20，快照为 `1/20,0 success`，PID=`643295/644597`、GPU0 显存约 `1.94 GiB`、producer heartbeat age=`8.5s`、无告警。原 `bwa-r15-handoff-expert-e22` 从 `2026-08-07T11:19Z` 起只等待 e21 acceptance，但 e21 run root 实际从未创建；在确认 GPU2/3 空闲、两条 run root 不存在、expert worktree clean 且 HEAD=`origin` 后，两路 dry-run 均通过。精确关闭的只是该 sleep-only handoff，没有停止 evaluator/trainer；随后从同一 `bwa/r15-expert-evolution@7aa19f0c6044` 并行启动 e21 expert rows `6/12`（GPU2/tmux `bwa-r15s-expert-e21`）与 e22 expert rows `3/12`（GPU3/tmux `bwa-r15s-expert-e22`），共享同一只读 expert cache/reference、输出与 checkpoint 完全隔离。`04:48:47Z` 快照分别为 e21 `2750/5000`、loss=`0.05160737`、ETA=`0.0410h`，e22 `2850/5000`、loss=`0.06399778`、ETA=`0.0383h`；两路心跳新鲜且无 OOM/NaN/进程消失。
+
+此前 e26 robust-reactive discovery=`3/20 vs 1/20` 已通过，却因旧编排没有 validation promotion 而遗漏升级。现已从 clean/pushed `bwa/r15-world-reactive-robust@c9306e7838b8` 在 GPU1/tmux `bwa-r15s-p3` 启动 `/workspace/bwa_runs/r15e46-20260808-world-reactive-robust-validation20`，复用冻结 W12 checkpoint 与 identical-seed validation control `/workspace/bwa_runs/r15e7-20260807-w12-validation20-control`；real launch 前 dry-run 通过。`04:48:47Z` 快照为 `1/20,0 success`、PID=`645046/645065`、显存约 `1.93 GiB`、heartbeat age=`2.9s`、无告警。等待 session `bwa-r15-handoff-robust-promote-e47` 只读取 e46 的结构化 `acceptance.json`：只有 candidate successes 严格大于 validation control `1/20` 才在 GPU1 启动 `r15e47-20260808-world-reactive-robust-formal20`；否则明确跳过。e47 仍须满足 Stack `>3/20`、protected=`74` exact、total `>77/100`，没有降低或替换正式门。
+
+本轮可复制命令如下；三路训练/验证均由实际 producer heartbeat 驱动状态，不以日志存在冒充存活：
+
+```bash
+# e21/e22 已实际验证并启动；单路重放时必须换新的 run-id/session/output
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/expert-evolution
+./scripts/before_we_act/launch_r15_expert_finetune_tmux.sh \
+  --run-id r15-expert-e6-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidate p2 --gpu-index 2 --session bwa-r15s-expert-e6-manual \
+  --updates 5000 --batch-size 12 --expert-rows 6 --learning-rate 2e-5 --warmup 500 \
+  --expert-index /workspace/bwa_runs/r15_stack_expert20_cache_20260807-v1-physical/features/index.json \
+  --split discovery20 --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2 --dry-run'
+
+# robust-reactive 独立 validation20（e46 已在运行，示例默认 dry-run 防重）
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/world-reactive-robust
+./scripts/before_we_act/launch_r15_temporal_screens_tmux.sh \
+  --run-id r15-robust-validation-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidate p3 --split validation20 --gpu-index 1 \
+  --execution-mode world_reactive_robust_aac_chunk \
+  --checkpoint /workspace/bwa_runs/shared/w12/checkpoint_130000.pt \
+  --reference-run-root /workspace/bwa_runs/r15e7-20260807-w12-validation20-control --dry-run'
+
+# 四路统一单次快照；按需去掉任一 --screen 即为单实验监测
+ssh -p 10328 root@69.176.92.104 '
+/workspace/bwa_worktrees/r15/expert-evolution/scripts/before_we_act/monitor_r15_portfolio.sh \
+  --screen /workspace/bwa_runs/r15e45-20260808-phase-balanced-e9-ft5k-discovery20:p1 \
+  --screen /workspace/bwa_runs/r15e46-20260808-world-reactive-robust-validation20:p3 \
+  --screen /workspace/bwa_runs/r15e21-20260807-expert20-e6-ft5k-discovery20:p2 \
+  --screen /workspace/bwa_runs/r15e22-20260807-expert20-e3-ft5k-discovery20:p3 --once'
+
+# 精确安全退出示例：默认 dry-run，不影响其它 run/session
+ssh -p 10328 root@69.176.92.104 '
+/workspace/bwa_worktrees/r15/world-reactive-robust/scripts/before_we_act/stop_r15_stack_screens.sh \
+  --run-root /workspace/bwa_runs/r15e46-20260808-world-reactive-robust-validation20 \
+  --candidate p3 --dry-run'
+```
+
+**UTC `2026-08-07T12:48Z` 历史资源快照。** 当时占用为 GPU0=`r15e20 expert-e9 discovery`，GPU1=`r15e23 world-reactive`，GPU2=`r15e16 true-stochastic AAC`，GPU3=`r15e18 replicated-batch formal Gate20`。最近心跳连续，显存约 `1.9 GiB/GPU`，未见 OOM、NaN、进程消失或异常重启。磁盘 `/workspace` 可用约 `145 GiB`、inode 使用约 `1%`，当时无需清理；既有实验、数据集、缓存和 checkpoint 均未删除。共享数据/HF cache/鉴权继续沿用 S0；缓存足够，未在 argv、日志、代码或 Git 中写入 token。可复制操作：
 
 ```bash
 # 单路线 discovery20；mode 可替换为 aac_stochastic_plan_chunk 或 fixed6_base_chunk
