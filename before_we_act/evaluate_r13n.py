@@ -19,7 +19,13 @@ import robofactory  # noqa: F401
 from before_we_act.action_generator.r13n_baseline import R13NActionGenerator, load_r13n_config
 from before_we_act.benchmark import get_task
 from before_we_act.evaluate_action_generator import TemporalChunkEnsembler, patch_means
-from before_we_act.r13n import TASKS, TASK_SPECS, camera_sensor_key, sha256
+from before_we_act.r13n import (
+    TASKS,
+    TASK_SPECS,
+    camera_sensor_key,
+    clamp_action_to_space,
+    sha256,
+)
 from before_we_act.spatial_observation import R12SpatialObservationEncoder
 from before_we_act.train_action_generator_r4 import atomic_json
 
@@ -118,12 +124,14 @@ def main() -> None:
             if row.get("task")==args.task and row.get("stage")==args.stage and row.get("seed") in requested and isinstance(row.get("success"),bool): recovered.append(row)
     recovered=list({row["seed"]:row for row in recovered}.values()); completed={row["seed"] for row in recovered}
     heartbeat=Path(args.heartbeat).resolve() if args.heartbeat else None
-    rows=[]; latencies=[]; env=make_env(args.task); spec=TASK_SPECS[args.task]; arms=get_task(args.task)["agents"]
+    rows=[]; latencies=[]
+    env=make_env(args.task); spec=TASK_SPECS[args.task]; arms=get_task(args.task)["agents"]
     video_dir=Path(args.video_dir).resolve() if args.video_dir else None
     try:
         for episode_index,seed in enumerate(requested):
             if seed in completed: continue
             observation,_=reset_reproducibly(env,seed); history=TeamHistory(arms,spec["camera_order"]); ensemble=TemporalChunkEnsembler(arms,decay=float(config.raw["evaluation"]["temporal_ensemble_decay"])); previous_action=None; success=False; info={}
+            episode_clip_elements=0; episode_action_elements=0
             temporary=None; writer=None
             if video_dir:
                 temporary,writer=open_video(video_dir/f"{args.task}_{args.stage}_{seed}.mp4")
@@ -140,6 +148,8 @@ def main() -> None:
                     latencies.append((time.perf_counter_ns()-started)/1e6)
                     normalized=proposals.actions[0,0,:len(arms)]; raw_actions=(normalized*stats["a_std"][None,None]+stats["a_mean"][None,None]).float().cpu().numpy(); action=ensemble.append_and_select(step,raw_actions)
                     if not all(np.isfinite(value).all() for value in action.values()): raise FloatingPointError("R13N produced non-finite action")
+                    action,clipped,total=clamp_action_to_space(env.action_space,action)
+                    episode_clip_elements+=clipped; episode_action_elements+=total
                     previous_action={key:value.copy() for key,value in action.items()}; observation,_,terminated,truncated,info=env.step(action); success=bool(np.asarray(info.get("success",False)).all())
                     if heartbeat and (step==0 or step%20==0): atomic_json(heartbeat,{"producer":"evaluate_r13n","pid":os.getpid(),"task":args.task,"stage":args.stage,"episode_index":episode_index,"episodes":20,"seed":seed,"step":step+1,"max_steps":int(spec["max_steps"]),"updated_at_epoch":time.time()})
                     if success or bool(np.asarray(terminated).all()) or bool(np.asarray(truncated).all()): break
@@ -150,11 +160,13 @@ def main() -> None:
                 category="success" if success else "failure"; target=video_dir/f"{args.task}_{category}.mp4"
                 if not target.exists(): os.replace(temporary,target); video=str(target)
                 else: temporary.unlink(missing_ok=True)
-            row={"schema_version":1,"round":"R13N","model_id":"b6_act_six_task","task":args.task,"stage":args.stage,"seed":seed,"success":success,"steps":step+1,"candidate_native":True,"fallback_used":False,"safety_system_success":success,"terminal_info":terminal_info(info),"video":video}
+            row={"schema_version":1,"round":"R13N","model_id":"b6_act_six_task","task":args.task,"stage":args.stage,"seed":seed,"success":success,"steps":step+1,"candidate_native":True,"fallback_used":False,"safety_system_success":success,"physical_action_clip_elements":episode_clip_elements,"physical_action_elements":episode_action_elements,"terminal_info":terminal_info(info),"video":video}
             rows.append(row); print(json.dumps(row,sort_keys=True),flush=True)
     finally: env.close()
     rows=recovered+rows; rows.sort(key=lambda row:requested.index(row["seed"])); values=np.asarray(latencies,dtype=np.float64)
-    result={"schema_version":1,"round":"R13N","model_id":"b6_act_six_task","task":args.task,"stage":args.stage,"checkpoint":str(checkpoint_path),"checkpoint_sha256":sha256(checkpoint_path),"episodes":len(rows),"successes":sum(row["success"] for row in rows),"candidate_native_episodes":sum(row.get("candidate_native") is True for row in rows),"fallback_episodes":sum(row.get("fallback_used") is True for row in rows),"rows":rows,"latency_ms":{"samples":len(latencies),"p50":float(np.percentile(values,50)) if len(values) else None,"p95":float(np.percentile(values,95)) if len(values) else None},"seed_protocol":{"source":str(seed_path),"sha256":hashlib.sha256(seed_bytes).hexdigest()},"policy_inputs":"manifest-selected native RGB plus causal qpos/executed-action history","privileged_inputs":False,"candidate_native":True,"temporal_aggregation":"exponential action-chunk ensemble decay=0.01"}
+    physical_clip_elements=sum(int(row.get("physical_action_clip_elements",0)) for row in rows)
+    physical_action_elements=sum(int(row.get("physical_action_elements",0)) for row in rows)
+    result={"schema_version":1,"round":"R13N","model_id":"b6_act_six_task","task":args.task,"stage":args.stage,"checkpoint":str(checkpoint_path),"checkpoint_sha256":sha256(checkpoint_path),"episodes":len(rows),"successes":sum(row["success"] for row in rows),"candidate_native_episodes":sum(row.get("candidate_native") is True for row in rows),"fallback_episodes":sum(row.get("fallback_used") is True for row in rows),"rows":rows,"latency_ms":{"samples":len(latencies),"p50":float(np.percentile(values,50)) if len(values) else None,"p95":float(np.percentile(values,95)) if len(values) else None},"normalized_clip":float(model.normalized_clip),"physical_action_clip":{"elements":physical_action_elements,"clipped_elements":physical_clip_elements,"fraction":physical_clip_elements/max(physical_action_elements,1)},"seed_protocol":{"source":str(seed_path),"sha256":hashlib.sha256(seed_bytes).hexdigest()},"policy_inputs":"manifest-selected native RGB plus causal qpos/executed-action history","privileged_inputs":False,"candidate_native":True,"temporal_aggregation":"exponential action-chunk ensemble decay=0.01"}
     if len(rows)!=20 or result["candidate_native_episodes"]!=20 or result["fallback_episodes"]!=0: raise ValueError("R13N rollout completeness/coverage differs")
     atomic_json(Path(args.output),result)
     if heartbeat: atomic_json(heartbeat,{"producer":"evaluate_r13n","status":"PASSED","task":args.task,"stage":args.stage,"successes":result["successes"],"episodes":20,"updated_at_epoch":time.time()})

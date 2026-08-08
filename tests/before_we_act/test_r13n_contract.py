@@ -9,7 +9,13 @@ from before_we_act.action_generator.r13n_baseline import (
     load_r13n_config,
 )
 from before_we_act.benchmark import ACTIVE_TASKS as BENCHMARK_TASKS
-from before_we_act.r13n import SPLIT_EPISODES, TASKS, TASK_SPECS, camera_sensor_key
+from before_we_act.r13n import (
+    SPLIT_EPISODES,
+    TASKS,
+    TASK_SPECS,
+    camera_sensor_key,
+    clamp_action_to_space,
+)
 
 
 def test_r13n_contract_has_exact_no_stack_portfolio():
@@ -83,3 +89,60 @@ def test_r13n_model_consumes_six_task_masks_and_is_candidate_native():
     assert proposals.actions.shape == (2, 1, 4, 100, 8)
     assert torch.equal(proposals.actions[:, :, 2:], torch.zeros_like(proposals.actions[:, :, 2:]))
     assert proposals.diagnostics["candidate_native"] is True
+
+
+class _LargeCore(nn.Module):
+    def sample(self, tokens, token_mask):
+        del token_mask
+        values = torch.full((len(tokens), 100, 32), 50.0, device=tokens.device)
+        values[:, :, 1] = 100.0
+        return values
+
+
+def test_r13n_normalized_guard_preserves_valid_six_task_range():
+    config = load_r13n_config(
+        Path(__file__).parents[2] / "configs/before_we_act/r13n/b6.yaml"
+    )
+    model = R13NActionGenerator(config)
+    model.core = _LargeCore()
+    batch = {
+        "visual": torch.randn(1, 3, 16, 15),
+        "view_mask": torch.ones(1, 3, 5),
+        "qpos": torch.randn(1, 3, 4, 9),
+        "actions": torch.randn(1, 3, 4, 8),
+        "agent_mask": torch.tensor([[1, 0, 0, 0]], dtype=torch.bool),
+    }
+    proposals = model.sample(
+        batch,
+        spatial_tokens=torch.randn(1, 5, 48, 768),
+        spatial_view_mask=torch.ones(1, 5, dtype=torch.bool),
+        task_index=torch.tensor([0]),
+    )
+    assert config.action["normalized_clip"] == 96.0
+    assert torch.all(proposals.actions[0, 0, 0, :, 0] == 50.0)
+    assert torch.all(proposals.actions[0, 0, 0, :, 1] == 96.0)
+    assert torch.count_nonzero(proposals.actions[0, 0, 1:]) == 0
+
+
+class _Box:
+    def __init__(self, low, high):
+        self.low = low
+        self.high = high
+
+
+class _DictSpace:
+    def __init__(self):
+        self.spaces = {
+            "panda-0": _Box(
+                torch.tensor([-1.0, -2.0]).numpy(),
+                torch.tensor([1.0, 2.0]).numpy(),
+            )
+        }
+
+
+def test_r13n_applies_physical_bounds_after_denormalization():
+    bounded, clipped, total = clamp_action_to_space(
+        _DictSpace(), {"panda-0": torch.tensor([1.5, -1.5]).numpy()}
+    )
+    assert bounded["panda-0"].tolist() == pytest.approx([1.0, -1.5])
+    assert (clipped, total) == (1, 2)

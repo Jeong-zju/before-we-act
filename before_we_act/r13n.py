@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import numpy as np
+
 
 TASKS = (
     "lift_barrier",
@@ -86,6 +88,29 @@ def camera_sensor_key(view: str) -> str:
         return CAMERA_SENSOR_KEYS[view]
     except KeyError as exc:
         raise ValueError(f"unknown R13N camera view {view!r}") from exc
+
+
+def clamp_action_to_space(action_space, action: dict[str, np.ndarray]):
+    """Apply the simulator's physical joint limits after denormalization."""
+
+    spaces = getattr(action_space, "spaces", None)
+    if not isinstance(spaces, dict) or set(action) - set(spaces):
+        raise ValueError("R13N action space does not cover every active robot")
+    bounded = {}
+    clipped_elements = 0
+    total_elements = 0
+    for key, value in action.items():
+        array = np.asarray(value, dtype=np.float32)
+        box = spaces[key]
+        low = np.asarray(box.low, dtype=np.float32)
+        high = np.asarray(box.high, dtype=np.float32)
+        if array.shape != low.shape or low.shape != high.shape:
+            raise ValueError(f"R13N physical action shape differs for {key}")
+        clipped = np.clip(array, low, high).astype(np.float32, copy=False)
+        clipped_elements += int(np.count_nonzero(clipped != array))
+        total_elements += int(array.size)
+        bounded[key] = clipped
+    return bounded, clipped_elements, total_elements
 
 
 def observation_contract() -> dict[str, object]:
@@ -184,6 +209,7 @@ __all__ = [
     "TASKS",
     "TASK_SPECS",
     "camera_sensor_key",
+    "clamp_action_to_space",
     "observation_contract",
     "sha256",
     "validate_manifest",

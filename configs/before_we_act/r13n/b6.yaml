@@ -43,7 +43,10 @@ action:
   max_agents: 4
   action_dim: 8
   belief_dim: 96
-  normalized_clip: 5.0
+  # The six-task shared moments map valid Panda joint targets as far as |z|=82.
+  # Keep a finite normalized guard outside that physical envelope; deployment
+  # applies the authoritative per-joint action-space bounds after denormalizing.
+  normalized_clip: 96.0
   num_proposals: 1
   condition_tokens: 37
   normalization: six_task_active_agent_training_moments_v1

@@ -53,7 +53,7 @@ def load_r13n_config(path: str | Path) -> R13NConfig:
     action = payload["action"]
     expected_action = {
         "horizon": 100, "max_agents": 4, "action_dim": 8,
-        "belief_dim": 96, "normalized_clip": 5.0,
+        "belief_dim": 96, "normalized_clip": 96.0,
         "num_proposals": 1, "condition_tokens": 37,
         "normalization": "six_task_active_agent_training_moments_v1",
     }

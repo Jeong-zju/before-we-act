@@ -24,6 +24,9 @@ progress_bar() {
 
 render() {
   printf 'R13N B6 monitor | %s\nrun_root=%s\n' "$(date -u +%FT%TZ)" "$RUN_ROOT"
+  local source_run_root=""
+  source_run_root="$(jq -r '.source_run_root // empty' "$RUN_ROOT/run_manifest.json" 2>/dev/null || true)"
+  [[ -n "$source_run_root" ]] && printf 'source_run_root=%s run_variant=%s\n' "$source_run_root" "$(jq -r '.run_variant // "unknown"' "$RUN_ROOT/run_manifest.json")"
   if [[ -f "$RUN_ROOT/status.json" ]]; then
     jq -r '"status=\(.status) stage=\(.stage) program=\(.program)\ndetail=\(.detail)\nbranch=\(.branch) commit=\(.commit) tmux=\(.tmux_session)\npid=\(.pid) child=\(.child_pid) started=\(.started_at)"' "$RUN_ROOT/status.json"
   else printf 'status=NOT_STARTED\n'; fi
@@ -43,11 +46,13 @@ render() {
     printf 'feature_cache='; progress_bar "$cache_done" "$cache_total"; printf '\n'
     jq -sr 'sort_by(.rank)[] | "  rank\(.rank)=\(.completed_episodes // 0)/\(.total_episodes // 0) status=\(.status // "UNKNOWN")"' "$cache_root"/rank_*_state.json
   fi
-  if [[ -f "$RUN_ROOT/train/formal/progress.jsonl" ]]; then
+  local train_progress="$RUN_ROOT/train/formal/progress.jsonl"
+  [[ ! -f "$train_progress" && -n "$source_run_root" ]] && train_progress="$source_run_root/train/formal/progress.jsonl"
+  if [[ -f "$train_progress" ]]; then
     local train_update train_total
-    read -r train_update train_total < <(tail -n 1 "$RUN_ROOT/train/formal/progress.jsonl" | jq -r '[.update,.target_updates] | @tsv')
+    read -r train_update train_total < <(tail -n 1 "$train_progress" | jq -r '[.update,.target_updates] | @tsv')
     printf 'training='; progress_bar "$train_update" "$train_total"; printf '\n'
-    tail -n 1 "$RUN_ROOT/train/formal/progress.jsonl" | jq -r '"  loss=\(.loss) l1=\(.l1) kl=\(.plan_kl) lr=\(.learning_rate) eta_hours=\(.eta_hours) gpu_memory_gb=\(.gpu_memory_gb)"'
+    tail -n 1 "$train_progress" | jq -r '"  loss=\(.loss) l1=\(.l1) kl=\(.plan_kl) lr=\(.learning_rate) eta_hours=\(.eta_hours) gpu_memory_gb=\(.gpu_memory_gb)"'
   fi
   if [[ -f "$RUN_ROOT/offline_heartbeat.json" ]]; then
     jq -r 'select(.total_rows != null) | "offline_progress=\(.rows)/\(.total_rows) eta_seconds=\(.eta_seconds)"' "$RUN_ROOT/offline_heartbeat.json"
@@ -72,7 +77,7 @@ render() {
   local stage="$(jq -r '.stage // "unknown"' "$RUN_ROOT/status.json" 2>/dev/null || printf unknown)"
   printf 'queue='; case "$stage" in cache_prepare|cache_index) printf 'preflight -> train130k -> offline -> Discovery20 -> Validation20 -> Formal20 -> acceptance\n';; preflight*) printf 'train130k -> offline -> Discovery20 -> Validation20 -> Formal20 -> acceptance\n';; train) printf 'offline -> Discovery20 -> Validation20 -> Formal20 -> acceptance\n';; offline) printf 'Discovery20 -> Validation20 -> Formal20 -> acceptance\n';; discovery) printf 'Validation20 -> Formal20 -> acceptance\n';; validation) printf 'Formal20 -> acceptance\n';; formal) printf 'acceptance\n';; complete) printf 'empty\n';; *) printf 'inspect status\n';; esac
   if find "$RUN_ROOT/logs" -type f -name '*.log' -print0 2>/dev/null | xargs -0 -r grep -HnE 'CUDA out of memory|NaN|FloatingPointError|Traceback \(most recent call last\)' | tail -n 5; then :; fi
-  [[ -f "$RUN_ROOT/acceptance.json" ]] && jq -r '"acceptance=\(.status) native=\(.candidate_native_episodes)/360 fallback=\(.fallback_episodes) discovery=\(.stage_totals.discovery.successes)/120 validation=\(.stage_totals.validation.successes)/120 formal=\(.stage_totals.formal.successes)/120"' "$RUN_ROOT/acceptance.json"
+  [[ -f "$RUN_ROOT/acceptance.json" ]] && jq -r '"acceptance=\(.status) native=\(.candidate_native_episodes)/360 fallback=\(.fallback_episodes) discovery=\(.stage_totals.discovery.successes)/120 validation=\(.stage_totals.validation.successes)/120 formal=\(.stage_totals.formal.successes)/120 physical_clip_fraction=\(.physical_action_clip.fraction // "n/a")"' "$RUN_ROOT/acceptance.json"
   printf 'recent_pipeline_log:\n'; [[ -f "$RUN_ROOT/logs/pipeline.log" ]] && tail -n 8 "$RUN_ROOT/logs/pipeline.log" | sed 's/^/  /'
 }
 while true; do ((ONCE)) || printf '\033[2J\033[H'; render; ((ONCE)) && exit 0; sleep "$INTERVAL"; done
