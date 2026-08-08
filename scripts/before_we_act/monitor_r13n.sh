@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+FE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUN_ROOT=/workspace/bwa_runs/r13n-no-stack-v1
 ONCE=0
 INTERVAL=30
@@ -26,8 +27,12 @@ render() {
   if [[ -f "$RUN_ROOT/status.json" ]]; then
     jq -r '"status=\(.status) stage=\(.stage) program=\(.program)\ndetail=\(.detail)\nbranch=\(.branch) commit=\(.commit) tmux=\(.tmux_session)\npid=\(.pid) child=\(.child_pid) started=\(.started_at)"' "$RUN_ROOT/status.json"
   else printf 'status=NOT_STARTED\n'; fi
+  printf 'repo_head=%s\n' "$(git -C "$FE_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)"
+  if [[ -f "$RUN_ROOT/code_update_receipt.json" ]]; then
+    jq -r '"effective_model_code_commit=\(.effective_training_evaluation_commit) cache_interrupted=\(.cache_processes_interrupted)"' "$RUN_ROOT/code_update_receipt.json"
+  fi
   local heartbeat="$RUN_ROOT/heartbeat.json" age=unknown
-  if [[ -f "$heartbeat" ]]; then age="$(awk -v n="$(date +%s)" -v u="$(jq -r '.updated_at_epoch // 0' "$heartbeat")" 'BEGIN{printf "%.1f",n-u}')"; fi
+  if [[ -f "$heartbeat" ]]; then age="$(awk -v n="$(date +%s)" -v u="$(jq -r '.updated_at_epoch // 0' "$heartbeat")" 'BEGIN{d=n-u;if(d<0)d=0;printf "%.1f",d}')"; fi
   printf 'runner_heartbeat_age_seconds=%s\n' "$age"
   local cache_root cache_done=0 cache_total=0
   cache_root="$(jq -r '.cache_root // empty' "$RUN_ROOT/status.json" 2>/dev/null || true)"
