@@ -4219,6 +4219,17 @@ TRACT-inspired legal-observation phase head e27 已完整 `PASSED`：raw accurac
 
 `05:01:20Z` 运行快照：e45 phase-balanced=`4/20,0 success`；e46 robust validation=`5/20,1 success`（control=`1/20`，尚未严格领先）；e21/e22 已各完成训练 `5000/5000`，末次 loss 分别为 `0.05286146/0.04963067`，进入 discovery 后均为 `2/20,0 success`。四路 status 均为 `VALIDATING`、producer heartbeat 新鲜、monitor alerts=`NONE`，没有 OOM/NaN/进程消失；任何中间计数都不作为终局。
 
+**为什么只有 Stack 显著偏低（UTC `2026-08-08T05:17Z` 因果审计）。** 首先纠正一个会误导归因的对照：R12–R15 的 protected 四任务不是由当前 Stack 专家、R13 world model 或 R14 planner 执行，而是通过隔离进程逐 seed 复用冻结 exact-W10 输出；因此 Lift=`20/20`、Camera=`14/20`、LPD=`20/20`、Photo=`20/20` 是继承基线，不是当前方法在另外四任务上的泛化成绩。真正可比的是 Stack route 自身。任务源码和真实 W12 Gate20 给出以下相互一致的证据：
+
+- Stack success 是严格乘法链：B 位于半径 `0.12 m` goal 内，B-on-A 与 C-on-B 的垂直误差都必须在 `±0.005 m`，且三个 cube 均须释放；任一子条件失败即整回合失败。W12 的 20 个原始回合按终态单调链恰为 `B placed=15`、`A/B stack=6`、`C/A stack=3`，即条件保留率约为 `15/20 × 6/15 × 3/6 = 3/20`。成功发生在 `400/403/401` step，其余 `17` 回合全部跑满 `800` step，说明策略一旦偏离没有可靠纠错。相比之下，Lift 只有单一高度门，LPD 只有单物体平面距离 `<0.1 m`；Camera 虽需两物体抬升，实际也只有 `14/20` 而非满分。长轨迹本身不是充分解释：LPD expert 平均约 `737.4` step，却仍为 `20/20`。
+- Stack 四个命名视觉 `global/agent_0/agent_1/agent_2` 在任务 YAML 中使用完全相同的 `look_at`。本次不只读配置：直接从训练 HDF5 抽取前 5 个 episode、每条均匀 10 帧，共 `50` 个时刻逐像素核验，四路 uint8 RGB 每次都 bit-exact 相同；代表帧的四个 SHA256 也一致。Camera 仅 agent0/1 重复但仍有 agent2/global 两个不同视角；Lift、LPD、Photo 的命名视角在同样检查中均不相同。Stack 因而名义有四视角、实际只有一个固定视角，且三臂初始 local qpos 相同；E1 的 learned agent-slot 只打破动作槽对称，不能凭空恢复每臂局部几何或新视差。
+- 物体尺寸与视觉压缩又放大该缺口：cube half-size 只有 `0.02 m`，最终 z 容差 `0.005 m`；当前 DINO 虽先读原生 `480×640`，但 `30×40` patch grid 随后被压到每视角 `6×8`，而四份输入仍是同一图像。Stack held-out first/full normalized MSE=`0.01638626/0.03368125`，first-step 是五任务最高，显著高于 Lift `0.00090717`、Camera `0.00262601`、LPD `0.00507895`、Photo `0.00581606`。所以问题不是 Stack 数据少：它有 `120` 个训练成功 episode/`48,892` timestep，反而多于 Lift、Camera、Photo；问题是小物体精确几何、重复视角与闭环阶段/角色耦合造成的有效信息和监督失配。
+- 20 条新增成功 expert 的三阶段有效样本为 `2536/3332/2256`，而 e27 仅凭合法 W11 observation history 就能在完全留出的 4 条轨迹上取得 raw accuracy=`0.9722`、authority accuracy=`0.9598`、boundary MAE=`8.125` step。这证明“当前阶段”原则上可观测，但原 ACT 没有显式阶段路由/阶段均衡目标；success-only BC 又没有学生失败状态上的 recovery label，故早期放置小误差会把后续输入推到训练分布外。e20 discovery `3/20`、validation `2/20`，却在原始 formal 退到 `1/20`，正是高方差、弱恢复而非完全没有技能。
+
+以上证据把当前优先级固定为：先让已实现的 `phase-routed specialist` 验证“阶段显式化 + W12 早期能力保护”；同时准备独立的 **role-conditioned spatial query / identical-view dedup / coarse-to-fine high-resolution** 路线，不能继续只改采样比例或机械续训。若这些合法单视角修复仍无法跨越两套独立 seed 与原始 Gate20，才有充分证据承担从零重采不同 agent/global 视角数据或谨慎替换 Stack 的成本。论文源码方面已审计 [RVT-2 官方仓库](https://github.com/NVlabs/RVT) `367995a1a216...`、NVIDIA License SHA256=`5e8f2073...`：其高精度 two-stage 实现会围绕第一阶段 waypoint 重缩放 RGB-D point cloud；当前数据没有 depth/标定 point cloud，直接复制会改变 observation contract，因此不伪装成可移植组件，只把“粗到细局部放大”登记为设计依据。
+
+`05:17:03Z` 增量运行快照仍未中断任何 producer：e45=`7/20,0 success`、终态阶段累计 `4/1/0`；e46=`9/20,1 success`、累计 `2/1/1`，robust monitor 至此 `0` intervention；e21=`5/20,0 success`、累计 `2/0/0`；e22=`4/20,0 success`、累计 `2/2/0`。四路最近心跳分别为 `05:16:46/05:16:52/05:16:50/05:17:01Z`，GPU0..3 显存约 `1967/1917/1911/1903 MiB`，没有 OOM、NaN、进程消失；上述只是进行中证据，不替代终态 acceptance。
+
 本轮可复制命令如下；三路训练/验证均由实际 producer heartbeat 驱动状态，不以日志存在冒充存活：
 
 ```bash
