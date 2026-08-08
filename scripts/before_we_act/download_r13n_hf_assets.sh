@@ -6,6 +6,7 @@ RUN_ROOT=/workspace/bwa_runs/r13n-no-stack-v1/assets
 DATA_ROOT=/workspace/datasets/robofactory_multitask
 HF_HOME_PATH=/workspace/.cache/huggingface
 HF_CLI=/venv/robofactory-act/bin/hf
+PYTHON=/venv/robofactory-act/bin/python
 DRY_RUN=0
 
 while (($#)); do
@@ -14,12 +15,14 @@ while (($#)); do
     --data-root) DATA_ROOT="$2"; shift 2 ;;
     --hf-home) HF_HOME_PATH="$2"; shift 2 ;;
     --hf-cli) HF_CLI="$2"; shift 2 ;;
+    --python) PYTHON="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
 
 [[ -x "$HF_CLI" ]] || { printf 'missing hf CLI: %s\n' "$HF_CLI" >&2; exit 3; }
+[[ -x "$PYTHON" ]] || { printf 'missing Python: %s\n' "$PYTHON" >&2; exit 3; }
 mkdir -p "$RUN_ROOT" "$DATA_ROOT" "$HF_HOME_PATH"
 STATE="$RUN_ROOT/state.json"
 HEARTBEAT="$RUN_ROOT/heartbeat.json"
@@ -33,7 +36,7 @@ STOP_REQUESTED=0
 
 write_state() {
   local status="$1" detail="$2"
-  PYTHONPATH="$FE_ROOT" python3 - "$STATE" "$status" "$detail" "$STARTED_AT" \
+  PYTHONPATH="$FE_ROOT" "$PYTHON" - "$STATE" "$status" "$detail" "$STARTED_AT" \
     "$CURRENT_TASK" "$CURRENT_REPO" "$$" "$CHILD_PID" "$DATA_ROOT" "$HF_HOME_PATH" "$LOG" <<'PY'
 import json, os, sys, time
 from pathlib import Path
@@ -54,7 +57,7 @@ PY
 
 heartbeat_loop() {
   while kill -0 "$$" 2>/dev/null; do
-    PYTHONPATH="$FE_ROOT" python3 - "$HEARTBEAT" "$$" "$CHILD_PID" "$CURRENT_TASK" <<'PY'
+    PYTHONPATH="$FE_ROOT" "$PYTHON" - "$HEARTBEAT" "$$" "$CHILD_PID" "$CURRENT_TASK" <<'PY'
 import json, os, sys, time
 from pathlib import Path
 path, pid, child, task = sys.argv[1:]
@@ -95,7 +98,7 @@ export HF_DOWNLOAD_ATTEMPTS=5
 unset HF_TOKEN
 
 verify_task() {
-  PYTHONPATH="$FE_ROOT" python3 - "$DATA_ROOT" "$1" "$2" <<'PY'
+  PYTHONPATH="$FE_ROOT" "$PYTHON" - "$DATA_ROOT" "$1" "$2" <<'PY'
 import json, sys
 from before_we_act.r13n import validate_manifest
 print(json.dumps(validate_manifest(sys.argv[1], sys.argv[2], require_files=sys.argv[3] == "1"), sort_keys=True))
@@ -145,7 +148,7 @@ if ((DRY_RUN)); then
 else
   write_state VERIFYING "validating all six manifests and local files"
   RECEIPT="$RUN_ROOT/dataset_receipt.json"
-  PYTHONPATH="$FE_ROOT" python3 - "$DATA_ROOT" "$RECEIPT" <<'PY'
+  PYTHONPATH="$FE_ROOT" "$PYTHON" - "$DATA_ROOT" "$RECEIPT" <<'PY'
 import json, os, sys, time
 from pathlib import Path
 from before_we_act.r13n import TASKS, validate_manifest
