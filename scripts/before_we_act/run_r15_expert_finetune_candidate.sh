@@ -47,7 +47,7 @@ for key in ("worktree","branch","commit","checkpoint"):
 PY
 )
 CURRENT_BRANCH="$(git -C "$ROOT" branch --show-current)"
-[[ "$CURRENT_BRANCH" =~ ^bwa/r15-(closed-loop-evolution|expert-evolution)$ && "${IDENTITY[0]}" == "$ROOT" && "${IDENTITY[1]}" == "$CURRENT_BRANCH" && "${IDENTITY[2]}" == "$(git -C "$ROOT" rev-parse HEAD)" && "${IDENTITY[3]}" == "$CHECKPOINT" && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'R15 expert run identity differs\n' >&2; exit 3; }
+[[ "$CURRENT_BRANCH" =~ ^bwa/r15-(closed-loop-evolution|expert-evolution|phase-balanced-expert)$ && "${IDENTITY[0]}" == "$ROOT" && "${IDENTITY[1]}" == "$CURRENT_BRANCH" && "${IDENTITY[2]}" == "$(git -C "$ROOT" rev-parse HEAD)" && "${IDENTITY[3]}" == "$CHECKPOINT" && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'R15 expert run identity differs\n' >&2; exit 3; }
 for path in "$PYTHON" "$RUNTIME" "$CONFIG" "$BELIEF_CONFIG" "$BELIEF_CHECKPOINT" "$PARENT_CHECKPOINT" "$EXPERT_INDEX"; do
   [[ -e "$path" ]] || { printf 'missing R15 expert input: %s\n' "$path" >&2; exit 3; }
 done

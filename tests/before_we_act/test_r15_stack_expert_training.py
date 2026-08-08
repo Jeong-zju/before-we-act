@@ -145,6 +145,7 @@ def test_phase_balanced_launcher_carries_manifest_to_trainer():
         root / "scripts/before_we_act/run_r15_expert_finetune_candidate.sh"
     ).read_text()
     assert "phase-balanced-expert" in launcher
+    assert "phase-balanced-expert" in runner
     assert "--phase-manifest" in launcher
     assert "--phase-manifest" in runner
 
