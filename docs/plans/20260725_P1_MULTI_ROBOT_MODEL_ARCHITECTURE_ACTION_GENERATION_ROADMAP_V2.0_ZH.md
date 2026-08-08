@@ -4096,6 +4096,8 @@ cd /workspace/bwa_worktrees/model-improvements
 
 **授权、目标与不可降低的门。** R14 正式 `no_winner_no_merge` 结论完成后，用户另行明确授权：可以推翻预定义路线、自由使用四卡、在磁盘不足时清理可再生实验产物，并持续尝试论文开源代码移植；唯一研究目标改为“让 R13/R14 所在完整系统的综合闭环性能高于冻结 W12/R14 基线”。这项后续授权不追溯修改 10.17.1 的正式 R14 结论，也不允许把工程 smoke、loss 下降或单一 seed 成功写成正式提升。当前先保留 `three_robots_stack_cube`：该任务已经出现可复现成功和两个新增 paired win 信号，尚无证据支持承担从零换数据集的成本；只有多条训练、推理和恢复路线在独立 seeds 上均失败后，才重新评估 `camera_alignment`、`pick_meat`、`place_food` 等合法 observation 差异任务。
 
+**任务切换优先级补充（用户授权，UTC `2026-08-08T07:55Z`）。** “多条路线均失败”现在冻结为可执行边界：先完整等待 phase-balanced e32 formal、role-query e52→e53 以及 exact-view-dedup e54→e56；若三条结构差异路线最终都不能在原 formal Gate20 上取得 Stack `>3/20`、protected=`74` exact、total `>77/100`，则不再优先追加同类 Stack 微调，而把下一轮四卡预算优先用于更换任务。候选仅从 Hugging Face `zeno-ai` 组织选择，优先审计 `camera_alignment`、`pick_meat`、`place_food`，并优先保留 agent observations 与 global observation 在真实像素/视角上不相同的任务；需要先冻结 dataset repo/revision、split、样本数、camera keys、action codec、seed manifest 与本地缓存 receipt。换任务后，每个任务的 task-dependent belief/action/world/decision 权重都必须从零训练并使用独立 checkpoint/output/log/status/tmux，不允许把 Stack 权重或 protected exact-reuse 输出当作新任务训练/成绩；只允许复用 S0 的 Hugging Face 缓存/鉴权机制、已固定的通用视觉 foundation 和不含任务学习状态的基础设施。先做数据与 observation 非退化审计及小规模 preflight，再进入完整训练和独立 Gate20；任务替换及新综合分母必须预注册，不能因看到结果后删除失败任务。当前 e32=`0/8`、终态链 `B/A/C=6/1/0`，e52=`0/2`、`B/A/C=1/0/0`，两路 heartbeat 新鲜且 e54 handoff 仍在等待，因此尚未触发切换，现有 producer 不受本规则更新影响。
+
 为减少 20 回合小样本偶然性，新建只读 seed 协议 `/workspace/bwa_runs/shared/r15_stack_protocol_v1`：
 
 - `discovery20.json` SHA256 `8793ec7d862a1aa8332f06e05cb8da5497fdf667f9d83818a38a1eb96e1c6536`；冻结 W12 control 为 `/workspace/bwa_runs/r15e1-20260807-discovery20-v2`，`1/20`；
