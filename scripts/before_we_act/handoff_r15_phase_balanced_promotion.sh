@@ -42,12 +42,12 @@ DISCOVERY_ACCEPTANCE="$DISCOVERY/candidates/p1/acceptance.json"
 wait_for_file "$DISCOVERY_ACCEPTANCE"
 if [[ "$(acceptance_status "$DISCOVERY_ACCEPTANCE")" != PASSED ]]; then
   printf '[%s] e30 discovery failed; launching e21 search\n' "$(date -u +%FT%TZ)"
-  wait_for_gpu0 bwa-r15s-phase-e30
+  wait_for_gpu0 bwa-r15s-phase-e45
   launch_e21_search
 fi
 
 printf '[%s] e30 discovery passed; starting independent validation\n' "$(date -u +%FT%TZ)"
-wait_for_gpu0 bwa-r15s-phase-e30
+wait_for_gpu0 bwa-r15s-phase-e45
 cd "$VALIDATION_ROOT"
 ./scripts/before_we_act/launch_r15_temporal_screens_tmux.sh \
   --run-id "$(basename "$VALIDATION")" --candidate p1 --split validation20 \
