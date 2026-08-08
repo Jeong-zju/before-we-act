@@ -204,6 +204,75 @@ def load_r12_evolution_config(path: str | Path) -> R12EvolutionConfig:
     return R12EvolutionConfig(payload)
 
 
+def bind_role_conditioned_spatial_queries(
+    slot_delta: torch.Tensor,
+    agent_mask: torch.Tensor,
+    query_count: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Bind equal groups of existing spatial queries to joint-action slots.
+
+    Stack exposes four named cameras that are pixel-identical, so view identity
+    cannot associate the shared spatial evidence with a particular robot.  The
+    E1 checkpoint already contains learned agent-slot embeddings.  Reusing
+    those embeddings on four equal query groups introduces no new checkpoint
+    tensors and preserves the 37-token/core contract while giving each action
+    slot an explicit role-conditioned read of the legal current RGB.
+    """
+
+    if slot_delta.ndim != 3 or tuple(agent_mask.shape) != tuple(slot_delta.shape[:2]):
+        raise ValueError("R15 role-query slot/mask shape differs")
+    batch, agents, width = slot_delta.shape
+    if (
+        query_count < agents
+        or query_count % agents
+    ):
+        raise ValueError("R15 role-query grouping contract differs")
+    queries_per_agent = query_count // agents
+    role_delta = slot_delta[:, :, None, :].expand(
+        -1, -1, queries_per_agent, -1
+    ).reshape(batch, query_count, width)
+    role_mask = agent_mask[:, :, None].expand(
+        -1, -1, queries_per_agent
+    ).reshape(batch, query_count).bool()
+    return role_delta, role_mask
+
+
+def deduplicate_exact_spatial_views(
+    spatial_tokens: torch.Tensor,
+    spatial_view_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Keep the first active copy of every bit-exact spatial view.
+
+    The Stack dataset exposes four differently named cameras from one physical
+    pose.  Their DINO tokens are therefore exact duplicates before the bridge
+    adds learned view embeddings.  Retaining only the first physical copy
+    prevents four artificial view identities from reweighting the same visual
+    evidence.  Near-equal views are deliberately preserved so the operation is
+    fail-closed and cannot silently merge distinct cameras.
+    """
+
+    if spatial_tokens.ndim != 4:
+        raise ValueError("R15 view-dedup spatial tokens must be [batch,view,patch,dim]")
+    if tuple(spatial_view_mask.shape) != tuple(spatial_tokens.shape[:2]):
+        raise ValueError("R15 view-dedup token/mask shape differs")
+    active = spatial_view_mask.bool()
+    if not bool(active.any(dim=1).all()):
+        raise ValueError("every R15 sample requires an active spatial view")
+    deduplicated = active.clone()
+    batch, views = active.shape
+    for view in range(1, views):
+        duplicate = torch.zeros(batch, dtype=torch.bool, device=active.device)
+        for previous in range(view):
+            exact = (spatial_tokens[:, view] == spatial_tokens[:, previous]).reshape(
+                batch, -1
+            ).all(dim=1)
+            duplicate |= active[:, previous] & exact
+        deduplicated[:, view] &= ~duplicate
+    if not bool(deduplicated.any(dim=1).all()):
+        raise ValueError("R15 view deduplication removed every spatial view")
+    return deduplicated
+
+
 class TaskConditionedActionGenerator(R4JointActionGenerator):
     """Full-resolution R12 specialist with bounded task and slot conditioning."""
 
@@ -242,13 +311,27 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
         spatial_view_mask: torch.Tensor,
         task_index: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        tokens, mask = self.bridge(belief, spatial_tokens, spatial_view_mask)
         if belief.agent_tokens.shape[1] != self.max_agents:
             raise ValueError("R12-E1 agent-slot count differs")
         agent_start = belief.tokens.shape[1]
         agent_stop = agent_start + self.max_agents
         slot_delta = self.agent_slot_scale * self.agent_slot_embedding[None]
         slot_delta = slot_delta * belief.agent_mask[:, :, None].to(slot_delta.dtype)
+        query_bias, query_mask = bind_role_conditioned_spatial_queries(
+            slot_delta,
+            belief.agent_mask,
+            self.bridge.query_count,
+        )
+        spatial_view_mask = deduplicate_exact_spatial_views(
+            spatial_tokens, spatial_view_mask
+        )
+        tokens, mask = self.bridge(
+            belief,
+            spatial_tokens,
+            spatial_view_mask,
+            query_bias=query_bias,
+            query_mask=query_mask,
+        )
         # Avoid an in-place update so autograd retains a clean path into the
         # explicit identity embeddings during bridge alignment.
         tokens = torch.cat(
@@ -333,7 +416,9 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
                 (len(actions), 1), dtype=torch.bool, device=actions.device
             ),
             agent_mask=belief.agent_mask,
-            source=(f"r12e1_{self.candidate_id}_task_conditioned_specialist",),
+            source=(
+                f"r15_{self.candidate_id}_role_query_view_dedup_stack_specialist",
+            ),
             diagnostics={
                 "core_free": True,
                 "legacy_core_import": False,
@@ -342,6 +427,11 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
                 "supplemental_inputs": "W11_TeamBeliefState+task_id+agent_slot_id",
                 "task_film_scale": self.task_film_scale,
                 "agent_slot_scale": self.agent_slot_scale,
+                "role_conditioned_spatial_queries": True,
+                "exact_spatial_view_deduplication": True,
+                "spatial_queries_per_action_slot": (
+                    self.bridge.query_count // self.max_agents
+                ),
             },
         ).validate()
 
@@ -349,5 +439,7 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
 __all__ = [
     "R12EvolutionConfig",
     "TaskConditionedActionGenerator",
+    "bind_role_conditioned_spatial_queries",
+    "deduplicate_exact_spatial_views",
     "load_r12_evolution_config",
 ]

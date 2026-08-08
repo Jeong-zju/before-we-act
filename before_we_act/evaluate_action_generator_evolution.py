@@ -19,6 +19,7 @@ from before_we_act.action_generator.evolution import (
     load_r12_evolution_config,
 )
 from before_we_act.benchmark import TASKS as BENCHMARK_TASKS, get_task
+from before_we_act.contracts import TeamBeliefState
 from before_we_act.data.raw_team_windows import TASKS
 from before_we_act.evaluate_action_generator_r4 import (
     TeamHistory,
@@ -27,6 +28,8 @@ from before_we_act.evaluate_action_generator_r4 import (
 )
 from before_we_act.spatial_observation import R12SpatialObservationEncoder
 from before_we_act.team_belief.base import PredictiveBeliefModel, load_r11_config
+from before_we_act.upstream_components.cogact import AdaptiveEnsembler
+from before_we_act.upstream_components.aac import select_joint_action_chunk
 
 
 
@@ -53,6 +56,55 @@ def make_env(task_name: str):
         sensor_configs=dict(shader_pack="default", width=640, height=480),
         human_render_camera_configs=dict(shader_pack="default"),
         viewer_camera_configs=dict(shader_pack="default"),
+    )
+
+
+class CogACTAdaptiveTeamEnsembler:
+    """Per-arm adapter around the pinned CogACT inference component."""
+
+    def __init__(self, arms, horizon: int = 2, alpha: float = 0.1):
+        self.arms = tuple(arms)
+        self.ensemblers = [
+            AdaptiveEnsembler(horizon, alpha) for _ in self.arms
+        ]
+
+    def append_and_select(self, _step: int, chunks: np.ndarray):
+        return {
+            f"panda-{arm}": self.ensemblers[local_index]
+            .ensemble_action(chunks[local_index])
+            .copy()
+            for local_index, arm in enumerate(self.arms)
+        }
+
+
+def expand_belief_for_samples(
+    belief: TeamBeliefState, samples: int
+) -> TeamBeliefState:
+    if len(belief.tokens) != 1 or samples < 2:
+        raise ValueError("AAC belief expansion requires one observation and >=2 samples")
+    return TeamBeliefState(
+        tokens=belief.tokens.expand(samples, -1, -1),
+        agent_tokens=belief.agent_tokens.expand(samples, -1, -1),
+        consensus_token=belief.consensus_token.expand(samples, -1),
+        uncertainty=belief.uncertainty.expand(samples, *belief.uncertainty.shape[1:]),
+        agent_mask=belief.agent_mask.expand(samples, -1),
+    ).validate()
+
+
+def aac_noise(*, seed: int, step: int, samples: int, device) -> torch.Tensor:
+    base_seed = int(seed) * 1_000_003 + int(step)
+    return torch.cat(
+        [
+            torch.randn(
+                (1, 100, 32),
+                generator=torch.Generator(device=device).manual_seed(
+                    base_seed + sample_index * 1_000_000_007
+                ),
+                device=device,
+            )
+            for sample_index in range(samples)
+        ],
+        dim=0,
     )
 
 
@@ -106,6 +158,7 @@ def evaluate_specialist(
     seeds,
     device,
     max_steps,
+    execution_mode="act_temporal_ensemble",
 ):
     generator, belief, spatial, stats, update = load_specialist(
         config,
@@ -125,40 +178,114 @@ def evaluate_specialist(
         for seed in seeds:
             observation, _ = reset_reproducibly(env, seed)
             history = TeamHistory(arms)
-            ensemble = TemporalChunkEnsembler(arms)
+            ensemble = (
+                CogACTAdaptiveTeamEnsembler(arms, horizon=2, alpha=0.1)
+                if execution_mode == "cogact_adaptive_ensemble"
+                else None
+                if execution_mode == "aac_entropy_chunk"
+                else TemporalChunkEnsembler(
+                    arms,
+                    decay={
+                        "act_temporal_ensemble": 0.01,
+                        "mild_temporal_ensemble": 0.02,
+                        "balanced_temporal_ensemble": 0.05,
+                        "recent_temporal_ensemble": 0.10,
+                        "responsive_temporal_ensemble": 0.20,
+                        "latest_chunk": 0.01,
+                    }[execution_mode],
+                )
+            )
             previous_action = None
             success, info = False, {}
+            aac_action_queue: list[dict[str, np.ndarray]] = []
+            aac_chunk_sizes: list[int] = []
+            aac_entropy_elbows: list[float] = []
             for step in range(max_steps):
                 batch = history.batch(observation, previous_action, device)
-                if device.type == "cuda":
-                    torch.cuda.synchronize(device)
-                started = time.perf_counter_ns()
-                with torch.autocast(
-                    "cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"
-                ):
-                    belief_state = belief(batch)["belief"]
-                    spatial_tokens, spatial_view_mask = spatial(
-                        batch["raw_fixed_rgb"], batch["spatial_view_mask"]
-                    )
-                    noise_generator = torch.Generator(device=device).manual_seed(
-                        int(seed) * 1_000_003 + step
-                    )
-                    noise = torch.randn(
-                        (1, 100, 32), generator=noise_generator, device=device
-                    )
-                    proposals = generator.sample(
-                        belief_state,
-                        spatial_tokens=spatial_tokens,
-                        spatial_view_mask=spatial_view_mask,
-                        task_index=task_index,
-                        noise=noise,
-                    )
-                if device.type == "cuda":
-                    torch.cuda.synchronize(device)
-                latencies.append((time.perf_counter_ns() - started) / 1e6)
-                normalized = proposals.actions[0, 0, : len(arms)]
-                raw = normalized * stats["a_std"][None, None] + stats["a_mean"][None, None]
-                action = ensemble.append_and_select(step, raw.float().cpu().numpy())
+                if execution_mode == "aac_entropy_chunk" and aac_action_queue:
+                    action = aac_action_queue.pop(0)
+                else:
+                    if device.type == "cuda":
+                        torch.cuda.synchronize(device)
+                    started = time.perf_counter_ns()
+                    with torch.autocast(
+                        "cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"
+                    ):
+                        belief_state = belief(batch)["belief"]
+                        spatial_tokens, spatial_view_mask = spatial(
+                            batch["raw_fixed_rgb"], batch["spatial_view_mask"]
+                        )
+                        if execution_mode == "aac_entropy_chunk":
+                            sample_count = 20
+                            proposals = generator.sample(
+                                expand_belief_for_samples(belief_state, sample_count),
+                                spatial_tokens=spatial_tokens.expand(
+                                    sample_count, -1, -1, -1
+                                ),
+                                spatial_view_mask=spatial_view_mask.expand(
+                                    sample_count, -1
+                                ),
+                                task_index=task_index.expand(sample_count),
+                                noise=aac_noise(
+                                    seed=int(seed), step=step,
+                                    samples=sample_count, device=device,
+                                ),
+                            )
+                        else:
+                            noise_generator = torch.Generator(device=device).manual_seed(
+                                int(seed) * 1_000_003 + step
+                            )
+                            noise = torch.randn(
+                                (1, 100, 32), generator=noise_generator, device=device
+                            )
+                            proposals = generator.sample(
+                                belief_state,
+                                spatial_tokens=spatial_tokens,
+                                spatial_view_mask=spatial_view_mask,
+                                task_index=task_index,
+                                noise=noise,
+                            )
+                    if device.type == "cuda":
+                        torch.cuda.synchronize(device)
+                    latencies.append((time.perf_counter_ns() - started) / 1e6)
+                    if execution_mode == "aac_entropy_chunk":
+                        normalized_samples = (
+                            proposals.actions[:, 0, : len(arms)].float().cpu().numpy()
+                        )
+                        selection = select_joint_action_chunk(normalized_samples)
+                        raw_samples = (
+                            proposals.actions[:, 0, : len(arms)]
+                            * stats["a_std"][None, None, None]
+                            + stats["a_mean"][None, None, None]
+                        ).float().cpu().numpy()
+                        selected = raw_samples[selection.sample_index]
+                        aac_action_queue = [
+                            {
+                                f"panda-{arm}": selected[local_index, offset].copy()
+                                for local_index, arm in enumerate(arms)
+                            }
+                            for offset in range(selection.chunk_size)
+                        ]
+                        aac_chunk_sizes.append(selection.chunk_size)
+                        aac_entropy_elbows.append(
+                            float(selection.chunk_mean_entropy[selection.chunk_size - 1])
+                        )
+                        action = aac_action_queue.pop(0)
+                    else:
+                        normalized = proposals.actions[0, 0, : len(arms)]
+                        raw = (
+                            normalized * stats["a_std"][None, None]
+                            + stats["a_mean"][None, None]
+                        )
+                        raw_actions = raw.float().cpu().numpy()
+                        action = (
+                            {
+                                f"panda-{arm}": raw_actions[local_index, 0].copy()
+                                for local_index, arm in enumerate(arms)
+                            }
+                            if execution_mode == "latest_chunk"
+                            else ensemble.append_and_select(step, raw_actions)
+                        )
                 previous_action = {key: value.copy() for key, value in action.items()}
                 observation, _, terminated, truncated, info = env.step(action)
                 success = bool(np.asarray(info.get("success", False)).all())
@@ -175,7 +302,24 @@ def evaluate_specialist(
                 "steps": step + 1,
                 "safety_projections": 0,
                 "terminal_info": terminal_info(info),
-                "route": "r12e1_high_resolution_specialist",
+                "route": {
+                    "act_temporal_ensemble": "r12e1_high_resolution_specialist",
+                    "mild_temporal_ensemble": "r15_w12_mild_decay_0p02_stack_specialist",
+                    "balanced_temporal_ensemble": "r15_w12_balanced_decay_0p05_stack_specialist",
+                    "recent_temporal_ensemble": "r15_w12_recent_decay_0p10_stack_specialist",
+                    "responsive_temporal_ensemble": "r15_w12_responsive_decay_0p20_stack_specialist",
+                    "cogact_adaptive_ensemble": "r15_cogact_adaptive_alpha0p1_h2_stack_specialist",
+                    "aac_entropy_chunk": "r15_aac_entropy20_h16_stack_specialist",
+                    "latest_chunk": "r15_w12_latest_chunk_stack_specialist",
+                }[execution_mode],
+                "aac_replans": len(aac_chunk_sizes),
+                "aac_chunk_sizes": aac_chunk_sizes,
+                "aac_mean_chunk_size": (
+                    float(np.mean(aac_chunk_sizes)) if aac_chunk_sizes else None
+                ),
+                "aac_mean_selected_entropy": (
+                    float(np.mean(aac_entropy_elbows)) if aac_entropy_elbows else None
+                ),
             }
             rows.append(row)
             print(json.dumps(row, sort_keys=True), flush=True)
@@ -199,6 +343,20 @@ def main() -> None:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--output", required=True)
     parser.add_argument("--resume-log", default="")
+    parser.add_argument(
+        "--execution-mode",
+        choices=(
+            "act_temporal_ensemble",
+            "mild_temporal_ensemble",
+            "balanced_temporal_ensemble",
+            "recent_temporal_ensemble",
+            "responsive_temporal_ensemble",
+            "cogact_adaptive_ensemble",
+            "aac_entropy_chunk",
+            "latest_chunk",
+        ),
+        default="act_temporal_ensemble",
+    )
     args = parser.parse_args()
     if args.vision_batch_size < 1:
         raise ValueError("R12-E1 vision batch size must be positive")
@@ -239,8 +397,18 @@ def main() -> None:
             remaining,
             device,
             args.max_steps,
+            args.execution_mode,
         ) if remaining else ([], [], None)
-        route = "r12e1_high_resolution_specialist"
+        route = {
+            "act_temporal_ensemble": "r12e1_high_resolution_specialist",
+            "mild_temporal_ensemble": "r15_w12_mild_decay_0p02_stack_specialist",
+            "balanced_temporal_ensemble": "r15_w12_balanced_decay_0p05_stack_specialist",
+            "recent_temporal_ensemble": "r15_w12_recent_decay_0p10_stack_specialist",
+            "responsive_temporal_ensemble": "r15_w12_responsive_decay_0p20_stack_specialist",
+            "cogact_adaptive_ensemble": "r15_cogact_adaptive_alpha0p1_h2_stack_specialist",
+            "aac_entropy_chunk": "r15_aac_entropy20_h16_stack_specialist",
+            "latest_chunk": "r15_w12_latest_chunk_stack_specialist",
+        }[args.execution_mode]
     elif args.task in config.deployment["protected_tasks"]:
         raise ValueError(
             "protected tasks must be evaluated by the isolated exact-W10 "
@@ -273,8 +441,21 @@ def main() -> None:
         },
         "policy_inputs": "native 480x640 RGB first; W11 TeamBeliefState, task ID and bounded agent-slot ID supplemental on specialist route",
         "privileged_inputs": False,
-        "control_cadence": "one proposal per environment step",
-        "temporal_aggregation": "W10 exponential chunk ensemble decay=0.01",
+        "control_cadence": (
+            "AAC entropy-selected open-loop chunk with 20 samples per replan"
+            if args.execution_mode == "aac_entropy_chunk"
+            else "one proposal per environment step"
+        ),
+        "temporal_aggregation": {
+            "act_temporal_ensemble": "W10 exponential chunk ensemble decay=0.01",
+            "mild_temporal_ensemble": "mild exponential chunk ensemble decay=0.02",
+            "balanced_temporal_ensemble": "balanced exponential chunk ensemble decay=0.05",
+            "recent_temporal_ensemble": "exponential chunk ensemble decay=0.10",
+            "responsive_temporal_ensemble": "responsive exponential chunk ensemble decay=0.20",
+            "cogact_adaptive_ensemble": "Microsoft CogACT Adaptive Action Ensemble alpha=0.1 horizon=2",
+            "aac_entropy_chunk": "CVPR 2026 AAC: 20 samples, entropy horizon=16, minimum chunk=2",
+            "latest_chunk": "latest predicted chunk first action; replan every environment step",
+        }[args.execution_mode],
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "component_id": "cogact_adaptive_action_ensemble",
+  "paper": "CogACT: A Foundational Vision-Language-Action Model for Synergizing Cognition and Action in Robotic Manipulation",
+  "paper_url": "https://arxiv.org/abs/2411.19650",
+  "repository": "https://github.com/microsoft/CogACT.git",
+  "repository_commit": "b174a1b86deedfab4d198d935207e7bb0527994e",
+  "source_file_commit": "c1712bf11ddb764e4fee2fca0236848514cfb4f0",
+  "license": "MIT",
+  "copied_component": "sim_cogact/adaptive_ensemble.py::AdaptiveEnsembler",
+  "adapter": "before_we_act.evaluate_action_generator_evolution.CogACTAdaptiveTeamEnsembler",
+  "frozen_deployment": {
+    "adaptive_ensemble_alpha": 0.1,
+    "pred_action_horizon": 2,
+    "candidate_actions": "physical pd_joint_pos W12 ACT chunks",
+    "refined_actions": false
+  },
+  "algorithm_changes": 0,
+  "full_repo_runtime_dependency": false,
+  "parity_test": "tests/before_we_act/test_core_temporal_contract.py::test_cogact_adaptive_ensemble_matches_pinned_equation_and_horizon"
+}
