@@ -68,6 +68,32 @@ TASK_SPECS: Mapping[str, Mapping[str, object]] = {
 }
 
 SPLIT_EPISODES = {"train": 120, "validation": 15, "test": 15}
+FULL_CACHE_PROTOCOL = "r13n_six_task_native_480x640_dinov3_30x40_to_6x8_v1"
+
+
+def observation_contract() -> dict[str, object]:
+    return {
+        "mode": "r13n_native_480x640_dinov3_30x40_to_6x8_plus_causal_team_v1",
+        "encoder_name": "dinov3_vitb16_lvd",
+        "model_id": "facebook/dinov3-vitb16-pretrain-lvd1689m",
+        "weights_sha256": "9a21ac3df0c63839d62612dda6f454d816c25611cc7a52966ed5a5a94921dc8b",
+        "config_sha256": "69256c4c142d59b0c0ccf5746542d9f2415f6c7db03bd7835a1f7b3afedb77fe",
+        "preprocess": "dinov3_imagenet_rgb_resize_rectangular_antialias_v2",
+        "input_height": 480,
+        "input_width": 640,
+        "require_native_input_shape": True,
+        "feature_dim": 768,
+        "encoder_patch_grid": [30, 40],
+        "spatial_grid": [6, 8],
+        "max_views": 5,
+        "history_frames": 3,
+        "compression_stage": "adaptive_average_after_full_resolution_dinov3",
+        "primary_input": "manifest_selected_current_fixed_view_rgb_uint8_480x640",
+        "supplemental_input": "from_scratch_causal_qpos_executed_action_and_coarse_rgb",
+        "training_cache_equivalence": "frozen_dinov3_post_encoder_6x8_tokens",
+        "fusion": "direct_query_bridge_no_scalar_gate",
+        "fusion_heads": 4,
+    }
 
 
 def sha256(path: str | Path) -> str:
@@ -134,4 +160,12 @@ def validate_manifest(data_root: str | Path, task: str, *, require_files: bool) 
     }
 
 
-__all__ = ["SPLIT_EPISODES", "TASKS", "TASK_SPECS", "sha256", "validate_manifest"]
+__all__ = [
+    "FULL_CACHE_PROTOCOL",
+    "SPLIT_EPISODES",
+    "TASKS",
+    "TASK_SPECS",
+    "observation_contract",
+    "sha256",
+    "validate_manifest",
+]

@@ -1,0 +1,75 @@
+schema_version: 1
+round: R13N
+model_id: b6_act_six_task
+component:
+  kind: act_action_chunk_transformer
+  hidden_dim: 256
+  num_heads: 8
+  encoder_layers: 4
+  decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.1
+  latent_dim: 32
+  condition_tokens: 37
+  chunk_size: 100
+  temporal_ensemble: true
+  plan_prior: learned_current_condition
+  plan_prior_hidden_dim: 256
+  plan_kl_weight: 0.01
+  kl_balance_alpha: 0.8
+observation:
+  mode: r13n_native_480x640_dinov3_30x40_to_6x8_plus_causal_team_v1
+  encoder_name: dinov3_vitb16_lvd
+  model_id: facebook/dinov3-vitb16-pretrain-lvd1689m
+  weights_sha256: 9a21ac3df0c63839d62612dda6f454d816c25611cc7a52966ed5a5a94921dc8b
+  config_sha256: 69256c4c142d59b0c0ccf5746542d9f2415f6c7db03bd7835a1f7b3afedb77fe
+  preprocess: dinov3_imagenet_rgb_resize_rectangular_antialias_v2
+  input_height: 480
+  input_width: 640
+  require_native_input_shape: true
+  feature_dim: 768
+  encoder_patch_grid: [30, 40]
+  spatial_grid: [6, 8]
+  max_views: 5
+  history_frames: 3
+  compression_stage: adaptive_average_after_full_resolution_dinov3
+  primary_input: manifest_selected_current_fixed_view_rgb_uint8_480x640
+  supplemental_input: from_scratch_causal_qpos_executed_action_and_coarse_rgb
+  training_cache_equivalence: frozen_dinov3_post_encoder_6x8_tokens
+  fusion: direct_query_bridge_no_scalar_gate
+  fusion_heads: 4
+action:
+  horizon: 100
+  max_agents: 4
+  action_dim: 8
+  belief_dim: 96
+  normalized_clip: 5.0
+  num_proposals: 1
+  condition_tokens: 37
+  normalization: six_task_active_agent_training_moments_v1
+training:
+  updates: 130000
+  batch_size: 12
+  rows_per_task: 2
+  seed: 20260808
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  precision: bfloat16
+  checkpoint_every: 10000
+  progress_every: 50
+  grad_clip: 1.0
+  warmup_steps: 1000
+  decay_steps: 130000
+  decay_lr_ratio: 0.1
+  history_augmentation_probability: 0.25
+  history_augmentation_ramp_updates: 10000
+  history_noise_scale: 0.25
+  task_film_scale: 0.25
+  agent_slot_scale: 0.25
+evaluation:
+  tasks: [lift_barrier, camera_alignment, long_pipeline_delivery, take_photo, pass_shoe, place_food]
+  stages: [discovery, validation, formal]
+  episodes_per_task: 20
+  candidate_native_coverage: 1.0
+  task_result_reuse: false
+  temporal_ensemble_decay: 0.01

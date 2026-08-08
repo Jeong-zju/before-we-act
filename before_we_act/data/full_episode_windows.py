@@ -50,10 +50,12 @@ class _HDF5Episode:
         self.path = path
         self.handle = h5py.File(path, "r")
         self.metadata = _metadata(self.handle, path)
+        expected_round = str(row.get("cache_round", "R12-R4"))
+        expected_protocol = str(row.get("cache_protocol", FULL_EPISODE_PROTOCOL))
         if (
             int(self.handle.attrs.get("schema_version", -1)) != 1
-            or str(self.handle.attrs.get("round", "")) != "R12-R4"
-            or self.metadata.get("protocol_variant") != FULL_EPISODE_PROTOCOL
+            or str(self.handle.attrs.get("round", "")) != expected_round
+            or self.metadata.get("protocol_variant") != expected_protocol
         ):
             self.close()
             raise ValueError(f"unsupported full-episode shard: {path}")
@@ -120,6 +122,7 @@ class FullEpisodeActionWindows(Dataset):
         horizon: int = 100,
         history: int = 3,
         cache_episodes: int = 1,
+        tasks: Sequence[str] = TASKS,
     ) -> None:
         if split not in ("train", "validation"):
             raise ValueError("full-episode split must be train or validation")
@@ -129,6 +132,9 @@ class FullEpisodeActionWindows(Dataset):
         self.horizon = int(horizon)
         self.history = int(history)
         self.cache_episodes = int(cache_episodes)
+        self.tasks = tuple(str(task) for task in tasks)
+        if not self.tasks or len(set(self.tasks)) != len(self.tasks):
+            raise ValueError("full-episode tasks must be unique and non-empty")
         self.stats = {
             "a_mean": torch.as_tensor(stats["a_mean"], dtype=torch.float32),
             "a_std": torch.as_tensor(stats["a_std"], dtype=torch.float32),
@@ -149,7 +155,7 @@ class FullEpisodeActionWindows(Dataset):
             if row.get("split") != split:
                 continue
             task = str(row.get("task"))
-            if task not in TASKS:
+            if task not in self.tasks:
                 raise ValueError(f"unsupported full-episode task {task!r}")
             path = Path(str(row.get("path", ""))).resolve(strict=True)
             steps = int(row.get("steps", 0))
@@ -159,15 +165,16 @@ class FullEpisodeActionWindows(Dataset):
             if len(source_digest) < 8:
                 raise ValueError(f"missing immutable source HDF5 digest for {path}")
             index = len(self.episodes)
-            row.update(path=str(path), task_index=TASKS.index(task), steps=steps)
+            task_index = self.tasks.index(task)
+            row.update(path=str(path), task_index=task_index, steps=steps)
             self.episodes.append(row)
-            self.by_task[TASKS.index(task)].append(index)
-            self.requests_by_task[TASKS.index(task)].extend(
+            self.by_task[task_index].append(index)
+            self.requests_by_task[task_index].extend(
                 (index, timestep) for timestep in range(steps)
             )
             self.total_steps += steps
-        if set(self.by_task) != set(range(len(TASKS))):
-            raise ValueError("full-episode index must cover all five task buckets")
+        if set(self.by_task) != set(range(len(self.tasks))):
+            raise ValueError("full-episode index must cover every requested task bucket")
         self._cache: OrderedDict[int, _HDF5Episode] = OrderedDict()
 
     def __len__(self) -> int:
@@ -278,7 +285,7 @@ class ExactFiveTaskFullEpisodeSampler(Sampler[list[tuple[int, int]]]):
         for update in range(self.start_update + 1, self.updates + 1):
             rng = random.Random(self.seed + 1_000_003 * update)
             batch: list[tuple[int, int]] = []
-            for task_index in range(len(TASKS)):
+            for task_index in range(len(self.dataset.tasks)):
                 bucket = self.dataset.requests_by_task[task_index]
                 for within_update in range(self.rows_per_task):
                     draw = (update - 1) * self.rows_per_task + within_update
@@ -323,10 +330,10 @@ class TaskWeightedFullEpisodeSampler(Sampler[list[tuple[int, int]]]):
         seed: int,
         start_update: int = 0,
     ) -> None:
-        if updates <= start_update or set(rows_per_task) != set(TASKS):
+        if updates <= start_update or set(rows_per_task) != set(dataset.tasks):
             raise ValueError("invalid task-weighted full-episode sampler budget")
         self.rows_per_task = {
-            task: int(rows_per_task[task]) for task in TASKS
+            task: int(rows_per_task[task]) for task in dataset.tasks
         }
         if any(value < 1 for value in self.rows_per_task.values()):
             raise ValueError("every task requires at least one row per update")
@@ -343,7 +350,7 @@ class TaskWeightedFullEpisodeSampler(Sampler[list[tuple[int, int]]]):
         for update in range(self.start_update + 1, self.updates + 1):
             rng = random.Random(self.seed + 1_000_003 * update)
             batch: list[tuple[int, int]] = []
-            for task_index, task in enumerate(TASKS):
+            for task_index, task in enumerate(self.dataset.tasks):
                 bucket = self.dataset.requests_by_task[task_index]
                 draws = self.rows_per_task[task]
                 for within_update in range(draws):
