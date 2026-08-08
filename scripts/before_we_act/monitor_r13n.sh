@@ -24,8 +24,11 @@ progress_bar() {
 
 render() {
   printf 'R13N B6 monitor | %s\nrun_root=%s\n' "$(date -u +%FT%TZ)" "$RUN_ROOT"
-  local source_run_root=""
+  local source_run_root="" stage status_value terminal=0
   source_run_root="$(jq -r '.source_run_root // empty' "$RUN_ROOT/run_manifest.json" 2>/dev/null || true)"
+  stage="$(jq -r '.stage // "unknown"' "$RUN_ROOT/status.json" 2>/dev/null || printf unknown)"
+  status_value="$(jq -r '.status // "UNKNOWN"' "$RUN_ROOT/status.json" 2>/dev/null || printf UNKNOWN)"
+  case "$status_value" in PASSED|FAILED|STOPPED) terminal=1;; esac
   [[ -n "$source_run_root" ]] && printf 'source_run_root=%s run_variant=%s\n' "$source_run_root" "$(jq -r '.run_variant // "unknown"' "$RUN_ROOT/run_manifest.json")"
   if [[ -f "$RUN_ROOT/status.json" ]]; then
     jq -r '"status=\(.status) stage=\(.stage) program=\(.program)\ndetail=\(.detail)\nbranch=\(.branch) commit=\(.commit) tmux=\(.tmux_session)\npid=\(.pid) child=\(.child_pid) started=\(.started_at)"' "$RUN_ROOT/status.json"
@@ -36,7 +39,7 @@ render() {
   fi
   local heartbeat="$RUN_ROOT/heartbeat.json" age=unknown
   if [[ -f "$heartbeat" ]]; then age="$(awk -v n="$(date +%s)" -v u="$(jq -r '.updated_at_epoch // 0' "$heartbeat")" 'BEGIN{d=n-u;if(d<0)d=0;printf "%.1f",d}')"; fi
-  printf 'runner_heartbeat_age_seconds=%s\n' "$age"
+  if ((terminal)); then printf 'runner_heartbeat_age_seconds=%s (terminal status; no live heartbeat expected)\n' "$age"; else printf 'runner_heartbeat_age_seconds=%s\n' "$age"; fi
   local cache_root cache_done=0 cache_total=0
   cache_root="$(jq -r '.cache_root // empty' "$RUN_ROOT/status.json" 2>/dev/null || true)"
   if [[ -n "$cache_root" ]] && compgen -G "$cache_root/rank_*_state.json" >/dev/null; then
@@ -63,18 +66,19 @@ render() {
     successes="$(find "$RUN_ROOT/evaluation" -mindepth 2 -maxdepth 2 -type f -name '*.json' ! -name '*heartbeat*' -print0 2>/dev/null | xargs -0 -r jq -s 'map(.successes // 0)|add // 0')"
   fi
   printf 'closed_loop='; progress_bar "${complete:-0}" 360; printf ' successes=%s\n' "${successes:-0}"
-  if [[ -d "$RUN_ROOT/evaluation" ]]; then
+  if [[ -d "$RUN_ROOT/evaluation" ]] && ((!terminal)); then
     local latest_heartbeat
     latest_heartbeat="$(find "$RUN_ROOT/evaluation" -type f -name '*_heartbeat.json' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)"
     if [[ -n "$latest_heartbeat" ]]; then
       jq -r '"active_rollout=\(.stage)/\(.task) episode=\((.episode_index // 0)+1)/\(.episodes // 20) step=\(.step // 0)/\(.max_steps // 0) heartbeat_epoch=\(.updated_at_epoch)"' "$latest_heartbeat"
     fi
+  elif ((terminal)); then
+    printf 'active_rollout=none terminal_status=%s\n' "$status_value"
   fi
   if [[ -d "$RUN_ROOT/evaluation" ]]; then
     find "$RUN_ROOT/evaluation" -mindepth 2 -maxdepth 2 -type f -name '*.json' ! -name '*heartbeat*' -print0 2>/dev/null | xargs -0 -r jq -r '"  \(.stage)/\(.task): \(.successes)/\(.episodes) p95_ms=\(.latency_ms.p95)"' | sort
   fi
   printf 'gpu:\n'; nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader | sed 's/^/  /'
-  local stage="$(jq -r '.stage // "unknown"' "$RUN_ROOT/status.json" 2>/dev/null || printf unknown)"
   printf 'queue='; case "$stage" in cache_prepare|cache_index) printf 'preflight -> train130k -> offline -> Discovery20 -> Validation20 -> Formal20 -> acceptance\n';; preflight*) printf 'train130k -> offline -> Discovery20 -> Validation20 -> Formal20 -> acceptance\n';; train) printf 'offline -> Discovery20 -> Validation20 -> Formal20 -> acceptance\n';; offline) printf 'Discovery20 -> Validation20 -> Formal20 -> acceptance\n';; discovery) printf 'Validation20 -> Formal20 -> acceptance\n';; validation) printf 'Formal20 -> acceptance\n';; formal) printf 'acceptance\n';; complete) printf 'empty\n';; *) printf 'inspect status\n';; esac
   if find "$RUN_ROOT/logs" -type f -name '*.log' -print0 2>/dev/null | xargs -0 -r grep -HnE 'CUDA out of memory|NaN|FloatingPointError|Traceback \(most recent call last\)' | tail -n 5; then :; fi
   [[ -f "$RUN_ROOT/acceptance.json" ]] && jq -r '"acceptance=\(.status) native=\(.candidate_native_episodes)/360 fallback=\(.fallback_episodes) discovery=\(.stage_totals.discovery.successes)/120 validation=\(.stage_totals.validation.successes)/120 formal=\(.stage_totals.formal.successes)/120 physical_clip_fraction=\(.physical_action_clip.fraction // "n/a")"' "$RUN_ROOT/acceptance.json"
