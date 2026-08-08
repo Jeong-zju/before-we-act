@@ -4242,6 +4242,18 @@ TRACT-inspired legal-observation phase head e27 已完整 `PASSED`：raw accurac
 
 `05:45:41Z` 增量快照：e45=`13/20,1 success`、阶段累计 `6/2/1`；e46=`14/20,1 success`、累计 `3/1/1` 且 triggers/interventions 仍为 `0/0`；e21=`11/20,1 success`、累计 `6/1/1`；e22=`10/20,0 success`、累计 `5/3/0`。四路仍为 `VALIDATING`，最新心跳均在 `05:45:30–05:45:41Z`，显存仍约 `1967/1917/1911/1903 MiB`，无 OOM、NaN 或进程消失；其中 e21 的新成功说明不是“彻底失败”，但只有终态 identical-seed acceptance 才能决定晋级。
 
+**UTC `2026-08-08T06:49Z` 四路终态分流与确定性视频取证。** e45 phase-balanced discovery 最终为 `2/20 vs W12 1/20`、paired wins/losses=`2/1`，结构化 acceptance=`PASSED`，已自然晋级 e31 validation；e46 robust validation 也以 `2/20 vs 1/20`、paired wins/losses=`2/1` 通过并自然晋级 e47 原始 formal Gate20。相反，e21 expert rows=`6/12` 与 e22 rows=`3/12` 均为 `1/20 vs 1/20`、paired wins/losses=`1/1`，没有严格增益，acceptance 均为 `FAILED`；失败属于模型能力结果而非运行异常。此时 e31/e47/e48/e51 分别占用 GPU `0/1/2/3` 且全部处于 `VALIDATING`，producer heartbeat 连续、无 OOM/NaN/进程消失；e47 的 robust monitor 到当前仍没有 intervention，因此其 discovery/validation 增益不能归因于 world correction 触发。
+
+为回答可视化复核要求，新增独立 `bwa/r15-stack-video-render@32fea7a58d6f90fa1f80d1238d2d1c07199c1789`，只给冻结 evaluator 增加逐环境 step 的只读 frame callback；不改变动作、随机数、模型状态或 evaluator 判定。`render_r15_stack_episode.py` 直接编码合法 `head_camera_global/rgb` 为 H.264/yuv420p，并在 sidecar 中写入原始 row、checkpoint update、帧数和 SHA256；若回放结论与 `--expected` 不一致则删除临时文件并 fail-closed。成功/失败种子固定取自 e45 原始结构化输出：`1744099183` 为 `398 steps` 且完整 `B placed → A on B → C on A`，`1583240340` 为 `800 steps` 失败；checkpoint SHA256=`31ac98f0b59cd78621d0b82fa637bc8a0f067aee120a2f3516f2fd7ff524580a`。
+
+本地 compile/ruff/bash syntax 与相关回归为 `18 passed`，远端 RoboFactory 环境同为 `18 passed`；额外真实 ffmpeg 冒烟得到 H.264 `640x480,7 frames`。等待 session `bwa-r15-handoff-video-e45` 在 GPU1 上实施显式 producer-session 与 compute-PID 双门控，`06:45:05Z` 状态为 `WAITING_FOR_GPU`，只会在 `bwa-r15s-p3` 自然退出且 GPU 连续空闲后依次渲染两段视频；GPU 查询失败按“占用”处理，不终止或抢占任何 producer。远端隔离输出根为 `/workspace/bwa_runs/r15-video-e45-20260808`，本地下载目录预注册为仓库忽略路径 `artifacts/r15_stack_videos/`；完成后的编码、结论复验、远端/本地 SHA256 和下载结果继续追加在本节，不能把等待状态写成已完成。
+
+**UTC `2026-08-08T07:46Z` 视频终态与同期 promotion。** e47 已自然跑满 formal Gate20，结构化结果为 Stack=`0/20`、protected=`74` exact、total=`74/100`，对照 W12 为 Stack=`3/20`、total=`77/100`，paired wins/losses=`0/3`，故严格 `FAILED`；这同时证明此前 e46 validation 的 `2/20` 增益未能外推到原 formal seeds。等待器没有提前终止 e47。第一次视频 root `/workspace/bwa_runs/r15-video-e45-20260808` 随后在模型加载前 fail-closed：直接执行 `scripts/...py` 时缺仓库 `PYTHONPATH`，日志为 `ModuleNotFoundError: before_we_act`，没有留下任何 MP4。修复提交 `bwa/r15-stack-video-render@44fb8f574c645fce420335b10e86a7187bba0f07` 显式导出 worktree import path 并加入 import preflight；本地/远端回归更新为 `19 passed`，旧失败 root 原样保留，新 root 使用 `/workspace/bwa_runs/r15-video-e45-20260808-v2`，没有覆盖重试。
+
+v2 于 `07:42:01Z` 启动、`07:45:15Z` 完成，结构化 status=`PASSED`，两次回放结论均与 expected 一致。成功视频 `stack_success_seed_1744099183.mp4` 为 H.264/yuv420p、`640x480@20fps`、`220 frames/11.0s`、`303383 bytes`，row=`success=true,steps=397`，SHA256=`7f75a0e8c85969b147826c88000c45d77c65bc7aaa439d4314b4ca5ac3a4753b`；终帧人工抽检确认 B 位于目标、A-on-B、C-on-A 且均释放。原 e45 首次日志为 `398 steps`，本次固定 seed/noise 回放提前 1 step 达成同一 success predicate，故证据表述为“结果闭锁的固定种子回放”，不声称像素/step bit-exact。失败视频 `stack_failure_seed_1583240340.mp4` 为同一编码、`421 frames/21.05s`、`470885 bytes`，row=`success=false,steps=800`，SHA256=`468f957b3961efeb07d8166465836677a6e3397cdb9a98f40cc11458fd7b6d52`；终帧抽检确认三块方块未堆叠并显示 `FAILED`。
+
+MP4、sidecar 和总 status 已下载到本地仓库忽略目录 `/home/jeong/zeno/wam/before-we-act/artifacts/r15_stack_videos/e45_20260808_v2/`；`ffprobe` 对两段视频均通过，本地重算 SHA256 与 sidecar/远端完全一致。视频结束后 GPU1 已回到 `2 MiB`、无 compute PID。同期 e31 validation 最终 `2/20 vs 1/20`、paired wins/losses=`2/1`，acceptance=`PASSED`，GPU0 已按既有 handoff 自然启动 e32 formal；`07:46:48Z` 快照 e48=`1/19`、e51=`2/16`，GPU2/3 producer 心跳新鲜。e48/e51/e32 和后继 handoff 均保持运行，视频任务没有停止或重启它们。
+
 本轮可复制命令如下；三路训练/验证均由实际 producer heartbeat 驱动状态，不以日志存在冒充存活：
 
 ```bash
@@ -4293,6 +4305,26 @@ ssh -p 10328 root@69.176.92.104 '
 tmux list-panes -t bwa-r15-handoff-role-query-view-dedup-e54 \
   -F "#{session_name} #{pane_pid} #{pane_current_command}"
 tail -n 20 /workspace/bwa_runs/r15e54-20260808-role-query-view-dedup-promotion-handoff.log'
+
+# 新隔离 root 中重新渲染一对结果闭锁视频；若 GPU1 有生产任务，脚本只等待、不抢占
+ssh -p 10328 root@69.176.92.104 '
+SESSION=bwa-r15-video-manual-$(date -u +%H%M%S)
+OUTPUT=/workspace/bwa_runs/r15-video-manual-$(date -u +%Y%m%dT%H%M%SZ)
+tmux new-session -d -s "$SESSION" \
+  "exec /workspace/bwa_worktrees/r15/stack-video/scripts/before_we_act/handoff_r15_stack_videos.sh \
+  --producer-session bwa-r15s-p3 --gpu-index 1 --output-root $OUTPUT"
+printf "session=%s output=%s\n" "$SESSION" "$OUTPUT"'
+
+# 本次已完成视频的结构化状态、编码核验与下载
+ssh -p 10328 root@69.176.92.104 '
+cat /workspace/bwa_runs/r15-video-e45-20260808-v2/status.json
+for video in /workspace/bwa_runs/r15-video-e45-20260808-v2/*.mp4; do
+  ffprobe -v error -select_streams v:0 \
+    -show_entries stream=codec_name,pix_fmt,width,height,nb_frames,duration "$video"
+done'
+mkdir -p /home/jeong/zeno/wam/before-we-act/artifacts/r15_stack_videos/e45_20260808_v2
+scp -P 10328 root@69.176.92.104:/workspace/bwa_runs/r15-video-e45-20260808-v2/'stack_*' \
+  /home/jeong/zeno/wam/before-we-act/artifacts/r15_stack_videos/e45_20260808_v2/
 
 # 四路统一单次快照；按需去掉任一 --screen 即为单实验监测
 ssh -p 10328 root@69.176.92.104 '
