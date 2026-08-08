@@ -36,7 +36,7 @@ render() {
       jq -sr '[(map(.completed_episodes // 0) | add), (map(.total_episodes // 0) | add)] | @tsv' "$cache_root"/rank_*_state.json
     )
     printf 'feature_cache='; progress_bar "$cache_done" "$cache_total"; printf '\n'
-    jq -sr 'sort_by(.rank)[] | "  rank\(.rank)=\(.completed_episodes // 0)/\(.total_episodes // 0) status=\(.status // \"UNKNOWN\")"' "$cache_root"/rank_*_state.json
+    jq -sr 'sort_by(.rank)[] | "  rank\(.rank)=\(.completed_episodes // 0)/\(.total_episodes // 0) status=\(.status // "UNKNOWN")"' "$cache_root"/rank_*_state.json
   fi
   if [[ -f "$RUN_ROOT/train/formal/progress.jsonl" ]]; then
     local train_update train_total
