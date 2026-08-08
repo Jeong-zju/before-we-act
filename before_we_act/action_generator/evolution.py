@@ -237,6 +237,42 @@ def bind_role_conditioned_spatial_queries(
     return role_delta, role_mask
 
 
+def deduplicate_exact_spatial_views(
+    spatial_tokens: torch.Tensor,
+    spatial_view_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Keep the first active copy of every bit-exact spatial view.
+
+    The Stack dataset exposes four differently named cameras from one physical
+    pose.  Their DINO tokens are therefore exact duplicates before the bridge
+    adds learned view embeddings.  Retaining only the first physical copy
+    prevents four artificial view identities from reweighting the same visual
+    evidence.  Near-equal views are deliberately preserved so the operation is
+    fail-closed and cannot silently merge distinct cameras.
+    """
+
+    if spatial_tokens.ndim != 4:
+        raise ValueError("R15 view-dedup spatial tokens must be [batch,view,patch,dim]")
+    if tuple(spatial_view_mask.shape) != tuple(spatial_tokens.shape[:2]):
+        raise ValueError("R15 view-dedup token/mask shape differs")
+    active = spatial_view_mask.bool()
+    if not bool(active.any(dim=1).all()):
+        raise ValueError("every R15 sample requires an active spatial view")
+    deduplicated = active.clone()
+    batch, views = active.shape
+    for view in range(1, views):
+        duplicate = torch.zeros(batch, dtype=torch.bool, device=active.device)
+        for previous in range(view):
+            exact = (spatial_tokens[:, view] == spatial_tokens[:, previous]).reshape(
+                batch, -1
+            ).all(dim=1)
+            duplicate |= active[:, previous] & exact
+        deduplicated[:, view] &= ~duplicate
+    if not bool(deduplicated.any(dim=1).all()):
+        raise ValueError("R15 view deduplication removed every spatial view")
+    return deduplicated
+
+
 class TaskConditionedActionGenerator(R4JointActionGenerator):
     """Full-resolution R12 specialist with bounded task and slot conditioning."""
 
@@ -285,6 +321,9 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
             slot_delta,
             belief.agent_mask,
             self.bridge.query_count,
+        )
+        spatial_view_mask = deduplicate_exact_spatial_views(
+            spatial_tokens, spatial_view_mask
         )
         tokens, mask = self.bridge(
             belief,
@@ -377,7 +416,9 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
                 (len(actions), 1), dtype=torch.bool, device=actions.device
             ),
             agent_mask=belief.agent_mask,
-            source=(f"r15_{self.candidate_id}_role_query_stack_specialist",),
+            source=(
+                f"r15_{self.candidate_id}_role_query_view_dedup_stack_specialist",
+            ),
             diagnostics={
                 "core_free": True,
                 "legacy_core_import": False,
@@ -387,6 +428,7 @@ class TaskConditionedActionGenerator(R4JointActionGenerator):
                 "task_film_scale": self.task_film_scale,
                 "agent_slot_scale": self.agent_slot_scale,
                 "role_conditioned_spatial_queries": True,
+                "exact_spatial_view_deduplication": True,
                 "spatial_queries_per_action_slot": (
                     self.bridge.query_count // self.max_agents
                 ),
@@ -398,5 +440,6 @@ __all__ = [
     "R12EvolutionConfig",
     "TaskConditionedActionGenerator",
     "bind_role_conditioned_spatial_queries",
+    "deduplicate_exact_spatial_views",
     "load_r12_evolution_config",
 ]

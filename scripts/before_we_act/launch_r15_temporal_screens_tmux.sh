@@ -37,7 +37,7 @@ if [[ -n "$MODE_OVERRIDE" ]]; then
 fi
 for command in git tmux nvidia-smi sha256sum jq; do command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }; done
 BRANCH="$(git -C "$ROOT" branch --show-current)"
-[[ "$BRANCH" =~ ^bwa/r15-(closed-loop-evolution|aac-entropy-chunk|role-query-specialist)$ && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires a clean R15 evolution branch\n' >&2; exit 3; }
+[[ "$BRANCH" =~ ^bwa/r15-(closed-loop-evolution|aac-entropy-chunk|role-query-specialist|role-query-view-dedup)$ && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires a clean R15 evolution branch\n' >&2; exit 3; }
 git -C "$ROOT" fetch origin --prune
 COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; [[ "$COMMIT" == "$(git -C "$ROOT" rev-parse "origin/$BRANCH")" ]] || { printf 'R15 branch differs from origin\n' >&2; exit 3; }
 SEED_FILE="$PROTOCOL_ROOT/$SPLIT.json"; SEED_SHA="$(sha256sum "$SEED_FILE" | awk '{print $1}')"
@@ -66,6 +66,10 @@ fi
 if [[ "$BRANCH" == bwa/r15-role-query-specialist ]]; then
   for candidate in "${SELECTED[@]}"; do
     [[ "${MODE[$candidate]}" == act_temporal_ensemble ]] && LABEL["$candidate"]=role_query_act_temporal_ensemble
+  done
+elif [[ "$BRANCH" == bwa/r15-role-query-view-dedup ]]; then
+  for candidate in "${SELECTED[@]}"; do
+    [[ "${MODE[$candidate]}" == act_temporal_ensemble ]] && LABEL["$candidate"]=role_query_view_dedup_act_temporal_ensemble
   done
 fi
 for candidate in "${SELECTED[@]}"; do

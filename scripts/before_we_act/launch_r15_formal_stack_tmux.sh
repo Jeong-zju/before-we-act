@@ -27,7 +27,7 @@ SESSION="${SESSION:-bwa-r15s-$CANDIDATE}"
 [[ "$RUN_ID" =~ ^[A-Za-z0-9_.-]+$ && "$CANDIDATE" =~ ^p[1-3]$ && "$GPU_INDEX" =~ ^[0-3]$ && "$SESSION" =~ ^bwa-r15s-[A-Za-z0-9_.-]+$ && "$MODE" =~ ^(act_temporal_ensemble|mild_temporal_ensemble|balanced_temporal_ensemble|recent_temporal_ensemble|responsive_temporal_ensemble|cogact_adaptive_ensemble|aac_entropy_chunk|latest_chunk)$ ]] || { printf 'valid run/candidate/GPU/session/mode required\n' >&2; exit 2; }
 for command in git tmux nvidia-smi sha256sum jq; do command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }; done
 BRANCH="$(git -C "$ROOT" branch --show-current)"
-[[ "$BRANCH" =~ ^bwa/r15-(closed-loop-evolution|aac-entropy-chunk|role-query-specialist)$ && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires a clean R15 evolution branch\n' >&2; exit 3; }
+[[ "$BRANCH" =~ ^bwa/r15-(closed-loop-evolution|aac-entropy-chunk|role-query-specialist|role-query-view-dedup)$ && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires a clean R15 evolution branch\n' >&2; exit 3; }
 git -C "$ROOT" fetch origin --prune; COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; [[ "$COMMIT" == "$(git -C "$ROOT" rev-parse "origin/$BRANCH")" ]] || { printf 'R15 branch differs from origin\n' >&2; exit 3; }
 REFERENCE="$W12_GATE/three_robots_stack_cube.json"
 PROTECTED_FILES=("$W12_GATE/lift_barrier.json" "$W12_GATE/camera_alignment.json" "$W12_GATE/long_pipeline_delivery.json" "$W12_GATE/take_photo.json")
@@ -51,6 +51,7 @@ mkdir -p "$RUN_ROOT/candidates/p0/validation"; ln -s "$REFERENCE" "$RUN_ROOT/can
 "$PYTHON" "$RUNTIME" status --run-root "$RUN_ROOT" --candidate p0 --state REFERENCE --stage complete --program r15_runtime.py --detail 'frozen W12 formal reference' --pid 0 --child-pid 0 --log "$REFERENCE"
 case "$MODE" in mild_temporal_ensemble) LABEL=w12_mild_decay_0p02 ;; balanced_temporal_ensemble) LABEL=w12_balanced_decay_0p05 ;; recent_temporal_ensemble) LABEL=w12_recent_decay_0p10 ;; responsive_temporal_ensemble) LABEL=w12_responsive_decay_0p20 ;; cogact_adaptive_ensemble) LABEL=cogact_adaptive_alpha0p1_h2 ;; aac_entropy_chunk) LABEL=aac_entropy20_h16 ;; latest_chunk) LABEL=w12_latest_chunk ;; *) LABEL=checkpoint_act_temporal_ensemble ;; esac
 [[ "$BRANCH" == bwa/r15-role-query-specialist && "$MODE" == act_temporal_ensemble ]] && LABEL=role_query_act_temporal_ensemble
+[[ "$BRANCH" == bwa/r15-role-query-view-dedup && "$MODE" == act_temporal_ensemble ]] && LABEL=role_query_view_dedup_act_temporal_ensemble
 CONFIG="$ROOT/configs/before_we_act/r12_action/e1_p2.yaml"
 "$PYTHON" "$RUNTIME" register "${COMMON[@]}" --candidate "$CANDIDATE" --label "$LABEL" --gpu "$GPU_INDEX" --worktree "$ROOT" --branch "$BRANCH" --commit "$COMMIT" --config "$CONFIG" --checkpoint "$CHECKPOINT" --session "$SESSION"
 tmux new-session -d -s "$SESSION" -n formal \

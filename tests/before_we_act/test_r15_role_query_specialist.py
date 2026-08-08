@@ -112,3 +112,6 @@ def test_role_query_launchers_keep_branch_session_and_phase_identity():
     assert "bwa-r15s-role-e51" in handoff
     assert "bwa-r15s-role-e52" in handoff
     assert "bwa-r15s-role-e53" in handoff
+    assert handoff.index('PRODUCER_SESSION=bwa-r15s-expert-e22') < handoff.index(
+        "launch_r15_expert_finetune_tmux.sh"
+    )

@@ -33,7 +33,7 @@ SESSION="${SESSION:-bwa-r15s-$CANDIDATE}"
 ((BATCH_SIZE >= 2 && EXPERT_ROWS < BATCH_SIZE && WARMUP <= UPDATES)) || { printf 'expert rows/warmup exceed training budget\n' >&2; exit 2; }
 for command in git tmux nvidia-smi sha256sum jq; do command -v "$command" >/dev/null || { printf 'missing command: %s\n' "$command" >&2; exit 3; }; done
 BRANCH="$(git -C "$ROOT" branch --show-current)"
-[[ "$BRANCH" =~ ^bwa/r15-(closed-loop-evolution|expert-evolution|phase-balanced-expert|role-query-specialist)$ && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires a clean R15 expert branch\n' >&2; exit 3; }
+[[ "$BRANCH" =~ ^bwa/r15-(closed-loop-evolution|expert-evolution|phase-balanced-expert|role-query-specialist|role-query-view-dedup)$ && -z "$(git -C "$ROOT" status --porcelain)" ]] || { printf 'launcher requires a clean R15 expert branch\n' >&2; exit 3; }
 git -C "$ROOT" fetch origin --prune
 COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; [[ "$COMMIT" == "$(git -C "$ROOT" rev-parse "origin/$BRANCH")" ]] || { printf 'R15 branch differs from origin\n' >&2; exit 3; }
 SEED_FILE="$PROTOCOL_ROOT/$SPLIT.json"; SEED_SHA="$(sha256sum "$SEED_FILE" | awk '{print $1}')"
@@ -42,7 +42,7 @@ REFERENCE_MANIFEST="$REFERENCE_RUN/run_manifest.json"; [[ -f "$REFERENCE_MANIFES
 [[ "$(jq -r .extension.protocol "$EXPERT_INDEX")" == r15_raw_success_expert_physical_pd_joint_pos_direct_dinov3_v2 && "$(jq -r .extension.expert_episodes "$EXPERT_INDEX")" -ge 1 ]] || { printf 'expert cache identity differs\n' >&2; exit 3; }
 PHASE_ARGS=()
 LABEL="w12_expert_ft_b${BATCH_SIZE}_e${EXPERT_ROWS}"
-if [[ "$BRANCH" =~ ^bwa/r15-(phase-balanced-expert|role-query-specialist)$ || -n "$PHASE_MANIFEST" ]]; then
+if [[ "$BRANCH" =~ ^bwa/r15-(phase-balanced-expert|role-query-specialist|role-query-view-dedup)$ || -n "$PHASE_MANIFEST" ]]; then
   [[ -f "$PHASE_MANIFEST" && $((EXPERT_ROWS % 3)) -eq 0 ]] || { printf 'phase-balanced branch requires manifest and expert rows divisible by three\n' >&2; exit 3; }
   [[ "$(jq -r .protocol "$PHASE_MANIFEST")" == r15_stack_expert_monotone_three_phase_v1 && "$(jq -r .expert_index_sha256 "$PHASE_MANIFEST")" == "$(sha256sum "$EXPERT_INDEX" | awk '{print $1}')" ]] || { printf 'phase manifest identity differs\n' >&2; exit 3; }
   PHASE_ARGS=(--phase-manifest "$PHASE_MANIFEST")
@@ -50,6 +50,8 @@ if [[ "$BRANCH" =~ ^bwa/r15-(phase-balanced-expert|role-query-specialist)$ || -n
 fi
 if [[ "$BRANCH" == bwa/r15-role-query-specialist ]]; then
   LABEL="w12_role_query_phase3_b${BATCH_SIZE}_e${EXPERT_ROWS}"
+elif [[ "$BRANCH" == bwa/r15-role-query-view-dedup ]]; then
+  LABEL="w12_role_query_view_dedup_phase3_b${BATCH_SIZE}_e${EXPERT_ROWS}"
 fi
 [[ ! -e "$RUN_ROOT" ]] || { printf 'run root already exists: %s\n' "$RUN_ROOT" >&2; exit 3; }
 tmux has-session -t "$SESSION" 2>/dev/null && { printf 'session already exists: %s\n' "$SESSION" >&2; exit 3; }
