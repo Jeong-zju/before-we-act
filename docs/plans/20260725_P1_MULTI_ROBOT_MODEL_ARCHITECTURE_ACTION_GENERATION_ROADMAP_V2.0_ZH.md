@@ -4258,6 +4258,8 @@ MP4、sidecar 和总 status 已下载到本地仓库忽略目录 `/home/jeong/ze
 
 `07:51:35Z` 后续自动决策已继续发生：e48 phase-routed discovery 完整结束为 `1/20 vs 1/20`、paired wins/losses=`1/1`，严格 `FAILED`，说明 e27 phase classifier 离线通过并不自动转化为闭环增益；其 handoff 正常退出、GPU2 释放。e51 role-query discovery 则为 `2/20 vs 1/20`、paired wins/losses=`2/1`，严格 `PASSED`，并已在 GPU3/tmux `bwa-r15s-role-e52` 自动启动独立 validation20；e32 formal 同期为 `0/5`、终态链 `B/A/C=5/1/0`，继续运行。exact-view-dedup e54 handoff 仍等待 role-query e52/e53 整条链自然结束，未与其争卡。
 
+**UTC `2026-08-08T08:12Z` phase-balanced 终局与 role-query 二层通过。** e32 已完整跑满原 formal Gate20：Stack=`1/20`、protected=`74` exact、total=`75/100`，对照 W12 为 `3/20`、total=`77/100`，paired wins/losses=`1/3`，结构化 acceptance=`FAILED`；终态链 `B/A/C=11/4/1` 再次定位为逐阶段乘法衰减，phase-balanced 在 discovery/validation 的 paired 增益没有外推到 formal seeds。e52 role-query validation 则完整得到 `3/20 vs 1/20`、paired wins/losses=`3/1`、终态链 `8/4/3`，严格 `PASSED`；handoff 已于 `08:12:17Z` 在 GPU3/tmux `bwa-r15s-role-e53` 自动启动原 formal Gate20。e54 继续等待 e53 自然结束。当前任务切换门仍未触发，因为 role-query formal 与 exact-view-dedup 三层链尚未完成。
+
 本轮可复制命令如下；三路训练/验证均由实际 producer heartbeat 驱动状态，不以日志存在冒充存活：
 
 ```bash
