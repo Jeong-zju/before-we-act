@@ -4266,6 +4266,12 @@ e54 使用 `bwa/r15-role-query-view-dedup@bd1ae1e9f2f193c29cc851b529a36965d4df7a
 
 为使持续监测直接展示上述条件队列，`bwa/r15-closed-loop-evolution@cce6d51a0fb49a89c1cc23587cff2e6af3df0a66` 在既有 monitor 增加实际 update/episode 驱动的 24 格文本进度条，并新增 `monitor_r15_promotion_queue.sh`：每层显示 `state/gate/prerequisite`、progress/success、root、candidate、GPU、tmux、branch/commit、log 和 detail；不存在的后继只显示 `QUEUED`，前门失败则显示 `BLOCKED_BY_GATE`。本地与远端定向测试均为 `8 passed`，Python compile、shell syntax 与 `git diff --check` 通过；远端第一次测试暴露写死 PID=`123` 在不同主机的非确定性，随后只修复测试为显式模拟 liveness，生产 monitor 逻辑未降低“PID 消失即 FAILED”的门槛。远端 `/workspace/bwa_worktrees/r15/evolution` 已 fast-forward 到该 commit 并用真实 e54/e55/e56 路径验证输出；持久只读 tmux `bwa-r15-monitor-dedup-queue` 已按 30 秒间隔启动，pane PID=`683896`，不占 GPU，也不控制 producer 生命周期。
 
+**UTC `2026-08-08T08:54Z` operator-requested 全量资源清理。** 用户随后明确要求终止运行并不可恢复地清除历史分支/checkpoint，因此本条覆盖上一段“持续运行”状态。清理前先杀死 e54 promotion handoff，向 e54 独立进程组发送 INT，再删除其 producer tmux；e54 当时只完成 discovery `11/20`、success=`1`、终态链 `B/A/C=7/2/1`，未跑满 20 seeds，故只能记为 `STOPPED`，不能记为模型 `FAILED/PASSED`。结构化状态现为 `state=STOPPED, stage=operator_cleanup, program=none, pid/child_pid=0, exit_code=130`，更新时间 `08:54:08Z`；e55/e56 从未创建。随后终止所有可识别的 BWA 训练、验证、handoff、monitor 和全部 GPU compute。tmux 已不存在内部 session id `$0`，因此把最早且唯一人工入口 `ssh_tmux:0` 作为用户所称“0”保留；其余 8 个 session、所有非 0 window 均删除，保留窗口中的旧 BWA monitor 子进程也已终止。
+
+checkpoint 清理按验证后的精确文件集合执行：服务器 `/workspace` 在排除 dataset/HF cache/venv 后删除 `239` 个 checkpoint、`80,350,860,929 bytes`（`74.833 GiB`），复核剩余 `0`；本地 `/home/jeong/zeno/wam` 删除 `5` 个历史 checkpoint、`6,631,937,036 bytes`，复核剩余 `0`。服务器磁盘由 `883 GiB used / 142 GiB available / 87%` 变为 `808 GiB used / 217 GiB available / 79%`。数据集、Hugging Face cache、结构化 JSON/日志和已下载 MP4 没有删除，避免把“历史 checkpoint”扩大为未经点名的数据资产。
+
+所有待删 Git worktree 先核验 `dirty=0`；本地删除 `28` 个历史 worktree 和 `90` 条本地 branch，服务器删除 `63` 个历史 worktree和 `69` 条服务器本地 branch。GitHub 默认分支由待删除的 `main` 切换为 `feat/model-improvements` 后，删除 `89` 条历史远端 branch。三端最终只保留 `feat/model-improvements@49a37abad2a2cf522b54b500f5f9b04fe04d97b4`、`bwa/r15-closed-loop-evolution` 和当前候选 `bwa/r15-role-query-view-dedup@bd1ae1e9f2f193c29cc851b529a36965d4df7aa0`；服务器仅保留对应三个 worktree `/workspace/fe-pc-wam`、`/workspace/bwa_worktrees/r15/evolution`、`/workspace/bwa_worktrees/r15/role-query-view-dedup`。清理后再执行 fetch-prune、reflog expire 和 Git GC，并以 branch/worktree/checkpoint/tmux/process/GPU/disk 清单复核。
+
 本轮可复制命令如下；三路训练/验证均由实际 producer heartbeat 驱动状态，不以日志存在冒充存活：
 
 ```bash
