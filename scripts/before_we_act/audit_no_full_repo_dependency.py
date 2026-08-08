@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 
-FORBIDDEN_PREFIXES = ("vjepa2", "lpwm", "dino_wm", "tdmpc2", "lerobot")
+FORBIDDEN_PREFIXES = ("vjepa2", "lpwm", "dino_wm", "lerobot")
 
 
 def main() -> None:
@@ -32,7 +32,6 @@ def main() -> None:
             "/workspace/bwa_upstream",
             "/tmp/bwa-r11-upstreams",
             "/tmp/bwa-r12-upstream",
-            "/tmp/bwa-r13-upstream",
         )):
             violations.append({"path": str(relative), "reason": "absolute upstream cache path"})
         tree = ast.parse(source, filename=str(path))

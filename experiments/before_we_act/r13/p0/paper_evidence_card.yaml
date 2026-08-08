@@ -1,8 +1,0 @@
-schema_version: 1
-candidate_id: p0
-method: TD-MPC2 scalable latent world model
-official_code: https://github.com/nicklashansen/tdmpc2
-used_symbols: [WorldModel, encode, next, reward, Q]
-absorbed_core_view: compact latent dynamics plus reward/value heads provide action-conditioned consequence features
-falsification: fail source/parity/restore/future-input/action-hash gates or rank below another valid frozen screen score
-claim_boundary: off-path world screening only; no closed-loop improvement claim
