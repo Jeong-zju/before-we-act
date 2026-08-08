@@ -4211,6 +4211,14 @@ TRACT-inspired legal-observation phase head e27 已完整 `PASSED`：raw accurac
 
 此前 e26 robust-reactive discovery=`3/20 vs 1/20` 已通过，却因旧编排没有 validation promotion 而遗漏升级。现已从 clean/pushed `bwa/r15-world-reactive-robust@c9306e7838b8` 在 GPU1/tmux `bwa-r15s-p3` 启动 `/workspace/bwa_runs/r15e46-20260808-world-reactive-robust-validation20`，复用冻结 W12 checkpoint 与 identical-seed validation control `/workspace/bwa_runs/r15e7-20260807-w12-validation20-control`；real launch 前 dry-run 通过。`04:48:47Z` 快照为 `1/20,0 success`、PID=`645046/645065`、显存约 `1.93 GiB`、heartbeat age=`2.9s`、无告警。等待 session `bwa-r15-handoff-robust-promote-e47` 只读取 e46 的结构化 `acceptance.json`：只有 candidate successes 严格大于 validation control `1/20` 才在 GPU1 启动 `r15e47-20260808-world-reactive-robust-formal20`；否则明确跳过。e47 仍须满足 Stack `>3/20`、protected=`74` exact、total `>77/100`，没有降低或替换正式门。
 
+**UTC `2026-08-08T05:02Z` legal-observation phase-routed specialist 实现与排队。** 由 e27 phase head 已通过、e29 expert formal 出现早期能力退化而驱动，新增独立 `bwa/r15-phase-routed-specialist@99d4e1a82027469a75d66fc06fe52552275b7bd1`。该路线同时加载冻结 W12 base、e45 phase-balanced specialist 与 e27 phase head：每个 environment step 只从合法的 RGB/qpos/executed-action history 计算 W11 consensus，再用与 e27 held-out acceptance **完全相同**的 5 帧单调 authority；authority=`0` 时只执行 W12，确认进入 phase `1/2` 后才执行 phase-balanced specialist。模型切换时重建 decay=`0.01` ensemble，禁止把旧模型的 overlapping chunk 混入新模型；逐 episode 结构化记录 raw/authority phase counts、切换 step/confidence、base/specialist steps。runner 还 fail-closed 固定 W12 SHA256=`4c85dcd30058...` 与 phase-head SHA256=`c76ad28af119...`，并核对 phase head 内嵌 belief config/checkpoint SHA 及两模型 action normalization exact。protected 四任务仍走原 exact-W10 materializer，不受路由影响。
+
+该分支本地 compile、ruff、四个 shell `bash -n` 及定向 `17 passed`；完整 `tests/before_we_act` 在复用主工作树 `.venv` 后 pytest lastfailed cache=`{}`（工作树自身缺 `.venv` 的首次两项属于环境路径，不是代码失败）。远端 RTX 5090 环境再次 compile、四 shell syntax 与同一组测试 `17 passed, 1 warning`。branch 已推送，远端 worktree=`/workspace/bwa_worktrees/r15/phase-routed-specialist` 与 origin commit 完全一致。持久等待 session `bwa-r15-handoff-phase-route-e48` 不占 GPU；它等待 e21 自然释放 GPU2 后，每一层先执行真实 launcher dry-run，再按 `/workspace/bwa_runs/r15e48-20260808-phase-routed-discovery20` → `r15e49...validation20` → `r15e50...formal20` 晋级。discovery/validation 仍要求 successes 严格大于各自 identical-seed W12 control；formal 仍要求 Stack `>3/20`、protected=`74` exact、total `>77/100`。
+
+同轮官方源码复核固定了两个新鲜证据，但没有为“上卡数量”重复算法或伪造接口：CronusVLA official `ef9dc169e09f...`、MIT LICENSE SHA256=`c2cfccb812fe...`、`vla/adaptive_ensemble.py` SHA256=`7ea111a233b4...`；逐行 diff 证明其 31 行 cosine-weighted action ensemble 与本仓库已 pin 的 CogACT 组件算法完全相同，仅缺文件头/末尾换行，而 CogACT e11 已真实 discovery=`0/20`，故淘汰重复实验。SCALE official 已从此前 `code coming soon` 更新为真实 `b4ad2a69d14f...`，MIT LICENSE SHA256=`e395abe05584...`、`configs/scale.yaml` SHA256=`0287ac363e45...`；源码的不确定性严格来自 OpenVLA 离散 action-token logits，并据此修改 token sampling temperature 和 vision-attention temperature。当前连续 ACT 没有这组 logits，以 plan variance 冒充会改变论文定义，故本轮只登记已发布源码，不复制、不占卡。
+
+`05:01:20Z` 运行快照：e45 phase-balanced=`4/20,0 success`；e46 robust validation=`5/20,1 success`（control=`1/20`，尚未严格领先）；e21/e22 已各完成训练 `5000/5000`，末次 loss 分别为 `0.05286146/0.04963067`，进入 discovery 后均为 `2/20,0 success`。四路 status 均为 `VALIDATING`、producer heartbeat 新鲜、monitor alerts=`NONE`，没有 OOM/NaN/进程消失；任何中间计数都不作为终局。
+
 本轮可复制命令如下；三路训练/验证均由实际 producer heartbeat 驱动状态，不以日志存在冒充存活：
 
 ```bash
@@ -4233,6 +4241,23 @@ cd /workspace/bwa_worktrees/r15/world-reactive-robust
   --execution-mode world_reactive_robust_aac_chunk \
   --checkpoint /workspace/bwa_runs/shared/w12/checkpoint_130000.pt \
   --reference-run-root /workspace/bwa_runs/r15e7-20260807-w12-validation20-control --dry-run'
+
+# phase-routed 全 promotion 一键 handoff；已作为下列 session 排队，命令可用于状态核验
+ssh -p 10328 root@69.176.92.104 '
+tmux list-panes -t bwa-r15-handoff-phase-route-e48 \
+  -F "#{session_name} #{pane_pid} #{pane_current_command}"
+tail -n 20 /workspace/bwa_runs/r15e48-20260808-phase-routed-promotion-handoff.log'
+
+# phase-routed 单层 discovery dry-run；真实 run 使用 e45 checkpoint，不覆盖 e48
+ssh -p 10328 root@69.176.92.104 '
+cd /workspace/bwa_worktrees/r15/phase-routed-specialist
+./scripts/before_we_act/launch_r15_temporal_screens_tmux.sh \
+  --run-id r15-phase-route-manual-$(date -u +%Y%m%dT%H%M%SZ) \
+  --candidate p2 --split discovery20 --gpu-index 2 \
+  --session bwa-r15s-phase-route-manual \
+  --execution-mode phase_routed_specialist \
+  --checkpoint /workspace/bwa_runs/r15e45-20260808-phase-balanced-e9-ft5k-discovery20/candidates/p1/train/stack_expert/checkpoints/checkpoint_005000.pt \
+  --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2 --dry-run'
 
 # 四路统一单次快照；按需去掉任一 --screen 即为单实验监测
 ssh -p 10328 root@69.176.92.104 '
