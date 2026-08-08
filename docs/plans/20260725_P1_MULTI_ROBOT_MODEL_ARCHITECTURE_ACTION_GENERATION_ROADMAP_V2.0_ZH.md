@@ -4254,6 +4254,8 @@ v2 于 `07:42:01Z` 启动、`07:45:15Z` 完成，结构化 status=`PASSED`，两
 
 MP4、sidecar 和总 status 已下载到本地仓库忽略目录 `/home/jeong/zeno/wam/before-we-act/artifacts/r15_stack_videos/e45_20260808_v2/`；`ffprobe` 对两段视频均通过，本地重算 SHA256 与 sidecar/远端完全一致。视频结束后 GPU1 已回到 `2 MiB`、无 compute PID。同期 e31 validation 最终 `2/20 vs 1/20`、paired wins/losses=`2/1`，acceptance=`PASSED`，GPU0 已按既有 handoff 自然启动 e32 formal；`07:46:48Z` 快照 e48=`1/19`、e51=`2/16`，GPU2/3 producer 心跳新鲜。e48/e51/e32 和后继 handoff 均保持运行，视频任务没有停止或重启它们。
 
+`07:51:35Z` 后续自动决策已继续发生：e48 phase-routed discovery 完整结束为 `1/20 vs 1/20`、paired wins/losses=`1/1`，严格 `FAILED`，说明 e27 phase classifier 离线通过并不自动转化为闭环增益；其 handoff 正常退出、GPU2 释放。e51 role-query discovery 则为 `2/20 vs 1/20`、paired wins/losses=`2/1`，严格 `PASSED`，并已在 GPU3/tmux `bwa-r15s-role-e52` 自动启动独立 validation20；e32 formal 同期为 `0/5`、终态链 `B/A/C=5/1/0`，继续运行。exact-view-dedup e54 handoff 仍等待 role-query e52/e53 整条链自然结束，未与其争卡。
+
 本轮可复制命令如下；三路训练/验证均由实际 producer heartbeat 驱动状态，不以日志存在冒充存活：
 
 ```bash
