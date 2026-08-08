@@ -33,7 +33,7 @@ render() {
   cache_root="$(jq -r '.cache_root // empty' "$RUN_ROOT/status.json" 2>/dev/null || true)"
   if [[ -n "$cache_root" ]] && compgen -G "$cache_root/rank_*_state.json" >/dev/null; then
     read -r cache_done cache_total < <(
-      jq -sr '[map(.completed_episodes // 0)|add, map(.total_episodes // 0)|add] | @tsv' "$cache_root"/rank_*_state.json
+      jq -sr '[(map(.completed_episodes // 0) | add), (map(.total_episodes // 0) | add)] | @tsv' "$cache_root"/rank_*_state.json
     )
     printf 'feature_cache='; progress_bar "$cache_done" "$cache_total"; printf '\n'
     jq -sr 'sort_by(.rank)[] | "  rank\(.rank)=\(.completed_episodes // 0)/\(.total_episodes // 0) status=\(.status // \"UNKNOWN\")"' "$cache_root"/rank_*_state.json
