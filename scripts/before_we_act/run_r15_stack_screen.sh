@@ -66,6 +66,9 @@ heartbeat_loop & HEARTBEAT_PID=$!
 EXECUTION_ARGS=()
 EXECUTION_DETAIL="W10 temporal ensemble decay=0.01"
 case "$LABEL" in
+  w12_role_query_*|role_query_act_temporal_ensemble)
+    EXECUTION_DETAIL="role-conditioned spatial queries; W10 temporal ensemble decay=0.01"
+    ;;
   w12_mild_decay_0p02)
     EXECUTION_ARGS=(--execution-mode mild_temporal_ensemble)
     EXECUTION_DETAIL="mild temporal ensemble decay=0.02"

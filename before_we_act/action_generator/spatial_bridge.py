@@ -104,10 +104,25 @@ class SpatialQueryBridge(nn.Module):
         belief: TeamBeliefState,
         spatial_tokens: torch.Tensor,
         spatial_view_mask: torch.Tensor,
+        *,
+        query_bias: torch.Tensor | None = None,
+        query_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         belief.validate()
         values, spatial_mask = self._spatial(spatial_tokens, spatial_view_mask)
         query = self.queries[None].expand(len(values), -1, -1)
+        if query_bias is not None:
+            if tuple(query_bias.shape) != tuple(query.shape):
+                raise ValueError("R15 role-query bias shape differs")
+            query = query + query_bias.to(query.dtype)
+        if query_mask is None:
+            active_queries = torch.ones_like(query[..., 0], dtype=torch.bool)
+        else:
+            if tuple(query_mask.shape) != tuple(query.shape[:2]):
+                raise ValueError("R15 role-query mask shape differs")
+            active_queries = query_mask.bool()
+            if not bool(active_queries.any(dim=1).all()):
+                raise ValueError("every R15 sample requires an active role query")
         residual, _ = self.cross_attention(
             query=query,
             key=values,
@@ -137,7 +152,7 @@ class SpatialQueryBridge(nn.Module):
             dim=1,
         )
         return torch.cat([belief_tokens, query], dim=1), torch.cat(
-            [belief_mask, torch.ones_like(query[..., 0], dtype=torch.bool)], dim=1
+            [belief_mask, active_queries], dim=1
         )
 
 
