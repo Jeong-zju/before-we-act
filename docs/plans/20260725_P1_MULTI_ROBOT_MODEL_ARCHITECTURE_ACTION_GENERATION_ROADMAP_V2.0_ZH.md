@@ -4230,6 +4230,12 @@ TRACT-inspired legal-observation phase head e27 已完整 `PASSED`：raw accurac
 
 `05:17:03Z` 增量运行快照仍未中断任何 producer：e45=`7/20,0 success`、终态阶段累计 `4/1/0`；e46=`9/20,1 success`、累计 `2/1/1`，robust monitor 至此 `0` intervention；e21=`5/20,0 success`、累计 `2/0/0`；e22=`4/20,0 success`、累计 `2/2/0`。四路最近心跳分别为 `05:16:46/05:16:52/05:16:50/05:17:01Z`，GPU0..3 显存约 `1967/1917/1911/1903 MiB`，没有 OOM、NaN、进程消失；上述只是进行中证据，不替代终态 acceptance。
 
+**UTC `2026-08-08T05:33Z` role-conditioned spatial query 实装与远端排队。** 针对“同一幅图像需要服务三个不同动作槽、但原 spatial query 没有机器人身份”的直接缺口，新增独立 `bwa/r15-role-query-specialist@63b210e0bb6a3ed96a90a58f877d59d2671b33f9`。该候选不增加 checkpoint tensor，也不改变 37-token/core contract：复用 W12 已有的 learned `agent_slot_embedding`，把 16 个 spatial query 固定分成四组、每组 4 个，在 cross-attention **之前**加入相应动作槽的 role bias；Stack 的三个活动机器人保留 12 个 query，第四个空槽的 4 个 query 显式 mask。训练协议与 e45 完全一致（`batch=12=3 original+3×3 phase expert`、`5000` updates、LR=`2e-5`、warmup=`500`），所以相对 e45 唯一模型轴是 role-conditioned readout，保持结果可归因。
+
+本地 Python compile、ruff、shell syntax 与相关回归均通过，完整 worktree 测试中唯一两项初始失败来自新 worktree 缺 `.venv` 路径；临时只读链接主 worktree 环境后两项均通过并已移除链接。远端 commit/worktree clean，实际测试为 `23 passed`；真实冻结 W12 `checkpoint_130000.pt` 严格加载结果为 `256` keys、`missing=[]`、`unexpected=[]`，role query 实测 shape=`[1,16,96]`、active/masked=`12/4`、bias nonzero。不中断 producer 的等待 session `bwa-r15-handoff-role-query-e51` 已于 `05:32:51Z` 启动，日志 `/workspace/bwa_runs/r15e51-20260808-role-query-promotion-handoff.log`；它等待 GPU3 自然释放后才运行 e51 discovery，且只有 discovery 严格胜过 W12 才进入 e52 独立 validation，只有 validation 再严格胜出才进入 e53 原始 Gate20 formal。三层输出分别固定为 `/workspace/bwa_runs/r15e51-20260808-role-query-phase-e9-ft5k-discovery20`、`r15e52-20260808-role-query-phase-e9-ft5k-validation20`、`r15e53-20260808-role-query-phase-e9-ft5k-formal20`，不会覆盖已有实验。
+
+`05:33:17Z` 四卡仍健康运行：e45=`11/20,1 success`、阶段累计 `5/2/1`；e46=`12/20,1 success`、累计 `3/1/1`，robust triggers/interventions 仍为 `0/0`，说明当前阈值下它等价于未介入基线且暂未严格领先 validation control；e21=`8/20,0 success`、累计 `4/0/0`；e22=`7/20,0 success`、累计 `4/3/0`。四路 status 均为 `VALIDATING`，最新结构化心跳为 `05:33:11/05:33:17/05:33:15/05:33:06Z`，GPU0..3 显存约 `1967/1917/1911/1903 MiB`，没有 OOM、NaN 或进程消失。
+
 本轮可复制命令如下；三路训练/验证均由实际 producer heartbeat 驱动状态，不以日志存在冒充存活：
 
 ```bash
@@ -4269,6 +4275,12 @@ cd /workspace/bwa_worktrees/r15/phase-routed-specialist
   --execution-mode phase_routed_specialist \
   --checkpoint /workspace/bwa_runs/r15e45-20260808-phase-balanced-e9-ft5k-discovery20/candidates/p1/train/stack_expert/checkpoints/checkpoint_005000.pt \
   --reference-run-root /workspace/bwa_runs/r15e1-20260807-discovery20-v2 --dry-run'
+
+# role-query 三层 promotion 已排队；不中断 GPU3 producer，只核验 handoff 与日志
+ssh -p 10328 root@69.176.92.104 '
+tmux list-panes -t bwa-r15-handoff-role-query-e51 \
+  -F "#{session_name} #{pane_pid} #{pane_current_command}"
+tail -n 20 /workspace/bwa_runs/r15e51-20260808-role-query-promotion-handoff.log'
 
 # 四路统一单次快照；按需去掉任一 --screen 即为单实验监测
 ssh -p 10328 root@69.176.92.104 '
