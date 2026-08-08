@@ -32,7 +32,7 @@ render() {
   else printf 'status=NOT_STARTED\n'; fi
   printf 'repo_head=%s\n' "$(git -C "$FE_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)"
   if [[ -f "$RUN_ROOT/code_update_receipt.json" ]]; then
-    jq -r '"effective_model_code_commit=\(.effective_training_evaluation_commit) cache_interrupted=\(.cache_processes_interrupted)"' "$RUN_ROOT/code_update_receipt.json"
+    jq -r '"effective_model_code_commit=\(.effective_training_evaluation_commit // .effective_evaluation_commit // "unknown") cache_interrupted=\(if has("cache_processes_interrupted") then .cache_processes_interrupted else "n/a" end)"' "$RUN_ROOT/code_update_receipt.json"
   fi
   local heartbeat="$RUN_ROOT/heartbeat.json" age=unknown
   if [[ -f "$heartbeat" ]]; then age="$(awk -v n="$(date +%s)" -v u="$(jq -r '.updated_at_epoch // 0' "$heartbeat")" 'BEGIN{d=n-u;if(d<0)d=0;printf "%.1f",d}')"; fi
