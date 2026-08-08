@@ -12,11 +12,6 @@ TASKS = {
         "config": "robofactory/configs/table/camera_alignment.yaml",
         "agents": (0, 1, 2),
     },
-    "three_robots_stack_cube": {
-        "env_id": "ThreeRobotsStackCube-rf",
-        "config": "robofactory/configs/table/three_robots_stack_cube.yaml",
-        "agents": (0, 1, 2),
-    },
     "long_pipeline_delivery": {
         "env_id": "LongPipelineDelivery-rf",
         "config": "robofactory/configs/table/long_pipeline_delivery.yaml",
@@ -27,6 +22,16 @@ TASKS = {
         "config": "robofactory/configs/table/take_photo.yaml",
         "agents": (0, 1, 2, 3),
     },
+    "pass_shoe": {
+        "env_id": "PassShoe-rf",
+        "config": "robofactory/configs/table/pass_shoe.yaml",
+        "agents": (0, 1),
+    },
+    "place_food": {
+        "env_id": "PlaceFood-rf",
+        "config": "robofactory/configs/table/place_food.yaml",
+        "agents": (0, 1),
+    },
 }
 
 
@@ -34,4 +39,4 @@ def get_task(name: str):
     try:
         return TASKS[name]
     except KeyError as exc:
-        raise KeyError(f"unknown R12 Gate20 task {name!r}") from exc
+        raise KeyError(f"unknown active no-stack benchmark task {name!r}") from exc
