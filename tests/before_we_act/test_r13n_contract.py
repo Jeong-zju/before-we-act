@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import torch
 from torch import nn
 
@@ -8,7 +9,7 @@ from before_we_act.action_generator.r13n_baseline import (
     load_r13n_config,
 )
 from before_we_act.benchmark import ACTIVE_TASKS as BENCHMARK_TASKS
-from before_we_act.r13n import SPLIT_EPISODES, TASKS, TASK_SPECS
+from before_we_act.r13n import SPLIT_EPISODES, TASKS, TASK_SPECS, camera_sensor_key
 
 
 def test_r13n_contract_has_exact_no_stack_portfolio():
@@ -29,6 +30,14 @@ def test_r13n_contract_has_exact_no_stack_portfolio():
 def test_place_food_is_deliberately_global_only():
     assert TASK_SPECS["place_food"]["camera_order"] == ("global",)
     assert TASK_SPECS["place_food"]["agents"] == 2
+
+
+def test_r13n_dataset_views_map_to_real_robofactory_sensor_keys():
+    assert camera_sensor_key("global") == "head_camera_global"
+    assert camera_sensor_key("agent_0") == "head_camera_agent0"
+    assert camera_sensor_key("agent_3") == "head_camera_agent3"
+    with pytest.raises(ValueError, match="unknown R13N camera view"):
+        camera_sensor_key("agent_4")
 
 
 class _Core(nn.Module):

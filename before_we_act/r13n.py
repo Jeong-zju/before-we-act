@@ -70,6 +70,23 @@ TASK_SPECS: Mapping[str, Mapping[str, object]] = {
 SPLIT_EPISODES = {"train": 120, "validation": 15, "test": 15}
 FULL_CACHE_PROTOCOL = "r13n_six_task_native_480x640_dinov3_30x40_to_6x8_v1"
 
+CAMERA_SENSOR_KEYS = {
+    "global": "head_camera_global",
+    "agent_0": "head_camera_agent0",
+    "agent_1": "head_camera_agent1",
+    "agent_2": "head_camera_agent2",
+    "agent_3": "head_camera_agent3",
+}
+
+
+def camera_sensor_key(view: str) -> str:
+    """Map immutable dataset view names to RoboFactory runtime sensor keys."""
+
+    try:
+        return CAMERA_SENSOR_KEYS[view]
+    except KeyError as exc:
+        raise ValueError(f"unknown R13N camera view {view!r}") from exc
+
 
 def observation_contract() -> dict[str, object]:
     return {
@@ -161,10 +178,12 @@ def validate_manifest(data_root: str | Path, task: str, *, require_files: bool) 
 
 
 __all__ = [
+    "CAMERA_SENSOR_KEYS",
     "FULL_CACHE_PROTOCOL",
     "SPLIT_EPISODES",
     "TASKS",
     "TASK_SPECS",
+    "camera_sensor_key",
     "observation_contract",
     "sha256",
     "validate_manifest",

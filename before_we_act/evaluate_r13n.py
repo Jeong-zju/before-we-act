@@ -19,7 +19,7 @@ import robofactory  # noqa: F401
 from before_we_act.action_generator.r13n_baseline import R13NActionGenerator, load_r13n_config
 from before_we_act.benchmark import get_task
 from before_we_act.evaluate_action_generator import TemporalChunkEnsembler, patch_means
-from before_we_act.r13n import TASKS, TASK_SPECS, sha256
+from before_we_act.r13n import TASKS, TASK_SPECS, camera_sensor_key, sha256
 from before_we_act.spatial_observation import R12SpatialObservationEncoder
 from before_we_act.train_action_generator_r4 import atomic_json
 
@@ -30,7 +30,7 @@ def reset_reproducibly(env, seed: int):
 
 
 def rgb(sensor_data, view: str) -> np.ndarray:
-    value=np.asarray(sensor_data[f"head_camera_{view}"]["rgb"])
+    value=np.asarray(sensor_data[camera_sensor_key(view)]["rgb"])
     value=value[0] if value.ndim==4 else value
     if tuple(value.shape)!=(480,640,3): raise ValueError(f"R13N {view} RGB shape differs: {tuple(value.shape)}")
     return np.asarray(value,dtype=np.uint8)
