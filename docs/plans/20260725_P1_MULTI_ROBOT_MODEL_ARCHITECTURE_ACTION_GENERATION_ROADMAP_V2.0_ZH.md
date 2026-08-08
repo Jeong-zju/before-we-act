@@ -267,6 +267,8 @@ B6 是 W12-style ACT 在六任务上的全新从零模型，不加载任何历�
 
 训练前 preflight 全部通过：strict restore、finite output、缺席 agent 为零、没有历史 checkpoint；spatial/action effect L1=0.001004796，task effect L1=0.001026645。训练末次 loss=0.144508、L1=0.136775、plan KL=0.773313，吞吐约 52,867 updates/hour，峰值显存约 0.664 GiB；无 OOM、NaN 或异常重启。
 
+代码验证结果：本地 `compileall`、116 个 `tests/before_we_act` 测试、六个 shell 入口 `bash -n` 和 `git diff --check` 全部通过（pytest 仅 10 条既有 warning）；最终同步远程后，R13N contract 6/6 通过（1 条既有 `pynvml` deprecation warning），两个 launch `--dry-run`、stop `--dry-run` 和终态 monitor 均实测通过。
+
 为容纳两个 pinned 新数据集，已在确认没有进程引用后删除永久排除的 ThreeRobotsStackCube 数据；receipt 位于 `/workspace/bwa_runs/r13n-no-stack-v1/receipts/removed_three_robots_stack_cube_dataset.json`，记录 469 个文件、176,646,907,751 bytes。任务结束后 `/workspace` 仍有约 199 GB 可用，没有删除六任务数据、HF cache、有效 checkpoint 或实验结果。
 
 ### 5.5 为什么第一版会是 0/360
