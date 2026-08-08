@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 VALIDATION_ROOT=/workspace/bwa_worktrees/r15/expert-validation
 EXPERT_ROOT=/workspace/bwa_worktrees/r15/expert-evolution
-DISCOVERY=/workspace/bwa_runs/r15e30-20260807-phase-balanced-e9-ft5k-discovery20
+DISCOVERY=/workspace/bwa_runs/r15e45-20260808-phase-balanced-e9-ft5k-discovery20
 VALIDATION=/workspace/bwa_runs/r15e31-20260807-phase-balanced-e9-ft5k-validation20
 FORMAL=/workspace/bwa_runs/r15e32-20260807-phase-balanced-e9-ft5k-formal20
 CHECKPOINT="$DISCOVERY/candidates/p1/train/stack_expert/checkpoints/checkpoint_005000.pt"

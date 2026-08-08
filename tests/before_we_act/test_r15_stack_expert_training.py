@@ -158,6 +158,7 @@ def test_phase_balanced_promotion_precedes_e21_search():
     assert handoff.index("DISCOVERY_ACCEPTANCE=") < handoff.index(
         "VALIDATION_ACCEPTANCE="
     ) < handoff.index("FORMAL_ACCEPTANCE=")
+    assert "r15e45-20260808-phase-balanced-e9-ft5k-discovery20" in handoff
     assert "r15e21-20260807-expert20-e6-ft5k-discovery20" in handoff
     assert "launch_r15_formal_stack_tmux.sh" in handoff
     assert "--session bwa-r15s-phase-e31" in handoff
