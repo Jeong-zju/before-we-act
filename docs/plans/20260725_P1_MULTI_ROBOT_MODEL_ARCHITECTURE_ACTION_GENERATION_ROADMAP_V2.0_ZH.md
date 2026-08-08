@@ -4236,6 +4236,12 @@ TRACT-inspired legal-observation phase head e27 已完整 `PASSED`：raw accurac
 
 `05:33:17Z` 四卡仍健康运行：e45=`11/20,1 success`、阶段累计 `5/2/1`；e46=`12/20,1 success`、累计 `3/1/1`，robust triggers/interventions 仍为 `0/0`，说明当前阈值下它等价于未介入基线且暂未严格领先 validation control；e21=`8/20,0 success`、累计 `4/0/0`；e22=`7/20,0 success`、累计 `4/3/0`。四路 status 均为 `VALIDATING`，最新结构化心跳为 `05:33:11/05:33:17/05:33:15/05:33:06Z`，GPU0..3 显存约 `1967/1917/1911/1903 MiB`，没有 OOM、NaN 或进程消失。
 
+**UTC `2026-08-08T05:45Z` handoff 修复与 exact-view-dedup 后继消融。** 初版 role-query handoff 在一次 `nvidia-smi` 暂态空窗后提前离开等待循环，随后 launcher 正确 fail-closed 报 `GPU 3 is in use`；e51/e52/e53 root 均未创建、producer 未受影响。修复提交 `bwa/r15-role-query-specialist@68b32c6ef9151f8aab6ae6aa7dc8034873e95bff` 除 GPU process 检测外显式等待已知 producer session `bwa-r15s-expert-e22`，本地/远端各 `6 passed`，等待器 `bwa-r15-handoff-role-query-e51` 已恢复且仍不占 GPU。
+
+为直接消融“同一物理图像被四个 learned view embedding 重复计权”的嫌疑，又从 role-query 模型分叉 `bwa/r15-role-query-view-dedup@bd1ae1e9f2f193c29cc851b529a36965d4df7aa0`。它只在 bridge 加 view embedding 前比较 DINO spatial tensor：每组 **bit-exact** active view 仅保留首个，任何 near-equal view 均保留；角色查询、phase-balanced 数据、更新数、LR 和 runtime 其余不变。真实 expert shard `expert_episode_000150_seed_5100.hdf5` 首帧输入 mask=`[1,1,1,1,0]`，前四路两两 max-abs=`0.0`，实装后 mask=`[1,0,0,0,0]`，证明消融命中真实缓存而非合成样本；第五个 padding tensor 虽不同但原本即 inactive。该分支本地全套 `117 passed, 1 skipped`，定向本地/远端分别 `29/29 passed`，compile、ruff、shell syntax 和真实 W12 strict-load contract 均通过。等待器 `bwa-r15-handoff-role-query-view-dedup-e54` 已排在 role-query e51→e53 整条链自然结束之后，再按 e54 discovery→e55 validation→e56 formal 严格晋级，不会与其争 GPU3。
+
+`05:45:41Z` 增量快照：e45=`13/20,1 success`、阶段累计 `6/2/1`；e46=`14/20,1 success`、累计 `3/1/1` 且 triggers/interventions 仍为 `0/0`；e21=`11/20,1 success`、累计 `6/1/1`；e22=`10/20,0 success`、累计 `5/3/0`。四路仍为 `VALIDATING`，最新心跳均在 `05:45:30–05:45:41Z`，显存仍约 `1967/1917/1911/1903 MiB`，无 OOM、NaN 或进程消失；其中 e21 的新成功说明不是“彻底失败”，但只有终态 identical-seed acceptance 才能决定晋级。
+
 本轮可复制命令如下；三路训练/验证均由实际 producer heartbeat 驱动状态，不以日志存在冒充存活：
 
 ```bash
@@ -4281,6 +4287,12 @@ ssh -p 10328 root@69.176.92.104 '
 tmux list-panes -t bwa-r15-handoff-role-query-e51 \
   -F "#{session_name} #{pane_pid} #{pane_current_command}"
 tail -n 20 /workspace/bwa_runs/r15e51-20260808-role-query-promotion-handoff.log'
+
+# role-query + exact-view-dedup 后继消融状态；它只等待，不抢占当前 GPU3
+ssh -p 10328 root@69.176.92.104 '
+tmux list-panes -t bwa-r15-handoff-role-query-view-dedup-e54 \
+  -F "#{session_name} #{pane_pid} #{pane_current_command}"
+tail -n 20 /workspace/bwa_runs/r15e54-20260808-role-query-view-dedup-promotion-handoff.log'
 
 # 四路统一单次快照；按需去掉任一 --screen 即为单实验监测
 ssh -p 10328 root@69.176.92.104 '
