@@ -1,373 +1,419 @@
-# P1 多机器人模型架构与动作生成技术路线 V5.1（R13/R14 回退重定版）
+# P1 多机器人模型架构与动作生成技术路线 V5.2（No-Stack 任务组合）
 
-> 状态：CURRENT / RESET
+> 状态：CURRENT / NO-STACK RESET
 > 更新日期：2026-08-08
 > 当前唯一分支：feat/model-improvements
 > 完整历史归档：[V2.0 全量历史原稿](../archive/20260725_P1_MULTI_ROBOT_MODEL_ARCHITECTURE_ACTION_GENERATION_ROADMAP_V2.0_FULL_HISTORY_ZH.md)
 > 归档原稿 SHA-256：8458d28fe3c4ba6235348bd042ecfca560df2031878da9bdc29d48e4c882dc3c
 
-## 0. 文档定位
+## 0. 当前决策
 
-本文件是回退后的当前事实源。旧 R13/R14 的完整实验、日志、哈希和失败证据只保留在历史归档与 Git 历史中，不再属于活动架构。
+新技术路线不再研究任何 Stack 任务。
 
-新路线遵循三个原则：
+永久排除：
 
-1. 先恢复可执行、可复算的闭环基线，再训练候选。
-2. 优先修复 observation、数据分布和失败恢复，再更换动作生成架构。
-3. 所有重要判断必须由独立 closed-loop seeds 证伪；loss、offline score 和工程测试不能代替成功率。
+- stack_cube；
+- two_robots_stack_cube；
+- three_robots_stack_cube；
+- 后续名称或定义属于 cube stacking 的变体。
 
-## 1. 回退结论
+旧 Stack 结果只保留为历史失败证据，不进入新训练数据、模型选择、Gate、综合分母或后续优化队列。旧 R15 role-query、view-dedup、phase-balanced 和 Stack expert 工作流均转为非活动历史代码；不得作为新基线默认启用。
 
-### 1.1 当前活动系统
+新的正式任务组合为：
 
-旧 R13 和旧 R14 已从活动代码中完整撤销：
+1. lift_barrier；
+2. camera_alignment；
+3. long_pipeline_delivery；
+4. take_photo；
+5. pass_shoe；
+6. place_food。
 
-- 移除 R13 TD-MPC2 world model、world window、训练评估、配置、上游代码、验收和运行脚本。
-- 移除 R14 world-guided planner、decision evaluator、配置、验收和运行脚本。
-- 将 contracts.py、audit_no_full_repo_dependency.py、r11_runtime.py、verify_upstream_source.py 精确恢复到 W12 终态。
-- R13/R14 的全部非文档路径与 W12 终态 commit 8b90d9e 逐文件一致。
+其中 pass_shoe 和 place_food 是替代 Stack 的新增任务。六任务全部从零建立新基线，不沿用历史 Stack denominator，也不把旧 W12 的 protected exact reuse 当作新成绩。
 
-当前活动结构为：
+## 1. 为什么选择这六个任务
 
-| 层级 | 当前定义 | 状态 |
+### 1.1 任务覆盖
+
+| 任务 | 机器人数量 | 动作维度 | 合作形态 | 观测形态 |
+| --- | ---: | ---: | --- | --- |
+| lift_barrier | 2 | 16 | 同步搬运 | global + 2 agent views |
+| camera_alignment | 3 | 24 | 多物体对齐 | global + 3 agent views，部分重复 |
+| long_pipeline_delivery | 4 | 32 | 长时程协同运输 | global + 4 agent views |
+| take_photo | 4 | 32 | 多机器人布局/拍摄 | global + 4 agent views |
+| pass_shoe | 2 | 16 | 顺序抓取、交接、投放 | global + 2 个真实不同 agent views |
+| place_food | 2 | 16 | 双物体并行抓取与放置 | pinned Hub 数据为 global-only |
+
+该组合同时覆盖：
+
+- 2、3、4 机器人；
+- 同步协作和顺序交接；
+- 短时程与长时程；
+- 真异构多视角与共享 global-only 观测；
+- 16、24、32 维动作；
+- 多种 episode horizon。
+
+### 1.2 新增任务的证据
+
+#### Pass Shoe
+
+Hugging Face：
+
+- repo：[zeno-ai/robofactory-pass-shoe-multiview](https://huggingface.co/datasets/zeno-ai/robofactory-pass-shoe-multiview)
+- revision：646bbfec792ed46c78e452acfc06b423ca1410af
+- 150 个成功 episode；
+- train/validation/test = 120/15/15；
+- train transitions = 43,501；
+- camera order = global, agent_0, agent_1；
+- action codec = robofactory.2x_panda_pd_joint_pos/1；
+- Hub 文件总量约 136.44 GB。
+
+本地抽取 5 个 episode、每个起始/中段/末端共 15 帧：
+
+| 视角对 | bit-exact | mean absolute pixel difference |
+| --- | ---: | ---: |
+| agent_0 / agent_1 | 0/15 | 19.0081 |
+| agent_0 / global | 0/15 | 26.2432 |
+| agent_1 / global | 0/15 | 26.4298 |
+
+因此它是真多视角任务，不存在 Stack 的“四路名义不同、像素完全相同”问题。
+
+环境成功定义为鞋子在目标区域平面距离平方小于 0.01。专家轨迹包含 robot 0 抓取并交到中间区域、robot 1 再抓取并投放到目标区，能直接测试角色分工和跨机器人交接。
+
+#### Place Food
+
+Hugging Face：
+
+- repo：[zeno-ai/robofactory-place-food-multiview](https://huggingface.co/datasets/zeno-ai/robofactory-place-food-multiview)
+- revision：2237d907f0b28d3f2e19fa4ea03b4048be2de27d
+- 150 个成功 episode；
+- train/validation/test = 120/15/15；
+- train transitions = 25,975；
+- pinned training manifest 的 camera order = global；
+- action codec = robofactory.2x_panda_pd_joint_pos/1；
+- Hub 文件总量约 30.15 GB。
+
+任务环境配置支持 global + 2 agent cameras，但当前 pinned Hub revision 的训练 manifest 只使用 global。新路线将它定义为双机器人共享 global observation 任务，不伪造多视角结论。
+
+本地曾存在另一份约 93 GB、含 3 个真实不同视角的旧 Place Food 数据，但其 episode_000000 SHA-256 与 pinned Hub revision 不同，且缺少 training_manifest.json。该旧缓存不得用于正式训练；如未来希望启用多视角 Place Food，必须发布并固定新的可审计 Hub revision。
+
+环境成功定义为 meat 与 pot 的水平距离小于 0.1，且 meat 高度低于冻结阈值。它可测试共享视野下两机器人并行动作与对象关系。
+
+### 1.3 未进入主基准的候选
+
+| 候选 | 不选原因 |
+| --- | --- |
+| pick_meat | 单机器人、8 维动作、global-only，不足以检验多机器人模型 |
+| strike_cube | 单机器人、8 维动作、global-only；名称含 cube 但不是 stacking，仍与本轮多机器人目标不匹配 |
+| RoboCasa composites | 环境、动作 codec、数据协议与当前 RoboFactory 六任务不统一，加入会同时改变过多变量 |
+| 所有 Stack | 用户明确排除，且历史已证明该任务的 observation/精度问题主导研究资源 |
+
+pick_meat 和 strike_cube 可作为未来 single-robot transfer holdout，但不进入当前训练、选择或综合分母。
+
+## 2. 数据审计边界
+
+Hugging Face Dataset Viewer 对这些 HDF5 仓库返回 preview/viewer/search/statistics=false，无法通过 parquet viewer 直接统计。因此正式 receipt 必须组合：
+
+- Hugging Face Hub repo metadata；
+- exact revision；
+- training_manifest.json；
+- normalization.npz；
+- 每个 HDF5 文件的 SHA-256；
+- 本地 HDF5 schema 和像素抽样；
+- evaluator task/config commit。
+
+六任务冻结身份：
+
+| 任务 | Hub revision | train episodes | train transitions | camera order | action dim |
+| --- | --- | ---: | ---: | --- | ---: |
+| lift_barrier | 6ab620091677e69370412f08cd7adecacc28c146 | 120 | 8,255 | global + agent_0 + agent_1 | 16 |
+| camera_alignment | e204af13f7191dfd86dab3da529316a51558f479 | 120 | 11,764 | global + agent_0..2 | 24 |
+| long_pipeline_delivery | fee628311ff52a3ae0ddfddf82379c63d28f7533 | 120 | 88,493 | global + agent_0..3 | 32 |
+| take_photo | 3966385a4c688a5610d4b6cde044150f6b73d320 | 120 | 23,044 | global + agent_0..3 | 32 |
+| pass_shoe | 646bbfec792ed46c78e452acfc06b423ca1410af | 120 | 43,501 | global + agent_0 + agent_1 | 16 |
+| place_food | 2237d907f0b28d3f2e19fa4ea03b4048be2de27d | 120 | 25,975 | global | 16 |
+
+已知相机边界：
+
+- Pass Shoe 的三路像素抽样均不相同。
+- Take Photo 的五路像素抽样均不相同。
+- Camera Alignment 的 agent_0 与 agent_1 在抽样中 bit-exact，其他组合不同；必须去重这两路，但不能丢弃 agent_2/global。
+- Place Food pinned revision 只允许 global。
+- Lift Barrier 和 Long Pipeline 必须在正式训练前完成同样的像素与 calibration 审计。
+
+## 3. Git 与模型基线
+
+旧 R13 TD-MPC2 world model 和旧 R14 world-guided planner 已回退，不在活动代码。
+
+当前允许复用的是：
+
+- W11/W12 架构代码；
+- 通用 RGB/qpos/action codec；
+- Hugging Face 缓存、镜像、断点续传和鉴权机制；
+- DINO foundation；
+- 通用 tmux/status/heartbeat 基础设施。
+
+当前不允许复用的是：
+
+- 任何历史 checkpoint；
+- Stack specialist、Stack phase、Stack expert 权重或缓存；
+- 旧五任务 77/100 作为新六任务验收阈值；
+- protected task 的预计算成功结果；
+- 为 Stack 编写的 role-query/view-dedup 配置作为默认新模型。
+
+所有历史 checkpoint 已删除，因此必须从零建立六任务 B6 基线。
+
+## 4. 新阶段定义
+
+| 阶段 | 名称 | 目标 |
 | --- | --- | --- |
-| Observation | RGB、qpos、executed-action history | 活动 |
-| W11 belief | V-JEPA2 belief/predictor 架构 | 需要重建权重 |
-| W12 action | high-resolution ACT/action generator | 当前基线架构；需要重建权重 |
-| 旧 W13 world | TD-MPC2 latent world | 已回退，不在活动代码 |
-| 旧 R14 decision | world-guided planner | 已回退，不在活动代码 |
-| R15 observation/action patch | role-query、bit-exact view dedup、phase-balanced continuation | 保留代码，尚无正式胜出证据 |
+| R13N | Six-Task Data & Baseline Reset | 下载并审计六任务，训练可执行 B6 baseline |
+| R14N | Six-Task Causal Tournament | 四卡独立比较数据、观测、动作头和恢复控制 |
+| R15N | Generalization Confirmation | 对 winner 做独立 50-seed 六任务确认 |
 
-R15 与 R13/R14 没有 import 依赖，也没有修改同一批 R13/R14 文件，因此本次保留用户已选择的 observation/action 实现。它默认视为实验性能力，不自动成为新基线。
+新路线中不存在 Stack fallback、Stack phase metric 或 Stack 专项门。
 
-### 1.2 回退验证
+## 5. R13N：六任务数据与基线重置
 
-- Python compile：PASSED。
-- 全部 R15 shell syntax：PASSED。
-- tests/before_we_act：110 passed，10 个既有 Transformer warning。
-- Git diff check：PASSED。
-- 回退使用普通新增提交保存，不重写 Git 历史。
+### 5.1 数据准备
 
-## 2. 历史证据与关闭边界
+远程当前已有前四个任务，但没有 Pass Shoe 和 Place Food 的正式 training manifest。部署前：
 
-历史 W12 正式 Gate20：
+1. 以 revision-specific 目录下载 Pass Shoe 与 Place Food。
+2. 复用 /workspace/.cache/huggingface。
+3. 下载后逐文件校验 Hub manifest。
+4. 不覆盖任何现有同名旧目录；旧 Place Food 缓存必须与 pinned revision 隔离。
+5. 为六任务生成统一 dataset receipt。
 
-| 任务 | W12 历史成功数 |
-| --- | ---: |
-| lift_barrier | 20/20 |
-| camera_alignment | 14/20 |
-| three_robots_stack_cube | 3/20 |
-| long_pipeline_delivery | 20/20 |
-| take_photo | 20/20 |
-| 合计 | 77/100 |
+当前服务器 /workspace 约 218 GB 可用；两项新数据合计约 166.59 GB，只剩约 51 GB，无法安全容纳四路训练输出。
 
-这些数字是历史参考线，不是当前可执行 checkpoint 的结果。历史 checkpoint 已全部删除，必须重新训练并复算。
+被排除的 /workspace/datasets/robofactory_multitask/three_robots_stack_cube 当前约 165 GB。正式下载前可在确认无进程引用、生成删除 receipt 后回收该目录，或使用新的共享存储；不得边训练边被动耗尽磁盘。
 
-旧阶段关闭结论：
+### 5.2 调用链修改
 
-| 阶段 | 历史结果 | 回退后的处理 |
-| --- | --- | --- |
-| R13 P0 TD-MPC2 | 工程门通过，但 off-path，动作 bit-exact | 代码撤销；不继承 W13 名称 |
-| R14 P0/P1/P2/P3 | 77/77/75/76，均未严格高于 77 | 代码撤销；四路永久关闭 |
-| phase-balanced | formal Stack 1/20 | 结果保留，路线淘汰 |
-| robust/world-reactive | formal Stack 0/20 | 结果保留，路线淘汰 |
-| phase-routed | discovery 1/20 vs 1/20 | 结果保留，路线淘汰 |
-| role-query | discovery/validation 通过，formal 2/20 | 实现保留，不能声明提升 |
-| role-query + view-dedup | discovery 1/11 后中止 | 实现保留，无质量结论 |
+R13N 实现时必须搜索并更新：
 
-禁止把工程通过、人工合并或 protected task 复用描述成 R13/R14 的性能提升。
+- before_we_act/benchmark.py；
+- action generator 的 task allowlist；
+- train/validation row-count 常量；
+- task/state/action padding；
+- task embedding/registry；
+- evaluator task registry 和 max episode steps；
+- Gate、acceptance、monitor、launch 和 stop；
+- seed manifest；
+- dataset/cache receipt；
+- 测试中的旧五任务固定集合。
 
-## 3. 根因判断
+两个 Stack task 必须从活动 allowlist 和正式 Gate 中移除，但历史 archive 不修改。
 
-### 3.1 为什么四个任务看起来高、Stack 很低
+### 5.3 B6 baseline
 
-历史 R12/R14 评测中，四个 protected tasks 直接复用冻结 W12 输出，合计 74/80。它们并不是 R13/R14 新组件重新执行后获得的泛化成绩。
+B6 是 W12-style ACT 架构在六任务上的全新从零训练：
 
-Stack 是唯一真正调用候选逻辑的任务，因此它暴露了系统的实际改进能力：
+- 不启用旧 R15 Stack patch；
+- 六任务共同训练；
+- task-balanced sampling；
+- action/state 统一 padding 并保留真实 active-agent mask；
+- view mask 由每任务 manifest 决定；
+- 每个任务均由模型真实推理，不做 task-level result reuse。
 
-- W12 formal 终态链约为 B=15、A=6、C=3。
-- 成功通常约 400 步完成；失败常运行到 800 步，表现为早期小误差累积且缺少恢复。
-- global、agent_0、agent_1、agent_2 在已审计 Stack 样本中 bit-exact，原多视角信息实际退化为重复单视角。
-- DINO spatial bridge 约 6×8 token，而 cube half-size 约 0.02、最终垂直容差约 ±0.005。
-- success-only BC 覆盖专家轨迹，却很少覆盖学生偏离后的恢复状态。
-- 多条方法在 discovery/validation 小幅胜出、formal 回落，说明收益被 seed 方差和分布外状态吞没。
+训练完成后为六任务各建立：
 
-[判断] 当前最可能的瓶颈排序为：
+- Discovery20 baseline；
+- Validation20 baseline；
+- Formal20 baseline；
+- task-specific seed JSON；
+- model-native rollout；
+- 成功和失败视频；
+- task-stage diagnostics；
+- checkpoint/normalization/dataset receipt。
 
-1. 失败状态与恢复监督不足；
-2. 观测视角退化及空间精度不足；
-3. 长链 action chunk 的误差累积；
-4. 动作分布建模能力；
-5. 高层 world/decision 表达。
+历史非 Stack 四任务 74/80 只用于 sanity check，不参与新 acceptance 运算。
 
-这个排序可能错的主要原因是：重新生成真实不同视角后，视觉几何可能一跃成为第一瓶颈。新路线用单变量分支和独立闭环 seeds 来区分。
+## 6. R14N：四卡独立改进
 
-## 4. 新的阶段命名
+四个分支从同一 B6 base commit 和同一数据 receipt 创建，每路只改变一个主要变量。
 
-旧 R13/R14 标识永久保留给已关闭历史，避免新结果与旧结论混淆。
+### 6.1 GPU0 / A：Task-Balanced Data Curriculum
 
-| 新阶段 | 名称 | 目标 |
-| --- | --- | --- |
-| R13N | Baseline & Observation Reset | 重建 W11/W12 基线，冻结 observation/data 事实 |
-| R14N | Causal Policy Tournament | 四卡独立验证数据、几何、生成头、恢复控制 |
-| R15N | Winner Composition & Confirmation | 只组合已独立胜出的轴，并做 50-seed 确认 |
-| PIVOT-N | Task Portfolio Reset | Stack 持续失败时，从零建立新任务组合 |
+- 模型架构与 B6 完全相同。
+- 改变 task/episode/phase sampling。
+- 对长任务不再因 transitions 多而压制短任务。
+- 使用先短任务稳定、再混入长时程协作的 curriculum。
+- 记录每任务有效 batch 比例和 gradient contribution。
 
-## 5. R13N：基线与观测重置
+建议分支：exp/r14n-a-six-task-curriculum。
 
-### 5.1 R13N-0 权重重建
+### 6.2 GPU1 / B：Heterogeneous Observation Fusion
 
-历史权重为零，第一步不是训练改进模型，而是重建可审计基线：
+- 只改变 observation fusion。
+- 对真多视角使用 calibration-aware view tokens 和 agent role。
+- 对 bit-exact 视角在 encoder 前去重。
+- 对 Place Food global-only 使用单 active view，不生成虚假 agent view。
+- active-agent mask、view mask、action slice 必须一致。
+- 不允许训练期 privileged state 进入部署输入。
 
-1. 固定 feat/model-improvements commit。
-2. 固定数据 repo、revision、split、样本数、camera keys、action codec 和 normalization receipt。
-3. 重建 W11 belief checkpoint。
-4. 重建 W12 ACT checkpoint，不启用 R15 patch。
-5. strict load 后在五任务上重新运行 paired Gate20。
-6. 生成新的 B_reset 指标、seed-level JSON、视频和 checkpoint manifest。
-
-历史 77/100 只作为外部参考。B_reset 是新实验的可执行对照；如果 B_reset 显著低于 77，先调查复现偏差，不允许直接把较低分数当作容易超越的新门槛。
-
-### 5.2 R13N-1 observation 审计
-
-对每个任务至少抽样 50 个 episode、每个 episode 的起始/中段/终态：
-
-- 逐相机 pixel SHA-256、max-abs、PSNR 和 active mask；
-- intrinsic、extrinsic、look_at、分辨率、裁剪和时间戳；
-- 数据集与 evaluator 的相机定义是否一致；
-- agent observation 是否真的对应不同机器人；
-- padding view 是否在进入 encoder 前被 mask；
-- RGB、qpos 和 action 是否时间对齐。
-
-冻结结构化 observation_audit.json。只有以下两种合法路线：
-
-- 真多视角：像素与外参确实不同，保留 view/role identity。
-- 诚实单视角：bit-exact 重复视角只保留一路，不再伪装成多视角。
-
-### 5.3 R13N-2 数据重置
-
-为 Stack 生成两个彼此分离的数据增量：
-
-1. Geometry set：真实不同的 global/agent cameras，或单视角高分辨率 crop；不得只改 view embedding。
-2. Recovery set：从 B_reset 失败轨迹的首次偏离点开始，由合法 expert/planner 给出纠正动作，覆盖 B 未放稳、A 滑移、C 对齐、释放失败和中间层坍塌。
-
-每条 recovery 样本记录：
-
-- source rollout、seed、首次偏离 step；
-- 介入前 observation；
-- expert correction 和恢复后是否重新进入成功轨迹；
-- cube stage；
-- 是否使用训练期 privileged label；
-- policy 输入中是否完全移除 privileged state。
-
-R13N 通过条件：
-
-- B_reset 五任务 Gate20 完整；
-- observation audit 无未解释的 camera/time alignment 异常；
-- Geometry/Recovery 数据 receipt 完整；
-- train/validation/formal seeds 互不重叠；
-- 数据和缓存检查不会覆盖历史产物。
-
-## 6. R14N：四卡因果模型锦标赛
-
-四个分支从同一个 R13N base commit 创建，共享 B_reset、原始数据和冻结增量数据；每个分支只改变一个主轴。
-
-### 6.1 GPU0 / A：Recovery-DAgger ACT
-
-目标：验证“训练分布缺少失败恢复”是否是主因。
-
-- 保持 W12 ACT 架构和 observation 不变。
-- 加入冻结 Recovery set。
-- success expert、recovery prefix、recovery continuation 分层采样。
-- 对严重 OOD 状态提高采样权重，但不改变动作损失定义。
-- 记录 policy rollout 到 expert intervention 的 paired 改善。
-
-参考 [HumanCompatibleAI DAgger 实现](https://github.com/HumanCompatibleAI/imitation/blob/master/docs/algorithms/dagger.rst)。只移植 dataset aggregation、round identity 和 intervention receipt，不引入其环境或 policy 框架。
-
-建议分支：exp/r14n-a-recovery-dagger-act。
-
-### 6.2 GPU1 / B：Geometry-Aware ACT
-
-目标：验证“空间信息不足”是否是主因。
-
-- 动作头和训练数据量保持与 B_reset 一致。
-- 若审计确认真多视角，使用相机外参编码和 role-conditioned queries。
-- 若审计确认单视角，使用 exact dedup，并取消重复 view embedding。
-- 提升 object-region token 分辨率。
-- 增加训练期 cube center、层级和相对位姿辅助头；辅助标签不得进入部署输入。
-- 正式输出仍只有原 action codec。
-
-建议分支：exp/r14n-b-geometry-act。
+建议分支：exp/r14n-b-heterogeneous-observation。
 
 ### 6.3 GPU2 / C：RGB Diffusion Policy Head
 
-目标：验证 ACT/CVAE action chunk 是否限制了多峰精细动作。
+- observation encoder、数据和 action codec 与 B6 对齐。
+- 只把 ACT/CVAE action head 替换为 RGB-conditioned action diffusion。
+- horizon、执行频率、latency 上限和 seed 固定。
+- 先做 tiny-batch overfit、strict shape、finite action 和 deterministic sampling preflight。
 
-- observation encoder、数据、action codec 与 B_reset 对齐。
-- 只替换 action head 和采样器。
-- 冻结 horizon、执行频率、最大 inference latency 和 seed 规则。
-- 先做 tiny-batch overfit、shape parity、finite action、latency 和 deterministic seed preflight。
+移植来源：[Diffusion Policy 官方仓库](https://github.com/real-stanford/diffusion_policy)。只移植最小 action diffusion 闭包，并固定 upstream commit、license、source map 和 parity。
 
-优先移植 [Diffusion Policy 官方仓库](https://github.com/real-stanford/diffusion_policy)。上游代码提供视觉策略、配置、日志和 checkpoint 复现结构；本项目只取最小 action diffusion 闭包。
+建议分支：exp/r14n-c-six-task-diffusion。
 
-建议分支：exp/r14n-c-rgb-diffusion。
+### 6.4 GPU3 / D：Uncertainty-Gated Residual Recovery
 
-### 6.4 GPU3 / D：Residual Recovery Controller
+- B6 生成主 action chunk。
+- residual head 在预注册的不确定度或进度停滞条件触发。
+- 面向六任务采集 on-policy failure/intervention 数据。
+- residual 有动作幅度、持续步数、latency 和 fallback 强限制。
+- 报告 intervention rate、paired wins/losses、timeout、fallback 和恢复后成功率。
 
-目标：验证小范围闭环纠偏是否比重生成完整 action chunk 更可靠。
+建议分支：exp/r14n-d-six-task-residual。
 
-- B_reset 生成主 action chunk。
-- residual head 只在预注册的不确定度或阶段偏离条件触发。
-- residual 有严格幅度、持续步数、deadline 和 bit-exact fallback。
-- 只用 Recovery set 训练纠偏，不改 B_reset 主干。
-- 必须报告 intervention rate、paired wins/losses、timeout 和 fallback。
+## 7. 外部开源移植规则
 
-建议分支：exp/r14n-d-residual-recovery。
+每次模型尝试都先搜索论文官方开源实现，但只有满足以下条件才移植：
 
-### 6.5 条件性 3D 路线
+1. 输入模态与六任务合法 observation 一致。
+2. 许可证允许。
+3. exact upstream commit 可固定。
+4. 最小 patch 可与本项目 action codec 对齐。
+5. parity、method separation、strict load 和 action-effect 可测试。
+6. RTX 5090 / CUDA 12.8 环境可运行。
+7. 推理 latency 满足 task control frequency。
 
-[3D Diffusion Policy 官方实现](https://github.com/YanjieZe/3D-Diffusion-Policy)显示其输入和数据流程依赖 point cloud/depth，并提供自定义任务 wrapper。它只有在以下条件全部满足时才能替换 R14N-D：
+论文成绩只解释动机，不替代本项目闭环结果。
 
-- 训练和 evaluator 都能合法提供同定义 depth/point cloud；
-- calibration 可复现；
-- 不使用 policy 不可见的 simulator state；
-- 数据审计在训练前完成；
-- 替换决定在看到候选结果前预注册。
+## 8. 新验收合同
 
-否则不启动 DP3，避免把训练期 privileged 3D 信息伪装成合法部署能力。
+### 8.1 统一分母
 
-## 7. 外部论文代码移植规则
+- Discovery20：6×20 = 120 episodes。
+- Validation20：6×20 = 120 episodes。
+- Formal20：6×20 = 120 episodes。
+- Confirmation50：6×50 = 300 episodes。
 
-每条路线在写模型代码前完成：
+各层 seeds 独立。候选在上一层冻结后才能进入下一层。
 
-1. 记录论文、官方仓库 URL、license 和 exact upstream commit。
-2. 建立 component lock、source map、adaptation card 和最小 patch。
-3. 禁止复制整个上游仓库或引入其训练环境作为隐式依赖。
-4. 用 parity test 证明移植核心与上游一致。
-5. 用 method-separation test 证明四个候选没有混入彼此改动。
-6. 对输入合法性、action effect、checkpoint strict load、fallback 和 latency 做 preflight。
-7. 论文指标只能解释方法动机，不能当作本项目成功证据。
+### 8.2 禁止 protected reuse
 
-W12 的 ACT 基线可对照 [ACT 官方实现](https://github.com/tonyzhaozh/act)，但当前仓库既有 ACT 路径仍是本项目基线事实源。
+六个任务都必须由候选模型实际执行：
 
-## 8. 统一验收规则
+- 不得复制 B6 rollout JSON；
+- 不得按任务路由回旧模型获得分数；
+- 不得将 fallback 成功计为 candidate-native success；
+- numerical safety fallback 可以保留，但对应 episode 在 candidate-native 口径计失败。
 
-### 8.1 三层 seeds
+同时报告：
 
-- Discovery20：独立 seeds，对 B_reset 做 identical-seed paired comparison。
-- Validation20：冻结候选后使用第二组独立 seeds。
-- Formal20：使用原始冻结 Gate20 seeds。
-- Confirmation50：仅对 Formal PASSED winner 使用第三组新 seeds。
+- model-native score；
+- safety-system score；
+- fallback/intervention coverage；
+- 每任务 paired wins/losses。
 
-任何层失败都停止该候选，不创建后续运行目录。
+正式 winner 以 model-native score 为主。
 
-### 8.2 PASSED 条件
+### 8.3 PASSED 条件
 
-设 B_reset 为重建基线：
+设 B6 为同 seeds 新基线，候选必须同时满足：
 
-1. candidate total 必须严格大于 max(B_reset total, 77)。
-2. Stack 必须严格大于 max(B_reset Stack, 3)。
-3. 五个任务中任何任务不得低于 B_reset 对应成功数。
-4. protected exact reuse 必须逐 seed 验证；若实际调用候选，则不能再标记为 exact reuse。
-5. Formal 胜出后，Confirmation50 必须继续保持正 paired net improvement。
-6. OOM、NaN、异常重启、无心跳、非有限动作或验收 JSON 缺失均 fail closed。
+1. 六任务总成功数严格高于 B6。
+2. 六个任务的成功数均不得低于 B6。
+3. 至少两个任务严格高于 B6。
+4. 至少一个新增任务 Pass Shoe 或 Place Food 严格高于 B6。
+5. candidate-native coverage = 100% episodes。
+6. 无 OOM、NaN、异常重启、非有限动作、无心跳或缺失 acceptance。
+7. Formal20 通过后，Confirmation50 仍保持正 paired net improvement，且无单任务回退。
 
-同时报告两套口径：
+如果 B6 在某任务达到 20/20，该任务只要求不回退；模型选择主要由未饱和任务产生的 paired improvement 决定。
 
-- System score：包含合法路由/fallback 的完整系统成绩。
-- Candidate coverage：候选在每个任务实际介入的回合和 step 比例。
+### 8.4 指标
 
-只有 system score 提升时可以声明综合闭环提升；只有 candidate coverage 足够时才可以声明新模型跨任务泛化。
+每任务固定报告：
 
-### 8.3 Stack 阶段指标
+- Success Rate；
+- Wilson interval；
+- Mean Steps to Success；
+- Executable Rate；
+- Intervention/Fallback Rate；
+- candidate-native coverage；
+- paired wins/losses；
+- episode latency P50/P95；
+- task-specific stage completion。
 
-除最终 success 外，固定报告：
+任务阶段只用于诊断，不替代 success。
 
-- cubeB_placed；
-- cubeA_on_cubeB；
-- cubeC_on_cubeA；
-- release success；
-- first deviation step；
-- recovery trigger 和 recovery success；
-- 400/600/800 step 生存曲线；
-- seed-level paired wins/losses。
+## 9. R15N：组合与确认
 
-阶段指标只用于根因分析，不替代最终 success。
+只有两个主轴分别独立通过 Formal20，才允许组合。
 
-## 9. R15N：winner 组合
+允许示例：
 
-只有两个不同主轴都独立通过 Formal20，才允许创建组合分支。例如：
+- curriculum winner + observation winner；
+- observation winner + diffusion winner；
+- curriculum winner + residual recovery winner。
 
-- Recovery data winner + Geometry winner；
-- Geometry winner + Diffusion head winner；
-- Recovery data winner + Residual controller winner。
+组合必须重新运行 Discovery20、Validation20、Formal20 和 Confirmation50。失败路线不得通过组合绕过独立归因。
 
-禁止：
+若四路均失败：
 
-- 将两个失败方案组合后直接跳过独立归因；
-- 在组合阶段重新调 formal seeds；
-- 用 discovery 最佳 checkpoint 替代冻结 validation winner；
-- 因组合 total 上升而忽略单任务回退。
+- 保留六任务和 B6；
+- 根据 seed-level 失败分布重新提出候选；
+- 不自动加入 Stack；
+- single-robot pick_meat/strike_cube 只有在研究目标明确扩展到跨机器人数量泛化时才进入下一轮。
 
-组合必须重新运行 Discovery20、Validation20、Formal20 和 Confirmation50。
+## 10. 四卡和运行约定
 
-## 10. PIVOT-N：任务组合切换
-
-满足以下任一条件才触发：
-
-- R14N 四路均无法在 formal 使 Stack 严格大于 max(B_reset Stack, 3)；
-- observation audit 证明 Stack 的合法观测无法支持所需空间精度，且无法重新生成一致的训练/评估数据；
-- 两轮 Recovery set 扩充后，首次偏离和终态链均无改善。
-
-候选来自 Hugging Face zeno-ai 组织，优先：
-
-- pick_meat；
-- place_food；
-- 其他 agent observations 与 global observation 在真实像素和视角上不同的任务。
-
-camera_alignment 已在当前五任务中，除非选择不同 repo/revision/observation 定义，否则不算新增任务。
-
-切换前必须：
-
-1. 冻结新的任务列表和总分分母。
-2. 审计每个数据集的 revision、split、相机、动作编码和成功定义。
-3. 为新任务从零训练全部 task-dependent 权重。
-4. 为旧基线和新候选分别运行相同 seeds。
-5. 不得在看到结果后删除失败任务。
-
-## 11. 四卡与运行约定
-
-| GPU | R14N 候选 | tmux 建议 |
+| GPU | 候选 | tmux 建议 |
 | ---: | --- | --- |
-| 0 | A Recovery-DAgger ACT | bwa-r14n-a |
-| 1 | B Geometry-Aware ACT | bwa-r14n-b |
+| 0 | A Task-Balanced Curriculum | bwa-r14n-a |
+| 1 | B Heterogeneous Observation | bwa-r14n-b |
 | 2 | C RGB Diffusion Policy | bwa-r14n-c |
 | 3 | D Residual Recovery | bwa-r14n-d |
 
-要求：
+每路必须有独立：
 
-- 独立 branch、worktree、run root、checkpoint、日志、状态、心跳和 tmux。
-- 数据集与 Hugging Face cache 只读共享。
-- producer 每 20 秒写原子 heartbeat。
-- monitor 从结构化 status/acceptance 读取状态，不从日志存在性猜测。
-- stop 只终止 manifest 中登记的 PID 和 session。
-- 不覆盖任何历史 run root。
+- branch/worktree；
+- output/log/checkpoint；
+- status/heartbeat；
+- tmux session；
+- acceptance JSON；
+- seed-level results。
 
-当前服务器在清理后无历史 checkpoint，禁止直接运行旧 handoff 脚本。新的一键 launch/monitor/stop 在 R13N receipt 完成后实现。
+数据集与 Hugging Face cache 只读共享。monitor 读取 producer heartbeat 和结构化 acceptance，不从日志文件存在性猜测状态。
 
-## 12. 当前资产和验证命令
+## 11. 当前资产和下一步
 
-保留资产：
+服务器：
 
-| 资产 | 路径 |
-| --- | --- |
-| 多任务数据集 | /workspace/datasets/robofactory_multitask |
-| Hugging Face cache | /workspace/.cache/huggingface |
-| 高分辨率 feature cache | /workspace/bwa_runs/shared/r12r4_native_full_cache_v2 |
-| 历史日志和结构化结果 | /workspace/bwa_runs |
-| 远程主工作树 | /workspace/fe-pc-wam |
+- repo：/workspace/fe-pc-wam；
+- dataset root：/workspace/datasets/robofactory_multitask；
+- HF cache：/workspace/.cache/huggingface；
+- 当前可用磁盘约 218 GB；
+- 被排除的 ThreeRobotsStackCube 数据约 165 GB；
+- Pass Shoe/Place Food 尚未以正式 manifest 部署；
+- 当前无可恢复模型 checkpoint。
 
-本地验证：
+下一次实施顺序：
+
+1. 为六任务实现 dataset audit 和 revision-specific download receipt。
+2. 更新全部 task registry、allowlist、shape/padding、Gate 和 monitor。
+3. 用 dry-run 验证六任务调用链。
+4. 回收不再使用的远程 Stack 数据或扩展存储。
+5. 下载 Pass Shoe/Place Food。
+6. 从零训练 B6。
+7. 冻结 B6 后创建 R14N 四路分支。
+
+在 B6 checkpoint、六任务 seeds 和 acceptance 代码齐备前，不启动长期训练。
+
+## 12. 当前验证命令
+
+本地：
 
     cd /home/jeong/zeno/wam/before-we-act
     git switch feat/model-improvements
@@ -377,14 +423,7 @@ camera_alignment 已在当前五任务中，除非选择不同 repo/revision/obs
     .venv/bin/python -m pytest -q tests/before_we_act
     git diff --check
 
-回退完整性：
-
-    cd /home/jeong/zeno/wam/before-we-act
-    git diff --name-status 8b90d9e..HEAD -- before_we_act/world_model before_we_act/planner before_we_act/data/world_windows.py before_we_act/evaluate_team_world.py before_we_act/evaluate_world_guided_decision.py before_we_act/train_team_world.py
-
-上述命令在本次回退提交之后应只显示历史 commit 比较；工作区不应重新出现这些路径。
-
-远程同步：
+远程状态：
 
     ssh -p 10328 root@69.176.92.104
     cd /workspace/fe-pc-wam
@@ -392,25 +431,28 @@ camera_alignment 已在当前五任务中，除非选择不同 repo/revision/obs
     git pull --ff-only origin feat/model-improvements
     git status --short
     git rev-parse HEAD
+    df -h /workspace
 
-Hugging Face token 只允许通过 S0 已有环境变量或受限 secret 机制注入，不得写入代码、配置、argv、日志、文档或 Git。
+Hugging Face token 只允许通过 S0 已有环境变量或受限 secret 注入，不得写入代码、配置、argv、日志、文档或 Git。
 
-## 13. 当前声明边界
+## 13. 声明边界
 
 可以声明：
 
-- 旧 R13/R14 模型、planner、配置、验收和运行代码已回退；
-- 当前代码回到 W12 架构基线，并保留无依赖的 R15 observation/action 实现；
-- 本次回退后本地完整测试为 110 passed；
-- 历史 W12 参考是 77/100，但当前权重已删除；
-- 新路线先重建基线，再进行数据/几何/动作头/恢复控制的独立比较。
+- 新路线正式排除全部 Stack 任务；
+- 新六任务包含 Pass Shoe 和 Place Food；
+- Pass Shoe 已验证为真实不同多视角；
+- Place Food pinned Hub revision 是双机器人 global-only；
+- 新 baseline 和候选都需要从零训练；
+- 新 Gate 不允许 protected result reuse。
 
 禁止声明：
 
-- 当前已有可运行的 W12、W13 或 R14 checkpoint；
-- role-query/view-dedup 已正式提高成功率；
-- 四个 protected tasks 证明新模型跨任务泛化；
-- Diffusion Policy、DP3 或 DAgger 在本项目尚未运行时已经有效；
-- 通过降低 baseline 或更换 seeds 获得提升。
+- 历史 77/100 可直接换算为六任务成绩；
+- 当前已有六任务 checkpoint；
+- 本地旧 Place Food 多视角缓存等同于 pinned Hub 数据；
+- candidate 未真实执行某任务却获得该任务成功分；
+- 任一新方法在训练前已经优于 B6；
+- Stack 以诊断、fallback 或隐含分母形式重新进入路线。
 
-后续只在本文件追加冻结阶段结论和当前有效命令。长日志、逐分钟快照、失败分支细节和淘汰产物继续进入 docs/archive。
+后续只在本文件追加冻结阶段结论和当前有效命令。长日志、逐分钟快照和淘汰分支细节继续进入 docs/archive。
