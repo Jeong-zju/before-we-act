@@ -4264,7 +4264,7 @@ MP4、sidecar 和总 status 已下载到本地仓库忽略目录 `/home/jeong/ze
 
 e54 使用 `bwa/r15-role-query-view-dedup@bd1ae1e9f2f193c29cc851b529a36965d4df7aa0`、RTX 5090 GPU3、tmux `bwa-r15s-dedup-e54` 和独立 root `/workspace/bwa_runs/r15e54-20260808-role-query-view-dedup-e9-ft5k-discovery20`。训练已完成 `5000/5000`，末次 loss/L1=`0.05206514/0.05206477`，checkpoint=`.../train/stack_expert/checkpoints/checkpoint_005000.pt`，SHA256=`304b7f64a5393a1db7b87c782d7d05af73bc93e6e3eff53a1c126cfde9db8ed8`；`08:41:46Z` 已进入 discovery，进度=`2/20`、success=`0`，producer heartbeat=`08:41:51Z`，程序 `evaluate_action_generator_evolution.py`，无 OOM/NaN/进程消失。后续队列冻结为：e54 discovery 严格胜过 control `1/20` 才创建 e55 validation；e55 再严格胜过独立 control `1/20` 才创建 e56 formal；任一门失败，后继显示 `BLOCKED_BY_GATE` 并停止该路线，不把“排队”误写成“必然运行”。当前 e55/e56 均为 `QUEUED`，GPU=`3`，预定 tmux 分别为 `bwa-r15s-dedup-e55/e56`，run root 仍不存在，因此没有伪造 branch/commit 或进度。
 
-为使持续监测直接展示上述条件队列，`bwa/r15-closed-loop-evolution@cce6d51a0fb49a89c1cc23587cff2e6af3df0a66` 在既有 monitor 增加实际 update/episode 驱动的 24 格文本进度条，并新增 `monitor_r15_promotion_queue.sh`：每层显示 `state/gate/prerequisite`、progress/success、root、candidate、GPU、tmux、branch/commit、log 和 detail；不存在的后继只显示 `QUEUED`，前门失败则显示 `BLOCKED_BY_GATE`。本地与远端定向测试均为 `8 passed`，Python compile、shell syntax 与 `git diff --check` 通过；远端第一次测试暴露写死 PID=`123` 在不同主机的非确定性，随后只修复测试为显式模拟 liveness，生产 monitor 逻辑未降低“PID 消失即 FAILED”的门槛。远端 `/workspace/bwa_worktrees/r15/evolution` 已 fast-forward 到该 commit 并用真实 e54/e55/e56 路径验证输出。
+为使持续监测直接展示上述条件队列，`bwa/r15-closed-loop-evolution@cce6d51a0fb49a89c1cc23587cff2e6af3df0a66` 在既有 monitor 增加实际 update/episode 驱动的 24 格文本进度条，并新增 `monitor_r15_promotion_queue.sh`：每层显示 `state/gate/prerequisite`、progress/success、root、candidate、GPU、tmux、branch/commit、log 和 detail；不存在的后继只显示 `QUEUED`，前门失败则显示 `BLOCKED_BY_GATE`。本地与远端定向测试均为 `8 passed`，Python compile、shell syntax 与 `git diff --check` 通过；远端第一次测试暴露写死 PID=`123` 在不同主机的非确定性，随后只修复测试为显式模拟 liveness，生产 monitor 逻辑未降低“PID 消失即 FAILED”的门槛。远端 `/workspace/bwa_worktrees/r15/evolution` 已 fast-forward 到该 commit 并用真实 e54/e55/e56 路径验证输出；持久只读 tmux `bwa-r15-monitor-dedup-queue` 已按 30 秒间隔启动，pane PID=`683896`，不占 GPU，也不控制 producer 生命周期。
 
 本轮可复制命令如下；三路训练/验证均由实际 producer heartbeat 驱动状态，不以日志存在冒充存活：
 
@@ -4325,6 +4325,9 @@ ssh -p 10328 root@69.176.92.104 '
   --stage "validation|/workspace/bwa_runs/r15e55-20260808-role-query-view-dedup-e9-ft5k-validation20|p3|3|bwa-r15s-dedup-e55" \
   --stage "formal|/workspace/bwa_runs/r15e56-20260808-role-query-view-dedup-e9-ft5k-formal20|p3|3|bwa-r15s-dedup-e56" \
   --once'
+
+# 查看已经持久运行的 30 秒刷新队列 monitor（Ctrl-b d 仅脱离，不停止）
+ssh -t -p 10328 root@69.176.92.104 'tmux attach-session -t bwa-r15-monitor-dedup-queue'
 
 # 新隔离 root 中重新渲染一对结果闭锁视频；若 GPU1 有生产任务，脚本只等待、不抢占
 ssh -p 10328 root@69.176.92.104 '
