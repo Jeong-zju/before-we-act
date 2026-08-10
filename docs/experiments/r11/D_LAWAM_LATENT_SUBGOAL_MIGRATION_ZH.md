@@ -7,6 +7,8 @@
 `ConditionalFlowMatchingHead`、LAM decoder、Qwen processor/collator 和 freeze policy。
 不是按论文另写一个同名动作头。逐文件路径、SHA256 和 license 见
 `third_party/r11/lawam/SOURCE_RECEIPT.json` 与 `LICENSE_MAP.md`。
+独立 venv 只安装下列运行依赖；源码由 builder 在 receipt 校验后加入 import path，
+不执行 editable install，也不向只读 vendor checkout 写入 `egg-info`。
 
 ## 逐符号映射
 
