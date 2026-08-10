@@ -119,3 +119,30 @@ def validate_asset_receipt(path: str | Path, expected: Mapping[str, str]) -> dic
     if actual != receipt.get("sha256"):
         raise ValueError(f"foundation file hash mismatch: {asset}")
     return receipt
+
+
+def validate_asset_bundle_receipt(path: str | Path, expected: Mapping[str, object]) -> dict:
+    """Validate a frozen multi-file/model-revision receipt without auth metadata."""
+
+    receipt_path = Path(path)
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if receipt.get("status") != "PASSED":
+        raise ValueError(f"foundation bundle receipt is not PASSED: {receipt_path}")
+    for key, value in expected.items():
+        if receipt.get(key) != value:
+            raise ValueError(f"foundation bundle receipt mismatch at {key}")
+    files = receipt.get("files")
+    if not isinstance(files, list) or not files:
+        raise ValueError(f"foundation bundle has no files: {receipt_path}")
+    seen: set[str] = set()
+    for entry in files:
+        local_path = str(entry.get("local_path", ""))
+        expected_hash = entry.get("sha256")
+        if not local_path or local_path in seen or not expected_hash:
+            raise ValueError("foundation bundle has invalid or duplicate file identity")
+        seen.add(local_path)
+        asset = Path(local_path)
+        actual = sha256_file(asset)
+        if actual != expected_hash:
+            raise ValueError(f"foundation bundle hash mismatch: {asset}")
+    return receipt
