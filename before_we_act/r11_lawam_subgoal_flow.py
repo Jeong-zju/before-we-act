@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import sys
+from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Mapping
 
@@ -44,9 +45,10 @@ def _latest_valid_indices(mask: torch.Tensor) -> torch.Tensor:
 class LaWAMRoboFactoryAdapter:
     """Translate the common six-task batch through official LaWAM builders."""
 
-    def __init__(self, train_collator, infer_batch_builder) -> None:
+    def __init__(self, train_collator, infer_batch_builder, spatial_preprocess=None) -> None:
         self.train_collator = train_collator
         self.infer_batch_builder = infer_batch_builder
+        self.spatial_preprocess = spatial_preprocess
 
     @staticmethod
     def _agent(batch: Mapping, index: int) -> int:
@@ -69,10 +71,14 @@ class LaWAMRoboFactoryAdapter:
                 raise ValueError("LaWAM training action has no valid timestep")
             target = future[index, int(future_index[index].item()), 0]
             primary_video = torch.stack((current[index, 0], target), dim=0).unsqueeze(0)
+            wrist_images = current[index, 1].unsqueeze(0)
+            if self.spatial_preprocess is not None:
+                primary_video = self.spatial_preprocess(primary_video[0]).unsqueeze(0)
+                wrist_images = self.spatial_preprocess(wrist_images)
             features.append(
                 {
                     "primary_videos": primary_video,
-                    "wrist_images": current[index, 1].unsqueeze(0),
+                    "wrist_images": wrist_images,
                     "lang": str(batch["task_text"][index]),
                     "state": qpos[index].unsqueeze(0),
                     "action": actions[index, :valid_actions],
@@ -282,6 +288,9 @@ def _build_official_backend(config: Mapping, artifacts: Mapping[str, str]):
     from starVLA.model.framework.latent_world.processor_utils import (
         build_latent_world_processor_spec,
     )
+    from starVLA.model.framework.latent_world.batch_utils import (
+        prepare_frame_spatial_uint8,
+    )
     from starVLA.model.framework.latent_world.runtime.freeze_policy import (
         LatentWorldPolicyFreezeConfig,
         apply_policy_freeze,
@@ -375,7 +384,20 @@ def _build_official_backend(config: Mapping, artifacts: Mapping[str, str]):
     # Reuse the already loaded processor and exact placeholder id.
     train_collator._processor = backend.processor
     train_collator._placeholder_token_id = backend.placeholder_token_id
-    return backend, LaWAMRoboFactoryAdapter(train_collator, infer_builder), pretrain
+    train_spatial_preprocess = partial(
+        prepare_frame_spatial_uint8,
+        target_hw=infer_builder.DEFAULT_INFER_IMAGE_HW,
+        apply_center_crop_90=False,
+    )
+    return (
+        backend,
+        LaWAMRoboFactoryAdapter(
+            train_collator,
+            infer_builder,
+            spatial_preprocess=train_spatial_preprocess,
+        ),
+        pretrain,
+    )
 
 
 def _clone_requires_grad_leaf(_module, _inputs, output):
@@ -411,6 +433,7 @@ def build_lawam_subgoal_flow(config: Mapping, project_root: str | Path) -> R11La
         "lawam_pretrain": pretrain,
         "task_sft_checkpoint": "none",
         "action_horizon": ACTION_HORIZON,
+        "lam_spatial_preprocess": "official prepare_frame_spatial_uint8 256x256",
         "scheduled_sampling": {"start": 0.0, "end": 1.0, "updates": 10000},
         "trainable_parameter_map": {
             name: bool(parameter.requires_grad) for name, parameter in model.named_parameters()

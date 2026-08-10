@@ -133,6 +133,25 @@ def test_adapter_preserves_two_frame_future_and_tail_action_mask():
     assert train.features[1]["action_hz"] == 99.0
 
 
+def test_training_adapter_applies_frozen_lam_geometry_to_primary_and_wrist_views():
+    train = FakeTrainCollator()
+
+    def resize(frames):
+        return torch.nn.functional.interpolate(
+            frames.float(), size=(16, 16), mode="nearest"
+        ).to(torch.uint8)
+
+    adapter = LaWAMRoboFactoryAdapter(
+        train,
+        FakeInferBuilder(),
+        spatial_preprocess=resize,
+    )
+    adapter.training_batch(_batch(), torch.device("cpu"))
+
+    assert train.features[0]["primary_videos"].shape == (1, 2, 3, 16, 16)
+    assert train.features[0]["wrist_images"].shape == (1, 3, 16, 16)
+
+
 def test_full_loss_backward_and_scheduled_sampling_probability():
     model = R11LaWAMSubgoalFlow(
         FakeBackend(), LaWAMRoboFactoryAdapter(FakeTrainCollator(), FakeInferBuilder())
