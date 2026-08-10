@@ -9,6 +9,8 @@
 `third_party/r11/lawam/SOURCE_RECEIPT.json` 与 `LICENSE_MAP.md`。
 独立 venv 只安装下列运行依赖；源码由 builder 在 receipt 校验后加入 import path，
 不执行 editable install，也不向只读 vendor checkout 写入 `egg-info`。
+Torch/torchvision 固定为远程已验证的 `2.7.1+cu128/0.22.1+cu128`；这是 RTX 5090
+可运行且不超过宿主 CUDA 12.8 驱动的组合，避免无约束解析到 CUDA 13 wheel。
 
 ## 逐符号映射
 

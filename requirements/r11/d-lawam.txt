@@ -1,6 +1,9 @@
 # The receipted upstream symbols are imported directly from the launcher-
 # verified read-only vendor checkout; never let pip write editable metadata
 # into that checkout.
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
 accelerate==1.13.0
 bitsandbytes>=0.46,<0.47
 diffusers==0.36.0

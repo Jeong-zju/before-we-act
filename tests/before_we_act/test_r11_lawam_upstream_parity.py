@@ -1,3 +1,4 @@
+import importlib.util
 import os
 from pathlib import Path
 import sys
@@ -24,7 +25,7 @@ def test_official_qformer_and_flow_fixed_tensor_parity():
     # though this parity uses only the policy modules. Keep the local parity
     # environment small by stubbing that unused framework; remote F0 installs
     # and imports the pinned full dependency set.
-    if "lightning" not in sys.modules:
+    if importlib.util.find_spec("lightning") is None:
         lightning = ModuleType("lightning")
         lightning.LightningModule = nn.Module
         lightning_pytorch = ModuleType("lightning.pytorch")
@@ -32,8 +33,10 @@ def test_official_qformer_and_flow_fixed_tensor_parity():
         lightning.pytorch = lightning_pytorch
         sys.modules["lightning"] = lightning
         sys.modules["lightning.pytorch"] = lightning_pytorch
-    if "wandb" not in sys.modules:
-        sys.modules["wandb"] = ModuleType("wandb")
+    if importlib.util.find_spec("wandb") is None:
+        wandb = ModuleType("wandb")
+        wandb.__spec__ = importlib.util.spec_from_loader("wandb", loader=None)
+        sys.modules["wandb"] = wandb
 
     from starVLA.model.framework.vlas.flowmatching_expert import (
         ConditionalFlowMatchingConfig,
