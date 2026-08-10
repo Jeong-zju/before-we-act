@@ -32,9 +32,16 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.output.exists():
-        # Never replace a completed formal decision with a wrapper failure.
+        # Never replace the formal decision for this exact code identity with a
+        # later wrapper failure.  Prerequisite failures are retry receipts, and
+        # an older commit's receipt must not remain authoritative after a
+        # fast-forward deployment.
         current = json.loads(args.output.read_text())
-        if current.get("complete"):
+        if (
+            current.get("complete")
+            and current.get("commit") == args.commit
+            and "failed_stage" not in current
+        ):
             return
     payload = {
         "format_version": "before-we-act.r11.acceptance/1",
