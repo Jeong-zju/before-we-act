@@ -279,6 +279,24 @@ run_child PREPARING dependencies pip "installing branch-local upstream dependenc
   "$PYTHON" -m pip install --disable-pip-version-check --cache-dir /workspace/.cache/pip \
     -r "${REQUIREMENTS[0]}"
 
+# PyTorch wheels keep CUDA libraries in distribution-specific directories.
+# When an exact dependency is satisfied by the frozen base overlay, its shared
+# object can live outside the candidate venv (cusparselt is notably top-level
+# rather than under nvidia/).  Prefer candidate-local libraries, then add the
+# frozen base directories as a read-only fallback before any F0/F1 process.
+CUDA_LIB_DIRS=()
+for site_root in "$VENV_SITE" "$BASE_SITE"; do
+  if [[ -d "$site_root/nvidia" ]]; then
+    while IFS= read -r library_dir; do
+      CUDA_LIB_DIRS+=("$library_dir")
+    done < <(find "$site_root/nvidia" -mindepth 2 -maxdepth 3 -type d -name lib | sort)
+  fi
+  [[ -d "$site_root/cusparselt/lib" ]] && CUDA_LIB_DIRS+=("$site_root/cusparselt/lib")
+done
+((${#CUDA_LIB_DIRS[@]})) || { printf 'candidate/base CUDA library directories are missing\n' >&2; exit 3; }
+CUDA_LIBRARY_PATH="$(IFS=:; printf '%s' "${CUDA_LIB_DIRS[*]}")"
+export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 "$PYTHON" -m pip freeze >"$CANDIDATE_ROOT/status/pip_freeze.txt"
 
 run_child PREFLIGHT F0 preflight_r11_candidate.py \
