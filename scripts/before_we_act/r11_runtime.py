@@ -191,8 +191,8 @@ def _acceptance(root: Path) -> dict[str, Any]:
 
 def _validation(root: Path) -> dict[str, Any]:
     for path in (
-        root / "validation/formal/summary.json",
-        root / "validation/discovery/summary.json",
+        root / "validation/formal/normal_summary.json",
+        root / "validation/discovery/normal_summary.json",
     ):
         value = read_json(path)
         if value:

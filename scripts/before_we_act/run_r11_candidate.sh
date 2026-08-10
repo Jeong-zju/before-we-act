@@ -36,6 +36,7 @@ SELECTION_GATE="$ROOT/scripts/before_we_act/check_r11_selection_gate.py"
 ACCEPTOR="$ROOT/scripts/before_we_act/accept_r11_candidate.py"
 FAIL_WRITER="$ROOT/scripts/before_we_act/fail_r11_candidate.py"
 PREFLIGHT="$ROOT/scripts/before_we_act/preflight_r11_candidate.py"
+PYTEST_RECEIPT="$ROOT/scripts/before_we_act/verify_r11_pytest_report.py"
 MANIFEST="$RUN_ROOT/run_manifest.json"
 BASELINE_PROVENANCE="$RUN_ROOT/preflight/baseline_provenance.json"
 BASELINE_CHECKPOINT=/workspace/bwa_runs/w10-six-task-v1/train/formal/checkpoint_120000.pt
@@ -238,7 +239,13 @@ run_child PREFLIGHT F0 pytest \
   env PYTHONPATH="$ROOT" \
     "${VENDOR_ENV_NAMES[$CANDIDATE]}=${VENDOR_PATHS[$CANDIDATE]}" \
     "$PYTHON" -m pytest -q \
+    --junitxml "$CANDIDATE_ROOT/preflight/f0_pytest.xml" \
     "$ROOT"/tests/before_we_act/test_r11_*.py
+run_child PREFLIGHT F0 verify_r11_pytest_report.py \
+  "fail closed if any upstream parity or integration test was skipped" other \
+  env PYTHONPATH="$ROOT" "$PYTHON" "$PYTEST_RECEIPT" \
+    --junit "$CANDIDATE_ROOT/preflight/f0_pytest.xml" \
+    --output "$CANDIDATE_ROOT/preflight/f0_pytest_receipt.json"
 
 train_stage() {
   local stage="$1" target="$2" destination="$3" resume="$4" smoke="$5"

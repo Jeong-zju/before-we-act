@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from scripts.before_we_act.verify_r11_pytest_report import summarize
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -105,3 +107,16 @@ def test_runner_routes_parity_to_each_remote_read_only_vendor():
         assert variable in runner
         assert path in runner
     assert '"${VENDOR_ENV_NAMES[$CANDIDATE]}=${VENDOR_PATHS[$CANDIDATE]}"' in runner
+
+
+def test_remote_f0_receipt_rejects_any_skip(tmp_path):
+    junit = tmp_path / "f0.xml"
+    junit.write_text(
+        '<testsuites><testsuite tests="4" failures="0" errors="0" skipped="1"/>'
+        "</testsuites>",
+        encoding="utf-8",
+    )
+    assert summarize(junit) == {"tests": 4, "failures": 0, "errors": 0, "skipped": 1}
+    runner = source("scripts/before_we_act/run_r11_candidate.sh")
+    assert "--junitxml" in runner
+    assert "verify_r11_pytest_report.py" in runner
