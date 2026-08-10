@@ -11,7 +11,7 @@
 
 本次采用普通 Git 回撤提交，不改写历史。需要追溯旧实验时只读以下归档：
 
-- [V5.0 及以前完整历史](../archive/20260725_P1_MULTI_ROBOT_MODEL_ARCHITECTURE_ACTION_GENERATION_ROADMAP_V2.0_FULL_HISTORY_ZH.md)
+- [旧路线完整历史](../archive/20260725_P1_MULTI_ROBOT_MODEL_ARCHITECTURE_ACTION_GENERATION_ROADMAP_V2.0_FULL_HISTORY_ZH.md)
 
 归档只用于审计，里面的阶段状态、命令和分支不代表当前执行计划。
 
@@ -28,6 +28,7 @@ W10 使用 `NoWristPAIRRoute`：每个机器人读取当前全局固定相机 RG
 - qpos/action 归一化统计直接从训练 HDF5 的物理量重新计算。
 - Place Food 没有 agent camera；训练与推理都确定性复用同一时刻的 global RGB 作为 local RGB。这是输入接口对齐，不是额外信息。
 - 训练代码集成提交：`87a6153cb9d0b7899066a82c69daeea1c70996a9`。
+- R11+ 回撤与新 baseline 固化提交：`6b82f89e72917ad7155286e6239079f2c3c3b1dc`。
 - 远程正式训练提交：`a335a2dfdf429058f4543a15c66a1d6c6738c77b`（远程实验分支 `bwa/w10-six-task`）。远程验证时使用的 complete-resume 和 Place Food 相机回退修复已纳入当前主分支回撤提交。
 
 ### 2.2 正式 Validation20 结果
