@@ -23,7 +23,7 @@
       "jialei02/lawam_lam": "MIT",
       "jialei02/lawam_pretrain": "MIT"
     },
-    "receipt": "/workspace/artifacts/r11_upstream/LaWAM/ASSET_BUNDLE_RECEIPT.json"
+    "receipt": "/workspace/artifacts/r11_upstream/lawam_assets/ASSET_BUNDLE_RECEIPT.json"
   },
   "model_config": {
     "action_horizon": 100,
