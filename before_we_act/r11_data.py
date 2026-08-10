@@ -217,6 +217,12 @@ class R11EpisodeDataset(Dataset):
                 [request.time_index],
                 dtype=np.float32,
             )
+            qpos_source = data["observation"]["agents"][f"panda_{request.arm}"]["qpos"]
+            future_qpos = np.zeros((len(self.future_offsets), 9), dtype=np.float32)
+            for index, offset in enumerate(self.future_offsets):
+                future_index = request.time_index + offset
+                if future_index < episode.length:
+                    future_qpos[index] = qpos_source[future_index]
             action_source = data["action"]["agents"][f"panda_{request.arm}"]["commanded"]
             action_end = min(request.time_index + self.horizon, episode.length)
             action = np.asarray(
@@ -235,11 +241,16 @@ class R11EpisodeDataset(Dataset):
         action_tensor[valid_steps:] = torch.from_numpy(action[-1])
         action_mask = torch.zeros(self.horizon, dtype=torch.bool)
         action_mask[:valid_steps] = True
+        future_qpos_tensor = (
+            torch.from_numpy(future_qpos) - self.q_mean.unsqueeze(0)
+        ) / self.q_std.unsqueeze(0)
+        future_qpos_tensor[~torch.from_numpy(future_mask)] = 0
         return {
             "current_rgb": current_tensor,
             "future_rgb": future_tensor,
             "future_mask": torch.from_numpy(future_mask),
             "qpos": (torch.from_numpy(qpos) - self.q_mean) / self.q_std,
+            "future_qpos": future_qpos_tensor,
             "action": (action_tensor - self.a_mean) / self.a_std,
             "action_mask": action_mask,
             "task": episode.task,

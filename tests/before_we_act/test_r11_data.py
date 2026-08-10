@@ -87,7 +87,9 @@ def test_episode_adapter_future_masks_text_and_place_food_fallback(episodes):
     sample = R11EpisodeDataset(episodes, stats, image_size=(3, 4))[place]
     assert sample["current_rgb"].shape == (2, 3, 3, 4)
     assert sample["future_rgb"].shape == (4, 2, 3, 3, 4)
+    assert sample["future_qpos"].shape == (4, 9)
     assert sample["future_mask"].tolist() == [True, False, False, False]
+    assert sample["future_qpos"][1:].count_nonzero().item() == 0
     assert sample["action_mask"].sum().item() == 2
     assert sample["task_text"] == "instruction for place_food"
     assert np.array_equal(sample["current_rgb"][0].numpy(), sample["current_rgb"][1].numpy())
