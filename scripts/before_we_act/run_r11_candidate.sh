@@ -164,7 +164,8 @@ cleanup() {
   if ((code != 0 && TERMINAL_WRITTEN == 0)); then
     local state=FAILED
     if grep -Fqi 'CUDA out of memory' "$MAIN_LOG"; then state=FAILED_FIT; fi
-    "$BASE_PYTHON" "$FAIL_WRITER" --candidate "$CANDIDATE" --branch "$BRANCH" \
+    env PYTHONPATH="$ROOT" "$BASE_PYTHON" "$FAIL_WRITER" \
+      --candidate "$CANDIDATE" --branch "$BRANCH" \
       --commit "$COMMIT" --failed-stage "$CURRENT_STAGE" \
       --reason "pipeline exited nonzero at $CURRENT_STAGE; inspect the preserved candidate log" \
       --exit-code "$code" --output "$CANDIDATE_ROOT/acceptance.json" || true
@@ -232,6 +233,46 @@ if [[ ! -x "$VENV_ROOT/bin/python" ]]; then
     "$BASE_PYTHON" -m venv --system-site-packages "$VENV_ROOT"
 fi
 PYTHON="$VENV_ROOT/bin/python"
+# A venv created from a Python executable that itself lives in a venv does not
+# inherit that parent venv's site-packages.  R11 deliberately uses an isolated
+# writable overlay while reusing the frozen RoboFactory/W10 runtime underneath.
+# Record that explicit base path in the candidate venv before resolving its
+# branch-local dependency closure.
+BASE_SITE="$($BASE_PYTHON - <<'PY'
+import site
+paths = [path for path in site.getsitepackages() if path.endswith("site-packages")]
+if not paths:
+    raise SystemExit("base Python has no site-packages path")
+print(paths[0])
+PY
+)"
+VENV_SITE="$($PYTHON - <<'PY'
+import site
+paths = [path for path in site.getsitepackages() if path.endswith("site-packages")]
+if not paths:
+    raise SystemExit("candidate Python has no site-packages path")
+print(paths[0])
+PY
+)"
+[[ -d "$BASE_SITE" && -d "$VENV_SITE" ]] || {
+  printf 'base/candidate site-packages path is missing\n' >&2
+  exit 3
+}
+"$BASE_PYTHON" - "$VENV_SITE/bwa_r11_base_runtime.pth" "$BASE_SITE" <<'PY'
+from pathlib import Path
+import os
+import sys
+import tempfile
+
+destination = Path(sys.argv[1])
+base_site = str(Path(sys.argv[2]).resolve())
+with tempfile.NamedTemporaryFile(
+    mode="w", encoding="utf-8", dir=destination.parent, delete=False
+) as stream:
+    temporary = Path(stream.name)
+    stream.write(base_site + "\n")
+os.replace(temporary, destination)
+PY
 mapfile -t REQUIREMENTS < <(find "$ROOT/requirements/r11" -maxdepth 1 -type f -name "${CANDIDATE,,}-*.txt" -print)
 [[ ${#REQUIREMENTS[@]} -eq 1 ]] || { printf 'expected one candidate requirements file\n' >&2; exit 3; }
 run_child PREPARING dependencies pip "installing branch-local upstream dependency closure" other \
