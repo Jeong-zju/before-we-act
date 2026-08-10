@@ -6,6 +6,7 @@ from before_we_act.r11_lawam_subgoal_flow import (
     ACTION_HORIZON,
     LaWAMRoboFactoryAdapter,
     R11LaWAMSubgoalFlow,
+    _clone_requires_grad_leaf,
 )
 
 
@@ -169,3 +170,15 @@ def test_causal_probe_returns_official_lam_prediction_target_and_persistence():
     assert normal["future_prediction"].shape == normal["future_target"].shape
     assert normal["persistence_prediction"].shape == normal["future_target"].shape
     assert not torch.equal(normal["future_prediction"], shuffled["future_prediction"])
+
+
+def test_frozen_embedding_leaf_is_cloned_for_official_query_injection():
+    leaf = torch.zeros(2, 3, 4, requires_grad=True)
+
+    output = _clone_requires_grad_leaf(None, (), leaf)
+
+    assert output.requires_grad
+    assert not output.is_leaf
+    output[:, 0, :] = 1.0
+    output.sum().backward()
+    assert leaf.grad is not None

@@ -335,6 +335,15 @@ def _build_official_backend(config: Mapping, artifacts: Mapping[str, str]):
         backend.vlm.gradient_checkpointing_enable()
     if hasattr(backend.vlm, "enable_input_require_grads"):
         backend.vlm.enable_input_require_grads()
+        # Transformers marks the output of a frozen input embedding as a
+        # requires-grad leaf. The pinned LaWAM backend then replaces action
+        # placeholders in-place, which PyTorch correctly rejects for a leaf.
+        # Keep the official query-injection path intact while returning a
+        # differentiable non-leaf tensor from the embedding boundary.
+        embedding = backend.vlm.get_input_embeddings()
+        backend._r11_embedding_clone_hook = embedding.register_forward_hook(
+            _clone_requires_grad_leaf
+        )
     pretrain = _load_compatible_pretrain(backend, artifacts["pretrain_checkpoint"])
 
     prompt_config = SimpleNamespace(datasets=None)
@@ -367,6 +376,14 @@ def _build_official_backend(config: Mapping, artifacts: Mapping[str, str]):
     train_collator._processor = backend.processor
     train_collator._placeholder_token_id = backend.placeholder_token_id
     return backend, LaWAMRoboFactoryAdapter(train_collator, infer_builder), pretrain
+
+
+def _clone_requires_grad_leaf(_module, _inputs, output):
+    """Make frozen embedding outputs safe for official in-place query injection."""
+
+    if isinstance(output, torch.Tensor) and output.requires_grad and output.is_leaf:
+        return output.clone()
+    return output
 
 
 def build_lawam_subgoal_flow(config: Mapping, project_root: str | Path) -> R11LaWAMSubgoalFlow:
