@@ -70,6 +70,18 @@ declare -A UPSTREAMS=(
   [C]=a2c298b0a3df3778b973fe65e9e58877b292d8a7
   [D]=4ea6fdadce6c9b8746028307a246b79ee2c4fd55
 )
+declare -A VENDOR_ENV_NAMES=(
+  [A]=R11_VJEPA2_VENDOR
+  [B]=R11_DREAMZERO_VENDOR
+  [C]=R11_COSMOS_VENDOR
+  [D]=R11_LAWAM_VENDOR
+)
+declare -A VENDOR_PATHS=(
+  [A]=/workspace/artifacts/r11_upstream/vjepa2
+  [B]=/workspace/artifacts/r11_upstream/dreamzero
+  [C]=/workspace/artifacts/r11_upstream/cosmos-predict2.5
+  [D]=/workspace/artifacts/r11_upstream/LaWAM
+)
 
 CONFIG="$ROOT/${CONFIGS[$CANDIDATE]}"
 ASSET_SCRIPT="$ROOT/${ASSET_SCRIPTS[$CANDIDATE]}"
@@ -223,7 +235,9 @@ run_child PREFLIGHT F0 preflight_r11_candidate.py \
     --output "$CANDIDATE_ROOT/preflight/candidate.json"
 run_child PREFLIGHT F0 pytest \
   "official fixed-tensor parity plus RoboFactory adapter/common runtime tests" other \
-  env PYTHONPATH="$ROOT" "$PYTHON" -m pytest -q \
+  env PYTHONPATH="$ROOT" \
+    "${VENDOR_ENV_NAMES[$CANDIDATE]}=${VENDOR_PATHS[$CANDIDATE]}" \
+    "$PYTHON" -m pytest -q \
     "$ROOT"/tests/before_we_act/test_r11_*.py
 
 train_stage() {

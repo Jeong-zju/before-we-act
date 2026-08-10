@@ -89,3 +89,17 @@ def test_monitor_lists_all_required_states_and_fields():
         "checkpoint=", "acceptance=", "upstream=", "power=", "queue=",
     ):
         assert field in runtime
+
+
+def test_runner_routes_parity_to_each_remote_read_only_vendor():
+    runner = source("scripts/before_we_act/run_r11_candidate.sh")
+    expected = {
+        "R11_VJEPA2_VENDOR": "/workspace/artifacts/r11_upstream/vjepa2",
+        "R11_DREAMZERO_VENDOR": "/workspace/artifacts/r11_upstream/dreamzero",
+        "R11_COSMOS_VENDOR": "/workspace/artifacts/r11_upstream/cosmos-predict2.5",
+        "R11_LAWAM_VENDOR": "/workspace/artifacts/r11_upstream/LaWAM",
+    }
+    for variable, path in expected.items():
+        assert variable in runner
+        assert path in runner
+    assert '"${VENDOR_ENV_NAMES[$CANDIDATE]}=${VENDOR_PATHS[$CANDIDATE]}"' in runner
