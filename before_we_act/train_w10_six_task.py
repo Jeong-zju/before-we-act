@@ -229,18 +229,6 @@ def main() -> None:
     device = torch.device("cuda:0")
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    atomic_json_save(
-        {
-            "status": "TRAINING",
-            "stage": "formal",
-            "model": "W10 NoWristPAIRRoute",
-            "tasks": list(SIX_TASKS),
-            "update": 0,
-            "target_updates": args.updates,
-            "started_at_epoch": time.time(),
-        },
-        output / "status.json",
-    )
     manifests = [Path(item).resolve() for item in args.manifests]
     episodes = load_episodes(manifests)
 
@@ -252,6 +240,36 @@ def main() -> None:
         print(json.dumps({"resuming": str(resume_path), "update": saved["update"]}), flush=True)
     else:
         stats = compute_stats(episodes)
+
+    if saved and int(saved["update"]) >= args.updates:
+        complete = {
+            "status": "PASSED",
+            "stage": "complete",
+            "model": "W10 NoWristPAIRRoute",
+            "tasks": list(SIX_TASKS),
+            "complete": True,
+            "update": int(saved["update"]),
+            "target_updates": args.updates,
+            "completed_at_epoch": time.time(),
+            "last_metrics": saved.get("last_metrics", {}),
+            "resumed_complete_checkpoint": str(resume_path.resolve()),
+        }
+        atomic_json_save(complete, output / "status.json")
+        print(json.dumps(complete), flush=True)
+        return
+
+    atomic_json_save(
+        {
+            "status": "TRAINING",
+            "stage": "formal",
+            "model": "W10 NoWristPAIRRoute",
+            "tasks": list(SIX_TASKS),
+            "update": int(saved["update"]) if saved else 0,
+            "target_updates": args.updates,
+            "started_at_epoch": time.time(),
+        },
+        output / "status.json",
+    )
 
     dataset = NoWristFrameDataset(episodes, horizon=100, stats=stats)
     start_update = int(saved["update"]) if saved else 0

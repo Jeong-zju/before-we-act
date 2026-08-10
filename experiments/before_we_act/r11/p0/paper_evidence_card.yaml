@@ -1,8 +1,0 @@
-schema_version: 1
-candidate_id: p0
-method: V-JEPA 2 predictive visual representation
-official_code: https://github.com/facebookresearch/vjepa2
-used_symbol: VisionTransformerPredictor
-absorbed_core_view: masked prediction in latent visual token space can provide a temporally predictive representation without reconstructing pixels
-falsification: fail source/parity/restore/action-hash gates, or rank below another valid candidate under the frozen representation score
-claim_boundary: off-path representation screening only; no closed-loop improvement claim

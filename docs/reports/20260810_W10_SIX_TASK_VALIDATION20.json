@@ -1,0 +1,49 @@
+{
+  "baseline": "W10 NoWristPAIRRoute six-task 120k",
+  "checkpoint": "/workspace/bwa_runs/w10-six-task-v1/train/formal/checkpoint_120000.pt",
+  "checkpoint_sha256": "e1b07b2cf7bff37428bf54a27f545632c8a1013930d96f6e646d8ca055f2f574",
+  "completed_at_epoch": 1786348107.9073303,
+  "completed_at_utc": "2026-08-10T07:48:27Z",
+  "episodes": 120,
+  "evaluation_root": "/workspace/bwa_runs/w10-six-task-v1/evaluation/validation",
+  "log": "/workspace/bwa_runs/w10-six-task-v1/logs/validation_supervisor.log",
+  "protocol_status": "PASSED",
+  "remote_training_branch": "bwa/w10-six-task",
+  "remote_training_commit": "a335a2dfdf429058f4543a15c66a1d6c6738c77b",
+  "success_rate": 0.7333333333333333,
+  "successes": 88,
+  "tasks": {
+    "camera_alignment": {
+      "episodes": 20,
+      "success_rate": 0.4,
+      "successes": 8
+    },
+    "lift_barrier": {
+      "episodes": 20,
+      "success_rate": 1.0,
+      "successes": 20
+    },
+    "long_pipeline_delivery": {
+      "episodes": 20,
+      "success_rate": 1.0,
+      "successes": 20
+    },
+    "pass_shoe": {
+      "episodes": 20,
+      "success_rate": 1.0,
+      "successes": 20
+    },
+    "place_food": {
+      "episodes": 20,
+      "success_rate": 0.0,
+      "successes": 0
+    },
+    "take_photo": {
+      "episodes": 20,
+      "success_rate": 1.0,
+      "successes": 20
+    }
+  },
+  "training_root": "/workspace/bwa_runs/w10-six-task-v1/train/formal",
+  "validation_note": "protocol_status=PASSED only certifies that all fixed-seed episodes completed; model quality is the measured 88/120 result"
+}

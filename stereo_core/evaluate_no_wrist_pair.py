@@ -61,7 +61,13 @@ def prepare_no_wrist_batch(observation, arms, stats, device):
     global_image = global_image[0] if global_image.ndim == 4 else global_image
     global_images, local_images, qposes = [], [], []
     for arm in arms:
-        local = np.asarray(sensors[f"head_camera_agent{arm}"]["rgb"])
+        local_key = f"head_camera_agent{arm}"
+        # PlaceFood exposes only the global fixed camera. Training explicitly
+        # reuses that image as the missing per-agent view, so deployment must
+        # apply the identical deterministic fallback.
+        local = np.asarray(
+            sensors[local_key]["rgb"] if local_key in sensors else global_image
+        )
         qpos = np.asarray(observation["agent"][f"panda-{arm}"]["qpos"])
         global_images.append(global_image)
         local_images.append(local[0] if local.ndim == 4 else local)
