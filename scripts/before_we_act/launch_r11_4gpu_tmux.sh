@@ -140,7 +140,7 @@ AVAILABLE_GIB="$(df -Pk /workspace | awk 'NR==2 {print int($4/1024/1024)}')"
 ((AVAILABLE_GIB >= 60)) || { printf 'less than 60 GiB free under /workspace\n' >&2; exit 3; }
 for candidate in "${SELECTED[@]}"; do
   gpu=$(( $(printf '%d' "'$candidate") - 65 ))
-  uuid="$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader | awk -F', ' -v index="$gpu" '$1==index {print $2}')"
+  uuid="$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader | awk -F', ' -v gpu_index="$gpu" '$1==gpu_index {print $2}')"
   if nvidia-smi --query-compute-apps=gpu_uuid --format=csv,noheader | grep -Fxq "$uuid"; then
     printf 'GPU %s is already in use; refusing candidate %s\n' "$gpu" "$candidate" >&2
     exit 3

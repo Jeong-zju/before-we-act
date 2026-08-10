@@ -27,6 +27,8 @@ def test_launcher_has_exact_independent_branch_gpu_tmux_mapping():
     ):
         assert session in launcher
     assert "CUDA_VISIBLE_DEVICES='$gpu'" in launcher
+    assert '-v gpu_index="$gpu"' in launcher
+    assert '-v index="$gpu"' not in launcher
     assert "merge --ff-only" in launcher
     assert "record_r11_deployment.py" in launcher
 
