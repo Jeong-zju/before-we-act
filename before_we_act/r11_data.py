@@ -380,6 +380,8 @@ class ExactSixTaskAccumulationSampler(Sampler[list[R11SampleRequest]]):
             "next_sample_keys",
             "effective_batch",
             "samples_per_task",
+            "micro_batch_size",
+            "accumulation_steps",
         ):
             if receipt.get(field) != expected[field]:
                 raise ValueError(f"resume sample cursor mismatch at {field}")

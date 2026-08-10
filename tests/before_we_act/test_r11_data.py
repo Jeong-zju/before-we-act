@@ -115,6 +115,11 @@ def test_exact_accumulation_balance_and_resume_cursor(episodes):
     broken["next_sample_keys"] = list(reversed(receipt["next_sample_keys"]))
     with pytest.raises(ValueError, match="next_sample_keys"):
         sampler.validate_resume_receipt(broken)
+    broken_micro = dict(receipt)
+    broken_micro["micro_batch_size"] = 1
+    broken_micro["accumulation_steps"] = 48
+    with pytest.raises(ValueError, match="micro_batch_size"):
+        sampler.validate_resume_receipt(broken_micro)
     projection = episode_receipt(episodes)
     assert projection["episodes"] == 6
     assert list(projection["task_texts"]) == list(SIX_TASKS)
