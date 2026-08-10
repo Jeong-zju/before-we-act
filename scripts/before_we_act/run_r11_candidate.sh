@@ -121,12 +121,25 @@ identity_alive() {
 
 watch_child() {
   local pid="$1" start="$2" stage="$3"
+  # This function runs in an asynchronous subshell.  It must not inherit the
+  # wrapper's terminal-state traps: terminating the watchdog is an internal
+  # control action, not an operator stop of the candidate.
+  trap - EXIT USR1 INT TERM
   while identity_alive "$pid" "$start"; do
     "$BASE_PYTHON" "$RUNTIME" watchdog --run-root "$RUN_ROOT" \
       --candidate "$CANDIDATE" --stage "$stage" --pid "$pid" \
       --pid-start-time-ticks "$start" >/dev/null 2>&1 || break
     sleep 20
   done
+}
+
+stop_watchdog() {
+  local pid="${WATCHDOG_PID:-0}"
+  if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && ((pid > 1)); then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
+  WATCHDOG_PID=0
 }
 
 on_signal() {
@@ -142,8 +155,7 @@ on_signal() {
 
 cleanup() {
   local code=$?
-  kill "$WATCHDOG_PID" 2>/dev/null || true
-  wait "$WATCHDOG_PID" 2>/dev/null || true
+  stop_watchdog
   if ((STOP_REQUESTED)); then
     status STOPPED "$CURRENT_STAGE" run_r11_candidate.sh \
       "graceful stop completed; all produced artifacts are preserved" 130 || true
@@ -179,9 +191,7 @@ run_child() {
   WATCHDOG_PID=$!
   local code=0
   wait "$CHILD_PID" || code=$?
-  kill "$WATCHDOG_PID" 2>/dev/null || true
-  wait "$WATCHDOG_PID" 2>/dev/null || true
-  WATCHDOG_PID=0
+  stop_watchdog
   CHILD_PID=0
   CHILD_START=0
   CHILD_KIND=other
