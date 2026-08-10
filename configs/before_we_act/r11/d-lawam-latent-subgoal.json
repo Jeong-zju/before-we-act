@@ -62,6 +62,8 @@
   "training": {
     "precision": "bfloat16",
     "optimizer": "AdamW8bit",
+    "learning_rate": 0.00001,
+    "weight_decay": 0.0001,
     "micro_batch_size": 2,
     "gradient_accumulation": 24,
     "effective_batch": 48,

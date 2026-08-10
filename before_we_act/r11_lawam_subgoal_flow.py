@@ -210,6 +210,32 @@ class R11LaWAMSubgoalFlow(nn.Module):
             "action_condition_mode": action_condition_mode,
         }
 
+    def causal_probe(
+        self, batch: Mapping, *, action_condition_mode: str = "normal"
+    ) -> dict:
+        """Expose official LAM h_t/h_t1_pred/h_t1_gt without pixel proxies."""
+
+        if action_condition_mode not in ACTION_CONDITION_MODES:
+            raise ValueError(action_condition_mode)
+        prepared = self.adapter.training_batch(batch, self.device)
+        self.prediction_mode = "normal"
+        self.action_condition_mode = action_condition_mode
+        try:
+            shared = self.policy_backend._run_shared_encoding_train(
+                prepared_batch=prepared,
+                source="R11LaWAMSubgoalFlow.causal_probe",
+                lam_features_with_no_grad=True,
+            )
+        finally:
+            self.prediction_mode = "normal"
+            self.action_condition_mode = "normal"
+        return {
+            "future_prediction": shared.h_t1_pred,
+            "future_target": shared.h_t1_gt.detach(),
+            "persistence_prediction": shared.h_t.detach(),
+            "action_condition_mode": action_condition_mode,
+        }
+
 
 def _load_compatible_pretrain(backend: nn.Module, checkpoint_path: str) -> dict:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)

@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from types import SimpleNamespace
 
 from before_we_act.r11_lawam_subgoal_flow import (
     ACTION_HORIZON,
@@ -84,6 +85,19 @@ class FakeBackend(nn.Module):
         actions = signal[:, None, None].expand(-1, ACTION_HORIZON, 8).clone()
         return actions, {"h_t": h_t.cpu(), "h_t1_pred": h_t1.cpu()}
 
+    def _run_shared_encoding_train(self, prepared_batch, **_kwargs):
+        values = torch.tensor(
+            [feature["primary_videos"][:, 0].float().mean() for feature in prepared_batch["features"]]
+        )
+        context = torch.stack((values, values + 1), dim=1).unsqueeze(-1)
+        latent_action = self.vlm_to_lam(context)
+        h_t = values[:, None, None].expand(-1, 4, 1)
+        return SimpleNamespace(
+            h_t=h_t,
+            h_t1_pred=self.lam.decoder(h_t, latent_action),
+            h_t1_gt=h_t + 2,
+        )
+
 
 def _batch(batch_size=2):
     torch.manual_seed(22)
@@ -143,3 +157,15 @@ def test_future_and_latent_action_interventions_change_actions():
     assert not torch.equal(normal["action"], shuffled["action"])
     assert not torch.equal(normal["action"], action_shuffled["action"])
     assert batch["task_text"] == ["task-0", "task-1"]
+
+
+def test_causal_probe_returns_official_lam_prediction_target_and_persistence():
+    model = R11LaWAMSubgoalFlow(
+        FakeBackend(), LaWAMRoboFactoryAdapter(FakeTrainCollator(), FakeInferBuilder())
+    ).eval()
+    batch = _batch()
+    normal = model.causal_probe(batch, action_condition_mode="normal")
+    shuffled = model.causal_probe(batch, action_condition_mode="action_shuffled")
+    assert normal["future_prediction"].shape == normal["future_target"].shape
+    assert normal["persistence_prediction"].shape == normal["future_target"].shape
+    assert not torch.equal(normal["future_prediction"], shuffled["future_prediction"])

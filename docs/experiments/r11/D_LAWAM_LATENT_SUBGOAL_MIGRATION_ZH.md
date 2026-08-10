@@ -33,6 +33,11 @@ pred_action_emb)` 生成 `h_t1_pred`。flow head 的 encoder condition 是
 - action-shuffle gate：在官方 `VLMToLAMQFormer` 输出处置换 latent action，再测 future error；
   这是 LaWAM 中动作条件的真实 latent-action 表示，不是改任务文本。
 
+`causal_probe` 直接调用官方 backend 的 shared training encoder，读取其真实
+`h_t1_pred`、`h_t1_gt` 与 `h_t`，分别作为 prediction、target 和 persistence；因此
+future-vs-persistence 与 action-shuffle 都核验实际送入 flow expert 的 latent subgoal，
+没有另造辅助预测头。
+
 ## 100-step 与训练目标
 
 动作 horizon 从官方 LIBERO 的 50 对齐到 100，action/state 维度改为本项目 8/9。
@@ -43,6 +48,7 @@ mask 与 HDF5 action mask 完全一致；推理固定 100，输出形状始终 `
 `loss_flow + 0.1 loss_perceptual + 0.1 loss_distill`。DINO/LAM encoder 是冻结 teacher；
 Q-Former、LaWM decoder、flow head 和官方配方允许的 VLM 路径联合训练。effective batch
 固定 48，默认 micro-batch 2、accumulation 24。
+优化器冻结默认值为 AdamW8bit、lr `1e-5`、weight decay `1e-4`。
 
 ## Foundation 与无 task-SFT 证明
 
