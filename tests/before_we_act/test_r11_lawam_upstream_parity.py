@@ -38,11 +38,16 @@ def test_official_qformer_and_flow_fixed_tensor_parity():
         wandb.__spec__ = importlib.util.spec_from_loader("wandb", loader=None)
         sys.modules["wandb"] = wandb
 
+    # Import the actual adapter entrypoint used by F1 so its official schema
+    # and transform dependency closure is a fail-closed part of F0.
+    from starVLA.dataloader.latent_world_train_collator import LatentWorldTrainCollator
     from starVLA.model.framework.vlas.flowmatching_expert import (
         ConditionalFlowMatchingConfig,
         ConditionalFlowMatchingHead,
     )
     from starVLA.model.framework.vlas.lawam import VLMToLAMQFormer
+
+    assert LatentWorldTrainCollator.__module__.startswith("starVLA.")
 
     torch.manual_seed(260615768)
     qformer = VLMToLAMQFormer(
