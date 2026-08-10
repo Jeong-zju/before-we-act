@@ -31,6 +31,23 @@ def main() -> None:
     checkpoint = args.checkpoint.resolve(strict=True)
     if sha256_file(checkpoint) != args.checkpoint_sha256:
         raise ValueError("W10 latency checkpoint SHA256 differs")
+    output = args.output.resolve()
+    if output.exists():
+        existing = json.loads(output.read_text(encoding="utf-8"))
+        expected = {
+            "status": "PASSED",
+            "checkpoint": str(checkpoint),
+            "checkpoint_sha256": args.checkpoint_sha256,
+            "warmup_per_task": WARMUP_PER_TASK,
+            "repeats_per_task": REPEATS_PER_TASK,
+            "tasks": list(SIX_TASKS),
+        }
+        if any(existing.get(key) != value for key, value in expected.items()):
+            raise ValueError("existing immutable W10 latency receipt identity differs")
+        if output.stat().st_mode & 0o777 != 0o444:
+            raise ValueError("existing W10 latency receipt must be mode 0444")
+        print(json.dumps(existing | {"rows": "saved", "reused": True}, sort_keys=True))
+        return
     device = torch.device(args.device)
     model, stats, _ = load_model(str(checkpoint), device)
     saved = torch.load(checkpoint, map_location="cpu", weights_only=False, mmap=True)
@@ -84,7 +101,8 @@ def main() -> None:
         "rows": rows,
         "completed_at_epoch": time.time(),
     }
-    atomic_json(args.output, result)
+    atomic_json(output, result)
+    output.chmod(0o444)
     print(json.dumps(result | {"rows": "saved"}, sort_keys=True))
 
 
