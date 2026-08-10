@@ -8,6 +8,7 @@ accelerate==1.13.0
 bitsandbytes>=0.46,<0.47
 diffusers==0.36.0
 lightning==2.4.0
+numpydantic==1.6.9
 omegaconf==2.3.0
 transformers==5.2.0
 qwen-vl-utils==0.0.14
