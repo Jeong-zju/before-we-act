@@ -136,10 +136,11 @@ def test_adapter_preserves_two_frame_future_and_tail_action_mask():
 def test_training_adapter_applies_frozen_lam_geometry_to_primary_and_wrist_views():
     train = FakeTrainCollator()
 
-    def resize(frames):
+    def resize(frame_hwc):
+        frame = torch.as_tensor(frame_hwc).permute(2, 0, 1).unsqueeze(0)
         return torch.nn.functional.interpolate(
-            frames.float(), size=(16, 16), mode="nearest"
-        ).to(torch.uint8)
+            frame.float(), size=(16, 16), mode="nearest"
+        )[0].to(torch.uint8)
 
     adapter = LaWAMRoboFactoryAdapter(
         train,

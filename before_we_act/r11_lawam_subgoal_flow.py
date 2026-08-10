@@ -57,6 +57,17 @@ class LaWAMRoboFactoryAdapter:
             return int(value[index].item())
         return int(value[index])
 
+    def _preprocess_chw_frames(self, frames: torch.Tensor) -> torch.Tensor:
+        if self.spatial_preprocess is None:
+            return frames
+        processed = []
+        for frame in frames:
+            # The official helper deliberately accepts the same HWC numpy/PIL
+            # boundary used by its inference builder.
+            frame_hwc = frame.permute(1, 2, 0).contiguous().numpy()
+            processed.append(self.spatial_preprocess(frame_hwc))
+        return torch.stack(processed, dim=0)
+
     def training_batch(self, batch: Mapping, device: torch.device) -> dict:
         current = batch["current_rgb"].detach().cpu()
         future = batch["future_rgb"].detach().cpu()
@@ -73,8 +84,8 @@ class LaWAMRoboFactoryAdapter:
             primary_video = torch.stack((current[index, 0], target), dim=0).unsqueeze(0)
             wrist_images = current[index, 1].unsqueeze(0)
             if self.spatial_preprocess is not None:
-                primary_video = self.spatial_preprocess(primary_video[0]).unsqueeze(0)
-                wrist_images = self.spatial_preprocess(wrist_images)
+                primary_video = self._preprocess_chw_frames(primary_video[0]).unsqueeze(0)
+                wrist_images = self._preprocess_chw_frames(wrist_images)
             features.append(
                 {
                     "primary_videos": primary_video,
