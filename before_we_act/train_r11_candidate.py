@@ -675,7 +675,12 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         latest = checkpoints / "checkpoint_latest.pt"
         atomic_torch_save(payload, latest)
         digest = sha256_file(latest)
-        if update == args.updates or update % args.save_every == 0:
+        # ``latest`` is atomically refreshed at every save interval and is the
+        # crash-resume checkpoint. Retaining a hard-linked full-model file at
+        # every 1k update would keep the old inode after the next replacement
+        # and exhaust the four-way run disk. Only each frozen gate endpoint is
+        # promoted to an immutable named checkpoint.
+        if update == args.updates:
             checkpoint_alias(latest, checkpoints / f"checkpoint_{update:06d}.pt")
         atomic_json(
             checkpoints / "checkpoint_latest.receipt.json",

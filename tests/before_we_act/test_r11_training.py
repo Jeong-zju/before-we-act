@@ -18,6 +18,9 @@ from before_we_act.train_r11_candidate import (
 )
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
+
 def test_training_contract_accepts_both_frozen_config_layouts():
     a = {
         "data": {"micro_batch": 2, "accumulation": 24},
@@ -55,6 +58,12 @@ def test_milestone_alias_preserves_old_checkpoint_when_latest_changes(tmp_path):
     atomic_torch_save({"update": 2}, latest)
     assert torch.load(milestone, weights_only=False)["update"] == 1
     assert torch.load(latest, weights_only=False)["update"] == 2
+
+
+def test_trainer_only_promotes_frozen_gate_endpoint_to_named_checkpoint():
+    source = (ROOT / "before_we_act/train_r11_candidate.py").read_text()
+    assert "if update == args.updates:" in source
+    assert "if update == args.updates or update % args.save_every" not in source
 
 
 class _CursorValidator:
