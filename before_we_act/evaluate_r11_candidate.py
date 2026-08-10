@@ -17,7 +17,11 @@ import torch
 import robofactory  # noqa: F401
 
 from before_we_act.r11_data import SIX_TASKS
-from before_we_act.train_r11_candidate import atomic_json, sha256_file
+from before_we_act.train_r11_candidate import (
+    atomic_json,
+    load_checkpoint_model_state,
+    sha256_file,
+)
 from stereo_core.two_three_task_manifest import get_task
 
 
@@ -58,7 +62,7 @@ def load_candidate(
     model = build_r11_model(
         config["model"], saved["provenance"]["config_path"], project_root
     )
-    model.load_state_dict(saved["model"], strict=True)
+    load_checkpoint_model_state(model, saved)
     model.to(device).eval()
     stats = {
         key: torch.as_tensor(value, dtype=torch.float32, device=device)

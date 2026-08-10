@@ -13,6 +13,8 @@ from before_we_act.train_r11_candidate import (
     _resume_contract,
     atomic_torch_save,
     checkpoint_alias,
+    checkpoint_model_state,
+    load_checkpoint_model_state,
     process_start_time_ticks,
     training_contract,
 )
@@ -64,6 +66,45 @@ def test_trainer_only_promotes_frozen_gate_endpoint_to_named_checkpoint():
     source = (ROOT / "before_we_act/train_r11_candidate.py").read_text()
     assert "if update == args.updates:" in source
     assert "if update == args.updates or update % args.save_every" not in source
+
+
+class _PartiallyTrainable(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.foundation = torch.nn.Linear(3, 3)
+        self.foundation.requires_grad_(False)
+        self.adapter = torch.nn.Linear(3, 2)
+        self.register_buffer("running_receipt", torch.arange(3.0))
+
+
+def test_checkpoint_saves_trainable_state_and_audits_frozen_rebuild():
+    torch.manual_seed(11)
+    source = _PartiallyTrainable()
+    state, metadata = checkpoint_model_state(source)
+    assert set(state) == {
+        "adapter.weight",
+        "adapter.bias",
+        "running_receipt",
+    }
+    assert metadata["scope"] == "trainable_parameters_plus_non_parameter_state"
+    assert metadata["saved_tensor_bytes"] < sum(
+        value.numel() * value.element_size() for value in source.state_dict().values()
+    )
+
+    torch.manual_seed(23)
+    rebuilt = _PartiallyTrainable()
+    frozen_before = rebuilt.foundation.weight.detach().clone()
+    load_checkpoint_model_state(
+        rebuilt, {"model": state, "model_state": metadata}
+    )
+    torch.testing.assert_close(rebuilt.adapter.weight, source.adapter.weight)
+    torch.testing.assert_close(rebuilt.running_receipt, source.running_receipt)
+    torch.testing.assert_close(rebuilt.foundation.weight, frozen_before)
+
+    drifted = dict(metadata)
+    drifted["trainable_parameter_names"] = []
+    with pytest.raises(ValueError, match="trainable parameter map"):
+        load_checkpoint_model_state(rebuilt, {"model": state, "model_state": drifted})
 
 
 class _CursorValidator:

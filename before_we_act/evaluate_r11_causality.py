@@ -22,6 +22,7 @@ from before_we_act.r11_data import (
 from before_we_act.train_r11_candidate import (
     atomic_json,
     capture_rng,
+    load_checkpoint_model_state,
     move_batch,
     restore_rng,
     sha256_file,
@@ -48,7 +49,7 @@ def _load_model(checkpoint: Path, expected_sha256: str, device: torch.device):
     model = build_r11_model(
         config["model"], saved["provenance"]["config_path"], project_root
     )
-    model.load_state_dict(saved["model"], strict=True)
+    load_checkpoint_model_state(model, saved)
     model.to(device).eval()
     return model, saved, config, observed
 

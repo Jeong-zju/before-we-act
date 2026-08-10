@@ -298,6 +298,102 @@ def move_batch(value: Any, device: torch.device) -> Any:
     return value
 
 
+def _parameter_map_with_aliases(
+    model: torch.nn.Module,
+) -> dict[str, torch.nn.Parameter]:
+    try:
+        return dict(model.named_parameters(remove_duplicate=False))
+    except TypeError:  # pragma: no cover - compatibility with older torch only
+        return dict(model.named_parameters())
+
+
+def checkpoint_model_state(
+    model: torch.nn.Module,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Serialize trainable state while rebuilding frozen foundation weights.
+
+    Every candidate is reconstructed from immutable, hash-verified foundation
+    assets before resume or evaluation.  Saving those frozen multi-billion
+    parameter tensors at every gate would duplicate the foundations and can
+    exhaust the shared run disk.  Trainable parameters and all persistent
+    non-parameter state are sufficient; aliases are retained for strict load
+    auditing.
+    """
+
+    full_state = model.state_dict()
+    parameters = _parameter_map_with_aliases(model)
+    parameter_names = set(parameters)
+    trainable_names = {
+        name for name, parameter in parameters.items() if parameter.requires_grad
+    }
+    missing_trainable = trainable_names - set(full_state)
+    if missing_trainable:
+        raise ValueError(
+            f"trainable parameters missing from model state: {sorted(missing_trainable)}"
+        )
+    non_parameter_names = set(full_state) - parameter_names
+    saved_names = trainable_names | non_parameter_names
+    if not trainable_names:
+        raise ValueError("checkpoint cannot contain zero trainable parameters")
+    selected = {name: full_state[name] for name in full_state if name in saved_names}
+    tensor_bytes = sum(
+        int(value.numel() * value.element_size())
+        for value in selected.values()
+        if isinstance(value, torch.Tensor)
+    )
+    metadata = {
+        "format_version": "before-we-act.r11.model_state/1",
+        "scope": "trainable_parameters_plus_non_parameter_state",
+        "trainable_parameter_names": sorted(trainable_names),
+        "frozen_parameter_names": sorted(parameter_names - trainable_names),
+        "non_parameter_state_names": sorted(non_parameter_names),
+        "saved_state_names_sha256": canonical_sha256(sorted(selected)),
+        "saved_tensor_bytes": tensor_bytes,
+    }
+    return selected, metadata
+
+
+def load_checkpoint_model_state(
+    model: torch.nn.Module, saved: Mapping[str, Any]
+) -> None:
+    state = saved.get("model")
+    if not isinstance(state, Mapping) or not state:
+        raise ValueError("R11 checkpoint model state is missing")
+    metadata = saved.get("model_state")
+    if metadata is None:
+        # Read compatibility for the initial full-state F1 diagnostic artifacts.
+        model.load_state_dict(state, strict=True)
+        return
+    if (
+        metadata.get("format_version") != "before-we-act.r11.model_state/1"
+        or metadata.get("scope")
+        != "trainable_parameters_plus_non_parameter_state"
+    ):
+        raise ValueError("unsupported R11 model-state scope")
+
+    parameters = _parameter_map_with_aliases(model)
+    parameter_names = set(parameters)
+    expected_trainable = {
+        name for name, parameter in parameters.items() if parameter.requires_grad
+    }
+    expected_non_parameter = set(model.state_dict()) - parameter_names
+    expected_frozen = parameter_names - expected_trainable
+    if set(metadata.get("trainable_parameter_names", ())) != expected_trainable:
+        raise ValueError("checkpoint trainable parameter map differs from rebuilt model")
+    if set(metadata.get("non_parameter_state_names", ())) != expected_non_parameter:
+        raise ValueError("checkpoint buffer/extra-state map differs from rebuilt model")
+    if set(metadata.get("frozen_parameter_names", ())) != expected_frozen:
+        raise ValueError("checkpoint frozen parameter map differs from rebuilt model")
+    expected_saved = expected_trainable | expected_non_parameter
+    if set(state) != expected_saved:
+        raise ValueError("checkpoint saved state names differ from declared scope")
+    if metadata.get("saved_state_names_sha256") != canonical_sha256(sorted(state)):
+        raise ValueError("checkpoint saved state-name receipt differs")
+    incompatible = model.load_state_dict(state, strict=False)
+    if set(incompatible.missing_keys) != expected_frozen or incompatible.unexpected_keys:
+        raise ValueError("checkpoint partial state load did not match frozen foundation")
+
+
 def build_optimizer(
     parameters: list[torch.nn.Parameter], contract: Mapping[str, Any], *, device: torch.device
 ):
@@ -595,7 +691,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         )
         if start_update >= args.updates:
             raise ValueError("resume checkpoint already reached this stage target")
-        model.load_state_dict(saved["model"], strict=True)
+        load_checkpoint_model_state(model, saved)
         optimizer.load_state_dict(saved["optimizer"])
         _optimizer_to(optimizer, device)
         scheduler.load_state_dict(saved["scheduler"])
@@ -649,11 +745,13 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     model.train()
 
     def save_checkpoint(update: int) -> tuple[Path, str]:
+        model_state, model_state_metadata = checkpoint_model_state(model)
         payload = {
             "format_version": "before-we-act.r11.checkpoint/1",
             "candidate": candidate,
             "model_name": config["model"],
-            "model": model.state_dict(),
+            "model": model_state,
+            "model_state": model_state_metadata,
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
             "stats": stats,
