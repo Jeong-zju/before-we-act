@@ -47,6 +47,7 @@ def test_pipeline_preserves_exact_gate_order_and_no_w10_action_fallback():
         runner.index("formal-acceptance"),
     ]
     assert ordered == sorted(ordered)
+    assert runner.index("DOWNLOADING foundation") < runner.index("PREPARING dependencies")
     assert "--updates \"$target\"" in runner
     assert "evaluate_no_wrist_pair.py" not in runner
     assert "fallback" not in source("before_we_act/evaluate_r11_candidate.py").lower() or \

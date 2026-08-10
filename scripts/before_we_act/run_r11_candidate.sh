@@ -208,6 +208,14 @@ run_child() {
 mapfile -t MANIFESTS < <(find /workspace/datasets/robofactory_multitask -mindepth 2 -maxdepth 2 -name training_manifest.json -type f | sort)
 [[ ${#MANIFESTS[@]} -eq 6 ]] || { printf 'expected six training manifests\n' >&2; exit 3; }
 
+status DOWNLOADING foundation "$(basename "$ASSET_SCRIPT")" \
+  "verifying or resuming only this candidate's pinned foundation files"
+run_child DOWNLOADING foundation "$(basename "$ASSET_SCRIPT")" \
+  "pinned revision download and immutable hash receipt" other \
+  env HF_HOME=/workspace/.cache/huggingface \
+    R11_HF_TOKEN_FILE="$RUN_ROOT/secrets/hf_token" \
+    PYTHON_BIN="$BASE_PYTHON" "$ASSET_SCRIPT"
+
 status PREPARING dependencies run_r11_candidate.sh "creating isolated candidate environment"
 if [[ ! -x "$VENV_ROOT/bin/python" ]]; then
   run_child PREPARING dependencies python-venv "isolated venv with inherited CUDA runtime" other \
@@ -221,13 +229,6 @@ run_child PREPARING dependencies pip "installing branch-local upstream dependenc
     -r "${REQUIREMENTS[0]}"
 
 "$PYTHON" -m pip freeze >"$CANDIDATE_ROOT/status/pip_freeze.txt"
-status DOWNLOADING foundation "$(basename "$ASSET_SCRIPT")" \
-  "verifying or resuming only this candidate's pinned foundation files"
-run_child DOWNLOADING foundation "$(basename "$ASSET_SCRIPT")" \
-  "pinned revision download and immutable hash receipt" other \
-  env HF_HOME=/workspace/.cache/huggingface \
-    R11_HF_TOKEN_FILE="$RUN_ROOT/secrets/hf_token" \
-    PYTHON_BIN="$BASE_PYTHON" "$ASSET_SCRIPT"
 
 run_child PREFLIGHT F0 preflight_r11_candidate.py \
   "branch/source/license/foundation hashes and cross-candidate diff" other \
