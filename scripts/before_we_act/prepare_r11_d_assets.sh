@@ -50,7 +50,7 @@ PY
   exit 0
 fi
 
-IFS= read -r HF_TOKEN < "${TOKEN_FILE}"
+IFS= read -r HF_TOKEN < "${TOKEN_FILE}" || [[ -n "${HF_TOKEN:-}" ]]
 export HF_TOKEN
 export HF_HOME="${HF_CACHE_ROOT}"
 export HF_HUB_CACHE="${HF_CACHE_ROOT}/hub"
