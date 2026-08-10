@@ -289,6 +289,10 @@ class ExactSixTaskAccumulationSampler(Sampler[list[R11SampleRequest]]):
         self.start_update = int(start_update)
         self.by_task: dict[str, list[int]] = defaultdict(list)
         for index, episode in enumerate(self.episodes):
+            if episode.length < 2:
+                raise ValueError(
+                    f"R11 world-model sampling requires a t+1 target: {episode.path}"
+                )
             self.by_task[episode.task].append(index)
         if set(self.by_task) != set(SIX_TASKS):
             raise ValueError(f"expected six task buckets, got {sorted(self.by_task)}")
@@ -311,7 +315,10 @@ class ExactSixTaskAccumulationSampler(Sampler[list[R11SampleRequest]]):
                 episode_list_index = candidates[rng.randrange(len(candidates))]
                 episode = self.episodes[episode_list_index]
                 arm = episode.arms[rng.randrange(len(episode.arms))]
-                time_index = rng.randrange(episode.length)
+                # Every R11 candidate has a real future-prediction objective.
+                # Exclude the terminal frame so every sampled item has at least
+                # the frozen t+1 target; longer offsets remain mask-controlled.
+                time_index = rng.randrange(episode.length - 1)
                 identity = (
                     f"{episode.manifest_sha256}:{episode.hdf5_sha256}:"
                     f"{episode.episode_index}:{task}:{arm}:{time_index}"

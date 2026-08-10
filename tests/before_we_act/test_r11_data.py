@@ -104,6 +104,7 @@ def test_exact_accumulation_balance_and_resume_cursor(episodes):
     first = sampler.requests_for_update(2)
     assert len(first) == EFFECTIVE_BATCH
     assert Counter(item.task for item in first) == Counter({task: 8 for task in SIX_TASKS})
+    assert all(item.time_index < episodes[item.episode_index].length - 1 for item in first)
     assert [item.sample_key for item in first] == [
         item.sample_key for item in sampler.requests_for_update(2)
     ]
