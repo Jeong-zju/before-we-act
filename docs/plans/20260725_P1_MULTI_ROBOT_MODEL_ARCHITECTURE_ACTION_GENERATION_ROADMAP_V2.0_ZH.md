@@ -2,7 +2,7 @@
 
 > 更新日期：2026-08-11
 > 活动分支：`feat/model-improvements`
-> 当前状态：六任务 W10 基线和数据口径已重新核验；R11 四候选均已独立实现并推送。A/B/D 通过真实 F1 后均在 Discovery gate 按冻结公式失败，C 因冻结 Cosmos 权重授权 403 失败关闭；最终结论为“R11 无胜者”，未生成 Confirmation50 seeds，也未发生 winner/checkpoint 晋级。后续研究选择 LaWAM latent subgoal 路线作为改进起点，并于 2026-08-11 将其源码迁移、受控消融所需公共运行器和测试以 `6cd891b` 合入 `feat/model-improvements`；这是实验代码整合，不改变 LaWAM 在 R11 中仍为 `FAILED`、不是 winner 的结论
+> 当前状态：六任务 W10 基线和数据口径已重新核验；R11 四候选均已独立实现并推送。A/B/D 通过真实 F1 后均在 Discovery gate 按冻结公式失败，C 因冻结 Cosmos 权重授权 403 失败关闭；最终结论为“R11 无胜者”，未生成 Confirmation50 seeds，也未发生 winner/checkpoint 晋级。后续研究选择 LaWAM latent subgoal 路线作为改进起点，并于 2026-08-11 将其源码迁移、受控消融所需公共运行器和测试以 `6cd891b` 合入 `feat/model-improvements`；这是实验代码整合，不改变 LaWAM 在 R11 中仍为 `FAILED`、不是 winner 的结论。R12 已冻结为 L0-L3 LaWAM 受控消融并生成独立正式执行 prompt，但尚未启动实验
 > 活动任务：Lift Barrier、Camera Alignment、Long Pipeline Delivery、Take Photo、Pass Shoe、Place Food；不包含任何 Stack Cube 任务
 
 ## 1. 当前决定
@@ -418,7 +418,7 @@ W10 action prior 是候选内部的可训练组成部分，不是评测 fallback
 
 大预算前的 fail-fast 顺序：
 
-1. **Measurement gate**：核验 frame/action/proprio 时间对齐；小型 oracle transition 在 held-out counterfactual probe 上的宏观 future-vs-persistence gain 至少 +5%，且至少 4/6 任务为正；oracle K=4 ranker 必须证明 proposal 集合中存在优于默认 W10 proposal 的候选。任一失败即停止，不实现大模型。
+1. **Measurement gate**：核验 frame/action/proprio 时间对齐；小型 oracle transition 在 held-out counterfactual probe 上的宏观 future-vs-persistence gain 至少 +5%，且至少 4/6 任务为正。K=4 oracle headroom 使用读取结果前冻结的逐任务 progress/risk 标量和 tie 规则：非默认 proposal 相对默认 W10 proposal 的 macro paired-win rate 至少 10%，至少 4/6 任务各自 paired-win rate 至少 10%，且 macro mean oracle-score advantage 必须大于 0。任一失败即停止，不实现大模型。
 2. **F0/F1**：对 LaWAM official tensor、adapter、W10 partial load、真实 forward/backward/optimizer/save/resume、三种因果模式和 K=4 selector 做零 skip parity/integration gate。不得用 R11 D checkpoint 续训冒充新 F1。
 3. **Discovery1000**：action loss 必须下降；future-vs-persistence 宏观至少 +5% 且至少 4/6 任务为正；action shuffle 使 future error 宏观至少恶化 5% 且至少 4/6 任务达到 5%；prediction off 或 shuffled 使动作 NRMSE 至少恶化 2%；K=4 counterfactual ranking accuracy 至少 70%。任一项失败即停止该消融路线。
 4. **闭环预算**：只有通过上述 gate 的路线才进入 paired Validation5、Selection、Formal 和 Validation20。正式闭环仍使用第 11 节的原始资格门槛和 Confirmation50 非劣界，不得因选择 LaWAM 方向而降低。
@@ -433,4 +433,8 @@ R11 已形成终态，原正式 AI coding prompt 只用于审计和复现，不�
 
 - [R11 四卡 World-Action Model 改进执行 Prompt](../runbooks/R11_FOUR_GPU_WORLD_ACTION_MODEL_EXECUTION_PROMPT_ZH.md)
 
-LaWAM 受控消融尚未分配正式 stage 名称、分支、run root 或运行 prompt。开始实现前必须从本路线第 13.1–13.2 节生成新的正式 prompt，并在变量区冻结 W10 provenance、LaWAM `FAILED` 历史、L0–L3 矩阵、counterfactual probe、上游 commit、GPU、训练预算和新 acceptance。不得沿用 R11 候选状态，不得写入 `/workspace/bwa_runs/r11-four-way-v1`，也不得把方向选择解释为对 R11 gate 的追认。
+LaWAM 受控消融现命名为 **R12**，使用独立分支、worktree、run root、counterfactual probe 和 acceptance；正式执行入口为：
+
+- [R12 LaWAM 受控消融四卡正式执行 Prompt](../runbooks/R12_LAWAM_CONTROLLED_ABLATION_EXECUTION_PROMPT_ZH.md)
+
+R12 prompt 已冻结 W10 provenance、LaWAM `FAILED` 历史、L0-L3 矩阵、K=4 proposal、counterfactual Measurement gate、上游 commit、GPU、训练预算、正式验收和 Confirmation50。它的生成不表示 R12 已启动或任何候选通过；不得沿用 R11 候选状态，不得写入 `/workspace/bwa_runs/r11-four-way-v1`，也不得把方向选择解释为对 R11 gate 的追认。

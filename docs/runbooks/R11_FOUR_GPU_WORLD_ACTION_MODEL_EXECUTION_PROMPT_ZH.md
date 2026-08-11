@@ -1,6 +1,6 @@
-# 四卡模型改进正式执行 AI Coding Prompt（R11 实例，可复用于 R12+）
+# R11 四卡 World-Action Model 正式执行 AI Coding Prompt（历史）
 
-下面整段可直接交给具备本地仓库、Git、SSH 和远程 GPU 操作能力的 coding agent。复用于 R12 以后时，先修改变量区；正文流程保持不变，阶段特有设计和验收以技术路线文档为准。
+本 prompt 只用于审计或复现已经终结的 R11，不得用于启动 R12，也不得写入原 R11 run root。当前 R12 请使用 [R12 LaWAM 受控消融四卡正式执行 Prompt](R12_LAWAM_CONTROLLED_ABLATION_EXECUTION_PROMPT_ZH.md)。
 
 ```text
 ====================
