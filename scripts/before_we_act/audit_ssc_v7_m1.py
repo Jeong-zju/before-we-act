@@ -147,18 +147,6 @@ def write_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def field_roles() -> dict[str, Any]:
-    trajectory_reproduction_passed = (
-        maximum <= args.replay_qpos_tolerance
-        and replay_success == recorded_success
-    )
-    fork_passed = (
-        fork_repeatability is not None and bool(fork_repeatability["passed"])
-    )
-    gate_passed = (
-        fork_passed
-        if args.replay_gate_mode == "benchmark_diagnostic"
-        else trajectory_reproduction_passed and fork_passed
-    )
     return {
         "format_version": "ssc-v7.m1.field_roles/1",
         "deployment_current": [
@@ -906,6 +894,18 @@ def replay_one(
             replay_success = scalar_bool(info["success"], name="info.success")
     finally:
         env.close()
+    trajectory_reproduction_passed = (
+        maximum <= args.replay_qpos_tolerance
+        and replay_success == recorded_success
+    )
+    fork_passed = (
+        fork_repeatability is not None and bool(fork_repeatability["passed"])
+    )
+    gate_passed = (
+        fork_passed
+        if args.replay_gate_mode == "benchmark_diagnostic"
+        else trajectory_reproduction_passed and fork_passed
+    )
     return {
         "task": task,
         "audit_seed": audit_seed,
