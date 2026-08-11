@@ -1,8 +1,8 @@
-# P1 多机器人闭环模型技术路线 V6.1：W10 基线与四路 R11 World-Action Model 方案
+# P1 多机器人闭环模型技术路线 V6.2：W10 基线、R11 结论与 LaWAM 受控消融方向
 
-> 更新日期：2026-08-10
+> 更新日期：2026-08-11
 > 活动分支：`feat/model-improvements`
-> 当前状态：六任务 W10 已完成训练和固定种子 Validation20；旧 R11+ 已撤回；新 R11 调研和四卡方案已完成，代码、训练与验收尚未开始
+> 当前状态：六任务 W10 基线和数据口径已重新核验；R11 四候选均已独立实现并推送。A/B/D 通过真实 F1 后均在 Discovery gate 按冻结公式失败，C 因冻结 Cosmos 权重授权 403 失败关闭；最终结论为“R11 无胜者”，未生成 Confirmation50 seeds，未合并 baseline。后续研究选择 LaWAM latent subgoal 路线作为改进起点，但 LaWAM 在 R11 中仍是 `FAILED`，不是 winner
 > 活动任务：Lift Barrier、Camera Alignment、Long Pipeline Delivery、Take Photo、Pass Shoe、Place Food；不包含任何 Stack Cube 任务
 
 ## 1. 当前决定
@@ -163,9 +163,9 @@ jq '{status,successes,episodes,tasks}' \
 | R11+ 旧实现回撤 | **完成** | 活动树不再包含 R11/R12/R13/R13N/R14/R15 实现 |
 | 新 R11 论文与源码调研 | **完成** | 四个来源、commit、许可证、迁移边界已冻结 |
 | 新 R11 方案设计 | **完成** | 四卡候选、分段训练、因果验收和胜者规则已预注册 |
-| 新 R11 训练与验收 | **未开始** | 满足第 4 节全部门槛并完成大样本复核 |
+| 新 R11 训练与验收 | **已终结（无胜者）** | 四候选按预注册 gate 形成终态，失败即不进入后续预算 |
 
-当前没有训练或验证任务在后台运行。下一步不是恢复任何旧 R11+ 分支，而是使用第 14 节的正式 AI coding prompt，从共同 R11 base commit 实现四个候选。
+R11 已从唯一冻结 base `78471b285bc69fa8b5168fb170a3c3332efc32be` 建立四个独立候选分支和 integration 分支。A/B/D 都通过真实 F1 fresh/save/resume/inference 并完成 Discovery1000，但均未通过冻结 causal gate；C 的 official gated foundation revision 返回 403，未绕过许可 gate。2026-08-11 08:30（Asia/Shanghai）决策器冻结 `NO_WINNER`，因此没有 Validation20/Confirmation50，也没有 baseline merge。完整命令、提交、修复栈和产物路径保留在 `feat/r11-four-way-integration@678e67780e6960749410ee0649ce961b10495950` 的 `docs/experiments/r11/R11_EXECUTION_LOG_ZH.md`。
 
 ## 7. 2026-08-10 最新论文和开源代码调研
 
@@ -357,17 +357,80 @@ score = 60 * (all_six_successes / 120)
 
 | 候选 | source parity / fit | update | 峰值显存 | Validation20 | 预测 gain | 动作→预测 gate | 预测→动作 gate | score | 结论 |
 |---|---|---:|---:|---:|---:|---|---|---:|---|
-| A V-JEPA | 待执行 | 0/120000 | — | — | — | — | — | — | NOT_STARTED |
-| B DreamZero | 待执行 | 0/120000 | — | — | — | — | — | — | NOT_STARTED |
-| C Cosmos | 待执行 | 0/120000 | — | — | — | — | — | — | NOT_STARTED |
-| D LaWAM | 待执行 | 0/120000 | — | — | — | — | — | — | NOT_STARTED |
+| A V-JEPA | F0 29/29；真实 F1；Discovery checkpoint `6e3931…0e3e` | Discovery 1000/1000 | 7.926 GiB | 未运行 | -97.883%（仅 1/6 任务改善） | PASS：shuffled future +31.651%，4/6 任务达 5% | PASS：off +3.217%；shuffled +0.019% | — | FAILED（Discovery persistence gate） |
+| B DreamZero | F0 42/42；真实 5.64B Wan + rank-16 LoRA F1；严格 Discovery resume receipt 通过；checkpoint `133a23…c78e` | Discovery 1000/1000 | 24.226 GiB | 未运行 | -308.438%（0/6 任务改善） | PASS：shuffled future +0.018%（冻结公式为宏观值 > 0） | FAIL：off -0.045%；shuffled +0.019% | — | FAILED（Discovery persistence/action-coupling gate） |
+| C Cosmos | source receipt 已核验；冻结 foundation revision 下载 403 | 0/120000 | — | — | — | — | — | — | FAILED（foundation authorization） |
+| D LaWAM | F0 31/31；真实 F1；Discovery checkpoint `5ad947…a888` | Discovery 1000/1000 | 16.463 GiB | 未运行 | -8.399%（仅 2/6 任务改善） | PASS：shuffled future +32.734%，5/6 任务达 5% | PASS：off +6.758%，shuffled +61.146% | — | FAILED（Discovery persistence gate） |
 
-详细结果放在 `docs/experiments/r11/`，路线只保留执行 commit、命令、产物位置、上述表格、逐项验收和人话结论。论文声称的 benchmark 数字只作选型依据，不能当成本项目成绩。
+执行前 baseline provenance gate 于 2026-08-10 通过：`origin/feat/model-improvements` 解析为 `78471b285bc69fa8b5168fb170a3c3332efc32be`；W10 checkpoint SHA256 仍为 `e1b07b2cf7bff37428bf54a27f545632c8a1013930d96f6e646d8ca055f2f574`；六任务 900/900 个 HDF5 已逐文件重算哈希，累计验证 744,660,714,054 字节；Validation20 仍为 88/120，六组 seeds 哈希一致。数据没有变化，不触发 W10 重训。不可变远程 receipt 为 `/workspace/bwa_runs/r11-four-way-v1/preflight/baseline_provenance.json`，SHA256 `c2936ba68afbb99a9201c69894b18c9d6fc0e400d22f7c90f7f8886728208cd5`。四个官方仓库默认分支 HEAD 也仍等于第 7.1 节冻结 commit，没有升级。
 
-## 14. 正式执行入口
+训练启动记录（2026-08-10）：四个候选均从冻结 base 独立派生，官方源码 checkout 保持 detached/clean/read-only，A/B/D foundation asset receipt 已通过；C 对 `nvidia/Cosmos-Predict2-2B-Video2World@f50c09f5d8ab133a90cac3f4886a6471e9ba3f18` 的真实请求返回 403，故没有生成伪 receipt 或替换权重。A 在提交 `b69aec1f8dd9b064c6c83c668ccd8b31b0b8c18f` 完成真实 forward/backward/optimizer、partial checkpoint 保存、严格恢复和推理，随后进入 Discovery。B 在执行提交 `dc28cc5abd085542fabfaffc891c366564c0ce70` 以 rank-16 LoRA/bf16 完成相同 F1 全路径；其 update-2 checkpoint SHA256 为 `44a718fa24a9f36db1e93389998cf0f927abeb417a528be1b718c156ee77cfc2`，三种模式均输出有限 `[1,100,8]` 动作和 future prediction，随后进入 Discovery。D 在 `6d7553b1063c708ffe7384cf73d2aab04c5ab359` 完成官方 256×256 LAM 路径的 F1 fresh/resume/inference 并进入 Discovery。此处只记录真实进行态，不能据此宣称 Validation5/20、因果 gate、Confirmation50 或 winner 已完成。
 
-可复用的正式 AI coding prompt 位于：
+Discovery gate 记录（2026-08-11 00:33，Asia/Shanghai）：D 完成连续 1,000 updates，effective batch 48、`micro_batch=2`、`accumulation=24`，端点 checkpoint SHA256 `5ad9476371bb308181c3fb6aa07114c921a1e097e78fa73350e3f9fbc077a888`，sample-cursor receipt SHA256 `08b9ce87ad66ab6e7240f735a629a0eb3d2548bddeb35e27c89d0d0267bf7b70`。action loss 最初/最后 100 updates 中位数从 2.538873 降至 0.197414；action shuffle 使未来误差宏观恶化 32.734%，5/6 任务达到 5%；prediction off/shuffled 使动作 NRMSE 分别宏观恶化 6.758%/61.146%。但 future-vs-persistence 宏观 gain 为 -8.399%，只有 2/6 任务改善，违反 Discovery 必须为正的冻结门槛，因此 pipeline 以 exit code 10 生成 `D/acceptance.json=FAILED` 并停止，未运行 Validation5、Selection 或更后阶段。该结果不重试、不降低门槛。
+
+Discovery gate 记录（2026-08-11 00:43，Asia/Shanghai）：A 完成连续 1,000 updates，effective batch 48、`micro_batch=2`、`accumulation=24`，端点 checkpoint SHA256 `6e393139f0447564836fbb4a7039a12320ea8159db280fc0ace2e1a08fbb0e3e`，sample-cursor receipt SHA256 同为 `08b9ce87ad66ab6e7240f735a629a0eb3d2548bddeb35e27c89d0d0267bf7b70`。action loss 最初/最后 100 updates 中位数从 0.025602 降至 0.003461；action shuffle 使未来误差宏观恶化 31.651%，4/6 任务达到 5%；prediction off 使动作 NRMSE 宏观恶化 3.217%，通过 2% 替代门槛，但 prediction shuffled 只变化 0.019%。future-vs-persistence 宏观 gain 为 -97.883%，只有 1/6 任务略有改善，违反 Discovery 门槛，因此 pipeline 同样以 exit code 10 生成 `A/acceptance.json=FAILED` 并停止，未运行 Validation5、Selection 或更后阶段。该结果不重试、不降低门槛。
+
+Discovery gate 记录（2026-08-11 08:27，Asia/Shanghai）：B 完成连续 1,000 updates，effective batch 48、六任务各 8、`micro_batch=1`、`accumulation=48`。训练执行提交为 `dc28cc5abd085542fabfaffc891c366564c0ce70`；因果 probe 修复提交 `f66b43149b57d49628bfe7fa5e6b85f55a2378e6` 只让 intervention hook 保留官方 `action=None` prefix/KV-cache 调用、在真实 action register 调用上 shuffle，并用独立脚本严格核验既有 checkpoint/cursor，不改权重、训练记录或门槛。endpoint checkpoint 为 281,476,775 bytes，SHA256 `133a239264065f0d590c07439ccc1a1b60e32fd6de3d61c785e9fedc6094c78e`；sample-cursor SHA256 `6dc8ce42f51785805a5f5ff9f5d0c49845646e9848555769d0badd85f7a9e0b8`。action loss 最初/最后 100 updates 中位数从 1.198908 降至 1.000934；但 192 样本 official Wan 因果 probe 的 future-vs-persistence 宏观 gain 为 -308.438%，0/6 任务改善，prediction off/shuffled 的动作 NRMSE 变化为 -0.045%/+0.019%。因此 B 以 exit code 10 生成 `acceptance.json=FAILED`，未运行 Validation5 或以后阶段。
+
+最终决策记录（2026-08-11 08:30，Asia/Shanghai）：integration 运行提交 `189c7c27eb7361dc7e42ee207ece9da1ea1b13a5` 的 fail-closed 决策器只读取四份结构化终态，得到 A/B/D `failed_stage=discovery-gate`、C `failed_stage=foundation`，无资格候选、ranking 为空。不可覆盖的 `/workspace/bwa_runs/r11-four-way-v1/winner.json` 为 `status=NO_WINNER`、`complete=true`、`confirmation50.status=NOT_APPLICABLE`、`merged_to_baseline=false`，SHA256 `b81856cf2d65c8824883af7f5a5cb78251a4dcf6a3177626a3abe2628b7d94e0`。Confirmation50 seed receipt 不存在，W10/winner 300+300 回合未启动，四张 GPU 已空闲，baseline 分支未合并。共同目标测试最终为 35/35，B 修复后 F0 为 42/42；门槛、score 公式和 W10 基线均未改变。
+
+### 13.1 R11 之后的方向选择：LaWAM 是研究起点，不是 R11 winner
+
+R11 的正式结论保持“无胜者”。后续技术方向选择 D / LaWAM latent visual subgoal + flow action expert，含义仅为“在失败候选中选择最有信息量的起点”，不构成验收通过、临时 winner、Confirmation50 资格或 baseline merge 资格。任何后续实现必须使用新的 stage、分支、run manifest、checkpoint 和 acceptance；不得覆盖 `D/acceptance.json=FAILED`，不得把 R11 D checkpoint 改标为通过，也不得用后续结果追溯修改 R11 结论。
+
+选择 LaWAM 的实验依据是：
+
+- D 已完成真实 F1 和连续 Discovery1000，训练过程稳定且 action loss 从最初 100 updates 中位数 2.538873 降至最后 100 updates 的 0.197414；相比 C 的未训练和 B 的 5.64B 高成本路线，它提供了已验证的可运行 latent 路径。
+- D 的 future-vs-persistence 宏观 gain 为 -8.399%，虽然明确未通过门槛，但显著接近 A 的 -97.883% 和 B 的 -308.438%；该相对接近度只用于选研究起点，不能转写为 PASS。
+- D 的 action-shuffle→future 为 +32.734%，5/6 任务达到 5%；prediction off/shuffled→action 为 +6.758%/+61.146%，说明预测已真实进入动作计算路径。失败集中在“预测目标没有优于 persistence”，因此下一步应更改预测表征、监督目标和候选选择机制，而不是延长原 checkpoint 训练。
+
+明确反面条件：若新的 action-relevant target 在冻结的 counterfactual probe 上仍不能稳定击败 persistence，或 oracle proposal ranker 不能从 W10 候选中选出更优动作，则停止 LaWAM 方向，不进入大预算训练。R11 D checkpoint 仅允许用于只读诊断；新阶段默认从冻结 LaWAM foundation/源码和 W10 action prior 初始化，重新训练 world/selector head。
+
+### 13.2 后续受控消融路线：W10-anchored action-relevant latent planning
+
+后续阶段不再让四张 GPU 运行四个参数规模、数据协议和推理路径均不同的 foundation model。四路共享同一 W10 action prior、LaWAM latent transition 基座、proposal selector/action refiner、六任务 sampler、数据 receipt、优化预算和评测协议，只改变一个预注册机制，以便把收益或失败归因到具体设计。
+
+共同动作路径冻结为：
+
+```text
+observation + task text + proprio
+  -> trainable W10 action prior 生成 K=4 个 100-step action proposals
+  -> LaWAM action-conditioned latent transition 分别 rollout 每个 proposal 的前缀
+  -> action-relevant future / progress / risk score
+  -> differentiable proposal selection + residual action refinement
+  -> 执行冻结 cadence 的短前缀并读取真实观测
+```
+
+W10 action prior 是候选内部的可训练组成部分，不是评测 fallback；默认解冻并以较低 learning rate 联合训练。所有合格变体的预测都必须进入 proposal score、选择或 residual refinement，禁止只有辅助 world loss。共同 action horizon 仍为 100；精确 rollout prefix 和 receding-horizon cadence 必须在新阶段配置冻结后写入 manifest。
+
+四卡受控消融矩阵：
+
+| 路线 | 唯一新增机制 | action-relevant target | 目的 |
+|---|---|---|---|
+| L0 / GPU0 | `delta-latent + common selector` | 多尺度 `Δz=z(t+h)-z(t)`，`h={1,4,8,16}`，按任务/视角/horizon 白化 | 判断去除静态背景后是否能击败 persistence |
+| L1 / GPU1 | L0 + self-grounded/foreground supervision | robot self-mask 或无标注时的 motion/foreground mask、proprio delta | 判断机器人和任务相关变化监督是否提高 action sensitivity；机制参考 [SelfWAM](https://arxiv.org/abs/2608.00725) |
+| L2 / GPU2 | L0 + algebraic transition consistency | action transition 的 composition/reversal consistency | 判断结构化 latent transition 是否比纯重建目标可用于动作生成；机制参考 [ALAM](https://arxiv.org/abs/2605.10819) |
+| L3 / GPU3 | L0+L1+L2 + uncertainty-aware score/residual refine | 上述联合目标以及 proposal progress/risk ranking | 验证组合是否产生可闭环的综合候选；ranking/guidance 只借鉴 [Guided Action Flow](https://arxiv.org/abs/2607.02092)，不能照搬其任务或成绩 |
+
+所有路线共用相同 `K=4` proposal 集合和 selector；L0 也是 prediction-in-action 的真实候选，不是只训练辅助 loss 的控制组。为区分各机制，L1/L2 不得互相混入，L3 只在 L0/L1/L2 的目标 gate 均有可解释结果后评估组合效应。
+
+训练前先建立只读 counterfactual dynamics probe：保持观测和任务文本不变，对同一模拟器状态执行正确、时间打乱、反向和幅值受控扰动的动作前缀，记录 `h={1,4,8,16}` 的真实 robot/object/proprio/progress 后果；按背景、机器人、任务物体和 proprio 分解 persistence error。probe 必须有独立 manifest、seed、simulator state/replay receipt 和哈希。第一轮 probe 只用于诊断和验收，不加入训练；若后续把新 counterfactual 数据用于训练，必须按数据版本策略先冻结新数据 receipt、重训/重验 W10 并建立新 baseline，不能继续引用当前 W10 provenance。
+
+大预算前的 fail-fast 顺序：
+
+1. **Measurement gate**：核验 frame/action/proprio 时间对齐；小型 oracle transition 在 held-out counterfactual probe 上的宏观 future-vs-persistence gain 至少 +5%，且至少 4/6 任务为正；oracle K=4 ranker 必须证明 proposal 集合中存在优于默认 W10 proposal 的候选。任一失败即停止，不实现大模型。
+2. **F0/F1**：对 LaWAM official tensor、adapter、W10 partial load、真实 forward/backward/optimizer/save/resume、三种因果模式和 K=4 selector 做零 skip parity/integration gate。不得用 R11 D checkpoint 续训冒充新 F1。
+3. **Discovery1000**：action loss 必须下降；future-vs-persistence 宏观至少 +5% 且至少 4/6 任务为正；action shuffle 使 future error 宏观至少恶化 5% 且至少 4/6 任务达到 5%；prediction off 或 shuffled 使动作 NRMSE 至少恶化 2%；K=4 counterfactual ranking accuracy 至少 70%。任一项失败即停止该消融路线。
+4. **闭环预算**：只有通过上述 gate 的路线才进入 paired Validation5、Selection、Formal 和 Validation20。正式闭环仍使用第 11 节的原始资格门槛和 Confirmation50 非劣界，不得因选择 LaWAM 方向而降低。
+
+本节只冻结后续研究方向和受控消融设计，不表示新阶段已启动。开始实现前仍需建立新的 stage 变量区、四个独立分支/共同 integration 分支、上游 commit/license/source receipt、不可变 run manifest、数据和 seed receipt，并重新执行 baseline provenance gate。
+
+详细逐任务记录保留在 `feat/r11-four-way-integration@678e67780e6960749410ee0649ce961b10495950` 的 `docs/experiments/r11/`；本路线保留执行 commit、命令、产物位置、上述表格、逐项验收和结论。论文声称的 benchmark 数字只作选型依据，不能当成本项目成绩。
+
+## 14. 后续正式执行入口
+
+R11 已形成终态，原正式 AI coding prompt 只用于审计和复现，不得用它在原 run root 重启训练：
 
 - [R11 四卡 World-Action Model 改进执行 Prompt](../runbooks/R11_FOUR_GPU_WORLD_ACTION_MODEL_EXECUTION_PROMPT_ZH.md)
 
-该 prompt 把阶段、baseline、四候选、GPU、远程路径、训练预算和验收章节都放在开头变量区。R12 以后复制文件并修改变量即可，但必须先完整阅读本路线中对应阶段，不能沿用 R11 的候选或门槛作为隐式默认值。
+LaWAM 受控消融尚未分配正式 stage 名称、分支、run root 或运行 prompt。开始实现前必须从本路线第 13.1–13.2 节生成新的正式 prompt，并在变量区冻结 W10 provenance、LaWAM `FAILED` 历史、L0–L3 矩阵、counterfactual probe、上游 commit、GPU、训练预算和新 acceptance。不得沿用 R11 候选状态，不得写入 `/workspace/bwa_runs/r11-four-way-v1`，也不得把方向选择解释为对 R11 gate 的追认。
