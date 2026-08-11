@@ -31,3 +31,4 @@
 ## 历史归档（`archive/`）
 
 - [Proprioceptive WAM 技术计划](archive/20260718_PROPRIOCEPTIVE_WAM_TECHNICAL_PLAN_V1.0_ZH.md)
+- [R11/R12 失败技术路线完整归档](archive/20260811_R11_R12_FAILED_TECHNICAL_ROUTES_ZH.md)

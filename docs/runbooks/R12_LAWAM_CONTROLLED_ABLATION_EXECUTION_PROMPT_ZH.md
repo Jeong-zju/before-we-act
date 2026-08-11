@@ -1,6 +1,6 @@
-# R12 LaWAM 受控消融四卡正式执行 AI Coding Prompt
+# R12 LaWAM 受控消融四卡正式执行 AI Coding Prompt（历史）
 
-下面整段可直接交给具备本地仓库、Git、SSH 和远程 GPU 操作能力的 coding agent。R12 是新的独立阶段：复用已合入主线且有 receipt 的 LaWAM 源码迁移，但不继承 R11 的 checkpoint、`FAILED` 状态或 run root。
+> **已归档：禁止执行。** R12 已按用户决策关闭为 `ARCHIVED_NO_WINNER`；本 prompt 只保留作只读审计，不得继续训练、创建新候选、写入原 run root 或把未完成的 L2/L3 改写为实验 gate 失败。完整历史见 [R11/R12 失败技术路线归档](../archive/20260811_R11_R12_FAILED_TECHNICAL_ROUTES_ZH.md)。
 
 ```text
 ====================
@@ -8,7 +8,7 @@
 ====================
 
 [PROJECT_ROOT] = /home/jeong/zeno/wam/before-we-act
-[ROADMAP_DOC] = /home/jeong/zeno/wam/before-we-act/docs/plans/20260725_P1_MULTI_ROBOT_MODEL_ARCHITECTURE_ACTION_GENERATION_ROADMAP_V2.0_ZH.md
+[ROADMAP_DOC] = /home/jeong/zeno/wam/before-we-act/docs/archive/20260811_R11_R12_FAILED_TECHNICAL_ROUTES_ZH.md
 [RESULT_DOC] = ROADMAP_DOC 第 13 节；详细记录写入 docs/experiments/r12/
 
 [STAGE] = R12

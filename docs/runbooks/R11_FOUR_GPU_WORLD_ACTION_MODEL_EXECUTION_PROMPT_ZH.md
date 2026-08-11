@@ -1,6 +1,6 @@
 # R11 四卡 World-Action Model 正式执行 AI Coding Prompt（历史）
 
-本 prompt 只用于审计或复现已经终结的 R11，不得用于启动 R12，也不得写入原 R11 run root。当前 R12 请使用 [R12 LaWAM 受控消融四卡正式执行 Prompt](R12_LAWAM_CONTROLLED_ABLATION_EXECUTION_PROMPT_ZH.md)。
+> **已归档：禁止执行。** R11 与 R12 均已关闭且无 winner；本 prompt 只用于只读审计，不得写入原 run root、启动训练或作为新路线父节点。完整历史见 [R11/R12 失败技术路线归档](../archive/20260811_R11_R12_FAILED_TECHNICAL_ROUTES_ZH.md)。
 
 ```text
 ====================
@@ -8,7 +8,7 @@
 ====================
 
 [PROJECT_ROOT] = /home/jeong/zeno/wam/before-we-act
-[ROADMAP_DOC] = /home/jeong/zeno/wam/before-we-act/docs/plans/20260725_P1_MULTI_ROBOT_MODEL_ARCHITECTURE_ACTION_GENERATION_ROADMAP_V2.0_ZH.md
+[ROADMAP_DOC] = /home/jeong/zeno/wam/before-we-act/docs/archive/20260811_R11_R12_FAILED_TECHNICAL_ROUTES_ZH.md
 [RESULT_DOC] = 与 ROADMAP_DOC 相同；详细实验记录写入 docs/experiments/r11/
 
 [STAGE] = R11
