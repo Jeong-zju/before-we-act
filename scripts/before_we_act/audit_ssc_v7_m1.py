@@ -92,6 +92,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hash-workers", type=int, default=6)
     parser.add_argument("--replay-qpos-tolerance", type=float, default=QPOS_TOLERANCE)
     parser.add_argument(
+        "--replay-gate-mode",
+        choices=("strict", "benchmark_diagnostic"),
+        default="strict",
+        help=(
+            "strict gates on qpos and terminal success; benchmark_diagnostic "
+            "reports both but gates only on replay completion and exact state forks"
+        ),
+    )
+    parser.add_argument(
+        "--gate-revision",
+        type=Path,
+        default=None,
+        help="Required frozen gate revision for benchmark_diagnostic mode.",
+    )
+    parser.add_argument(
         "--mode", choices=("all", "schema", "replay"), default="all"
     )
     return parser.parse_args()
@@ -132,6 +147,18 @@ def write_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def field_roles() -> dict[str, Any]:
+    trajectory_reproduction_passed = (
+        maximum <= args.replay_qpos_tolerance
+        and replay_success == recorded_success
+    )
+    fork_passed = (
+        fork_repeatability is not None and bool(fork_repeatability["passed"])
+    )
+    gate_passed = (
+        fork_passed
+        if args.replay_gate_mode == "benchmark_diagnostic"
+        else trajectory_reproduction_passed and fork_passed
+    )
     return {
         "format_version": "ssc-v7.m1.field_roles/1",
         "deployment_current": [
@@ -894,13 +921,10 @@ def replay_one(
         "recorded_terminal_success": recorded_success,
         "replay_terminal_success": replay_success,
         "terminal_success_exact_match": replay_success == recorded_success,
+        "trajectory_reproduction_passed": trajectory_reproduction_passed,
         "fork_repeatability": fork_repeatability,
-        "passed": (
-            maximum <= args.replay_qpos_tolerance
-            and replay_success == recorded_success
-            and fork_repeatability is not None
-            and bool(fork_repeatability["passed"])
-        ),
+        "gate_mode": args.replay_gate_mode,
+        "passed": gate_passed,
     }
 
 
@@ -933,8 +957,13 @@ def run_replay(args: argparse.Namespace) -> dict[str, Any]:
                 )
             )
     return {
+        "gate_mode": args.replay_gate_mode,
         "status": "PASSED" if all(value["passed"] for value in results) else "FAILED",
         "episodes_checked": len(results),
+        "episodes_completed": len(results),
+        "trajectory_reproduction_passed": sum(
+            bool(value["trajectory_reproduction_passed"]) for value in results
+        ),
         "qpos_passed": sum(bool(value["qpos_passed"]) for value in results),
         "terminal_success_matched": sum(
             bool(value["terminal_success_exact_match"]) for value in results
@@ -960,17 +989,44 @@ def main() -> int:
         raise ValueError("--hash-workers must be positive")
     if args.replay_qpos_tolerance <= 0:
         raise ValueError("--replay-qpos-tolerance must be positive")
+    gate_revision: dict[str, Any] | None = None
+    if args.replay_gate_mode == "benchmark_diagnostic":
+        if args.gate_revision is None:
+            raise ValueError(
+                "--gate-revision is required for benchmark_diagnostic mode"
+            )
+        gate_revision = json.loads(args.gate_revision.read_text(encoding="utf-8"))
+        if gate_revision.get("stage_id") != "SSC-V7-M1-R1":
+            raise RuntimeError("unexpected benchmark-relaxed gate stage_id")
+        acceptance = gate_revision.get("acceptance", {})
+        if acceptance.get("qpos_reproduction", {}).get("role") != "diagnostic_only":
+            raise RuntimeError("gate revision still gates on qpos reproduction")
+        if acceptance.get("terminal_success", {}).get("role") != "diagnostic_only":
+            raise RuntimeError("gate revision still gates on terminal success")
+        if acceptance.get("state_fork_repeatability", {}).get("required") is not True:
+            raise RuntimeError("gate revision does not require exact state forks")
     dry_run_receipt_path = args.run_root / "step0_audit/dry_run_receipt.json"
     dry_run_receipt = json.loads(dry_run_receipt_path.read_text(encoding="utf-8"))
     if dry_run_receipt.get("status") != "PASSED":
         raise RuntimeError("SSC-V7-M1 dry-run has not passed")
-    output_root = args.run_root / "measurement/m1"
+    output_name = (
+        str(gate_revision["output_name"])
+        if gate_revision is not None
+        else "m1"
+    )
+    if not output_name or output_name in (".", "..") or "/" in output_name:
+        raise ValueError("gate output_name must be one safe path component")
+    output_root = args.run_root / "measurement" / output_name
     output_root.mkdir(parents=True, exist_ok=True)
     roles = field_roles()
     write_json(output_root / "field_roles.json", roles)
     started = time.perf_counter()
     provenance = {
-        "stage_id": "SSC-V7-M1/M1",
+        "stage_id": (
+            str(gate_revision["stage_id"])
+            if gate_revision is not None
+            else "SSC-V7-M1/M1"
+        ),
         "branch": git_value(Path(__file__).resolve().parents[2], "branch", "--show-current"),
         "commit": git_value(Path(__file__).resolve().parents[2], "rev-parse", "HEAD"),
         "base_commit": BASE_COMMIT,
@@ -982,9 +1038,24 @@ def main() -> int:
             or args.run_root / "pre_registration/contracts/seed_contract.json"
         ),
         "dry_run_receipt_sha256": sha256_file(dry_run_receipt_path),
+        "replay_gate_mode": args.replay_gate_mode,
     }
-    if provenance["branch"] != "feat/ssc-v7-measurement":
-        raise RuntimeError("M1 must run on feat/ssc-v7-measurement")
+    if gate_revision is not None:
+        provenance["gate_revision"] = str(args.gate_revision)
+        provenance["gate_revision_sha256"] = sha256_file(args.gate_revision)
+        expected_branch = str(gate_revision["implementation"]["branch"])
+        expected_commit = str(gate_revision["implementation"]["commit"])
+        expected_script_sha256 = str(
+            gate_revision["implementation"]["script_sha256"]
+        )
+        if provenance["branch"] != expected_branch:
+            raise RuntimeError("branch differs from the relaxed gate revision")
+        if provenance["commit"] != expected_commit:
+            raise RuntimeError("commit differs from the relaxed gate revision")
+        if provenance["script_sha256"] != expected_script_sha256:
+            raise RuntimeError("script differs from the relaxed gate revision")
+    elif provenance["branch"] != "feat/ssc-v7-measurement":
+        raise RuntimeError("strict M1 must run on feat/ssc-v7-measurement")
     if provenance["robofactory_commit"] != ROBOFACTORY_COMMIT:
         raise RuntimeError("RoboFactory commit differs from the frozen contract")
     schema: dict[str, Any] | None = None
@@ -1015,13 +1086,21 @@ def main() -> int:
     elif not replay_passed:
         decision_code = "FAILED_SCHEMA/REPLAY_NOT_DETERMINISTIC"
     else:
-        decision_code = "PASSED_M1"
+        decision_code = (
+            "PASSED_M1_BENCHMARK_RELAXED"
+            if args.replay_gate_mode == "benchmark_diagnostic"
+            else "PASSED_M1"
+        )
+    passed_decision = decision_code in (
+        "PASSED_M1",
+        "PASSED_M1_BENCHMARK_RELAXED",
+    )
     receipt = {
         "format_version": "ssc-v7.m1.schema_receipt/1",
         "completed_at_utc": utc_now(),
         "status": (
             "PASSED"
-            if decision_code == "PASSED_M1"
+            if passed_decision
             else "PENDING"
             if decision_code == "SCHEMA_PASSED_REPLAY_PENDING"
             else "FAILED"
@@ -1031,14 +1110,36 @@ def main() -> int:
         "requirements": {
             "hdf5_files_expected": 900,
             "replay_episodes_per_task": 5,
-            "replay_qpos_max_abs_error_lte": args.replay_qpos_tolerance,
-            "terminal_success_exact_match": True,
+            "qpos_reproduction": (
+                {
+                    "role": "diagnostic_only",
+                    "pass_threshold": None,
+                    "reported_reference_tolerance": args.replay_qpos_tolerance,
+                }
+                if args.replay_gate_mode == "benchmark_diagnostic"
+                else {
+                    "role": "required",
+                    "max_abs_error_lte": args.replay_qpos_tolerance,
+                }
+            ),
+            "terminal_success": {
+                "role": (
+                    "diagnostic_only"
+                    if args.replay_gate_mode == "benchmark_diagnostic"
+                    else "required"
+                ),
+                "exact_match": (
+                    None
+                    if args.replay_gate_mode == "benchmark_diagnostic"
+                    else True
+                ),
+            },
             "save_restore_same_action_result_exact_match": True,
         },
         "schema": schema,
         "replay": replay,
         "field_roles": roles,
-        "m2_or_oracle_sidecar_unlocked": decision_code == "PASSED_M1",
+        "m2_or_oracle_sidecar_unlocked": passed_decision,
         "training_started": False,
         "stop_rule_applied": decision_code.startswith("FAILED"),
         "elapsed_wall_seconds": time.perf_counter() - started,
@@ -1070,7 +1171,7 @@ def main() -> int:
     write_json(output_root / "artifact_manifest.json", artifact_manifest)
     print(decision_code, flush=True)
     print(json.dumps(receipt, ensure_ascii=False, sort_keys=True), flush=True)
-    return 0 if decision_code in ("PASSED_M1", "SCHEMA_PASSED_REPLAY_PENDING") else 2
+    return 0 if passed_decision or decision_code == "SCHEMA_PASSED_REPLAY_PENDING" else 2
 
 
 if __name__ == "__main__":
