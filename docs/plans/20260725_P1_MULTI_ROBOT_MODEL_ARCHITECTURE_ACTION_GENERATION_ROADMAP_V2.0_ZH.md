@@ -2,7 +2,7 @@
 
 > 更新日期：2026-08-11
 > 活动分支：`feat/model-improvements`
-> 当前状态：六任务 W10 基线和数据口径已重新核验；R11 四候选均已独立实现并推送。A/B/D 通过真实 F1 后均在 Discovery gate 按冻结公式失败，C 因冻结 Cosmos 权重授权 403 失败关闭；最终结论为“R11 无胜者”，未生成 Confirmation50 seeds，也未发生 winner/checkpoint 晋级。后续研究选择 LaWAM latent subgoal 路线作为改进起点，并于 2026-08-11 将其源码迁移、受控消融所需公共运行器和测试以 `6cd891b` 合入 `feat/model-improvements`；这是实验代码整合，不改变 LaWAM 在 R11 中仍为 `FAILED`、不是 winner 的结论。R12 已冻结为 L0-L3 LaWAM 受控消融并生成独立正式执行 prompt，但尚未启动实验
+> 当前状态：六任务 W10 基线和数据口径已重新核验；R11 四候选均已独立实现并推送。A/B/D 通过真实 F1 后均在 Discovery gate 按冻结公式失败，C 因冻结 Cosmos 权重授权 403 失败关闭；最终结论为“R11 无胜者”，未生成 Confirmation50 seeds，也未发生 winner/checkpoint 晋级。后续研究选择 LaWAM latent subgoal 路线作为改进起点，并于 2026-08-11 将其源码迁移、受控消融所需公共运行器和测试以 `6cd891b` 合入 `feat/model-improvements`；这是实验代码整合，不改变 LaWAM 在 R11 中仍为 `FAILED`、不是 winner 的结论。R12 已冻结为 L0-L3 LaWAM 受控消融并生成独立正式执行 prompt，但尚未启动实验。R12 之外已登记一组独立的 social-state-conditioned cooperation 后续研究路线：只复用 W10 的训练脚手架、基础动作架构和评测协议，不加载 W10 checkpoint、不把 W10 作为 action prior 或 fallback；该路线尚未启动，也未分配正式 stage ID
 > 活动任务：Lift Barrier、Camera Alignment、Long Pipeline Delivery、Take Photo、Pass Shoe、Place Food；不包含任何 Stack Cube 任务
 
 ## 1. 当前决定
@@ -427,6 +427,85 @@ W10 action prior 是候选内部的可训练组成部分，不是评测 fallback
 
 详细逐任务记录保留在 `feat/r11-four-way-integration@678e67780e6960749410ee0649ce961b10495950` 的 `docs/experiments/r11/`；本路线保留执行 commit、命令、产物位置、上述表格、逐项验收和结论。论文声称的 benchmark 数字只作选型依据，不能当成本项目成绩。
 
+### 13.3 独立后续方向：social-state-conditioned cooperative action generation
+
+本路线回答与 R12 不同的问题：显式建模“队友正在做什么、团队知道什么、联合任务完成到哪里”，能否改善多机器人 cooperation，同时使最终动作策略在同一六任务协议下不弱于 W10。它不是 R12 失败后的临时补丁，也不能根据 R12 结果修改设计；正式执行时必须使用新的 stage ID、base/run root、分支、manifest、checkpoint、seed receipt 和 acceptance。历史上已经存在只读归档的 R13/R13N，因此在新执行 prompt 冻结前不复用该名称。
+
+#### 13.3.1 W10 边界、研究归属和最终模型形态
+
+W10 只承担三种明确角色：
+
+1. **训练脚手架**：复用已经验证的数据加载、六任务 exact sampler、归一化、optimizer/scheduler、action horizon、temporal ensemble、checkpoint/resume 和 evaluator 协议。
+2. **强比较基线**：保留其 checkpoint、88/120 Validation20、固定 seeds 和 provenance，只用于 paired comparison；W10 的模型和工程贡献必须明确归因，不得改写成新路线的原创工作。
+3. **受控架构起点**：B0 从与 W10 相同的基础 action backbone 和训练 recipe 重新训练，用于确认当前代码、数据和预算可以独立复现强基线；不得加载 W10 checkpoint，也不得从其 optimizer/RNG/sample cursor 续训。
+
+W10 不得作为候选内部的 action prior、teacher fallback 或评测兜底；checkpoint 中不得保留可调用的独立 W10 policy handle。最终候选必须是一个从头联合训练、单 checkpoint 可部署的 social-state-conditioned policy，而不是在 W10 外部挂一个不影响动作的辅助头或 wrapper。其目标条件分布为：
+
+```text
+pi(a_i | local_observation_i, task_text, proprio_i,
+         joint_task_progress, teammate_latent, team_belief)
+```
+
+`joint_task_progress`、`teammate_latent` 和 `team_belief` 必须通过 cross-attention、conditioned action queries、FiLM/gating 或预注册的等价主路径进入 action decoder；移除或打乱对应输入时，动作必须产生方向可解释且可检测的变化。只增加 auxiliary loss、训练期 teacher 或 inference 时不影响 action chunk 的表示不构成合格机制。
+
+开始实现前必须书面冻结 W10 的代码使用、署名和贡献边界；若属于同一论文，应在 author contribution 中区分 W10 baseline/engineering 与新 social-state method/evaluation；若属于独立论文，需另行核验仓库授权和共同数据使用范围。许可证合规和清晰归因用于消除源码归属风险，但不能替代方法 novelty。
+
+#### 13.3.2 共同模型和受控路线
+
+共同 action backbone、数据、样本顺序、训练更新数、effective batch、optimizer policy、action horizon、temporal ensemble、随机种子、parameter budget、Validation5/20/50 和 evaluator 必须一致。新增模块引入的参数由 common width 补偿或通过等参数 capacity-control 报告；不能把“参数更多”误写成社会状态建模收益。所有正式路线从同一冻结 base 建立为兄弟分支；下表顺序是预算晋级顺序，不允许从前一路 checkpoint warm-start 下一路。
+
+| 路线 | 唯一机制 | 部署输入与目标 | 研究问题 |
+|---|---|---|---|
+| B0 / reproduction | 与 W10 相同的基础 action backbone 和训练 recipe，从头训练 | local observation、task text、proprio | 能否在不加载 W10 checkpoint 的前提下复现强 action baseline；不是论文贡献 |
+| P / progress | B0 + joint task-progress tokens | global stage、stage 内连续 progress、per-agent contribution、remaining-goal state | 显式任务进度能否减少停滞、重复劳动和错误切换 |
+| T / teammate | B0 + teammate intent/action latent | 只使用部署时可得的队友历史 observation/action/communication，预测下一 action chunk、目标物体/角色及 uncertainty | 建模其他 agent 能否减少冲突并改善分工 |
+| B / belief | B0 + structured team belief | agent-object-role slot/graph，表示物体状态、队友已完成子目标、任务缺口和不确定度 | 部分可观测条件下的联合 belief 是否提供独立增益 |
+| PT / progress+teammate | P+T，除联合以外不加新机制 | progress 与 teammate latent 联合进入 action decoder | 两种单机制是否互补，或只是重复编码时间/动作历史 |
+| PTB / full | P+T+B 的单一联合策略 | progress、teammate 和 belief tokens 共同条件化 action chunk | 完整社会状态是否在保持 W10 级动作能力的同时产生 cooperation 增益 |
+
+推荐预算顺序为 `Measurement -> B0 -> P -> T -> B -> PT -> PTB`。B0 未能在冻结容忍区间内复现 W10 时先诊断训练实现，不得用 W10 checkpoint 填补；P/T/B 单机制的结构化结果未齐全前，不启动 PT/PTB。单机制失败仍可进入组合诊断的前提是该规则在查看结果前预注册，但不得把组合通过追溯写成单机制通过。
+
+#### 13.3.3 Social-headroom Measurement gate
+
+本路线必须在大模型实现和训练前验证当前六任务数据是否真的包含可学习的 cooperation 信号。Measurement 与训练集、Validation5/20/50 隔离，固定 anchor、seed、simulator state、agent identity、history window、可见性/通信条件和逐文件 hash；真实未来、队友隐藏状态和成功标签只允许作为 measurement label，不能泄漏到 deployment input。
+
+至少回答以下问题并形成逐任务结构化报告：
+
+1. **Schema/observability**：HDF5 是否保存时间同步的多 agent observation、action、proprio、agent ID、可用通信、任务实体状态和成功条件；缺少的输入不能由评测期 privileged state 伪造。
+2. **Social action headroom**：控制自身 observation/task/proprio 后，oracle teammate state、joint progress 或 team belief 是否能显著改善当前 agent 的 action/chunk 预测或闭环 oracle score；若自身状态已充分决定动作，则停止该信息源。
+3. **Cooperation sensitivity**：交换 teammate history/ID、打乱对方 action prefix、遮掉真实可用通信或改变已完成子目标时，oracle-correct ego action 是否发生一致变化；只改变标签而不改变合理动作说明任务没有该机制的 headroom。
+4. **Progress validity**：progress target 必须由成功谓词、任务实体状态或人工/规则核验的 subtask boundary 构造，禁止把 frame index、episode length 或未来终止时刻当作部署输入。相同语义状态在不同时长轨迹中应得到一致进度。
+5. **Failure taxonomy**：量化 W10 失败中重复劳动、互相阻挡/争抢、错误等待、错误分工和 task-progress 误判的占比；若失败主要来自单臂精细操作或视觉感知，社会模型不应被预期产生大幅增益。
+
+正式阈值必须在读取 Measurement 结果前写入新阶段的 `measurement_gate.json`。最低判定原则是：oracle social state 对 action 或闭环 score 有正的 paired headroom，且不是由时间泄漏、agent identity shortcut 或 privileged evaluator state 造成；至少覆盖预注册数量的 cooperation-sensitive 任务。未通过即写 `FAILED_MEASUREMENT/NO_SOCIAL_HEADROOM`，停止 P/T/B/PT/PTB，不用扩大模型或修改 anchor 挽救结论。
+
+#### 13.3.4 监督目标、参考边界和源码政策
+
+P 路线优先采用 stage-aware progress：联合预测离散 stage 与 stage 内连续进度，并从 joint task predicates 派生 global progress、per-agent contribution 和 remaining-goal targets。可参考 [SARM](https://arxiv.org/abs/2509.25358)；其机器人实现已进入 [Hugging Face LeRobot](https://github.com/huggingface/lerobot/blob/main/docs/source/sarm.mdx)。T/B 路线可参考 [GPL](https://github.com/uoe-agents/GPL)、[LIAM](https://github.com/uoe-agents/LIAM) 的 teammate representation，以及 [MAMBA](https://arxiv.org/abs/2205.15023) 的 cooperative multi-agent world-model 结构；[Dreaming of Others](https://arxiv.org/abs/2605.31361) 只作为 teammate-latent/ToM 机制参考。
+
+2026-08-11 的初步只读 recheck 只确认以下官方仓库 HEAD 存在：LeRobot `59ab28620f3f2385f808bd4bcac7fc50cf14217a`、GPL `83bf42d9b02a4a520381f37bed3cb662d86df701`、LIAM `8545b9e4237eb60ad45b7cb8ed6caec6bc4263b5`、MAMBA `2c97258f71bf1c421c40ce14fd2f7cc3fe7fe19f`。这不是源码选型或迁移 receipt：正式实现前仍需逐项核验论文/官方仓库对应关系、commit、license、维护状态、训练依赖和与连续机器人 action chunk 的适配边界，并生成 path/hash、LICENSE、NOTICE、SPDX 和逐符号映射。当前没有核验到 Dreaming of Others 的官方代码，不得声称源码迁移。
+
+GPL/LIAM/MAMBA 原始问题主要属于 MARL，不得把其离散环境结果当作本项目机器人闭环成绩；SARM 原始目标偏单机器人 reward/progress modeling，也不能直接证明 multi-robot cooperation。论文机制用于形成假设，本项目的 joint progress、per-agent contribution、continuous action conditioning 和因果评测必须作为独立适配与实验贡献报告。
+
+#### 13.3.5 因果验收、闭环非劣和论文声称
+
+除共同的 action loss、checkpoint、resume、finite gradient 和范围检查外，各机制必须通过与其语义一一对应的因果干预：
+
+| 干预 | 必须验证的结论 |
+|---|---|
+| `progress_shuffled` / stage swap | 错误进度使动作、阶段切换或闭环效率按预注册方向恶化，而不是模型忽略 progress token |
+| `teammate_history_shuffled` | 错误队友轨迹降低动作预测或 cooperation score，且不是简单时间顺序扰动造成 |
+| `teammate_id_swap` / role swap | 模型对不同角色作出合理变化，排除固定 agent-ID shortcut |
+| `communication_off` / visibility mask | 可用信息减少时 belief uncertainty 上升，策略在风险/等待上产生校准变化 |
+| `oracle_social_state` | 给定合法 oracle label 后存在性能上界，用于解释 learned model 与可用 headroom 的差距；不得成为正式 fallback |
+| equal-parameter capacity control | 加入同等参数但不给真实社会信息时不产生相同增益，排除容量混淆 |
+
+闭环仍逐项执行第 11 节 protected-four、Camera、Camera+Food、prediction/causality、延迟和显存门槛。若数据/评测 receipt 与当前 W10 一致，论文中直接声称 “matches or exceeds W10” 还要求同一 Validation20 原始总成功数不低于 **88/120**；只达到第 11.1 节 `80/120` 资格线而低于 88/120 时，不得写字面持平。Confirmation50 必须继续用 paired bootstrap 95% CI 验证第 11.3 节非劣界，并并列报告 point estimate；数据版本变化时先重训/重验 B0 和 W10-equivalent baseline，再冻结新的比较值。
+
+除成功率外，必须在看结果前冻结 cooperation-specific 指标和 tie rule，至少覆盖完成步数、双方 idle/wait 比例、重复目标动作、互相阻挡/争抢、安全投影/碰撞风险和任务贡献不平衡。若 PTB 只保持单机器人动作能力、却没有在预注册 cooperation-sensitive 指标上优于 B0/W10，则只能报告“社会状态可建模但未产生有效合作增益”，不能把 auxiliary accuracy 包装成 cooperation improvement。
+
+本路线最强的论文证据应同时满足：社会信息存在 oracle headroom；P/T/B 中至少一个单机制提供独立支持；对应 shuffle/swap/communication 干预破坏动作或协作；PTB 单一 checkpoint 在同一闭环协议下不弱于 W10，并改善预注册 cooperation 指标。任何一环失败都如实形成消融结论，不降低门槛、不混合失败路线补 winner，也不靠重新命名 wrapper 制造 novelty。
+
 ## 14. 后续正式执行入口
 
 R11 已形成终态，原正式 AI coding prompt 只用于审计和复现，不得用它在原 run root 重启训练：
@@ -438,3 +517,5 @@ LaWAM 受控消融现命名为 **R12**，使用独立分支、worktree、run roo
 - [R12 LaWAM 受控消融四卡正式执行 Prompt](../runbooks/R12_LAWAM_CONTROLLED_ABLATION_EXECUTION_PROMPT_ZH.md)
 
 R12 prompt 已冻结 W10 provenance、LaWAM `FAILED` 历史、L0-L3 矩阵、K=4 proposal、counterfactual Measurement gate、上游 commit、GPU、训练预算、正式验收和 Confirmation50。它的生成不表示 R12 已启动或任何候选通过；不得沿用 R11 候选状态，不得写入 `/workspace/bwa_runs/r11-four-way-v1`，也不得把方向选择解释为对 R11 gate 的追认。
+
+第 13.3 节的 social-state-conditioned cooperation 路线目前只有研究问题、受控消融、Measurement 和验收边界，没有正式 stage ID 或 execution prompt，不得在 R12 run root 中试跑。只有在 R12 形成终态、W10 使用/署名边界确认、multi-agent 数据 schema 与 social headroom 预检方案冻结后，才另建正式执行变量区、兄弟分支和独立 run root。
