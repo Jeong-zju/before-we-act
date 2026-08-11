@@ -2,12 +2,12 @@
 
 > 更新日期：2026-08-11
 > 活动分支：`feat/model-improvements`
-> 当前状态：六任务 W10 基线和数据口径已重新核验；R11 四候选均已独立实现并推送。A/B/D 通过真实 F1 后均在 Discovery gate 按冻结公式失败，C 因冻结 Cosmos 权重授权 403 失败关闭；最终结论为“R11 无胜者”，未生成 Confirmation50 seeds，未合并 baseline。后续研究选择 LaWAM latent subgoal 路线作为改进起点，但 LaWAM 在 R11 中仍是 `FAILED`，不是 winner
+> 当前状态：六任务 W10 基线和数据口径已重新核验；R11 四候选均已独立实现并推送。A/B/D 通过真实 F1 后均在 Discovery gate 按冻结公式失败，C 因冻结 Cosmos 权重授权 403 失败关闭；最终结论为“R11 无胜者”，未生成 Confirmation50 seeds，也未发生 winner/checkpoint 晋级。后续研究选择 LaWAM latent subgoal 路线作为改进起点，并于 2026-08-11 将其源码迁移、受控消融所需公共运行器和测试以 `6cd891b` 合入 `feat/model-improvements`；这是实验代码整合，不改变 LaWAM 在 R11 中仍为 `FAILED`、不是 winner 的结论
 > 活动任务：Lift Barrier、Camera Alignment、Long Pipeline Delivery、Take Photo、Pass Shoe、Place Food；不包含任何 Stack Cube 任务
 
 ## 1. 当前决定
 
-从现在起，后续模型改进只与六任务 W10 比较。原 R11、R12、R13/R13N、R14 和 R15 的代码、配置、训练入口、验收脚本及实验清单不再属于活动路线，也不能作为新候选的隐式组成部分。
+从现在起，后续模型改进只与六任务 W10 比较。除第 13 节明确回引的 LaWAM 源码迁移、受控消融所需公共运行器和测试外，原 R11、R12、R13/R13N、R14 和 R15 的代码、配置、训练入口、验收脚本及实验清单不再属于活动路线，也不能作为新候选的隐式组成部分。被回引的 R11 代码只是新阶段的实现起点，不携带 R11 checkpoint、验收状态或 winner 身份。
 
 本次采用普通 Git 回撤提交，不改写历史。需要追溯旧实验时只读以下归档：
 
@@ -160,12 +160,12 @@ jq '{status,successes,episodes,tasks}' \
 |---|---|---|
 | W10 六任务训练 | **完成** | 120,000 updates 和 checkpoint 固化 |
 | W10 Validation20 | **完成** | 120/120 回合完整，结果 88/120 |
-| R11+ 旧实现回撤 | **完成** | 活动树不再包含 R11/R12/R13/R13N/R14/R15 实现 |
+| R11+ 旧实现收口 | **完成（LaWAM 受控回引）** | 仅回引 LaWAM 及必要 R11 公共运行器；其他旧 stage 仍为非活动归档 |
 | 新 R11 论文与源码调研 | **完成** | 四个来源、commit、许可证、迁移边界已冻结 |
 | 新 R11 方案设计 | **完成** | 四卡候选、分段训练、因果验收和胜者规则已预注册 |
 | 新 R11 训练与验收 | **已终结（无胜者）** | 四候选按预注册 gate 形成终态，失败即不进入后续预算 |
 
-R11 已从唯一冻结 base `78471b285bc69fa8b5168fb170a3c3332efc32be` 建立四个独立候选分支和 integration 分支。A/B/D 都通过真实 F1 fresh/save/resume/inference 并完成 Discovery1000，但均未通过冻结 causal gate；C 的 official gated foundation revision 返回 403，未绕过许可 gate。2026-08-11 08:30（Asia/Shanghai）决策器冻结 `NO_WINNER`，因此没有 Validation20/Confirmation50，也没有 baseline merge。完整命令、提交、修复栈和产物路径保留在 `feat/r11-four-way-integration@678e67780e6960749410ee0649ce961b10495950` 的 `docs/experiments/r11/R11_EXECUTION_LOG_ZH.md`。
+R11 已从唯一冻结 base `78471b285bc69fa8b5168fb170a3c3332efc32be` 建立四个独立候选分支和 integration 分支。A/B/D 都通过真实 F1 fresh/save/resume/inference 并完成 Discovery1000，但均未通过冻结 causal gate；C 的 official gated foundation revision 返回 403，未绕过许可 gate。2026-08-11 08:30（Asia/Shanghai）决策器冻结 `NO_WINNER`，因此当时没有 Validation20/Confirmation50，也没有 winner baseline merge。完整命令、提交、修复栈和产物路径保留在 `feat/r11-four-way-integration@678e67780e6960749410ee0649ce961b10495950` 的 `docs/experiments/r11/R11_EXECUTION_LOG_ZH.md`。同日后续将 LaWAM 实验代码合入 `feat/model-improvements` 只用于第 13 节的新受控消融；该源码合并不追溯修改冻结的 `winner.json`、`acceptance.json` 或 `merged_to_baseline=false` 实验事实。
 
 ## 7. 2026-08-10 最新论文和开源代码调研
 
@@ -376,7 +376,7 @@ Discovery gate 记录（2026-08-11 08:27，Asia/Shanghai）：B 完成连续 1,0
 
 ### 13.1 R11 之后的方向选择：LaWAM 是研究起点，不是 R11 winner
 
-R11 的正式结论保持“无胜者”。后续技术方向选择 D / LaWAM latent visual subgoal + flow action expert，含义仅为“在失败候选中选择最有信息量的起点”，不构成验收通过、临时 winner、Confirmation50 资格或 baseline merge 资格。任何后续实现必须使用新的 stage、分支、run manifest、checkpoint 和 acceptance；不得覆盖 `D/acceptance.json=FAILED`，不得把 R11 D checkpoint 改标为通过，也不得用后续结果追溯修改 R11 结论。
+R11 的正式结论保持“无胜者”。后续技术方向选择 D / LaWAM latent visual subgoal + flow action expert，含义仅为“在失败候选中选择最有信息量的起点”，不构成验收通过、临时 winner、Confirmation50 资格或 baseline policy/checkpoint 晋级。为复用已核验的上游迁移与测试，`feat/r11-lawam-latent-subgoal@6d7553b` 已通过非快进合并提交 `6cd891b` 进入 `feat/model-improvements`；合入范围是 LaWAM 实现及其必要公共运行器，不是把 R11 D 的失败模型提升为基线。任何后续实验仍必须使用新的 stage、分支、run manifest、checkpoint 和 acceptance；不得覆盖 `D/acceptance.json=FAILED`，不得把 R11 D checkpoint 改标为通过，也不得用后续结果追溯修改 R11 结论。
 
 选择 LaWAM 的实验依据是：
 
