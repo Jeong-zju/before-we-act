@@ -1,0 +1,75 @@
+{
+  "format_version": "before-we-act.r11.candidate_config/1",
+  "candidate": "D",
+  "model": "R11LaWAMSubgoalFlow",
+  "branch": "feat/r11-lawam-latent-subgoal",
+  "base_commit": "78471b285bc69fa8b5168fb170a3c3332efc32be",
+  "source_receipt": "third_party/r11/lawam/SOURCE_RECEIPT.json",
+  "vendor_env": "R11_LAWAM_VENDOR",
+  "vendor_default": "/workspace/artifacts/r11_upstream/LaWAM",
+  "inference_modes": ["normal", "prediction_off", "prediction_shuffled"],
+  "w10_init": "none",
+  "foundation": {
+    "hf_cache": "/workspace/.cache/huggingface",
+    "repositories": {
+      "Qwen/Qwen3-VL-2B-Instruct": "89644892e4d85e24eaac8bacfd4f463576704203",
+      "facebook/dinov3-vitb16-pretrain-lvd1689m": "5931719e67bbdb9737e363e781fb0c67687896bc",
+      "jialei02/lawam_lam": "bd993da2a0861afaac5a95ac86d2555b1313ab8c",
+      "jialei02/lawam_pretrain": "62b14a8e8990050ec8aeb1e1b8c8694d2bf60e84"
+    },
+    "licenses": {
+      "Qwen/Qwen3-VL-2B-Instruct": "Apache-2.0",
+      "facebook/dinov3-vitb16-pretrain-lvd1689m": "DINOv3 License",
+      "jialei02/lawam_lam": "MIT",
+      "jialei02/lawam_pretrain": "MIT"
+    },
+    "receipt": "/workspace/artifacts/r11_upstream/lawam_assets/ASSET_BUNDLE_RECEIPT.json"
+  },
+  "model_config": {
+    "action_horizon": 100,
+    "num_action_queries": 8,
+    "flow_action_num_queries": 8,
+    "perceptual_weight": 0.1,
+    "lam_encoder_distill_weight": 0.1,
+    "repeated_diffusion_steps": 2,
+    "scheduled_sampling_ramp_updates": 10000,
+    "keep_llm_first_n_layers": 16,
+    "flow_cfg": {
+      "action_dim": 8,
+      "state_dim": 9,
+      "use_state": true,
+      "vlm_dim": 2048,
+      "hidden_dim": 1024,
+      "attention_heads": 16,
+      "num_layers": 16,
+      "num_target_vision_tokens": -1,
+      "interleave_self_attention": true,
+      "use_alternate_vldit": true,
+      "attend_text_every_n_blocks": 2,
+      "cfg_drop_prob": 0.0,
+      "cfg_guidance_scale": 1.0,
+      "num_inference_steps": 10,
+      "num_timestep_buckets": 1000,
+      "horizon_sec": 1.0,
+      "noise_beta_alpha": 1.5,
+      "noise_beta_beta": 1.0,
+      "noise_s": 0.999,
+      "token_independent_noise": false,
+      "use_action_positional_embeddings": true,
+      "num_embodiments": 32
+    }
+  },
+  "training": {
+    "precision": "bfloat16",
+    "optimizer": "AdamW8bit",
+    "learning_rate": 0.00001,
+    "weight_decay": 0.0001,
+    "micro_batch_size": 2,
+    "gradient_accumulation": 24,
+    "effective_batch": 48,
+    "activation_checkpointing": true,
+    "discovery_updates": 1000,
+    "selection_updates": 20000,
+    "formal_updates": 120000
+  }
+}
