@@ -996,6 +996,23 @@ def overlay_frame(image: np.ndarray, text_lines: Sequence[str]) -> np.ndarray:
     return np.asarray(canvas)
 
 
+def causal_review_indices(center: int, total_frames: int, width: int = 5) -> list[int]:
+    """Return a fixed-width past/current window without exposing future frames.
+
+    Events in the first ``width - 1`` frames are left-padded by repeating frame 0.
+    This preserves the frozen event identity and five-frame UI shape without letting
+    a reviewer use a post-event frame to judge the current label.
+    """
+
+    if total_frames <= 0:
+        raise ValueError("manual review episode is empty")
+    if center < 0 or center >= total_frames:
+        raise ValueError("manual review center is outside the episode")
+    if width <= 0:
+        raise ValueError("manual review width must be positive")
+    return [max(0, center - width + 1 + offset) for offset in range(width)]
+
+
 def build_manual_packets(
     output_root: Path, automatic: Mapping[str, Any], gate: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -1012,12 +1029,11 @@ def build_manual_packets(
         episode_sha = str(event["episode_sha256"])
         center = int(event["frame_index"])
         rows = rows_by_episode[episode_sha]
-        start = max(0, center - 2)
-        stop = min(len(rows), center + 3)
+        frame_indices = causal_review_indices(center, len(rows))
         frames: list[np.ndarray] = []
         with h5py.File(str(event["hdf5_path"]), "r") as stream:
             dataset = stream["data/observation/images/global"]
-            for frame_index in range(start, stop):
+            for context_slot, frame_index in enumerate(frame_indices):
                 label = rows[frame_index]["oracle_label"]
                 custody = {
                     name: value["current_custodian"]
@@ -1028,6 +1044,7 @@ def build_manual_packets(
                         np.asarray(dataset[frame_index]),
                         (
                             f"{task} f={frame_index}",
+                            f"audit_context={context_slot + 1}/5 past_or_current",
                             f"stage={label['stage_id']}",
                             f"custody={custody}",
                             f"complete={label['task_complete']}",
@@ -1050,6 +1067,8 @@ def build_manual_packets(
                 "task": task,
                 "episode_sha256": episode_sha,
                 "frame_index": center,
+                "review_frame_indices": frame_indices,
+                "review_window_policy": "past/current only; frame 0 is repeated for left padding",
                 "video_path": str(video_path),
                 "video_sha256": sha256_file(video_path),
                 "contact_sheet_path": str(sheet_path),
