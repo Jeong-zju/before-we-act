@@ -274,8 +274,13 @@ def extract_snapshot(
         object_positions[object_name] = [
             float(value) for value in tensor_array(actor.pose.p)[0]
         ]
+        velocity = (
+            actor.linear_velocity
+            if hasattr(actor, "linear_velocity")
+            else actor.root_linear_velocity
+        )
         object_velocities[object_name] = [
-            float(value) for value in tensor_array(actor.linear_velocity)[0]
+            float(value) for value in tensor_array(velocity)[0]
         ]
         grasp_values: list[bool] = []
         contact_values: list[bool] = []
@@ -464,8 +469,8 @@ class EpisodeWriter:
 
     def close(self) -> None:
         if self.stream:
-            image_group = self.stream["data/observation/images"]
-            if "global" in image_group:
+            image_group = self.stream.get("data/observation/images")
+            if isinstance(image_group, h5py.Group) and "global" in image_group:
                 for slot in range(self.agent_count):
                     key = f"agent_{slot}"
                     if key not in image_group:
@@ -627,7 +632,7 @@ def validate_contracts(args: argparse.Namespace) -> tuple[dict[str, Any], dict[s
     gate = json.loads(args.gate_contract.read_text(encoding="utf-8"))
     if seed.get("stage_id") != "SSC-V7-M1":
         raise RuntimeError("M2 seed contract is not the frozen M1 seed revision")
-    if gate.get("stage_id") != "SSC-V7-M2-R0":
+    if not str(gate.get("stage_id", "")).startswith("SSC-V7-M2-R"):
         raise RuntimeError("M2 gate contract has the wrong stage identity")
     if tuple(seed["tasks"]) != tuple(TASKS):
         raise RuntimeError("M2 task order differs from the frozen seed contract")
@@ -1049,7 +1054,7 @@ def manifest_for_collection(
     repository = Path(__file__).resolve().parents[2]
     return {
         "format_version": "ssc-v7.m2.oracle_sidecar_manifest/1",
-        "stage_id": "SSC-V7-M2-R0",
+        "stage_id": gate["stage_id"],
         "mode": args.mode,
         "status": "COLLECTED_PENDING_AUDIT",
         "created_at_utc": utc_now(),
@@ -1145,7 +1150,7 @@ def finalize(
         decision = "INCONCLUSIVE_MEASUREMENT/INSUFFICIENT_LABEL_SUPPORT"
     result = {
         "format_version": "ssc-v7.m2.oracle_label_audit/1",
-        "stage_id": "SSC-V7-M2-R0",
+        "stage_id": gate["stage_id"],
         "completed_at_utc": utc_now(),
         "decision_code": decision,
         "global_hard_gate_passed": hard_passed,
@@ -1204,7 +1209,7 @@ def main() -> None:
     )
     receipt = {
         "format_version": "ssc-v7.m2.execution_receipt/1",
-        "stage_id": "SSC-V7-M2-R0",
+        "stage_id": gate["stage_id"],
         "mode": args.mode,
         "completed_at_utc": utc_now(),
         "elapsed_wall_seconds": elapsed,
