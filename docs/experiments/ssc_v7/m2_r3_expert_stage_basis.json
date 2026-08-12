@@ -1,0 +1,55 @@
+{
+  "format_version": "ssc-v7.m2.expert_stage_basis/1",
+  "stage_id": "SSC-V7-M2-R3",
+  "date": "2026-08-12",
+  "decision": "Executed expert trajectories are the source of truth for macro-stage definitions.",
+  "precedence": [
+    "environment success semantics",
+    "executed privileged physical trajectory",
+    "expert planner command intent",
+    "roadmap's earlier hypothetical stage wording"
+  ],
+  "r2_diagnostic_source": {
+    "manifest_sha256": "87ae24975a9960b5474f2f12284a46eceddd6394bf84359cebcc7958c2487f6d",
+    "episodes": 30,
+    "frames": 9547,
+    "use": "stage-definition diagnosis only; R3 formal results must use fresh candidate indices"
+  },
+  "take_photo": {
+    "observed_episodes": 5,
+    "observed_frames": 1079,
+    "button_aligned_true_frames": 127,
+    "button_aligned_true_before_environment_success": 0,
+    "r3_stages": [
+      "approach",
+      "partial_support_or_grasp",
+      "camera_and_meat_controlled",
+      "photo_complete"
+    ],
+    "rationale": "button alignment remains a terminal predicate, but it is not a separately observable preterminal macro-stage in the executed expert trajectories"
+  },
+  "place_food": {
+    "observed_episodes": 5,
+    "observed_frames": 1366,
+    "meat_grasped_frames": 605,
+    "meat_lifted_frames": 521,
+    "planar_aligned_frames": 491,
+    "pot_contact_frames": 0,
+    "pot_grasp_frames": 0,
+    "pot_height_range_m": [0.08, 0.08],
+    "r3_stages": [
+      "approach",
+      "meat_controlled",
+      "meat_lifted",
+      "aligned",
+      "released"
+    ],
+    "rationale": "the planner commands both arms, but the executed privileged trajectory never contacts, grasps, or lifts the pot; only the meat's physical control, lift, alignment, and release are real stages"
+  },
+  "anti_shortcut_rule": "The R3 revision does not use frame index, elapsed time, episode length, future action, or future success to infer a stage.",
+  "fresh_seed_rule": {
+    "dry_run_candidate_index_start": 1,
+    "formal_candidate_index_start": 8,
+    "reason": "avoid reusing the R2 pilot/formal trajectories while retaining the frozen M1 seed derivation"
+  }
+}
