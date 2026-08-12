@@ -877,6 +877,56 @@ def event_signature(label: Mapping[str, Any]) -> str:
     return sha256_json(payload)
 
 
+def select_manual_events(
+    collection: Mapping[str, Any],
+    event_candidates: Mapping[str, Sequence[Mapping[str, Any]]],
+    gate: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], int]:
+    """Select frozen hash-ranked windows and add only missing episode coverage.
+
+    The gate requires at least 20 transition windows *and* five independent
+    episodes per task.  A global lowest-20 ranking can accidentally omit an
+    episode.  Keep those first 20 identities unchanged, then append the
+    lowest-ranked boundary from each omitted collected episode.  This makes
+    the coverage correction deterministic and prevents choosing an easy-looking
+    supplement after inspecting the rendered video.
+    """
+
+    selected_events: list[dict[str, Any]] = []
+    missing_without_event = 0
+    required_events = int(gate["manual_audit"]["transition_windows_per_task_min"])
+    for task in TASKS:
+        candidates = sorted(
+            (dict(value) for value in event_candidates[task]),
+            key=lambda value: str(value["rank"]),
+        )
+        primary = candidates[:required_events]
+        selected_events.extend(primary)
+        selected_episodes = {str(value["episode_sha256"]) for value in primary}
+        collected_episodes = sorted(
+            {
+                str(episode["hdf5_sha256"])
+                for episode in collection["episodes"]
+                if str(episode["task"]) == task
+            }
+        )
+        for episode_sha in collected_episodes:
+            if episode_sha in selected_episodes:
+                continue
+            choices = [
+                value
+                for value in candidates
+                if str(value["episode_sha256"]) == episode_sha
+            ]
+            if not choices:
+                missing_without_event += 1
+                continue
+            supplement = dict(choices[0])
+            supplement["coverage_supplement"] = True
+            selected_events.append(supplement)
+    return selected_events, missing_without_event
+
+
 def automatic_audit(
     collection: Mapping[str, Any], gate: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -957,15 +1007,19 @@ def automatic_audit(
     ambiguity_passed = ambiguity_fraction <= float(
         gate["thresholds"]["ambiguous_frame_fraction_max"]
     )
-    selected_events: list[dict[str, Any]] = []
     required_events = int(gate["manual_audit"]["transition_windows_per_task_min"])
     for task, candidates in event_candidates.items():
-        candidates.sort(key=lambda value: value["rank"])
         if len(candidates) < required_events and collection["mode"] == "execute":
             issue_counts["insufficient_transition_windows"] = issue_counts.get(
                 "insufficient_transition_windows", 0
             ) + (required_events - len(candidates))
-        selected_events.extend(candidates[:required_events])
+    selected_events, missing_manual_episode_coverage = select_manual_events(
+        collection, event_candidates, gate
+    )
+    if missing_manual_episode_coverage and collection["mode"] == "execute":
+        issue_counts["insufficient_manual_episode_coverage"] = (
+            missing_manual_episode_coverage
+        )
     hard_passed = all(value == 0 for value in issue_counts.values())
     return {
         "format_version": "ssc-v7.m2.automatic_audit/1",
