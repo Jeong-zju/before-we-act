@@ -38,6 +38,7 @@ def test_manual_selection_appends_only_missing_episode_coverage() -> None:
         "episodes": [
             {"task": "lift_barrier", "hdf5_sha256": "episode-a"},
             {"task": "lift_barrier", "hdf5_sha256": "episode-b"},
+            {"task": "camera_alignment", "hdf5_sha256": "episode-c"},
         ]
     }
     candidates = {
@@ -56,6 +57,10 @@ def test_manual_selection_appends_only_missing_episode_coverage() -> None:
         {"rank": "01", "episode_sha256": "episode-a", "frame_index": 2},
         {"rank": "02", "episode_sha256": "episode-b", "frame_index": 3},
     ]
+    candidates["camera_alignment"] = [
+        {"rank": "00", "episode_sha256": "episode-c", "frame_index": 4},
+        {"rank": "01", "episode_sha256": "episode-c", "frame_index": 5},
+    ]
     gate = {"manual_audit": {"transition_windows_per_task_min": 2}}
 
     selected, missing = select_manual_events(collection, candidates, gate)
@@ -64,6 +69,8 @@ def test_manual_selection_appends_only_missing_episode_coverage() -> None:
     assert [(item["episode_sha256"], item["frame_index"]) for item in selected] == [
         ("episode-a", 1),
         ("episode-a", 2),
+        ("episode-c", 4),
+        ("episode-c", 5),
         ("episode-b", 3),
     ]
     assert "coverage_supplement" not in selected[0]

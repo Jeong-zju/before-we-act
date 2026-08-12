@@ -893,6 +893,7 @@ def select_manual_events(
     """
 
     selected_events: list[dict[str, Any]] = []
+    supplements: list[dict[str, Any]] = []
     missing_without_event = 0
     required_events = int(gate["manual_audit"]["transition_windows_per_task_min"])
     for task in TASKS:
@@ -923,7 +924,8 @@ def select_manual_events(
                 continue
             supplement = dict(choices[0])
             supplement["coverage_supplement"] = True
-            selected_events.append(supplement)
+            supplements.append(supplement)
+    selected_events.extend(supplements)
     return selected_events, missing_without_event
 
 
