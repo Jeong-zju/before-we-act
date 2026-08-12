@@ -32,7 +32,7 @@ if str(REPOSITORY) not in sys.path:
 from scripts.before_we_act import audit_ssc_v7_m2 as m2  # noqa: E402
 
 
-STAGE_ID = "SSC-V7-M3-R1"
+STAGE_ID = "SSC-V7-M3-R2"
 M2_DECISION = "PASSED_M2_ORACLE_LABEL_GATE"
 TASKS = tuple(m2.TASKS)
 TASK_TEXT = {
@@ -286,7 +286,11 @@ def collect_one_task(
     (args.output_root / "logs").mkdir()
     seed_contract = read_json(args.seed_contract)
     expanded = m2.expanded_seed_manifest(seed_contract, args.w10_seed_root)
-    purpose_name = "pilot" if args.purpose == "pilot" else "expert_candidate_pool"
+    purpose_name = (
+        str(gate["collection"].get("pilot_seed_purpose", "pilot"))
+        if args.purpose == "pilot"
+        else "expert_candidate_pool"
+    )
     required = int(
         gate["collection"][
             "pilot_successes_per_task"

@@ -10,6 +10,10 @@ import numpy as np
 from scripts.before_we_act import run_ssc_v7_m3 as m3
 
 
+def test_stage_revision_is_m3_r2() -> None:
+    assert m3.STAGE_ID == "SSC-V7-M3-R2"
+
+
 def _label(frame: int) -> dict[str, object]:
     return {
         "stage_id": "approach" if frame < 20 else "controlled",

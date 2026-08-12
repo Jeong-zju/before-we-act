@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "stage_id": "SSC-V7-M3-R2",
+  "status": "FROZEN_BEFORE_R2_PILOT",
+  "supersedes": "docs/experiments/ssc_v7/seed_contract.json for M3 execution only",
+  "revision_reason": "M3-R1 proved that a four-candidate pilot pool cannot guarantee four successful expert episodes: Place Food produced only three successes. R2 adds a separate twelve-candidate pilot purpose while leaving every expert_candidate_pool, shared evaluation and common training seed unchanged.",
+  "namespace": "before-we-act/SSC-V7-M1/2026-08-11",
+  "derivation": {
+    "message": "{namespace}|{purpose}|{task_or_common}|{zero_based_index}|{retry}",
+    "hash": "SHA256 UTF-8 bytes",
+    "conversion": "big-endian first 8 digest bytes modulo 2147483646, then add 1",
+    "collision_rule": "start retry at 0; increment only when the value is zero, duplicated anywhere in this contract, or appears in any frozen W10 validation seed file",
+    "ordering": "ascending zero_based_index after collision rejection"
+  },
+  "tasks": [
+    "lift_barrier",
+    "camera_alignment",
+    "long_pipeline_delivery",
+    "take_photo",
+    "pass_shoe",
+    "place_food"
+  ],
+  "measurement_purposes_per_task": {
+    "pilot": 4,
+    "expert_candidate_pool": 120,
+    "w10_measurement_rollout": 40,
+    "replay_audit": 5,
+    "m3_r2_pilot": 12
+  },
+  "expert_selection": {
+    "rule": "take the first 60 successful episodes in candidate-pool order; fail if the fixed 120 candidates contain fewer than 60 successes",
+    "probe_train": 36,
+    "probe_tune": 12,
+    "probe_read_only_test": 12
+  },
+  "w10_measurement_rollout_schedule": {
+    "initial_prefix_per_task": 20,
+    "balanced_extension_batch_per_task": 5,
+    "maximum_prefix_per_task": 40,
+    "extension_trigger": "use only aggregate W10 success/failure counts while social-root taxonomy labels remain sealed, and extend only when the preregistered power target is not met",
+    "stop_rule": "stop after a complete balanced batch once target power is reached, or at the fixed maximum; never extend based on social-root labels"
+  },
+  "shared_candidate_evaluation_purposes_per_task": {
+    "validation5": 5,
+    "validation20": 20,
+    "confirmation50": 50
+  },
+  "common_training_purposes": [
+    "model_initialization",
+    "dataset_sampler",
+    "dataloader_workers",
+    "discovery_evaluation",
+    "formal_training",
+    "measurement_statistics"
+  ],
+  "route_seed_rule": "B0, P, T, B, PT and PTB use the same common seed for a given purpose; the route name is deliberately not part of the derivation message",
+  "r2_invariants": {
+    "pilot_seed_purpose": "m3_r2_pilot",
+    "pilot_candidates_per_task": 12,
+    "pilot_required_successes_per_task": 4,
+    "old_pilot_seeds_reused": false,
+    "expert_candidate_pool_unchanged": true,
+    "common_training_seeds_unchanged": true,
+    "shared_evaluation_seeds_unchanged": true
+  },
+  "disjointness": [
+    "all purposes are mutually disjoint",
+    "all six tasks are mutually disjoint",
+    "all seeds are disjoint from the six W10 Validation20 seed files",
+    "R1 pilot seeds never enter the R2 pilot or formal metrics",
+    "pilot seeds never enter formal metrics",
+    "unused W10 measurement reserve seeds remain sealed and never enter metrics",
+    "validation5, validation20 and confirmation50 are mutually disjoint"
+  ],
+  "visibility": {
+    "m3_r2_pilot": "read_write_during_debugging",
+    "probe_train": "read_write",
+    "probe_tune": "read_only_for_selection",
+    "probe_read_only_test": "sealed_until_final_probe_configuration_is_hashed",
+    "validation20": "sealed_until_checkpoint_and_acceptance_configuration_are_hashed",
+    "confirmation50": "sealed_until_one_temporary_winner_is_named"
+  }
+}
