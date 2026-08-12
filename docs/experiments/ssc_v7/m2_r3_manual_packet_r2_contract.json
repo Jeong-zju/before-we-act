@@ -13,9 +13,9 @@
   },
   "implementation": {
     "branch": "feat/ssc-v7-m2-oracle-sidecar",
-    "commit": "88457f6a31773be25aea8a6f0f7924b880f8b87b",
+    "commit": "40be1883754683b7c29f7f73cc95d236f8527cb6",
     "script": "scripts/before_we_act/audit_ssc_v7_m2.py",
-    "script_sha256": "1677756962b201b2bdfc54f619d4433f677c35b18afef8b1e8486113365f12b9",
+    "script_sha256": "048a95031fbbabb1e96af24180c96fc145aaa723001f62851317cf09b6daafc6",
     "tests_passed": 30
   },
   "selection_repair": {
