@@ -233,12 +233,56 @@ def expanded_seed_manifest(contract: Mapping[str, Any], w10_root: Path) -> dict[
     return expanded
 
 
-def pair_contact_force(base_env: Any, agent: Any, actor: Any) -> tuple[float, float]:
+def contact_targets(actor: Any) -> list[Any]:
+    if hasattr(actor, "_bodies"):
+        return [actor]
+    if hasattr(actor, "get_links"):
+        links = list(actor.get_links())
+        if links:
+            return links
+    raise TypeError(f"unsupported M2 contact object type {type(actor)!r}")
+
+
+def finger_contact_vectors(
+    base_env: Any, agent: Any, actor: Any
+) -> tuple[np.ndarray, np.ndarray]:
     scene = base_env.scene
-    left = tensor_array(scene.get_pairwise_contact_forces(agent.finger1_link, actor))
-    right = tensor_array(scene.get_pairwise_contact_forces(agent.finger2_link, actor))
-    return float(np.linalg.norm(left, axis=-1).max()), float(
-        np.linalg.norm(right, axis=-1).max()
+    left = np.zeros((1, 3), dtype=np.float64)
+    right = np.zeros((1, 3), dtype=np.float64)
+    for target in contact_targets(actor):
+        left += tensor_array(
+            scene.get_pairwise_contact_forces(agent.finger1_link, target)
+        )
+        right += tensor_array(
+            scene.get_pairwise_contact_forces(agent.finger2_link, target)
+        )
+    return left, right
+
+
+def vector_angle_degrees(first: np.ndarray, second: np.ndarray) -> float:
+    denominator = float(np.linalg.norm(first) * np.linalg.norm(second))
+    if denominator <= 1e-12:
+        return 180.0
+    cosine = float(np.dot(first, second) / denominator)
+    return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+
+
+def grasp_from_contacts(agent: Any, left: np.ndarray, right: np.ndarray) -> bool:
+    left_vector = np.asarray(left[0], dtype=np.float64)
+    right_vector = np.asarray(right[0], dtype=np.float64)
+    left_force = float(np.linalg.norm(left_vector))
+    right_force = float(np.linalg.norm(right_vector))
+    left_direction = tensor_array(agent.finger1_link.pose.to_transformation_matrix())[
+        0, :3, 1
+    ]
+    right_direction = -tensor_array(
+        agent.finger2_link.pose.to_transformation_matrix()
+    )[0, :3, 1]
+    return bool(
+        left_force >= 0.5
+        and right_force >= 0.5
+        and vector_angle_degrees(left_direction, left_vector) <= 85.0
+        and vector_angle_degrees(right_direction, right_vector) <= 85.0
     )
 
 
@@ -286,11 +330,13 @@ def extract_snapshot(
         contact_values: list[bool] = []
         force_values: list[float] = []
         for agent in agents:
-            left, right = pair_contact_force(base_env, agent, actor)
+            left_vector, right_vector = finger_contact_vectors(base_env, agent, actor)
+            left = float(np.linalg.norm(left_vector, axis=-1).max())
+            right = float(np.linalg.norm(right_vector, axis=-1).max())
             force = max(left, right)
             force_values.append(force)
             contact_values.append(force >= CONTACT_FORCE_MIN)
-            grasp_values.append(scalar_bool(agent.is_grasping(actor)))
+            grasp_values.append(grasp_from_contacts(agent, left_vector, right_vector))
             if abs(force - CONTACT_FORCE_MIN) <= CONTACT_AMBIGUITY_MARGIN:
                 threshold_ambiguous = True
         grasp[object_name] = grasp_values
