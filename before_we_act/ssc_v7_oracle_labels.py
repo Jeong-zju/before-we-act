@@ -686,6 +686,14 @@ def permute_automaton_state(
         object_name: None if slot is None else mapping[int(slot)]
         for object_name, slot in value["last_confirmed_custodian"].items()
     }
+    result["achieved_predicate_latches"] = {
+        (
+            f"agent{mapping[int(key[len('agent') : -len('_support')])]}_support"
+            if key.startswith("agent") and key.endswith("_support")
+            else key
+        ): predicate_value
+        for key, predicate_value in value["achieved_predicate_latches"].items()
+    }
     return result
 
 

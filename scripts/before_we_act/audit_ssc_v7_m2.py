@@ -1248,11 +1248,15 @@ def main() -> None:
     template = build_manual_packets(args.output_root, automatic_with_rows, gate)
     write_json(args.output_root / "manual_review_template.json", template)
     elapsed = (datetime.now(timezone.utc) - started).total_seconds()
-    decision = (
-        "SSC_V7_M2_DRY_RUN_PASSED"
-        if args.mode == "dry-run" and automatic["hard_gate_passed"]
-        else "PENDING_M2_MANUAL_AUDIT"
+    automatic_passed = bool(
+        automatic["hard_gate_passed"] and automatic["ambiguity_passed"]
     )
+    if not automatic_passed:
+        decision = "FAILED_SCHEMA/ORACLE_LABEL_MISMATCH"
+    elif args.mode == "dry-run":
+        decision = "SSC_V7_M2_DRY_RUN_PASSED"
+    else:
+        decision = "PENDING_M2_MANUAL_AUDIT"
     receipt = {
         "format_version": "ssc-v7.m2.execution_receipt/1",
         "stage_id": gate["stage_id"],
@@ -1262,8 +1266,8 @@ def main() -> None:
         "decision_code": decision,
         "manifest": str(manifest_path),
         "manifest_sha256": sha256_file(manifest_path),
-        "automatic_hard_gate_passed": automatic["hard_gate_passed"],
-        "manual_review_required": args.mode == "execute",
+        "automatic_hard_gate_passed": automatic_passed,
+        "manual_review_required": args.mode == "execute" and automatic_passed,
         "training_authorized": False,
     }
     write_json(args.output_root / "execution_receipt.json", receipt)

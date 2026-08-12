@@ -132,6 +132,20 @@ def test_agent_slot_permutation_equivariance(task: str) -> None:
     assert renamed == expected
 
 
+def test_agent_slot_permutation_equivariance_with_latched_support_history() -> None:
+    state = snapshot("lift_barrier")
+    state["grasp"]["barrier"] = [True, False]
+    memory = initial_automaton_state("lift_barrier")
+    memory["achieved_predicate_latches"] = {"agent0_support": True}
+    permutation = [1, 0]
+    original = build_oracle_label(state, memory)
+    renamed = build_oracle_label(
+        permute_agent_slots(state, permutation),
+        permute_automaton_state(memory, permutation),
+    )
+    assert renamed == permute_label_slots(original, permutation)
+
+
 def test_pass_shoe_causal_memory_records_only_observed_transfer() -> None:
     state = snapshot("pass_shoe")
     memory = initial_automaton_state("pass_shoe")
@@ -154,4 +168,3 @@ def test_wrong_delivery_order_is_explicitly_ambiguous() -> None:
     result = build_oracle_label(state)
     assert result["ambiguity_code"] != 0
     assert not result["label_validity_mask"]["grasp_contact_custody_state"]
-
