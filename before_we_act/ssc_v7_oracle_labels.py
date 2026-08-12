@@ -42,7 +42,6 @@ TASK_STAGE_NAMES: dict[str, tuple[str, ...]] = {
         "approach",
         "partial_support_or_grasp",
         "camera_and_meat_controlled",
-        "button_aligned",
         "photo_complete",
     ),
     "pass_shoe": (
@@ -54,9 +53,8 @@ TASK_STAGE_NAMES: dict[str, tuple[str, ...]] = {
     ),
     "place_food": (
         "approach",
-        "partial_grasp",
-        "joint_control",
-        "joint_lift",
+        "meat_controlled",
+        "meat_lifted",
         "aligned",
         "released",
     ),
@@ -435,8 +433,6 @@ def _take_photo(
     success = bool(snapshot["environment_success"])
     if success:
         stage, progress = "photo_complete", 1.0
-    elif controlled and button_aligned:
-        stage, progress = "button_aligned", 1.0
     elif controlled:
         stage = "camera_and_meat_controlled"
         progress = _approach_progress(snapshot, ("camera",), (button_agent,))
@@ -529,14 +525,9 @@ def _place_food(
     snapshot: Mapping[str, Any], memory: dict[str, Any]
 ) -> tuple[str, float, dict[str, bool], dict[str, Any], dict[int, list[tuple[str, str]]]]:
     meat_handlers = _object_agents(snapshot, "grasp", "meat")
-    pot_handlers = _object_agents(snapshot, "grasp", "pot")
     meat_grasped = bool(meat_handlers)
-    pot_grasped = bool(pot_handlers)
-    joint_control = meat_grasped and pot_grasped
     base_z = float(snapshot["reference_heights"]["robot_base"])
     meat_lifted = _point(snapshot, "object_positions", "meat")[2] > base_z + 0.10
-    pot_lifted = _point(snapshot, "object_positions", "pot")[2] > base_z + 0.10
-    joint_lift = joint_control and meat_lifted and pot_lifted
     planar_distance = float(snapshot["task_predicates"]["planar_meat_to_pot_distance"])
     aligned = planar_distance < 0.10
     success = bool(snapshot["environment_success"])
@@ -545,37 +536,30 @@ def _place_food(
     elif aligned:
         stage = "aligned"
         progress = float(not meat_grasped)
-    elif joint_lift:
-        stage = "joint_lift"
+    elif meat_grasped and meat_lifted:
+        stage = "meat_lifted"
         progress = _clamp(1.0 - planar_distance / 0.50)
-    elif joint_control:
-        stage = "joint_control"
-        progress = 0.5 * float(meat_lifted) + 0.5 * float(pot_lifted)
-    elif meat_grasped or pot_grasped:
-        stage = "partial_grasp"
+    elif meat_grasped:
+        stage = "meat_controlled"
         progress = 0.5
     else:
         stage = "approach"
         progress = _approach_progress(snapshot, ("meat", "pot"), range(int(snapshot["agent_count"])))
     predicates = {
         "meat_grasped": meat_grasped,
-        "pot_grasped": pot_grasped,
-        "joint_lift": joint_lift,
+        "meat_lifted": meat_lifted,
         "planar_alignment": aligned,
         "release_complete": success,
     }
     remaining = {
         "meat_grasp": not meat_grasped and not success,
-        "pot_grasp": not pot_grasped and not success,
-        "joint_lift": not joint_lift and not success,
+        "meat_lift": not meat_lifted and not success,
         "alignment": not aligned,
         "release": not success,
     }
     roles: dict[int, list[tuple[str, str]]] = {}
     for slot in meat_handlers:
         roles.setdefault(slot, []).append(("meat", "handler"))
-    for slot in pot_handlers:
-        roles.setdefault(slot, []).append(("pot", "handler"))
     return stage, progress, remaining, predicates, roles
 
 

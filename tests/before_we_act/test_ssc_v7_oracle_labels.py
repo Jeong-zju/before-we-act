@@ -6,6 +6,7 @@ import pytest
 
 from before_we_act.ssc_v7_oracle_labels import (
     TASK_OBJECTS,
+    TASK_STAGE_NAMES,
     build_oracle_label,
     initial_automaton_state,
     permute_agent_slots,
@@ -144,6 +145,37 @@ def test_agent_slot_permutation_equivariance_with_latched_support_history() -> N
         permute_automaton_state(memory, permutation),
     )
     assert renamed == permute_label_slots(original, permutation)
+
+
+def test_take_photo_has_no_unobserved_preterminal_button_stage() -> None:
+    state = snapshot("take_photo")
+    state["task_predicates"]["button_aligned"] = True
+    state["environment_success"] = True
+    result = build_oracle_label(state)
+    assert "button_aligned" not in TASK_STAGE_NAMES["take_photo"]
+    assert result["stage_id"] == "photo_complete"
+    assert result["factorized_predicates"]["button_aligned"] is True
+
+
+def test_place_food_stages_follow_observed_expert_object_motion() -> None:
+    state = snapshot("place_food")
+    assert build_oracle_label(state)["stage_id"] == "approach"
+    state["grasp"]["meat"] = [True, False]
+    controlled = build_oracle_label(state)
+    assert controlled["stage_id"] == "meat_controlled"
+    assert "pot_grasp" not in controlled["remaining_goal_mask"]
+    state["object_positions"]["meat"][2] = 0.15
+    lifted = build_oracle_label(state)
+    assert lifted["stage_id"] == "meat_lifted"
+    state["task_predicates"]["planar_meat_to_pot_distance"] = 0.05
+    assert build_oracle_label(state)["stage_id"] == "aligned"
+    state["environment_success"] = True
+    released = build_oracle_label(state)
+    assert released["stage_id"] == "released"
+    assert all(
+        row["object"] != "pot" or row["roles"] == ["none"]
+        for row in released["agent_object_role_slots"]
+    )
 
 
 def test_pass_shoe_causal_memory_records_only_observed_transfer() -> None:

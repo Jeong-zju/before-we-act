@@ -770,6 +770,7 @@ def collect(args: argparse.Namespace, seeds: Mapping[str, Any], gate: Mapping[st
     mode = str(args.mode)
     purpose = "pilot" if mode == "dry-run" else "expert_candidate_pool"
     required_successes = int(gate["collection"][mode]["successful_episodes_per_task"])
+    candidate_start = int(gate["collection"][mode].get("candidate_index_start", 0))
     attempts_limit = int(gate["collection"][mode]["candidate_prefix_max"])
     episodes: list[dict[str, Any]] = []
     attempts: list[dict[str, Any]] = []
@@ -779,8 +780,10 @@ def collect(args: argparse.Namespace, seeds: Mapping[str, Any], gate: Mapping[st
         solver = getattr(solutions, str(spec["solver"]))
         task_successes = 0
         try:
-            candidates = seeds["per_task"][task][purpose][:attempts_limit]
-            for candidate_index, seed in enumerate(candidates):
+            candidates = seeds["per_task"][task][purpose][
+                candidate_start:attempts_limit
+            ]
+            for candidate_index, seed in enumerate(candidates, start=candidate_start):
                 if task_successes >= required_successes:
                     break
                 print(
@@ -823,6 +826,8 @@ def collect(args: argparse.Namespace, seeds: Mapping[str, Any], gate: Mapping[st
         "format_version": "ssc-v7.m2.collection/1",
         "mode": mode,
         "purpose": purpose,
+        "candidate_index_start": candidate_start,
+        "candidate_index_stop_exclusive": attempts_limit,
         "required_successes_per_task": required_successes,
         "episodes": episodes,
         "attempts": attempts,
@@ -949,7 +954,6 @@ def automatic_audit(
                 }
             )
     ambiguity_fraction = ambiguous_frames / total_frames if total_frames else 1.0
-    hard_passed = all(value == 0 for value in issue_counts.values())
     ambiguity_passed = ambiguity_fraction <= float(
         gate["thresholds"]["ambiguous_frame_fraction_max"]
     )
@@ -957,11 +961,12 @@ def automatic_audit(
     required_events = int(gate["manual_audit"]["transition_windows_per_task_min"])
     for task, candidates in event_candidates.items():
         candidates.sort(key=lambda value: value["rank"])
-        if len(candidates) < required_events:
+        if len(candidates) < required_events and collection["mode"] == "execute":
             issue_counts["insufficient_transition_windows"] = issue_counts.get(
                 "insufficient_transition_windows", 0
             ) + (required_events - len(candidates))
         selected_events.extend(candidates[:required_events])
+    hard_passed = all(value == 0 for value in issue_counts.values())
     return {
         "format_version": "ssc-v7.m2.automatic_audit/1",
         "hard_gate_passed": hard_passed,
@@ -1148,6 +1153,7 @@ def finalize(
         "role_agreement",
         "custody_agreement",
         "reviewer",
+        "reviewer_type",
         "notes",
     }
     for item in review["items"]:
@@ -1169,14 +1175,25 @@ def finalize(
         task: len({item["episode_sha256"] for item in review["items"] if item["task"] == task})
         for task in TASKS
     }
+    task_window_counts = {
+        task: sum(item["task"] == task for item in review["items"]) for task in TASKS
+    }
+    human_review = all(
+        item["review"]["reviewer_type"] == "human" for item in review["items"]
+    )
     manual_passed = bool(
         predicate_agreement >= float(gate["manual_audit"]["predicate_level_agreement_min"])
         and terminal_errors == 0
         and role_errors == 0
         and custody_errors == 0
+        and human_review
         and all(
             value >= int(gate["manual_audit"]["episodes_per_task"])
             for value in task_counts.values()
+        )
+        and all(
+            value >= int(gate["manual_audit"]["transition_windows_per_task_min"])
+            for value in task_window_counts.values()
         )
     )
     hard_passed = bool(automatic["hard_gate_passed"] and automatic["ambiguity_passed"])
@@ -1211,6 +1228,8 @@ def finalize(
             "role_errors": role_errors,
             "custody_errors": custody_errors,
             "episodes_covered_per_task": task_counts,
+            "transition_windows_per_task": task_window_counts,
+            "human_review": human_review,
         },
         "training_authorized": False,
         "next_step_authorized": "M3 only for sources with source_status=PASSED",
