@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect, train, and adjudicate the frozen SSC-V7 M3 small-model probe."""
+"""Run the frozen SSC-V7 M3-R3 convergence-repair measurement."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ if str(REPOSITORY) not in sys.path:
 from scripts.before_we_act import audit_ssc_v7_m2 as m2  # noqa: E402
 
 
-STAGE_ID = "SSC-V7-M3-R2"
+STAGE_ID = "SSC-V7-M3-R3"
 M2_DECISION = "PASSED_M2_ORACLE_LABEL_GATE"
 TASKS = tuple(m2.TASKS)
 TASK_TEXT = {
@@ -61,17 +61,8 @@ CONDITIONS = (
     "HC",
     "label_shuffled",
     "time_phase_only",
-    "P",
-    "T",
     "B",
-    "PT",
-    "PB",
-    "TB",
-    "PTB",
-    "P_hat",
-    "T_hat",
     "B_hat",
-    "PTB_hat",
 )
 
 
@@ -79,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=("collect", "merge", "pilot-check", "tune", "test"),
+        choices=("collect", "merge", "pilot-check", "tune", "seal", "test"),
     )
     parser.add_argument("--gate", type=Path, required=True)
     parser.add_argument(
@@ -106,7 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--data-root", type=Path)
     parser.add_argument("--task", choices=TASKS)
-    parser.add_argument("--purpose", choices=("pilot", "formal"))
+    parser.add_argument("--purpose", choices=("repair_test",))
     parser.add_argument("--device", default="cuda:0")
     return parser.parse_args()
 
@@ -160,9 +151,14 @@ def load_gate(path: Path) -> dict[str, Any]:
     gate = read_json(path)
     if gate.get("stage_id") != STAGE_ID:
         raise RuntimeError("M3 gate has the wrong stage identity")
-    if gate.get("status") != "FROZEN_BEFORE_PILOT":
-        raise RuntimeError("M3 gate was not frozen before pilot execution")
+    if gate.get("status") != "FROZEN_BEFORE_REPAIR_TEST_COLLECTION":
+        raise RuntimeError("M3-R3 gate was not frozen before repair-test collection")
     return gate
+
+
+def run_path(args: argparse.Namespace, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else args.run_root / path
 
 
 def preflight(args: argparse.Namespace, gate: Mapping[str, Any]) -> dict[str, Any]:
@@ -286,19 +282,15 @@ def collect_one_task(
     (args.output_root / "logs").mkdir()
     seed_contract = read_json(args.seed_contract)
     expanded = m2.expanded_seed_manifest(seed_contract, args.w10_seed_root)
-    purpose_name = (
-        str(gate["collection"].get("pilot_seed_purpose", "pilot"))
-        if args.purpose == "pilot"
-        else "expert_candidate_pool"
+    if args.purpose != "repair_test":
+        raise ValueError("M3-R3 collection is restricted to repair_test")
+    purpose_name = "expert_candidate_pool"
+    required = int(gate["collection"]["repair_test_successes_per_task"])
+    first_candidate = int(
+        gate["collection"]["first_unused_candidate_index_by_task"][args.task]
     )
-    required = int(
-        gate["collection"][
-            "pilot_successes_per_task"
-            if args.purpose == "pilot"
-            else "formal_successes_per_task"
-        ]
-    )
-    candidates = expanded["per_task"][args.task][purpose_name]
+    frozen_candidates = expanded["per_task"][args.task][purpose_name]
+    candidates = frozen_candidates[first_candidate:]
     m2.EpisodeWriter = CompactEpisodeWriter
     from robofactory.planner import solutions
 
@@ -310,7 +302,8 @@ def collect_one_task(
     episodes: list[dict[str, Any]] = []
     started = datetime.now(timezone.utc)
     try:
-        for candidate_index, seed in enumerate(candidates):
+        for offset, seed in enumerate(candidates):
+            candidate_index = first_candidate + offset
             if len(episodes) >= required:
                 break
             print(
@@ -373,7 +366,35 @@ def merge_collections(args: argparse.Namespace, gate: Mapping[str, Any]) -> None
         raise ValueError("merge requires --data-root and --purpose")
     if args.output_root.exists():
         raise FileExistsError(f"fresh output root required: {args.output_root}")
+    if args.purpose != "repair_test":
+        raise ValueError("M3-R3 merge is restricted to repair_test")
+    base_manifest_path = run_path(
+        args, str(gate["repair_training_data"]["r2_formal_manifest"])
+    )
+    expected_base_hash = str(
+        gate["repair_training_data"]["r2_formal_manifest_sha256"]
+    )
+    if sha256_file(base_manifest_path) != expected_base_hash:
+        raise RuntimeError("frozen R2 base manifest hash mismatch")
+    base_manifest = read_json(base_manifest_path)
     episodes: list[dict[str, Any]] = []
+    for episode in base_manifest["episodes"]:
+        if episode["split"] not in {"train", "tune"}:
+            continue
+        item = deepcopy(episode)
+        item["source_stage_id"] = str(base_manifest["stage_id"])
+        episodes.append(item)
+    for task in TASKS:
+        for split, expected in (("train", 36), ("tune", 12)):
+            actual = sum(
+                1
+                for item in episodes
+                if item["task"] == task and item["split"] == split
+            )
+            if actual != expected:
+                raise RuntimeError(
+                    f"R2 base manifest has {actual} {task}/{split} episodes, expected {expected}"
+                )
     receipts: list[dict[str, Any]] = []
     for task in TASKS:
         path = args.data_root / task / "task_collection_receipt.json"
@@ -388,25 +409,14 @@ def merge_collections(args: argparse.Namespace, gate: Mapping[str, Any]) -> None
             }
         )
         task_episodes = list(receipt["episodes"])
-        required = (
-            int(gate["collection"]["pilot_successes_per_task"])
-            if args.purpose == "pilot"
-            else int(gate["collection"]["formal_successes_per_task"])
-        )
+        required = int(gate["collection"]["repair_test_successes_per_task"])
         if len(task_episodes) != required:
             raise RuntimeError(f"wrong successful episode count for {task}")
         for rank, episode in enumerate(task_episodes):
             if int(episode["success_rank"]) != rank:
                 raise RuntimeError(f"non-canonical success order for {task}")
             item = deepcopy(episode)
-            if args.purpose == "pilot":
-                item["split"] = "pilot"
-            elif rank < 36:
-                item["split"] = "train"
-            elif rank < 48:
-                item["split"] = "tune"
-            else:
-                item["split"] = "read_only_test"
+            item["split"] = "read_only_test"
             for key in ("hdf5_path", "sidecar_path"):
                 path_value = Path(str(item[key]))
                 if not path_value.is_file():
@@ -435,9 +445,15 @@ def merge_collections(args: argparse.Namespace, gate: Mapping[str, Any]) -> None
         "gate": str(args.gate),
         "gate_sha256": sha256_file(args.gate),
         "source_receipts": receipts,
+        "repair_training_data": {
+            "r2_formal_manifest": str(base_manifest_path),
+            "r2_formal_manifest_sha256": expected_base_hash,
+            "included_splits": ["train", "tune"],
+            "excluded_split": "read_only_test",
+        },
         "split_counts": split_counts,
         "episodes": episodes,
-        "test_is_sealed": args.purpose == "formal",
+        "test_is_sealed": True,
         "test_has_been_read": False,
     }
     write_json(args.output_root / "dataset_manifest.json", manifest)
@@ -446,7 +462,7 @@ def merge_collections(args: argparse.Namespace, gate: Mapping[str, Any]) -> None
         "manifest": str(args.output_root / "dataset_manifest.json"),
         "manifest_sha256": sha256_file(args.output_root / "dataset_manifest.json"),
         "split_counts": split_counts,
-        "test_is_sealed": args.purpose == "formal",
+        "test_is_sealed": True,
         "formal_training_authorized": False,
     }
     write_json(args.output_root / "merge_receipt.json", receipt)
@@ -903,15 +919,15 @@ def train_action_model(
     train_y: np.ndarray,
     train_mask: np.ndarray,
     tune_x: np.ndarray,
-    tune_y: np.ndarray,
-    tune_mask: np.ndarray,
+    tune_data: ProbeData,
+    tune_targets: np.ndarray,
     device: str,
     learning_rate: float,
     hidden_width: int,
     initialization_seed: int,
     sampler_seed: int,
-    max_epochs: int = 120,
-    patience: int = 12,
+    max_epochs: int,
+    patience: int,
 ) -> tuple[Any, dict[str, Any]]:
     torch = torch_setup(initialization_seed)
     model = build_action_model(train_x.shape[1], hidden_width, initialization_seed).to(
@@ -924,9 +940,10 @@ def train_action_model(
     y_train = torch.from_numpy(train_y)
     mask_train = torch.from_numpy(train_mask)
     x_tune = torch.from_numpy(tune_x).to(device)
-    y_tune = torch.from_numpy(tune_y).to(device)
-    mask_tune = torch.from_numpy(tune_mask).to(device)
-    best_loss = float("inf")
+    y_tune = torch.from_numpy(tune_targets).to(device)
+    mask_tune = torch.from_numpy(tune_data.target_mask).to(device)
+    best_primary = float("inf")
+    best_full_loss = float("inf")
     best_state: dict[str, Any] | None = None
     best_epoch = -1
     history: list[dict[str, float]] = []
@@ -950,12 +967,23 @@ def train_action_model(
             tune_loss = float(
                 action_loss(model, x_tune, y_tune, mask_tune).detach().cpu()
             )
+        tune_primary = float(
+            evaluate_model(model, tune_x, tune_data, tune_targets, device)[
+                "task_macro_primary_16_nrmse"
+            ]
+        )
         train_loss = float(np.mean(losses))
         history.append(
-            {"epoch": float(epoch), "train_loss": train_loss, "tune_loss": tune_loss}
+            {
+                "epoch": float(epoch),
+                "train_loss_100_step": train_loss,
+                "tune_loss_100_step": tune_loss,
+                "tune_task_macro_primary_16_nrmse": tune_primary,
+            }
         )
-        if tune_loss < best_loss - 1e-7:
-            best_loss = tune_loss
+        if tune_primary < best_primary - 1e-7:
+            best_primary = tune_primary
+            best_full_loss = tune_loss
             best_epoch = epoch
             best_state = {
                 key: value.detach().cpu().clone()
@@ -972,7 +1000,9 @@ def train_action_model(
     model.eval()
     return model, {
         "best_epoch": best_epoch,
-        "best_tune_loss": best_loss,
+        "best_tune_task_macro_primary_16_nrmse": best_primary,
+        "diagnostic_100_step_loss_at_best_epoch": best_full_loss,
+        "selection_metric": "tune_task_macro_primary_16_nrmse",
         "epochs_run": len(history),
         "history": history,
         "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
@@ -988,6 +1018,8 @@ def train_social_model(
     initialization_seed: int,
     sampler_seed: int,
     fixed_epochs: int | None = None,
+    max_epochs: int = 260,
+    patience: int = 25,
 ) -> tuple[Any, dict[str, Any]]:
     torch = torch_setup(initialization_seed)
     model = build_social_predictor(train_x.shape[1], initialization_seed).to(device)
@@ -998,7 +1030,7 @@ def train_social_model(
     best_state: dict[str, Any] | None = None
     best_epoch = -1
     stale = 0
-    maximum = fixed_epochs if fixed_epochs is not None else 80
+    maximum = fixed_epochs if fixed_epochs is not None else max_epochs
     history: list[dict[str, float]] = []
     for epoch in range(maximum):
         model.train()
@@ -1042,7 +1074,7 @@ def train_social_model(
             stale = 0
         else:
             stale += 1
-        if fixed_epochs is None and stale >= 10:
+        if fixed_epochs is None and stale >= patience:
             break
     if best_state is None:
         raise RuntimeError("social predictor failed to produce a checkpoint")
@@ -1054,6 +1086,8 @@ def train_social_model(
         "epochs_run": len(history),
         "history": history,
         "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
+        "max_epochs": maximum,
+        "patience": None if fixed_epochs is not None else patience,
     }
 
 
@@ -1069,25 +1103,64 @@ def predict_numpy(model: Any, values: np.ndarray, device: str, width: int) -> np
     return np.concatenate(output, axis=0).astype(np.float32)
 
 
+def nested_social_masks(
+    train: ProbeData, outer_fold: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return episode-level outer-held, inner-fit, and inner-validation masks."""
+    fold_for_episode: dict[str, int] = {}
+    for task in TASKS:
+        episode_ids = sorted(set(train.episode_ids[train.tasks == task].tolist()))
+        for index, episode_id in enumerate(episode_ids):
+            fold_for_episode[episode_id] = index % 3
+    outer_held = np.asarray(
+        [fold_for_episode[value] == outer_fold for value in train.episode_ids],
+        dtype=bool,
+    )
+    inner_validation_ids: set[str] = set()
+    for task in TASKS:
+        available = sorted(
+            episode_id
+            for episode_id in set(train.episode_ids[train.tasks == task].tolist())
+            if fold_for_episode[episode_id] != outer_fold
+        )
+        inner_validation_ids.update(
+            episode_id
+            for index, episode_id in enumerate(available)
+            if index % 4 == outer_fold % 4
+        )
+    inner_validation = np.asarray(
+        [value in inner_validation_ids for value in train.episode_ids], dtype=bool
+    )
+    inner_fit = ~(outer_held | inner_validation)
+    return outer_held, inner_fit, inner_validation
+
+
 def crossfit_social(
     train: ProbeData,
     tune: ProbeData,
     device: str,
     initialization_seed: int,
     sampler_seed: int,
+    max_epochs: int,
+    patience: int,
 ) -> tuple[np.ndarray, np.ndarray, Any, dict[str, Any]]:
     train_hat = np.zeros_like(train.social)
     fold_receipts: list[dict[str, Any]] = []
-    fold_for_episode: dict[str, int] = {}
-    for task in TASKS:
-        episode_ids = sorted(set(train.episode_ids[train.tasks == task].tolist()))
-        for index, episode_id in enumerate(episode_ids):
-            fold_for_episode[episode_id] = index % 3
     for fold in range(3):
-        held = np.asarray(
-            [fold_for_episode[value] == fold for value in train.episode_ids], dtype=bool
+        held, inner_fit, inner_validation = nested_social_masks(train, fold)
+        selector, selector_receipt = train_social_model(
+            train.legal[inner_fit],
+            train.social[inner_fit],
+            train.legal[inner_validation],
+            train.social[inner_validation],
+            device,
+            initialization_seed,
+            sampler_seed + fold * 1000,
+            max_epochs=max_epochs,
+            patience=patience,
         )
-        model, receipt = train_social_model(
+        selected_epochs = int(selector_receipt["best_epoch"]) + 1
+        model, refit_receipt = train_social_model(
             train.legal[~held],
             train.social[~held],
             None,
@@ -1095,13 +1168,27 @@ def crossfit_social(
             device,
             initialization_seed,
             sampler_seed + fold * 1000,
-            fixed_epochs=40,
+            fixed_epochs=selected_epochs,
+            max_epochs=max_epochs,
+            patience=patience,
         )
         train_hat[held] = predict_numpy(model, train.legal[held], device, 192)
-        receipt["fold"] = fold
-        receipt["heldout_episode_count"] = len(set(train.episode_ids[held].tolist()))
-        receipt["heldout_row_count"] = int(held.sum())
-        fold_receipts.append(receipt)
+        fold_receipts.append(
+            {
+                "fold": fold,
+                "selector": selector_receipt,
+                "selected_refit_epochs": selected_epochs,
+                "refit": refit_receipt,
+                "inner_fit_episode_count": len(
+                    set(train.episode_ids[inner_fit].tolist())
+                ),
+                "inner_validation_episode_count": len(
+                    set(train.episode_ids[inner_validation].tolist())
+                ),
+                "heldout_episode_count": len(set(train.episode_ids[held].tolist())),
+                "heldout_row_count": int(held.sum()),
+            }
+        )
     final_model, final_receipt = train_social_model(
         train.legal,
         train.social,
@@ -1110,6 +1197,8 @@ def crossfit_social(
         device,
         initialization_seed,
         sampler_seed,
+        max_epochs=max_epochs,
+        patience=patience,
     )
     tune_hat = predict_numpy(final_model, tune.legal, device, 192)
     return train_hat, tune_hat, final_model, {
@@ -1336,8 +1425,16 @@ def tune(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
     train_shuffled = episode_permutation(train, sampler_seed)
     tune_shuffled = episode_permutation(tune_data, sampler_seed)
 
+    social_config = gate["social_predictor"]
+    action_config = gate["action_probe"]
     train_hat, tune_hat, social_model, social_receipt = crossfit_social(
-        train, tune_data, args.device, init_seed, sampler_seed
+        train,
+        tune_data,
+        args.device,
+        init_seed,
+        sampler_seed,
+        max_epochs=int(social_config["max_epochs"]),
+        patience=int(social_config["early_stopping_patience"]),
     )
     social_path = args.output_root / "checkpoints/social_predictor.pt"
     save_torch_checkpoint(
@@ -1363,13 +1460,15 @@ def tune(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
             target_train,
             train.target_mask,
             tune_x,
+            tune_data,
             target_tune,
-            tune_data.target_mask,
             args.device,
             float(candidate["learning_rate"]),
             int(candidate["hidden_width"]),
             init_seed,
             sampler_seed,
+            max_epochs=int(action_config["max_epochs"]),
+            patience=int(action_config["early_stopping_patience"]),
         )
         metric = evaluate_model(model, tune_x, tune_data, target_tune, args.device)
         grid_receipts.append(
@@ -1388,7 +1487,10 @@ def tune(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
     condition_receipts: dict[str, Any] = {}
     tune_metrics: dict[str, Any] = {}
     parameter_counts: set[int] = set()
-    for condition in CONDITIONS:
+    active_conditions = tuple(str(value) for value in gate["conditions"])
+    if active_conditions != CONDITIONS:
+        raise RuntimeError("gate conditions do not match the M3-R3 implementation")
+    for condition in active_conditions:
         print(f"[M3 tune] training {condition}", flush=True)
         train_x = condition_input(
             train, condition, noise, train_shuffled, train_hat
@@ -1401,13 +1503,15 @@ def tune(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
             target_train,
             train.target_mask,
             tune_x,
+            tune_data,
             target_tune,
-            tune_data.target_mask,
             args.device,
             float(selected["learning_rate"]),
             int(selected["hidden_width"]),
             init_seed,
             sampler_seed,
+            max_epochs=int(action_config["max_epochs"]),
+            patience=int(action_config["early_stopping_patience"]),
         )
         checkpoint = args.output_root / f"checkpoints/action_{condition}.pt"
         save_torch_checkpoint(
@@ -1430,20 +1534,44 @@ def tune(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
         raise RuntimeError("M3 action conditions do not have equal parameter counts")
 
     baseline = tune_metrics["HC"]
-    power: dict[str, Any] = {}
-    for source, condition, effect in (
-        ("P", "P", 0.03),
-        ("T", "T", 0.03),
-        ("B", "B", 0.03),
-        ("combined", "PTB", 0.05),
-    ):
-        rows = gain_rows(baseline, tune_metrics[condition])
-        estimate = estimated_power(rows, effect)
-        estimate["observed_tune_macro_gain"] = macro_gain(rows)
-        estimate["powered"] = bool(estimate["estimated_power"] >= 0.80)
-        power[source] = estimate
-    powered_sources = [source for source in ("P", "T", "B") if power[source]["powered"]]
-    test_authorized = bool(powered_sources)
+    target_source = str(gate["target_source"])
+    if target_source != "B":
+        raise RuntimeError("M3-R3 is frozen as a B-only convergence repair")
+    oracle_rows = gain_rows(baseline, tune_metrics[target_source])
+    power = estimated_power(
+        oracle_rows, float(gate["power_audit"]["registered_relative_effect"])
+    )
+    power["observed_tune_macro_gain"] = macro_gain(oracle_rows)
+    power["powered"] = bool(
+        power["estimated_power"] >= float(gate["power_audit"]["target_power"])
+    )
+    oracle_tune = summarize_gain(
+        baseline, tune_metrics[target_source], statistics_seed + 1
+    )
+    deployable_tune = summarize_gain(
+        baseline, tune_metrics[f"{target_source}_hat"], statistics_seed + 2
+    )
+    deployable_vs_shuffled_tune = summarize_gain(
+        tune_metrics["label_shuffled"],
+        tune_metrics[f"{target_source}_hat"],
+        statistics_seed + 3,
+    )
+    screen_gate = gate["tune_screen"]
+    tune_screen_checks = {
+        "oracle_powered": bool(power["powered"]),
+        "oracle_gain": oracle_tune["macro_gain"]
+        >= float(screen_gate["oracle_gain_min"]),
+        "oracle_positive_tasks": len(oracle_tune["positive_tasks"])
+        >= int(screen_gate["oracle_positive_tasks_min"]),
+        "deployable_gain": deployable_tune["macro_gain"]
+        > float(screen_gate["deployable_gain_gt"]),
+        "deployable_positive_tasks": len(deployable_tune["positive_tasks"])
+        >= int(screen_gate["deployable_positive_tasks_min"]),
+        "deployable_beats_shuffled": deployable_vs_shuffled_tune["macro_gain"]
+        > float(screen_gate["deployable_vs_shuffled_gain_gt"]),
+    }
+    test_authorized = all(tune_screen_checks.values())
+    powered_sources = [target_source] if power["powered"] else []
 
     normalization_path = args.output_root / "normalization.json"
     write_json(normalization_path, norms)
@@ -1467,11 +1595,18 @@ def tune(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
         "normalization_sha256": sha256_file(normalization_path),
         "tune_metrics": str(metrics_path),
         "tune_metrics_sha256": sha256_file(metrics_path),
-        "power_audit": power,
+        "power_audit": {target_source: power},
+        "tune_screen": {
+            "checks": tune_screen_checks,
+            "oracle": oracle_tune,
+            "deployable": deployable_tune,
+            "deployable_vs_label_shuffled": deployable_vs_shuffled_tune,
+            "passed": test_authorized,
+        },
         "powered_sources": powered_sources,
         "test_authorized": test_authorized,
         "decision_code": (
-            "SSC_V7_M3_TEST_UNSEAL_AUTHORIZED"
+            "SSC_V7_M3_REPAIR_TEST_COLLECTION_AUTHORIZED"
             if test_authorized
             else "INCONCLUSIVE_MEASUREMENT/INSUFFICIENT_POWER"
         ),
@@ -1483,8 +1618,8 @@ def tune(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
     frozen_files.extend(
         Path(value["checkpoint"]) for value in condition_receipts.values()
     )
-    unseal = {
-        "format_version": "ssc-v7.m3.test_unseal_manifest/1",
+    configuration = {
+        "format_version": "ssc-v7.m3.repair_configuration_manifest/1",
         "stage_id": STAGE_ID,
         "created_at_utc": utc_now(),
         "tuning_receipt": str(receipt_path),
@@ -1494,9 +1629,10 @@ def tune(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
         ],
         "powered_sources": powered_sources,
         "test_authorized": test_authorized,
-        "test_paths_opened_before_manifest_hash": 0,
+        "test_paths_opened_before_configuration_hash": 0,
+        "next_action": "collect and seal a new repair test" if test_authorized else "stop",
     }
-    write_json(args.output_root / "test_unseal_manifest.json", unseal)
+    write_json(args.output_root / "repair_configuration_manifest.json", configuration)
     print(receipt["decision_code"])
 
 
@@ -1590,15 +1726,74 @@ def summarize_gain(
     }
 
 
+def verify_repair_configuration(path: Path) -> dict[str, Any]:
+    configuration = read_json(path)
+    for item in configuration["frozen_files"]:
+        file_path = Path(str(item["path"]))
+        if sha256_file(file_path) != str(item["sha256"]):
+            raise RuntimeError(f"frozen M3-R3 configuration file changed: {file_path}")
+    receipt = Path(str(configuration["tuning_receipt"]))
+    if sha256_file(receipt) != str(configuration["tuning_receipt_sha256"]):
+        raise RuntimeError("M3-R3 tuning receipt changed after screening")
+    if not bool(configuration["test_authorized"]):
+        raise RuntimeError("M3-R3 tune screen did not authorize a new test")
+    return configuration
+
+
+def seal_test(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
+    if args.data_root is None:
+        raise ValueError("seal requires --data-root pointing to the repair dataset")
+    tuning_root = args.output_root
+    configuration_path = tuning_root / "repair_configuration_manifest.json"
+    configuration = verify_repair_configuration(configuration_path)
+    dataset_manifest = args.data_root / "dataset_manifest.json"
+    dataset = read_json(dataset_manifest)
+    if dataset.get("stage_id") != STAGE_ID or dataset.get("purpose") != "repair_test":
+        raise RuntimeError("wrong M3-R3 repair-test dataset identity")
+    if not bool(dataset.get("test_is_sealed")) or bool(dataset.get("test_has_been_read")):
+        raise RuntimeError("M3-R3 repair test is not sealed")
+    expected_counts = {"train": 36, "tune": 12, "read_only_test": 12}
+    for task in TASKS:
+        if dataset["split_counts"].get(task) != expected_counts:
+            raise RuntimeError(f"wrong M3-R3 split counts for {task}")
+    unseal = {
+        "format_version": "ssc-v7.m3.test_unseal_manifest/2",
+        "stage_id": STAGE_ID,
+        "created_at_utc": utc_now(),
+        "repair_configuration": str(configuration_path),
+        "repair_configuration_sha256": sha256_file(configuration_path),
+        "tuning_receipt": str(configuration["tuning_receipt"]),
+        "tuning_receipt_sha256": str(configuration["tuning_receipt_sha256"]),
+        "test_dataset_manifest": str(dataset_manifest),
+        "test_dataset_manifest_sha256": sha256_file(dataset_manifest),
+        "frozen_files": [
+            {"path": str(configuration_path), "sha256": sha256_file(configuration_path)},
+            {"path": str(dataset_manifest), "sha256": sha256_file(dataset_manifest)},
+        ],
+        "powered_sources": list(configuration["powered_sources"]),
+        "test_authorized": True,
+        "test_paths_opened_before_manifest_hash": 0,
+        "formal_training_authorized": False,
+    }
+    path = tuning_root / "test_unseal_manifest.json"
+    if path.exists():
+        raise FileExistsError(f"fresh unseal manifest required: {path}")
+    write_json(path, unseal)
+    print("SSC_V7_M3_REPAIR_TEST_UNSEAL_AUTHORIZED")
+
+
 def verify_unseal_manifest(path: Path) -> dict[str, Any]:
     manifest = read_json(path)
     for item in manifest["frozen_files"]:
         file_path = Path(str(item["path"]))
         if sha256_file(file_path) != str(item["sha256"]):
             raise RuntimeError(f"frozen M3 file changed before test: {file_path}")
-    receipt = Path(str(manifest["tuning_receipt"]))
-    if sha256_file(receipt) != str(manifest["tuning_receipt_sha256"]):
-        raise RuntimeError("M3 tuning receipt changed before test")
+    configuration_path = Path(str(manifest["repair_configuration"]))
+    if sha256_file(configuration_path) != str(
+        manifest["repair_configuration_sha256"]
+    ):
+        raise RuntimeError("M3-R3 repair configuration changed before test")
+    verify_repair_configuration(configuration_path)
     if not bool(manifest["test_authorized"]):
         raise RuntimeError("M3 power audit did not authorize test unsealing")
     return manifest
@@ -1613,13 +1808,7 @@ def test(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
     unseal_path = tuning_root / "test_unseal_manifest.json"
     unseal = verify_unseal_manifest(unseal_path)
     tuning = read_json(tuning_root / "tuning_receipt.json")
-    dataset_manifest = Path(
-        next(
-            item["path"]
-            for item in unseal["frozen_files"]
-            if Path(str(item["path"])).name == "dataset_manifest.json"
-        )
-    )
+    dataset_manifest = Path(str(unseal["test_dataset_manifest"]))
     data, data_audit = load_sealed_test(dataset_manifest)
     norms = read_json(tuning_root / "normalization.json")
     normalize_social(data, norms)
@@ -1665,113 +1854,83 @@ def test(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
         for index, condition in enumerate(CONDITIONS)
         if condition != "HC"
     }
-    raw_p = {
-        source: sign_flip_p(
-            gain_rows(baseline, metrics[source]), statistics_seed + 100 + index
-        )
-        for index, source in enumerate(("P", "T", "B"))
-    }
-    adjusted_p = holm(raw_p)
+    source = "B"
+    source_p = sign_flip_p(
+        gain_rows(baseline, metrics[source]), statistics_seed + 100
+    )
     powered_sources = set(str(value) for value in unseal["powered_sources"])
-    source_results: dict[str, Any] = {}
     source_gate = gate["acceptance"]["per_source"]
-    for source in ("P", "T", "B"):
-        oracle = effects[source]
-        deployable = effects[f"{source}_hat"]
-        retention = (
-            deployable["macro_gain"] / oracle["macro_gain"]
-            if oracle["macro_gain"] > 0
-            else float("-inf")
+    oracle = effects[source]
+    deployable = effects[f"{source}_hat"]
+    retention = (
+        deployable["macro_gain"] / oracle["macro_gain"]
+        if oracle["macro_gain"] > 0
+        else float("-inf")
+    )
+    oracle_harms = [
+        task
+        for task, value in oracle["per_task"].items()
+        if value["gain"] <= float(source_gate["stable_harm_threshold"])
+        and value["ci95"][1] < 0.0
+    ]
+    deployable_harms = [
+        task
+        for task, value in deployable["per_task"].items()
+        if value["gain"] <= float(source_gate["stable_harm_threshold"])
+        and value["ci95"][1] < 0.0
+    ]
+    oracle_vs_shuffled = summarize_gain(
+        metrics["label_shuffled"], metrics[source], statistics_seed + 200
+    )
+    deployable_vs_shuffled = summarize_gain(
+        metrics["label_shuffled"], metrics[f"{source}_hat"], statistics_seed + 201
+    )
+    checks = {
+        "powered_before_test": source in powered_sources,
+        "oracle_gain": oracle["macro_gain"] >= float(source_gate["oracle_gain_min"]),
+        "oracle_ci": oracle["ci95"][0] > 0.0,
+        "source_p": source_p <= float(source_gate["source_p_lte"]),
+        "oracle_positive_tasks": len(oracle["positive_tasks"])
+        >= int(source_gate["positive_tasks_min"]),
+        "no_oracle_stable_harm": not oracle_harms,
+        "deployable_retention": retention
+        >= float(source_gate["deployable_retention_min"]),
+        "deployable_ci": deployable["ci95"][0] > 0.0,
+        "deployable_positive_tasks": len(deployable["positive_tasks"])
+        >= int(source_gate["positive_tasks_min"]),
+        "no_deployable_stable_harm": not deployable_harms,
+        "oracle_beats_shuffled_ci": oracle_vs_shuffled["ci95"][0]
+        > float(source_gate["shortcut_ci_lower_gt"]),
+        "deployable_beats_shuffled_ci": deployable_vs_shuffled["ci95"][0]
+        > float(source_gate["shortcut_ci_lower_gt"]),
+    }
+    if source not in powered_sources:
+        source_decision = "INCONCLUSIVE_MEASUREMENT/INSUFFICIENT_POWER"
+    else:
+        source_decision = (
+            "PASSED_M3_SOURCE" if all(checks.values()) else "FAILED_M3_SOURCE"
         )
-        stable_harms = [
-            task
-            for task, value in oracle["per_task"].items()
-            if value["gain"] <= float(source_gate["stable_harm_threshold"])
-            and value["ci95"][1] < 0.0
-        ]
-        checks = {
-            "powered_before_test": source in powered_sources,
-            "oracle_gain": oracle["macro_gain"] >= float(source_gate["oracle_gain_min"]),
-            "oracle_ci": oracle["ci95"][0] > 0.0,
-            "holm_p": adjusted_p[source]
-            <= float(source_gate["holm_adjusted_p_lte"]),
-            "positive_tasks": len(oracle["positive_tasks"])
-            >= int(source_gate["positive_tasks_min"]),
-            "no_stable_harm": not stable_harms,
-            "deployable_retention": retention
-            >= float(source_gate["deployable_retention_min"]),
-            "deployable_ci": deployable["ci95"][0] > 0.0,
-        }
-        if source not in powered_sources:
-            decision = "INCONCLUSIVE_MEASUREMENT/INSUFFICIENT_POWER"
-        else:
-            decision = "PASSED_M3_SOURCE" if all(checks.values()) else "FAILED_M3_SOURCE"
-        source_results[source] = {
-            "decision": decision,
+    source_results = {
+        source: {
+            "decision": source_decision,
             "checks": checks,
             "oracle": oracle,
             "deployable": deployable,
             "deployable_retention": retention,
-            "raw_p": raw_p[source],
-            "holm_adjusted_p": adjusted_p[source],
-            "stable_harm_tasks": stable_harms,
+            "source_p": source_p,
+            "oracle_stable_harm_tasks": oracle_harms,
+            "deployable_stable_harm_tasks": deployable_harms,
+            "oracle_vs_label_shuffled": oracle_vs_shuffled,
+            "deployable_vs_label_shuffled": deployable_vs_shuffled,
         }
-
-    combined_gate = gate["acceptance"]["combined"]
-    combined = effects["PTB"]
-    combined_hat = effects["PTB_hat"]
-    combined_retention = (
-        combined_hat["macro_gain"] / combined["macro_gain"]
-        if combined["macro_gain"] > 0
-        else float("-inf")
-    )
-    combined_harms = [
-        task
-        for task, value in combined["per_task"].items()
-        if value["gain"] <= float(combined_gate["stable_harm_threshold"])
-        and value["ci95"][1] < 0.0
-    ]
-    combined_checks = {
-        "powered_before_test": bool(tuning["power_audit"]["combined"]["powered"]),
-        "oracle_gain": combined["macro_gain"]
-        >= float(combined_gate["oracle_gain_min"]),
-        "oracle_ci": combined["ci95"][0] > 0.0,
-        "positive_tasks": len(combined["positive_tasks"])
-        >= int(combined_gate["positive_tasks_min"]),
-        "hard_task": any(
-            task in combined["positive_tasks"]
-            for task in combined_gate["must_include_one_of"]
-        ),
-        "no_stable_harm": not combined_harms,
-        "deployable_retention": combined_retention
-        >= float(combined_gate["deployable_retention_min"]),
-        "deployable_ci": combined_hat["ci95"][0] > 0.0,
     }
-    overlap: dict[str, Any] = {}
-    for pair in ("PT", "PB", "TB"):
-        first, second = pair
-        overlap[pair] = {
-            f"{first}_conditional_on_{second}": summarize_gain(
-                metrics[second], metrics[pair], statistics_seed + 200 + len(overlap)
-            ),
-            f"{second}_conditional_on_{first}": summarize_gain(
-                metrics[first], metrics[pair], statistics_seed + 210 + len(overlap)
-            ),
-        }
-    passed_sources = [
-        source
-        for source, result in source_results.items()
-        if result["decision"] == "PASSED_M3_SOURCE"
-    ]
+    passed_sources = [source] if source_decision == "PASSED_M3_SOURCE" else []
     if passed_sources:
         decision = "PASSED_M3_SOCIAL_SIGNAL_GATE"
-    elif all(
-        result["decision"] == "INCONCLUSIVE_MEASUREMENT/INSUFFICIENT_POWER"
-        for result in source_results.values()
-    ):
-        decision = "INCONCLUSIVE_MEASUREMENT/INSUFFICIENT_POWER"
+    elif source_decision == "INCONCLUSIVE_MEASUREMENT/INSUFFICIENT_POWER":
+        decision = source_decision
     else:
-        decision = "FAILED_MEASUREMENT/NO_SOCIAL_HEADROOM"
+        decision = "FAILED_MEASUREMENT/NO_DEPLOYABLE_B_HEADROOM"
     args.output_root.mkdir(parents=True)
     metrics_path = args.output_root / "test_metrics.json"
     write_json(metrics_path, metrics)
@@ -1804,24 +1963,18 @@ def test(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
             "time_phase_only": effects["time_phase_only"],
         },
         "source_results": source_results,
-        "combined": {
-            "decision": (
-                "PASSED_M3_COMBINED_CORROBORATION"
-                if all(combined_checks.values())
-                else "FAILED_M3_COMBINED_CORROBORATION"
-            ),
-            "checks": combined_checks,
-            "oracle": combined,
-            "deployable": combined_hat,
-            "deployable_retention": combined_retention,
-            "stable_harm_tasks": combined_harms,
-        },
-        "overlap": overlap,
+        "repair_scope": "B only; P, T, combinations, M4, and M5 were not rerun",
         "passed_sources": passed_sources,
         "test_metrics": str(metrics_path),
         "test_metrics_sha256": sha256_file(metrics_path),
         "m4_authorized_sources": passed_sources,
         "m4_is_not_executed": True,
+        "b_core_unlocked": False,
+        "b_core_status": (
+            "B may proceed to M4; B-core remains locked until M4 and M5 pass."
+            if passed_sources
+            else "B remains stopped at M3."
+        ),
         "formal_training_authorized": False,
         "required_next_action": (
             "Proceed only to M4 for passed sources; do not train B0-H or social models."
@@ -1848,6 +2001,8 @@ def main() -> None:
         pilot_check(args)
     elif args.command == "tune":
         tune(args, gate)
+    elif args.command == "seal":
+        seal_test(args, gate)
     elif args.command == "test":
         test(args, gate)
     else:

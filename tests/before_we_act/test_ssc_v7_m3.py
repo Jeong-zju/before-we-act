@@ -10,8 +10,16 @@ import numpy as np
 from scripts.before_we_act import run_ssc_v7_m3 as m3
 
 
-def test_stage_revision_is_m3_r2() -> None:
-    assert m3.STAGE_ID == "SSC-V7-M3-R2"
+def test_stage_revision_is_m3_r3() -> None:
+    assert m3.STAGE_ID == "SSC-V7-M3-R3"
+    assert m3.CONDITIONS == (
+        "E0",
+        "HC",
+        "label_shuffled",
+        "time_phase_only",
+        "B",
+        "B_hat",
+    )
 
 
 def _label(frame: int) -> dict[str, object]:
@@ -156,6 +164,43 @@ def test_all_action_conditions_have_identical_parameter_count() -> None:
         for _condition in m3.CONDITIONS
     }
     assert len(counts) == 1
+
+
+def test_nested_social_masks_are_episode_level_and_leak_free() -> None:
+    episode_ids = []
+    tasks = []
+    for task in m3.TASKS:
+        for index in range(36):
+            episode_ids.extend([f"{task}-{index}"] * 2)
+            tasks.extend([task] * 2)
+    count = len(episode_ids)
+    data = m3.ProbeData(
+        legal=np.zeros((count, 1), dtype=np.float32),
+        e0=np.zeros((count, 1), dtype=np.float32),
+        social=np.zeros((count, 192), dtype=np.float32),
+        time=np.zeros((count, 192), dtype=np.float32),
+        target=np.zeros((count, 100, 8), dtype=np.float32),
+        target_mask=np.ones((count, 100), dtype=np.float32),
+        tasks=np.asarray(tasks),
+        episode_ids=np.asarray(episode_ids),
+        frame_indices=np.zeros(count, dtype=np.int32),
+        agent_slots=np.zeros(count, dtype=np.int16),
+    )
+    all_held: set[str] = set()
+    for fold in range(3):
+        held, inner_fit, inner_validation = m3.nested_social_masks(data, fold)
+        assert np.all(held.astype(int) + inner_fit.astype(int) + inner_validation.astype(int) == 1)
+        for episode_id in set(episode_ids):
+            rows = data.episode_ids == episode_id
+            assert held[rows].all() or inner_fit[rows].all() or inner_validation[rows].all()
+        held_ids = set(data.episode_ids[held].tolist())
+        assert not (held_ids & set(data.episode_ids[inner_validation].tolist()))
+        assert all(
+            len(set(data.episode_ids[held & (data.tasks == task)].tolist())) == 12
+            for task in m3.TASKS
+        )
+        all_held.update(held_ids)
+    assert all_held == set(episode_ids)
 
 
 def test_holm_adjustment_is_monotone_in_rank() -> None:
