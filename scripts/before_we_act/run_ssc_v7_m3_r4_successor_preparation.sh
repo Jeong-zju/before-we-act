@@ -53,4 +53,9 @@ if [[ ! -f "${manifest_root}/confirmation_manifest_receipt.json" ]]; then
     >"${log_root}/merge_confirmation.log" 2>&1
 fi
 
+if ! supervisorctl status ssc_v7_m3_r4_successor_formal 2>/dev/null \
+  | grep -Eq 'RUNNING|STARTING'; then
+  supervisorctl start ssc_v7_m3_r4_successor_formal
+fi
+
 printf '%s\n' SSC_V7_M3_R4_SUCCESSOR_PREPARATION_COMPLETE

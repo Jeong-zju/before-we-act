@@ -3,13 +3,18 @@ set -euo pipefail
 
 repository=/workspace/fe-pc-wam
 runner=scripts/before_we_act/run_ssc_v7_m3_r4_successor.py
-gate=docs/experiments/ssc_v7/m3_r4_successor_a1_a2_gate.json
 run_root=/workspace/bwa_runs/ssc-v7-social-state-cooperation-v2/measurement/m3_r4_successor_a1_v1
+gate=${run_root}/frozen_gate/m3_r4_successor_a1_a2_gate.json
 log_root=${run_root}/logs/formal
 python_bin=${repository}/.venv/bin/python
 
 mkdir -p "${log_root}"
 cd "${repository}"
+
+if [[ ! -f "${gate}" ]]; then
+  "${python_bin}" scripts/before_we_act/freeze_ssc_v7_m3_r4_successor_formal_gate.py \
+    >"${log_root}/freeze_formal_gate.log" 2>&1
+fi
 
 if [[ ! -f "${run_root}/parameter_audit.json" ]]; then
   "${python_bin}" "${runner}" parameter-audit \
