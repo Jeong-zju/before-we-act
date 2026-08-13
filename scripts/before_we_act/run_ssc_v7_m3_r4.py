@@ -19,6 +19,7 @@ import math
 import os
 from pathlib import Path
 import random
+import subprocess
 import sys
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -193,6 +194,34 @@ def load_gate(path: Path) -> dict[str, Any]:
         raise RuntimeError("gate payload hash mismatch")
     gate["_runtime_gate_sha256"] = sha256_file(path)
     return gate
+
+
+def preflight(gate: Mapping[str, Any]) -> None:
+    implementation = gate["implementation"]
+    script = REPOSITORY / str(implementation["script"])
+    test = REPOSITORY / str(implementation["test"])
+    checks = {
+        "script_hash": sha256_file(script) == str(implementation["script_sha256"]),
+        "test_hash": sha256_file(test) == str(implementation["test_sha256"]),
+        "implementation_is_ancestor": subprocess.call(
+            (
+                "git",
+                "-C",
+                str(REPOSITORY),
+                "merge-base",
+                "--is-ancestor",
+                str(implementation["implementation_commit"]),
+                "HEAD",
+            )
+        )
+        == 0,
+        "repository_clean": subprocess.check_output(
+            ("git", "-C", str(REPOSITORY), "status", "--porcelain"), text=True
+        ).strip()
+        == "",
+    }
+    if not all(checks.values()):
+        raise RuntimeError(f"M3-R4 preflight failed: {checks}")
 
 
 def label_rows(path: Path) -> list[dict[str, Any]]:
@@ -1203,6 +1232,7 @@ def aggregate_oracle(args: argparse.Namespace, gate: Mapping[str, Any]) -> None:
 def main() -> None:
     args = parse_args()
     gate = load_gate(args.gate)
+    preflight(gate)
     if sha256_file(args.manifest) != str(gate["data"]["manifest_sha256"]):
         raise RuntimeError("frozen data manifest hash mismatch")
     if args.command == "schema-audit":
