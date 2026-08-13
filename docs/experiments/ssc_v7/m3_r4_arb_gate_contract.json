@@ -189,11 +189,11 @@
     "script": "scripts/before_we_act/run_ssc_v7_m3_r4.py",
     "test": "tests/before_we_act/test_ssc_v7_m3_r4.py",
     "branch": "feat/ssc-v7-m3-r4-arb",
-    "script_sha256": "TO_BE_FROZEN_AFTER_IMPLEMENTATION_REVIEW",
-    "test_sha256": "TO_BE_FROZEN_AFTER_IMPLEMENTATION_REVIEW",
-    "implementation_commit": "TO_BE_FROZEN_AFTER_IMPLEMENTATION_REVIEW"
+    "script_sha256": "d5f7c0d97ce9dbd8abd30b472dbe0be2e5889e4637458ccb89d0fd1cc5790a9c",
+    "test_sha256": "427dd86e8552ce8f30c7fad6f038d1913a15d9f0c9eedac8246e65e7f35930d2",
+    "implementation_commit": "1184a53dd49b8467aea91c3752fa81334032cbd7"
   },
   "integrity": {
-    "payload_sha256": "TO_BE_COMPUTED"
+    "payload_sha256": "809bf762727d6c914178805c8bbd3cfce299cfc47a9db7647314a6cdd9fda653"
   }
 }
