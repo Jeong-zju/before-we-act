@@ -9,6 +9,7 @@ collection_root=${run_root}/confirmation_collections
 manifest_root=${run_root}/confirmation_data
 log_root=${run_root}/logs/preparation
 python_bin=${repository}/.venv/bin/python
+export PYTHONPATH=/workspace/RoboFactory:${PYTHONPATH:-}
 
 mkdir -p "${collection_root}" "${log_root}"
 cd "${repository}"
