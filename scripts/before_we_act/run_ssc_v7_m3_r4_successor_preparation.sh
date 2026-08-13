@@ -46,13 +46,12 @@ if [[ "${failed}" -ne 0 ]]; then
 fi
 
 if [[ ! -f "${manifest_root}/confirmation_manifest_receipt.json" ]]; then
-  "${python_bin}" "${runner}" merge-confirmation \
-    --gate "${gate}" \
-    --data-root "${collection_root}" \
-    --output-root "${manifest_root}" \
+  "${python_bin}" scripts/before_we_act/freeze_ssc_v7_m3_r4_successor_confirmation.py \
     >"${log_root}/merge_confirmation.log" 2>&1
 fi
 
+supervisorctl reread
+supervisorctl update
 if ! supervisorctl status ssc_v7_m3_r4_successor_formal 2>/dev/null \
   | grep -Eq 'RUNNING|STARTING'; then
   supervisorctl start ssc_v7_m3_r4_successor_formal

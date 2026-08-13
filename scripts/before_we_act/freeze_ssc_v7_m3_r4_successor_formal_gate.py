@@ -89,6 +89,19 @@ def main() -> None:
         gate["implementation"][hash_key] = sha256_file(
             REPOSITORY / str(gate["implementation"][path_key])
         )
+    gate["implementation"]["confirmation_freezer"] = (
+        "scripts/before_we_act/freeze_ssc_v7_m3_r4_successor_confirmation.py"
+    )
+    gate["implementation"]["confirmation_freezer_sha256"] = sha256_file(
+        REPOSITORY
+        / "scripts/before_we_act/freeze_ssc_v7_m3_r4_successor_confirmation.py"
+    )
+    gate["implementation"]["formal_gate_freezer"] = (
+        "scripts/before_we_act/freeze_ssc_v7_m3_r4_successor_formal_gate.py"
+    )
+    gate["implementation"]["formal_gate_freezer_sha256"] = sha256_file(
+        Path(__file__).resolve()
+    )
     gate["pre_formal_implementation_correction"] = {
         "timing": "after confirmation collection started but before confirmation features, action targets, metrics or model results were opened",
         "change": "Remove per_agent_contribution (the legacy T source) from sanitized_legacy_B; the A2 cell now uses only current grasp/contact/custody and collision/drop/contention relations.",
