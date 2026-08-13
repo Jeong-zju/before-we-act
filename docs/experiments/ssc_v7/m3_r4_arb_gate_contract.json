@@ -1,10 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "stage_id": "SSC-V7-M3-R4",
   "status": "FROZEN_BEFORE_R4_TUNE_ACCESS",
   "supersedes_for_b_measurement_only": "SSC-V7-M3-R3",
   "authorized_scope": "R4-0 train-only convergence pilot followed by the R4-A action-relevant oracle utility gate. R4-B, a new test, M4, M5, B-core and formal policy training remain unauthorized unless the preceding gate explicitly passes.",
-  "revision_reason": "R3 showed that a converged old B representation degraded the 16-step action metric. R4 changes both the information bottleneck and the fusion mechanism while preserving a hard HC fallback and matched capacity controls.",
+  "revision_reason": "R3 showed that a converged old B representation degraded the 16-step action metric. R4 changes both the information bottleneck and the fusion mechanism while preserving a hard HC fallback and matched capacity controls. The first train-only R4-0 pilot under gate SHA256 7a95bec8d1ed47c8210f408487c6ef1afb8b72e561e5ab0fce24c81bbcbad9c8 reached the 360-epoch cap with HC best at epoch 350 and oracle residual best at epoch 347; tune_paths_opened=0 and test_paths_opened=0. This revision preregisters a larger train-only cap before any tune access.",
   "prerequisites": {
     "m2_decision": "PASSED_M2_ORACLE_LABEL_GATE",
     "m3_r3_decision": "FAILED_MEASUREMENT/NO_SOCIAL_HEADROOM",
@@ -144,11 +144,11 @@
     "split": "train episodes only, with an episode-disjoint deterministic six-episode-per-task holdout",
     "holdout_episodes_per_task": 6,
     "split_seed": 1720448731,
-    "max_epochs": 360,
+    "max_epochs": 520,
     "patience": 40,
-    "formal_budget_margin_epochs": 40,
-    "formal_max_epochs_floor": 320,
-    "formal_max_epochs_ceiling": 440,
+    "formal_budget_margin_epochs": 60,
+    "formal_max_epochs_floor": 480,
+    "formal_max_epochs_ceiling": 680,
     "rule": "Freeze the formal max epoch and patience from the HC and oracle-residual train-only curves. If either pilot branch reaches the cap before exhausting patience, report INCONCLUSIVE_TRAINING/CAP_REACHED and do not read tune."
   },
   "training": {
@@ -194,6 +194,6 @@
     "implementation_commit": "1184a53dd49b8467aea91c3752fa81334032cbd7"
   },
   "integrity": {
-    "payload_sha256": "809bf762727d6c914178805c8bbd3cfce299cfc47a9db7647314a6cdd9fda653"
+    "payload_sha256": "8086c5fbc7b3b244dca20ea6173b1aef6c58f287281b0d2d46d657f6546d9521"
   }
 }
