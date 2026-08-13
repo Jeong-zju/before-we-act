@@ -34,12 +34,12 @@ if [[ ! -f "${run_root}/formal/hc/hc_receipt.json" ]]; then
 fi
 
 jobs=(
-  oracle_arb_query:0 oracle_arb_query:1 oracle_arb_query:2 zero_arb_query:0
-  zero_arb_query:1 zero_arb_query:2 noise_arb_query:0 noise_arb_query:1
-  noise_arb_query:2 label_shuffled_arb_query:0 label_shuffled_arb_query:1 label_shuffled_arb_query:2
-  episode_shuffled_arb_query:0 episode_shuffled_arb_query:1 episode_shuffled_arb_query:2 arb_direct:0
-  arb_direct:1 arb_direct:2 sanitized_legacy_query:0 sanitized_legacy_query:1
-  sanitized_legacy_query:2 sanitized_legacy_direct:0 sanitized_legacy_direct:1 sanitized_legacy_direct:2
+  oracle_arb_query:0 zero_arb_query:0 noise_arb_query:0 label_shuffled_arb_query:0
+  episode_shuffled_arb_query:0 arb_direct:0 sanitized_legacy_query:0 sanitized_legacy_direct:0
+  oracle_arb_query:1 zero_arb_query:1 noise_arb_query:1 label_shuffled_arb_query:1
+  episode_shuffled_arb_query:1 arb_direct:1 sanitized_legacy_query:1 sanitized_legacy_direct:1
+  oracle_arb_query:2 zero_arb_query:2 noise_arb_query:2 label_shuffled_arb_query:2
+  episode_shuffled_arb_query:2 arb_direct:2 sanitized_legacy_query:2 sanitized_legacy_direct:2
 )
 
 index=0
