@@ -208,9 +208,12 @@ def sanitized_legacy_tokens(label: Mapping[str, Any], own_slot: int) -> np.ndarr
     peer_custodian = self_custodian = missing_custodian = False
     multi_contact = multi_grasp = multi_control = False
     any_object = False
+    object_count = self_controlled_count = peer_controlled_count = shared_count = 0
+    free_object = False
     object_states = label["grasp_contact_custody_state"]
     for state in object_states.values():
         any_object = True
+        object_count += 1
         contacts = int_agents(state.get("contact_agents", []))
         grasps = int_agents(state.get("grasp_agents", []))
         controllers = int_agents(state.get("controller_agents", []))
@@ -221,6 +224,7 @@ def sanitized_legacy_tokens(label: Mapping[str, Any], own_slot: int) -> np.ndarr
         peer_grasp |= bool(grasps - {own_slot})
         peer_control |= bool(controllers - {own_slot})
         shared |= bool(state.get("shared_control", False))
+        shared_count += int(bool(state.get("shared_control", False)))
         custodian = state.get("current_custodian")
         try:
             custodian = None if custodian is None else int(custodian)
@@ -229,6 +233,12 @@ def sanitized_legacy_tokens(label: Mapping[str, Any], own_slot: int) -> np.ndarr
         self_custodian |= custodian == own_slot
         peer_custodian |= custodian is not None and custodian != own_slot
         missing_custodian |= custodian is None and bool(contacts | grasps | controllers)
+        free_object |= custodian is None and not bool(contacts | grasps | controllers)
+        self_controlled_count += int(own_slot in controllers or custodian == own_slot)
+        peer_controlled_count += int(
+            bool(controllers - {own_slot})
+            or (custodian is not None and custodian != own_slot)
+        )
         multi_contact |= len(contacts) >= 2
         multi_grasp |= len(grasps) >= 2
         multi_control |= len(controllers) >= 2
@@ -236,27 +246,15 @@ def sanitized_legacy_tokens(label: Mapping[str, Any], own_slot: int) -> np.ndarr
     risk = label["collision_drop_contention_risk"]
     contested = bool(risk.get("contested_objects", []))
     dropped = bool(risk.get("dropped_objects", []))
-    peers = [
-        item
-        for item in label["per_agent_contribution"]
-        if int(item["agent_slot"]) != own_slot
-    ]
-    peer_active = [bool(item.get("active", False)) for item in peers]
-    peer_roles = {
-        str(role)
-        for item in peers
-        for role in item.get("roles", [])
-        if str(role) != "none"
-    }
     valid = label["label_validity_mask"]
     values = np.asarray(
         [
-            [self_contact, self_grasp, self_control, self_custodian, any_object, bool(peers), shared, not missing_custodian],
-            [peer_contact, peer_grasp, peer_control, peer_custodian, any(peer_active), any(not x for x in peer_active), sum(peer_active) >= 2, bool(peer_roles)],
-            [shared, multi_contact, multi_grasp, multi_control, self_custodian, peer_custodian, missing_custodian, contested],
+            [self_contact, self_grasp, self_control, self_custodian, shared, any_object, object_count > 1, not missing_custodian],
+            [peer_contact, peer_grasp, peer_control, peer_custodian, shared, multi_contact, multi_grasp, multi_control],
+            [bool(self_custodian or peer_custodian), self_custodian, peer_custodian, missing_custodian, shared, bool(self_contact or peer_contact), bool(self_grasp or peer_grasp), bool(self_control or peer_control)],
             [bool(risk.get("robot_collision", False)), bool(risk.get("robot_proximity_risk", False)), contested, dropped, multi_contact, multi_grasp, shared, missing_custodian],
-            ["support" in peer_roles, "receiver" in peer_roles, "handler" in peer_roles, "button_operator" in peer_roles, "custodian" in peer_roles, peer_contact, peer_grasp, peer_control],
-            [bool(valid.get("grasp_contact_custody_state", False)), bool(valid.get("collision_drop_contention_risk", False)), bool(valid.get("per_agent_contribution", False)), int(label.get("ambiguity_code", 1)) == 0, any_object, bool(peers), not dropped, True],
+            [any_object, object_count > 1, free_object, self_controlled_count > 1, peer_controlled_count > 1, shared_count > 1, contested, dropped],
+            [bool(valid.get("grasp_contact_custody_state", False)), bool(valid.get("collision_drop_contention_risk", False)), int(label.get("ambiguity_code", 1)) == 0, any_object, not missing_custodian, not contested, not dropped, True],
         ],
         dtype=np.float32,
     )

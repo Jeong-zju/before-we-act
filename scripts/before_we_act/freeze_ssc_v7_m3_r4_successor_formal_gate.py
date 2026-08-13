@@ -81,6 +81,20 @@ def main() -> None:
     gate["implementation"]["implementation_commit"] = subprocess.check_output(
         ("git", "-C", str(REPOSITORY), "rev-parse", "HEAD"), text=True
     ).strip()
+    for path_key, hash_key in (
+        ("script", "script_sha256"),
+        ("test", "test_sha256"),
+        ("base_r4_script", "base_r4_script_sha256"),
+    ):
+        gate["implementation"][hash_key] = sha256_file(
+            REPOSITORY / str(gate["implementation"][path_key])
+        )
+    gate["pre_formal_implementation_correction"] = {
+        "timing": "after confirmation collection started but before confirmation features, action targets, metrics or model results were opened",
+        "change": "Remove per_agent_contribution (the legacy T source) from sanitized_legacy_B; the A2 cell now uses only current grasp/contact/custody and collision/drop/contention relations.",
+        "effect_on_collected_data": "none; collection identity, seeds and episode files are unchanged",
+        "reason": "The frozen amendment excludes P and T information from sanitized legacy B.",
+    }
     gate["run_root"] = str(RUN_ROOT)
     gate["terminal_locks"].update(
         {

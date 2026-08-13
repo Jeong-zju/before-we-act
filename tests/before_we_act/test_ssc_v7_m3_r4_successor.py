@@ -81,6 +81,15 @@ def test_sanitized_legacy_excludes_progress_future_and_fixed_robot_ids() -> None
         "completed_handoff_mask": [],
         "custody_transfer_count": 0,
     }
+    changed["per_agent_contribution"] = [
+        {
+            "agent_slot": 99,
+            "active": True,
+            "contact_objects": ["future_only"],
+            "grasp_objects": ["future_only"],
+            "roles": ["forbidden_T_role"],
+        }
+    ]
     assert np.array_equal(
         successor.sanitized_legacy_tokens(first, own_slot=0),
         successor.sanitized_legacy_tokens(changed, own_slot=0),
