@@ -100,11 +100,14 @@ def main() -> None:
     encoded_images = 0
 
     @torch.no_grad()
-    def encode(dataset) -> np.ndarray:
+    def encode(dataset, length: int) -> np.ndarray:
         nonlocal encoded_images
         pieces: list[np.ndarray] = []
-        for first in range(0, len(dataset), args.batch_size):
-            array = np.asarray(dataset[first : first + args.batch_size], dtype=np.uint8)
+        for first in range(0, length, args.batch_size):
+            array = np.asarray(
+                dataset[first : min(first + args.batch_size, length)],
+                dtype=np.uint8,
+            )
             value = torch.from_numpy(array).permute(0, 3, 1, 2).to(
                 device, non_blocking=True
             )
@@ -128,17 +131,28 @@ def main() -> None:
         values: dict[str, np.ndarray] = {}
         with h5py.File(episode.path, "r") as source:
             images = source["data/observation/images"]
+            encoded_sources: dict[str, np.ndarray] = {}
             for key in ("global", *(f"agent_{arm}" for arm in episode.arms)):
                 source_key = key
                 if source_key not in images:
                     if episode.task != "place_food" or not key.startswith("agent_"):
                         raise KeyError(f"missing {key} in {episode.path}")
                     source_key = "global"
-                if images[source_key].shape != (episode.length, 480, 640, 3):
+                shape = images[source_key].shape
+                if shape[0] < episode.length or shape[1:] != (480, 640, 3):
                     raise ValueError(
-                        f"cache source is not original 640x480 RGB: {episode.path}/{source_key}"
+                        "cache source cannot cover selected original 640x480 RGB "
+                        f"transitions: {episode.path}/{source_key}, "
+                        f"frames={shape[0]}, selected={episode.length}, shape={shape[1:]}"
                     )
-                values[f"view_{key}"] = encode(images[source_key])
+                if source_key not in encoded_sources:
+                    # Manifests deliberately stop at first success, while the
+                    # original HDF5 can retain post-success frames. Cache only
+                    # the selected legal prefix and encode reused views once.
+                    encoded_sources[source_key] = encode(
+                        images[source_key], episode.length
+                    )
+                values[f"view_{key}"] = encoded_sources[source_key]
         temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
         with temporary.open("wb") as stream:
             np.savez(

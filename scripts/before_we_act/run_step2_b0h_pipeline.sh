@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 ROOT="${STEP2_REPO_ROOT:-/workspace/fe-pc-wam-step2}"
-RUN_ROOT="${STEP2_RUN_ROOT:-/workspace/bwa_runs/p1-step2-b0h-v1}"
+RUN_ROOT="${STEP2_RUN_ROOT:-/workspace/bwa_runs/p1-step2-b0h-v2}"
 DATA_ROOT="${STEP2_DATA_ROOT:-/workspace/datasets/robofactory_multitask}"
-CACHE_ROOT="${STEP2_CACHE_ROOT:-/workspace/bwa_runs/shared/p1-step2-dino-history-cache-v1}"
+CACHE_ROOT="${STEP2_CACHE_ROOT:-/workspace/bwa_runs/shared/p1-step2-dino-history-cache-v2}"
 PYTHON_BIN="${STEP2_PYTHON:-/venv/robofactory-act/bin/python}"
 TORCHRUN_BIN="${STEP2_TORCHRUN:-/venv/robofactory-act/bin/torchrun}"
 DINO_MODEL="${STEP2_DINO_MODEL:-/workspace/artifacts/dinov3-vitb16-pretrain-lvd1689m}"
