@@ -47,6 +47,13 @@ class B0HPolicy(NoWristPAIRRoute):
             role_rank=role_rank,
             dino_model=dino_model,
         )
+        # PAIR's compatibility matrix is consumed only by its separately
+        # supervised relation objective.  B0-H deliberately has no B/P/T
+        # labels or social-state loss, and the matrix is not on the action
+        # inference path.  Keep the inherited checkpoint field for state-dict
+        # compatibility, but do not advertise a dead trainable parameter to
+        # DDP (which correctly treats that as a protocol error).
+        self.compatibility.requires_grad_(False)
         self.variant = variant
         self.history_layers_n = int(history_layers)
         self.history_pair = nn.Sequential(
