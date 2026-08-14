@@ -1,10 +1,10 @@
-# P1 多机器人闭环模型技术路线 V7.3：Measurement 收口后的 ARB-first PBT 协作模型
+# P1 多机器人闭环模型技术路线 V7.3：Measurement 收口后的自动团队信念 PBT 协作模型
 
 > 更新日期：2026-08-14
 > 活动分支：`feat/model-improvements`
-> 当前状态：**第 1 步 Measurement 按负责人后验的 signal-first 决策收口，模块设计和训练获准开始。** 第 2 步先建立 `TeamTemporalSample` 与公平 B0-H，第 3 步再训练继承 ARB schema、direct residual 和可靠度回退的 B-core，随后逐级进入 BP、BT、BPT。
+> 当前状态：**第 1 步 Measurement 按负责人后验的 signal-first 决策收口，模块设计和训练获准开始。** 第 2 步不返工原始数据和标签，而是把已经验收的数据整理成所有候选共同使用的 16 步时序样本，并训练一个“有同样历史和 residual、但没有团队信念”的强 B0-H；第 3 步按 `3-N1` 原始数据新信号、`3-N2` 完整 B-core、`3-N3` 机制归因、`3-N4` 正式验收逐级推进，随后再进入 BP、BT、BPT。
 > 证据边界：R4-C 在 72 条全新成功 episode 上相对冻结 HC 改善 `26.05%`，95% CI `[24.15%, 27.90%]`，三个 seed、六个任务全正；但 hidden-only、time-only、row-shuffle 和同阶段 shuffle 仍更强。因此可声称“整套 ARB_hat + residual 栈有稳定纸面收益”，不可声称“ARB 语义独立贡献了这些收益”。
-> 优先级调整：M4 partner-change、M5 W10 失败归因和 ARB-vs-hidden residual 隔离不删除，但后置为稳定候选的机制消融，不再阻断现在的模块训练。详细结论和全部原始验收状态见[第 1 步结果文档](../reports/20260814_P1_STEP1_MEASUREMENT_CONCLUSIONS_AND_ACCEPTANCE_ZH.md)。
+> 优先级调整：B-core 的“新信号—整体结构—普通容量”主归因放在 3-N3；M4 partner-change 和 M5 W10 失败归因保留为稳定候选后的补充因果审计，不再阻断现在的模块训练。详细结论和全部原始验收状态见[第 1 步结果文档](../reports/20260814_P1_STEP1_MEASUREMENT_CONCLUSIONS_AND_ACCEPTANCE_ZH.md)。
 > 活动任务：Lift Barrier、Camera Alignment、Long Pipeline Delivery、Take Photo、Pass Shoe、Place Food；不包含任何 Stack Cube 任务
 
 ## 0. 先用一句话说明这条路线
@@ -42,9 +42,13 @@
   ↓
 第 1 步：Measurement（已完成）
   ↓
-第 2 步：TeamTemporalSample + B0-H
+第 2 步：统一 16 步训练样本 + 公平 B0-H
   ↓
-第 3 步：ARB-B-core
+第 3 步：自动团队信念 B-core
+  ├─ 3-N1：无人工标签的原始数据团队表示
+  ├─ 3-N2：完整 B-core 训练充分后的积极信号
+  ├─ 3-N3：整体结构与新信号的机制归因
+  └─ 3-N4：冻结唯一方案并正式闭环验收
   ↓
 第 4/5 步：BP / BT
   ↓
@@ -52,10 +56,10 @@
   ↓
 联合训练 + Validation/Confirmation
   ↓
-稳定候选后的 M4 / M5 / residual 机制消融
+稳定候选后的 M4 / M5 补充因果审计
 ```
 
-第 2 步以后的模块仍逐级走漏斗；后置 M4/M5 不阻断开模，但在它们完成前不得提出严格 ARB 因果机制 claim。
+第 2 步以后的模块仍逐级走漏斗；3-N3 负责 B-core 的主机制归因，后置 M4/M5 不阻断开模，但在它们完成前不得提出更强的 partner-change 或失败根因因果结论。
 
 文档里的几个常用词可以这样理解：
 
@@ -66,17 +70,25 @@
 | probe | 为了验证某种信息有没有用而训练的小模型，不是最终模型 |
 | sidecar | 不修改原 HDF5，另外保存的一份逐帧标签文件 |
 | receipt | 用 commit、配置和 SHA256 证明“这次到底用了什么”的记录 |
-| belief | 模型对团队当前状态的结构化判断，不是自然语言感想 |
-| ARB | Action-Relevant Belief；不追求复原全部团队状态，只保留能改变当前自身动作的少量关系、事件和可靠度 |
+| TeamTemporalSample | 一条统一训练样本：把同一任务、同一 episode、同一机器人当前时刻的 16 步过去、100 步动作答案和监督标签对齐放好 |
+| residual | “动作修正支路”：基础模型先给动作，旁路再学习加上一小段修正；它本身也可能带来性能，所以必须单独控制 |
+| B0-H | 不使用团队信念的公平基础模型；它拥有与 B-core 相同的 16 步历史和 residual 容量，用来测清历史与通用修正本身能做到多好 |
+| belief | 模型根据当前与过去证据形成的团队状态分布，同时包含“认为是什么”和“有多不确定” |
+| ARB | Action-Relevant Belief；第 1 步冻结的动作相关语义集合。第 3 步中只作探针、解释和审计，不再作为 B-core 必须人工标注的训练输入 |
+| 运行分支 | 部署时真正保留的分支，只读取当前和过去的合法观测 |
+| 训练教师分支 | 只在训练时读取同步多视角和未来 `0.2/0.4/0.8/1.6` 秒的四个原始观测锚点，用来教运行分支形成更完整的团队信念；部署时删除 |
+| 团队信念 token | B-core 自动学习的少量潜在状态位置，包括智能体锚点和自由交互状态，不与人工 ARB 字段逐维绑定 |
 | cross-attention | 一组信息主动读取另一组信息；谁是 Query 就是谁在问，谁提供 Key/Value 就是谁在回答 |
-| coordination queries | 少量“协调员”token，负责把 B、P、T 中与下一段动作有关的信息整理后交给动作模型 |
-| CoordinationAdapter | ACT decoder 里的小型旁路，让 action query 读取 coordination queries；它不是第四个 PBT 模块 |
+| coordination queries | 完整 PBT 阶段才启用的少量“协调员”token，负责把 B、P、T 中与下一段动作有关的信息整理后交给动作模型；B-core 单独阶段不重复增加这一层 |
+| CoordinationAdapter | 完整 PBT 阶段 ACT decoder 的小型旁路；B-core 单独阶段直接用可靠度控制的 zero-init belief residual 接入动作 |
 | macro | 先分别计算六个任务，再对六个任务等权平均，避免长任务支配结果 |
 | paired bootstrap | 对相同 seed 的两个模型做成对重采样，用来估计结果是否稳定 |
 | 95% CI | 对结果稳定范围的估计；本文要求最保守的一端仍然大于 0 |
 | 统计功效 | 现有样本是否足以看出预设大小的差异；样本不够时只能说“证据不足” |
 | 分叉点 | 从同一个模拟器状态复制出几条路线，只改变队友后续行为 |
 | `INCONCLUSIVE` | 证据不足，既不算通过，也不能当成路线已被证明失败 |
+| `INCONCLUSIVE_TRAINING_NOT_CONVERGED` | 已达到冻结训练上限但曲线仍明显改善，暂时不能判断路线有没有信号 |
+| `INCONCLUSIVE_ATTRIBUTION` | 各自训练充分后的排序与相同训练量下的排序冲突，暂时不能判断收益来自哪里 |
 
 </details>
 
@@ -160,15 +172,15 @@ V7.3 不再采用“三组 token 直接拼接”的正式方案。P、B、T 是�
 
 | 模块 | 用人话解释 | 它负责的内容 | 它不负责的内容 |
 |---|---|---|---|
-| B：team belief | “我现在认为现场是什么状态” | 谁可见、谁接触/抓住了什么、物体由谁持有、最近确认过的交接、遮挡和置信度 | 不直接判断任务完成百分比，不直接预测队友未来动作 |
+| B：team belief | “根据目前能看到的证据，我认为团队现场是什么状态，而且我有多确定” | 从原始多视角轨迹自动学习智能体、物体交互、接触、运动、遮挡和关键事件的潜在状态分布 | 不要求逐维复刻人工 ARB，不直接判断任务完成百分比，不显式输出队友未来模式 |
 | P：progress | “按照任务规则，现在做完了什么、还缺什么” | 已完成/未完成谓词、当前阶段、阶段内连续进度、剩余目标 | 不重新看原始图像猜角色，不复制 B 的 agent-object 关系 |
 | T：teammate future | “根据当前现场和剩余任务，队友接下来可能怎么做” | 队友未来若干步的目标、角色、动作模式及每种模式的不确定性 | 不保存长期物体记忆，不重新定义任务进度 |
 
-`per_agent_contribution` 继续作为监督和审计标签，但不再单独做一组输入 token。它用于检查 B 中的角色/物体关系和 P 中的任务完成判断是否一致。
+第 1 步的 ARB sidecar 与 `per_agent_contribution` 继续保留作探针、解释和审计，但不再要求 B-core 依靠这些人工定义字段训练。B 的主要训练信号来自原始轨迹本身：同步多视角、未来 `0.2/0.4/0.8/1.6` 秒的视觉特征、队友当前状态和状态变化。P、T 仍各自保留独立语义边界，避免 B 预先吞掉后续模块的研究问题。
 
 ### 2.3 PBT 到底做不做 cross-attention
 
-做，但只做**有方向的 cross-attention**，不做 P、B、T 两两互相乱读。
+做，但分两个阶段处理：**B-core 单独阶段直接把 B 接到动作；完整 PBT 阶段才用有方向的 cross-attention 和统一协调层。** 这样 B-core 的研究主张集中在“团队信念怎样从原始数据自动形成”，不会被一个额外协调瓶颈混淆。
 
 完整的一次前向按下面顺序执行：
 
@@ -176,7 +188,11 @@ V7.3 不再采用“三组 token 直接拼接”的正式方案。P、B、T 是�
 合法的当前观察、最近 16 步历史、上一时刻 B
                       │
                       ▼
-       B：更新“现场现在是什么状态”
+       B：更新带不确定性的团队潜在状态
+          │
+          ├──────── B-core 阶段：可靠度控制的直接 residual → action
+          │
+          └──────── 完整 PBT 阶段继续向下
                       │
                       ▼
        P 用自己的 Query 去读取 B
@@ -187,7 +203,7 @@ V7.3 不再采用“三组 token 直接拼接”的正式方案。P、B、T 是�
        得到“队友接下来可能怎么做”
                       │
                       ▼
-  8 个 coordination queries 读取 B + P + T
+  少量 coordination queries 读取 B + P + T
        只留下与下一段自身动作有关的信息
                       │
                       ▼
@@ -198,79 +214,65 @@ V7.3 不再采用“三组 token 直接拼接”的正式方案。P、B、T 是�
 
 | 顺序 | 谁在问（Query） | 读取谁（Key/Value） | 输出 |
 |---|---|---|---|
-| 1 | B 的 entity/memory queries | 当前观察、16 步历史、上一时刻 B | 更新后的 `B_t` |
-| 2 | P 的 task-predicate queries | `B_t` 和 task graph | `P_t` |
-| 3 | T 的 future-mode queries | `B_t` 和 `P_t` | `T_t` |
-| 4 | 8 个 coordination queries | `B_t`、`P_t`、`T_t` | `C_t` |
-| 5 | 100 个 ACT action queries | 原视觉 memory，以及单独的 `C_t` 旁路 | 100 步 action chunk |
+| 1 | B 的智能体锚点和自由交互 queries | 当前观察、16 步历史、上一时刻 B、当前 episode 的关键事件记忆 | 更新后的信念分布 `B_t=(μ_t,σ_t)` |
+| 2a | B-core 的 direct belief residual | `B_t` 与动作主干 hidden | 只由 B 带来的动作修正 |
+| 2b | P 的 task-predicate queries | `B_t` 和 task graph | 完整 PBT 中的 `P_t` |
+| 3 | T 的 future-mode queries | `B_t` 和 `P_t` | 完整 PBT 中的 `T_t` |
+| 4 | 少量 coordination queries | `B_t`、`P_t`、`T_t` | 完整 PBT 中的 `C_t` |
+| 5 | 100 个 ACT action queries | 原视觉 memory，以及 `B_t` 或 `C_t` 的 zero-init 旁路 | 100 步 action chunk |
 
 这里有一个刻意的限制：在同一次前向中，`B_t` 不再反过来读取 P 或 T。否则会形成“B 依赖 P、P 又依赖 B”的即时循环，很难判断信息从哪里来。T 预测出的未来只监督一个单独的 `future_B` 预测头，用来检查动力学是否合理；它不会在同一时刻覆盖当前 `B_t`。下一控制步到来后，B 再用真正看到的新观察更新。
 
-这条 `B → P → T → C → action` 的单向链是第一版正式实现。更复杂的多轮 PBT 反复交互只有在单向版本通过因果干预后，才允许作为新路线预注册，不能在训练途中临时加入。
+B-core 的链路固定为 `raw history → B → action`；完整模型的链路固定为 `raw history → B → P → T → C → action`。同一次前向中 B 不反过来读取 P 或 T。更复杂的多轮 PBT 交互只有在单向版本通过因果干预后才允许另立路线，不能在训练途中临时加入。
 
 ### 2.4 每组张量长什么样
 
 基础 action backbone 继续使用 `d_model=384` 和 100 个 action queries。社会状态使用同一宽度：
 
 ```text
-B_t: [batch, n_B, 384]    现场中的 agent/object/relation/memory slots
+B_mu:    [batch, n_B, 384]    团队状态的当前中心判断
+B_sigma: [batch, n_B, 384]    对每个状态判断的不确定性
+M_event: [batch, n_M, 384]    当前 episode 中按预测意外程度保留的关键事件
 P_t: [batch, n_P, 384]    任务谓词和剩余目标 slots
 T_t: [batch, n_T, 384]    队友未来模式和时间段 slots
-C_t: [batch,   8, 384]    固定 8 个协调员 slots
+C_t: [batch, n_C, 384]    完整 PBT 才启用的协调 slots
 ```
 
-`n_B`、`n_P`、`n_T` 不能拍脑袋决定。ARB 字段已经由第 1 步冻结；token 数在第 2 步根据六个任务需要的最大 agent、object、predicate 和未来模式数量一次性冻结，并使用 padding mask 处理较小任务。冻结后不得因为 Validation 结果不好而改 token 数。8 个 coordination queries 是第一版 B-core 的候选规格，目的是迫使模型整理信息，而不是把全部 PBT 原样复制给动作模型。
+`n_B` 不再由人工 ARB 字段数决定。3-N1 先观察表示容量与预测/动作探针是否已经趋于饱和，再在 3-N2 启动前冻结一个规模；默认可以从十几个团队信念 token 起步，但不能看到闭环结果后继续搜索。B 中至少保留智能体锚点，其余位置作为自由交互状态，不强迫每个 token 对应某个手工物体类别。`n_P`、`n_T`、`n_C` 在各自模块启动前用相同原则冻结。
 
-agent slot 不读取显式机器人 ID。ego 由自己的 local view/qpos 确认，其余 teammate slots 共享参数；训练时一致交换 teammate slot，B/T/C 和动作影响也必须相应交换。
+agent slot 不读取显式机器人 ID。ego 由自己的 local view/qpos 确认，其余 teammate slot 共享参数并使用相对角色编码；一致交换两个机器人的输入和动作目标后，B/T/C 及其动作影响必须相应交换。
 
-### 2.5 CoordinationAdapter 到底是什么
+### 2.5 B-core 和完整 PBT 怎样接入动作
 
-它不是一个新的“大协调模型”，只是放在现有 ACT decoder 每一层里的小旁路。
-
-当前 ARCA decoder 每层已经做三件事：action query 先互相交流，再读取基础视觉 memory，最后通过 role adapter 补充观察信息。V7.3 保留这些原有路径，只增加第四条残差：让 action query 读取 8 个 `C_t`。
+动作接入不承担本轮的主要研究创新。第 1 步已经表明 direct residual 优于当时的 query 融合，因此 B-core 使用最短、可切断的旁路，完整 PBT 才恢复统一协调层：
 
 ```text
-原来的动作特征
-  + 原来的视觉 cross-attention
-  + 原来的 role adapter
-  + social_gate × CrossAttention(action_query, C_t)
-  = 本层新的动作特征
+B-core:
+action = ACT(observation, history)
+       + reliability(B_t) × ZeroInit(DirectBeliefResidual(action_hidden, B_t))
+
+完整 PBT:
+action = ACT(observation, history)
+       + reliability(C_t) × ZeroInit(CoordinationAdapter(action_hidden, C_t))
 ```
 
-第一版在 7 个 ACT decoder layers 中都使用下面这个固定计算，不同时尝试 FiLM、AdaLN 或其他融合器：
-
-```text
-h_l       : [batch, 100, 384]，第 l 层的 action query
-C_t       : [batch,   8, 384]，统一协调结果
-social_l  = LowRankCrossAttention(query=LayerNorm(h_l), key/value=C_t, rank=32)
-gate_l    = sigmoid(MLP(LayerNorm(h_l), mean(C_t)))       # [batch, 100, 1]
-h_l       = h_l + gate_l × ZeroInitOutput(social_l)
-```
-
-`ZeroInitOutput` 表示最后一个线性层初始为 0：第一次 forward 时社会旁路不会破坏基础动作，训练后它才能逐渐变成非零。`rank=32` 沿用现有 ARCA role adapter 的低秩宽度，避免又引入一个未经控制的大参数块。
-
-具体约束：
-
-- `action_query` 是 Query，8 个 coordination tokens 是 Key/Value；
-- 每个 decoder layer 都有自己的 adapter，但使用同一组 `C_t`；
-- gate 按 layer 和 action query 分别计算，因此“马上执行的动作”和“动作块后半段”可以读取不同社会信息；
-- social cross-attention 的输出投影从 0 初始化，所以训练开始时模型与基础动作路径一致，之后才逐渐学会使用协调信息；
-- 沿用 R4 已验证的可靠度回退：不可靠的社会残差必须衰减，不能无界污染主路；如果高不确定应该触发等待或观察，要通过独立、可监督的 uncertainty/observe head 明确表达并重新过 gate，不能让未校准的残差暗中承担两种相反职责；
-- P、B、T 不再分别直接接入 action decoder。action decoder 只读取统一的 `C_t`，否则又会退回三组 token 竞争的旧设计。
-
-本项目已有的 [ARCADecoderLayer](../../vendor/stereo-core/stereo_core/stereo_decoder_variants.py) 已经提供 query-conditioned residual cross-attention 的代码骨架，因此第一版只需要增加一个 `CoordinationAdapter` 和对应 gate，不需要替换整个 ACT。
+`ZeroInit` 保证新增旁路初始不破坏基础动作；强制关闭 B 或 C 时必须结构上回到同一候选的无社会信息路径。B 的不确定性直接控制 residual 强度，不再旁挂一套与 belief 无关的可靠度分类器。本项目已有的 [ARCADecoderLayer](../../vendor/stereo-core/stereo_core/stereo_decoder_variants.py) 可继续提供低秩残差骨架，但具体融合形式在 3-N2 前一次冻结，3-N2 内不同时搜索多种 adapter。
 
 ### 2.6 训练和部署时如何避免偷看答案
 
-oracle P/B/T 只用于生成监督目标和测上限。正式模型在训练和部署时都必须沿着下面这条可微路径走：
+第 3 步把“运行时可见信息”和“训练时用于教学的信息”严格分开：
 
 ```text
-合法输入 → 预测 B → 预测 P → 预测 T → C → 动作
+运行分支：合法当前/过去输入 → 预测 B → 动作
+训练教师分支：同步多视角 + t+4/8/16/32 的未来原始观测 → 更完整的 B 教师状态
+训练约束：让运行分支逼近教师状态；部署时删除教师分支
 ```
 
-不能在训练时把 oracle B/P/T embedding 喂给下游模块，再在部署时突然换成预测值。各类 oracle label 只计算 `L_B`、`L_P`、`L_T` 和一致性 loss；主动作 loss 始终经过预测的 PBT。最终 checkpoint 同时包含 history/belief、progress、teammate、coordination adapter 和 action decoder，部署时不需要 teacher、reward model 或外部通信。
+原始 720 条轨迹的控制与图像频率都是 `20 Hz`，因此未来窗口冻结为最多 `32` 个控制步，也就是 `1.6` 秒。教师不连续读取 32 张高度重复的图像，只读取各相机在 `t+4、t+8、t+16、t+32` 的四个锚点，分别对应 `0.2、0.4、0.8、1.6` 秒，并在冻结 DINO 潜在特征空间中教学。episode 尾部不存在的锚点必须用 mask 排除，禁止复制最后一帧冒充未来。如果以后改变采样频率，应保持这四个秒级时间点并重新换算步数，不能机械沿用 4/8/16/32。
 
-最终要验证的不是“P/B/T 分类准确”，而是：切断 `B→P`、`B/P→T`、`PBT→C` 或 `C→action` 中任一条边时，动作和对应合作行为是否按预注册方向退化。
+训练教师分支还可以读取同步的当前队友状态和多视角一致性证据，但不能把未来 ego 动作答案、未来队友动作、最终成功、remaining goals 或 simulator truth 直接送入运行分支。未来队友动作若被使用，只能作为训练目标，不能作为教师或运行分支输入。
+
+人工 ARB、P、T sidecar 仍可作 probe、oracle 上限和解释性审计，但 B-core 的动作主路始终经过自动学习的 B。最终部署 checkpoint 不包含训练教师、oracle、reward model 或外部通信。到完整 PBT 阶段，仍需逐边验证 `B→P`、`B/P→T`、`PBT→C` 和 `C→action`。
 
 ### 2.7 研究锚点怎样落到这套模型里
 
@@ -278,15 +280,18 @@ oracle P/B/T 只用于生成监督目标和测上限。正式模型在训练和�
 
 | V7.3 要解决的问题 | 主要近期锚点 | 具体落到本项目的设计 | 当前证据边界 |
 |---|---|---|---|
-| B 怎样记住被遮挡前的现场 | [MemoryVLA，ICLR 2026](https://arxiv.org/abs/2508.19236) | 当前 token 用 cross-attention 检索历史，再通过 gate 合并新观察与旧记忆；每个 episode 必须 reset | 它验证的是单机器人记忆，不能直接证明多机器人 belief 有效；仓库 license 未澄清前只读机制，不复制源码 |
+| 怎样不用人工 B 标签形成动作相关状态 | [Being-H0.7，2026](https://arxiv.org/abs/2605.00078) | 采用结构匹配的运行分支和训练教师分支；未来四锚点只负责塑造潜在团队状态，部署时删除教师分支 | 它验证的是单机器人 latent world-action model，不能直接证明多机器人 team belief 有效 |
+| 怎样让团队状态对遮挡和关键事件敏感 | [MemoryVLA，ICLR 2026](https://arxiv.org/abs/2508.19236) 与 [RoboMemArena/PrediMem，2026](https://arxiv.org/abs/2605.10921) | 保留短期工作状态；用下一时刻潜在预测误差选择关键事件；每个 episode 强制 reset | 两者主要研究单机器人长时记忆，不能替本项目证明预测误差选出的事件会改善双机器人动作 |
+| 为什么预测潜在特征而不是未来像素 | [AHEAD，2026](https://arxiv.org/abs/2606.02486) 与 [ω-0，2026](https://arxiv.org/abs/2608.06375) | 冻结视觉主干，在紧凑特征空间预测场景和队友状态变化；不训练大型未来视频生成器 | 两者任务和数据规模不同，只支撑潜在预测这一训练形式 |
+| 多机器人怎样保持可区分又不绑定固定编号 | [Gamma-World，2026](https://arxiv.org/abs/2605.28816) | 智能体锚点使用共享参数和相对角色编码，自由交互 token 形成共享团队状态；一致交换机器人时结果相应交换 | 它以生成式多智能体 world model 为主，只支撑置换对称和共享状态原则 |
 | P 怎样表示“做到哪了” | [PALM，CVPR 2026](https://openaccess.thecvf.com/content/CVPR2026/html/Liu_PALM_Progress-Aware_Policy_Learning_via_Affordance_Reasoning_for_Long-Horizon_Robotic_CVPR_2026_paper.html)、[ProcVLM，2026](https://procvlm.github.io/) 和 [ProgVLA，2026](https://arxiv.org/abs/2605.28231) | 联合学习 action 与 progress；progress 按任务谓词、程序步骤和剩余动作定义；长历史先压成少量 control-ready tokens | PALM 没有同等完整的官方实现；ProcVLM 是 progress reward/VLM，不是动作策略；ProgVLA 目前只作机制参考 |
 | T 应该学习哪些合作变化 | [Sequential Asymmetric Imitation，2026](https://arxiv.org/abs/2606.16490) | 数据和反事实必须覆盖队友延迟、阶段不一致、让行和错误分工，T 不能只在正常专家轨迹上学“队友总会配合” | 它主要支撑数据与干预设计，不是可直接搬来的 T 模块源码 |
 | P、B、T 为什么用单向 cross-attention | [AffordanceVLA，2026](https://arxiv.org/abs/2606.06155) | 借鉴严格单向的 block-causal attention，把它改成 `B→P→T→C→Action`；同一次前向不允许反向形成循环 | 借的是 mask 和连接原则，不搬它的 π0 权重、训练集或大规模训练栈 |
-| 为什么先汇总成少量 C token | [Gamma-World，2026](https://arxiv.org/abs/2605.28816) | 借鉴 Sparse Hub Attention：P/B/T 先写入 8 个协调 token，ACT 只读取这 8 个 token；teammate slot 使用共享参数并做置换检查 | 它是视频 world model，只支撑 hub/slot 机制，不证明 ACT 上一定有效 |
+| 完整 PBT 为什么再汇总成少量 C token | [Gamma-World，2026](https://arxiv.org/abs/2605.28816) | 只在 P、B、T 同时存在时用少量共享 hub 整理三路信息；B-core 阶段由 B 直接接 action，不重复压缩 | 它不证明 ACT 上的协调层一定有效，因此 C 仍需在 BPT 中单独消融 |
 | action chunk 交界处怎样不断片 | [ChainVLA，2026](https://arxiv.org/abs/2608.02326) | 下一次决策保留上一 chunk 的工作状态和未执行动作尾部，作为 B/P 的跨 chunk 连续性参考 | 工作很新且尚未完成代码审计，第一版只做消融参考 |
-| C 怎样接入现有 ACT | 本仓库 [ARCADecoderLayer](../../vendor/stereo-core/stereo_core/stereo_decoder_variants.py) | 沿用已有的低秩、query-conditioned residual cross-attention 骨架，增加 zero-init social residual 和逐 query gate | 这是本地工程锚点，不是外部论文对 BPT 有效性的证据 |
+| B/C 怎样安全接入现有 ACT | 本仓库 [ARCADecoderLayer](../../vendor/stereo-core/stereo_core/stereo_decoder_variants.py) | 沿用已有低秩残差骨架；B-core 使用 direct belief residual，完整 PBT 使用 CoordinationAdapter，输出都 zero-init | 这是本地工程锚点，不是外部论文对 B-core/PBT 有效性的证据 |
 
-这些锚点不是参考文献装饰，而是要变成可检查的实现和消融：MemoryVLA 对应 B 的检索、更新门和 episode reset；PALM/ProcVLM 对应“进度不能等于帧号”和 action-progress 联合头；AffordanceVLA 对应单向 attention mask 与禁止反向边；Gamma-World 对应 8 个协调 token 和机器人换位测试；Sequential Asymmetric Imitation 对应 delay、yield、wrong-role 数据；ChainVLA 对应 action chunk 交界测试。任何一项没有通过本项目的 Measurement 和闭环实验，都不能只凭论文写成“已经有效”。
+这些锚点不是参考文献装饰，而是要变成可检查的实现和消融：Being-H0.7 对应运行/教师双分支；AHEAD、ω-0 对应潜在未来预测；MemoryVLA、PrediMem 对应短期状态和预测意外驱动的事件记忆；Gamma-World 对应机器人换位和共享团队状态；PALM/ProcVLM 对应“进度不能等于帧号”；AffordanceVLA 对应单向 attention mask；Sequential Asymmetric Imitation 对应 delay、yield、wrong-role 数据。任何一项没有通过本项目的信号实验和最终闭环，都不能只凭论文写成“已经有效”。
 
 ## 3. 第 0 步：冻结 Measurement 边界（已完成）
 
@@ -330,27 +335,30 @@ oracle P/B/T 只用于生成监督目标和测上限。正式模型在训练和�
 | 新路线 | 计划分支 | 独立输出目录 |
 |---|---|---|
 | Measurement | `feat/ssc-v7-measurement` | `measurement/` |
-| M3-R4/ARB | `feat/ssc-v7-m3-r4-arb` | `measurement/m3_r4_arb/` |
+| M3-R4/ARB（历史只读） | `feat/ssc-v7-m3-r4-arb` | `measurement/m3_r4_arb/` |
 | B0-H | `feat/ssc-v7-b0-history` | `b0-history/` |
-| B-core | `feat/ssc-v7-b-core` | `b-core/` |
+| B-core 3-N1 | `feat/ssc-v7-b-core` | `b-core/n1-raw-signal/` |
+| B-core 3-N2 | `feat/ssc-v7-b-core` | `b-core/n2-architecture/` |
+| B-core 3-N3 | `feat/ssc-v7-b-core` | `b-core/n3-attribution/` |
+| B-core 3-N4 | `feat/ssc-v7-b-core` | `b-core/n4-formal/` |
 | BP | `feat/ssc-v7-bp-progress` | `bp-progress/` |
 | BT | `feat/ssc-v7-bt-teammate` | `bt-teammate/` |
 | BPT | `feat/ssc-v7-bpt-directed` | `bpt-directed/` |
 | 汇总 | `feat/ssc-v7-integration` | `integration/` |
 
-所有正式模型仍从同一个冻结 base 随机初始化，不从前一路 checkpoint 续训。表中分支已经获得路线级设计/训练资格，但仍要在启动各阶段前冻结数据、预算、seed、停止规则和验收合同。
+3-N1～3-N3 是同一条 B-core 研究路线内部的递进实验，可以在只读 receipt 完整的前提下继承上一小步的表示权重和代码产物，但这些继承结果只能用于 Discovery，不具备正式候选资格。3-N4、B0-H、BP、BT、BPT 等正式模型仍从同一个冻结 base 按各自完整 recipe 重新训练，不能把诊断 checkpoint 冒充正式初始化。表中分支已经获得路线级设计/训练资格，但仍要在启动各阶段前冻结数据边界、比较方向、seed 和停止规则。
 
 ### 3.4 已经冻结的实验规矩
 
 用人话概括如下：
 
 - Measurement 已按 signal-first 路线级决策完成；原始 M1/M2/M3/R4 回执继续保留，M4/M5 改为稳定候选后的机制审计；
-- 模型只能看合法图像、自己的 qpos、固定任务文本和 16 步合法历史；不能偷看队友真值、对象真值、未来、最终成功或虚构通信；
+- 运行分支只能看合法图像、自己的 qpos、固定任务文本和 16 步合法历史；训练教师和辅助目标只能按第 2.6 节读取预先冻结的原始数据字段，并在部署时删除，任何分支都不能使用最终成功、remaining goals 或虚构通信；
 - Measurement 每个任务先用 4 个 seed 调试，再准备 60 个成功专家 episode。W10 先跑 20 个新 seed；如果样本仍不足，只能六个任务一起每次增加 5 个，最多增加到每任务 40 个。每个 W10 episode 最多选 24 个时刻做反事实分叉；
-- 将来每条正式训练路线统一走 F0、4-update F1、5,000-update Discovery、Validation5、120,000-update Formal 和 Validation20；
-- B0-H/B-core/BP/BT/BPT 使用相同 seed、数据、48 effective batch、100 action horizon、evaluator 和预算；
+- B0-H、3-N4、BP、BT、BPT 等正式候选统一走 F0、4-update F1、Discovery、Validation5、120,000-update Formal 和 Validation20；3-N1～3-N3 是前置探索，不分别重复 Validation20/Confirmation50，但训练本身必须达到第 6.0 节的最低暴露和收敛平台，不能把 4-update F1 或 5,000-step smoke test 当成信号实验；
+- B0-H、3-N4 正式 B-core、BP、BT、BPT 使用完全相同的统一 16 步样本、seed、48 effective batch、100 action horizon、evaluator 和正式预算；3-N1～3-N3 在各自训练充分性合同内做数据、sample cursor 和 matched-compute 比较。B0-H 同时保留 history-only 和 hidden-residual 两种读法，后者是主要强基线；
 - 自动执行时不准看到结果后重抽 seed、加预算、换 evaluator 或降低门槛。用户因固定 benchmark 的已知限制明确改变研究口径时，必须建立新的只读 gate revision、保留旧结论并原样重跑，不能覆盖旧 receipt；
-- BP 必须等 B-core 通过自身模块门禁并冻结 P 合同；BT 必须等 B-core 通过并冻结 T 合同；BPT 必须等 BP、BT 均通过各自漏斗，不能同时开工后挑最好结果。
+- BP 必须等 3-N4 正式验收 B-core 并冻结 P 合同；BT 必须等 3-N4 正式验收 B-core 并冻结 T 合同；BPT 必须等 BP、BT 均通过各自漏斗，不能同时开工后挑最好结果。
 
 历史数字和停止码见 [阶段合同](../experiments/ssc_v7/stage_contract.json)、[seed 合同](../experiments/ssc_v7/seed_contract.json)、[Measurement gate](../experiments/ssc_v7/measurement_gate.json)、[M1 benchmark 放宽修订](../experiments/ssc_v7/m1_relaxed_gate.json) 和[第 1 步详细结果](../reports/20260814_P1_STEP1_MEASUREMENT_CONCLUSIONS_AND_ACCEPTANCE_ZH.md)。旧合同中的 P/T/B/PT/PTB 训练顺序已被本路线替代；模块训练前必须生成 V7.3 新 schema 的合同，不能修改已经产生过 receipt 的旧文件。
 
@@ -429,88 +437,267 @@ M1 已同步到 `/workspace/bwa_runs/ssc-v7-social-state-cooperation-v2/pre_regi
 
 ### 4.3 进入模块路线后继承什么
 
-1. B-core 继承 ARB schema，只保留 contact/grasp/custody、handoff、teammate motion、blocking/collision、visibility/staleness 和 uncertainty/missingness。
-2. 禁止把 frame index、episode ID、固定机器人编号、任务完成百分比、remaining goals、未来队友动作或旧 192 维 B 偷渡进 ARB。
-3. direct residual 是第一版默认接口；residual 最后一层 zero-init，低可靠度和 gate-off 必须回到本候选基础动作。
-4. query-attention 只作为历史反方消融，不因进入正式模块而复活。
-5. B0-H、B-core、BP、BT、BPT 使用相同 TeamTemporalSample、seed、sample cursor、action target 和预算。
-6. hidden-only、time/phase、shuffle、stale 和 gate-off 继续作为诊断；它们不再阻断开始训练，但继续限制论文归因。
+1. 第 1 步的 ARB schema 继续定义“哪些团队语义可能与动作有关”，但在第 3 步只作 probe、解释和审计；B-core 的团队信念必须主要从原始轨迹的多视角、时序变化和队友状态中自动学习，不依赖新增人工标注。
+2. 禁止把 frame index、episode ID、固定机器人编号、任务完成百分比、remaining goals、未来队友动作、最终成功或旧 192 维 B 偷渡进运行分支。`t+4/8/16/32` 的未来观测只允许进入训练教师分支，部署时必须删除。
+3. direct residual 是 B-core 第一版默认动作接口；residual 最后一层 zero-init，低可靠度和 gate-off 必须回到本候选基础动作。
+4. B-core 不再额外增加一层 C；自动团队信念 B 直接修正动作。C 只在后续 P/B/T 同时存在时负责汇总三路信息。
+5. B0-H、3-N4 正式 B-core、BP、BT、BPT 必须读取完全相同的 16 步样本、走相同 sample cursor、预测相同动作目标并使用相同正式预算；3-N1～3-N3 的比较组必须在各自训练充分性合同内匹配，否则差异没有可比性。
+6. hidden-only、time/phase、shuffle、stale 和 gate-off 继续作为诊断；3-N1～3-N2 只要求出现跨对照的一致积极信号，完整归因集中在 3-N3。
 7. 纸面未来 16 步 NRMSE 只用于筛选，最终 winner 仍必须通过闭环 Validation/Confirmation。
 
 ### 4.4 M4/M5 的新优先级
 
 M4 和 M5 不删除，改到候选架构与训练 recipe 稳定以后统一执行：
 
-- M4 检查 partner change 是否因果改变正确动作，以及模型能否在变化可见后及时响应；
-- M5 检查 W10 和最终候选的失败中有多少真正属于合作根因；
-- residual 隔离使用嵌套结构，在冻结 hidden residual 后比较真实 ARB、ARB 置零、同阶段 shuffle 和 oracle ARB。
+- M4 检查 partner change 是否因果改变正确动作，以及团队信念能否在变化可见后及时响应；
+- M5 对失败轨迹做时序错误分析，区分信念形成、动作生成和控制执行问题；
+- 归因时至少打乱跨机器人对应关系、替换错误 teammate、删除训练教师或未来预测目标、删除关键事件记忆，并比较 no-B residual 与 B-increment。
 
-这些实验决定后续能否提出严格 ARB 机制和合作因果 claim，不再决定现在能否进入模块设计与训练。
+这些实验用于判断性能信号是否来自团队信念和 B-core 整体结构。Step 1 的 ARB/oracle 只保留为补充解释探针，不再作为训练依赖或主归因手段。
 
-## 5. 第 2 步：先修数据单元，再训练 B0-H
+## 5. 第 2 步：统一时序训练样本，并建立公平基础模型
 
-本节现在是活动入口。先冻结 `TeamTemporalSample`、数据/seed/预算合同和 B0-H 公平基线，再进入 B-core；M4/M5 不再是本节的前置条件。
+本节现在是活动入口。这里说的“统一数据单元”不是清洗数据，更不是重做标签。M1 已经确认原始 HDF5 可用，M2 已经确认标签可用；第 2 步只负责把这些已经验收的材料整理成正式模型都能读取的同一种训练样本。
 
-### 5.1 当前数据加载器为什么不能直接训练 PBT
+用人话说，这一步要先回答三个很朴素的问题：
 
-现有 `NoWristFrameDataset` 每次只读取一个 episode、一个 arm、一个时刻，并预测这个 arm 后续的动作；Sampler 也独立抽取 `(episode, arm, time_index)`。它没有返回连续历史，也没有把同一时刻的团队信息组织在一起。直接在这个 Dataset 上加 PBT head，只会得到几个缺少时序依据的分类器。
+1. 每个模型到底看到了哪 16 步历史；
+2. 这段历史、要预测的动作和只用于判卷的 B/P/T 标签有没有对齐；
+3. 不给模型 ARB，只给它相同历史和相同 residual 容量，它本身能做到多好。
 
-第一项实现工作是增加统一的 `TeamTemporalSample`：
+只有这三个问题先固定，后面 B-core、BP、BT、BPT 的结果才可以互相比较。
+
+### 5.1 为什么现有两个数据加载器都不能直接当正式入口
+
+现有 W10 `NoWristFrameDataset` 每次只取一个 episode、一个机器人、一个时刻，然后预测这个机器人后续动作。它适合训练 W10，但没有返回完整的 16 步历史，也没有对齐同一时刻的 B/P/T 监督。
+
+Measurement 的临时 loader 已经证明“从合法输入中取出 16 步历史并对齐 ARB 标签”是做得到的，但它把图像压成小块均值，再展平成独立的 MLP 行，并且只稀疏抽取少量时刻。它的用途是快速判断有没有纸面信号，不是训练最终视觉动作模型。
+
+所以现在缺的不是新数据，而是连接两者的正式接口：保留 W10 的真实图像和动作训练方式，同时加入 Measurement 已验证过的合法历史、标签对齐和信息边界。
+
+### 5.2 一条统一样本到底是什么
+
+统一样本的代码名继续叫 `TeamTemporalSample`。一条样本用人话表示如下：
+
+| 这一部分是什么 | 具体内容 | 模型能不能看到 |
+|---|---|---|
+| “这条样本是谁” | task、episode、当前 ego 机器人、当前时刻 `t` | 只作索引和审计；只有 canonical task text 会在下一行作为正常输入，episode ID、frame index 不喂给模型 |
+| “刚才发生了什么” | `t-15` 到 `t` 的 global/local RGB 和 ego qpos，`t-16` 到 `t-1` 已经执行过的 ego action，以及 task text | 可以看到；全部来自当前或过去，不包含从 `t` 开始的动作答案 |
+| “接下来该怎么动” | ego 从 `t` 开始的 100 步 commanded action 和有效位 mask | 训练目标，模型不能提前看到 |
+| “原始数据教师材料” | 同步多视角、当前队友状态、`t+4/8/16/32`（20 Hz 下为 `0.2/0.4/0.8/1.6` 秒）的未来图像锚点，以及从原始轨迹自动得到的队友/场景状态变化 | 只允许 3-N1/3-N2 的训练教师分支和辅助目标读取；运行分支、动作主路和部署模型都不能看到；尾部缺失锚点只做 mask，不复制末帧 |
+| “团队现场的标准答案” | 同一 episode、同一时刻的 B/P/T sidecar | 只用来计算监督损失和验收，绝不能拼进模型输入 |
+| “这里是不是新一局” | history mask、episode reset、agent/padding mask | 可以看到，用来防止把上一局记忆带进下一局 |
+
+episode 开头不足 16 步时，只能用合同中提前冻结的 padding 规则补齐，并明确提供 mask；不能为了凑满历史去读未来。切换 episode 时必须清空上一局记忆。机器人槽位交换后，相关标签、mask 和动作目标也必须一起交换。
+
+第一版每条样本自己携带完整的 16 步窗口，B0-H 不需要在两个随机训练批次（batch）之间保存隐藏状态。接口同时保留“同一 episode 的短序列”和 reset 标记，供 B-core 以后按时间更新 B；但第 2 步不建设跨训练批次、跨 episode 的复杂长期记忆。
+
+### 5.3 B0-H 到底在对照什么
+
+B0-H 不是旧 W10 的复制品，也不是一个故意做弱的陪跑模型。它要回答的是：
+
+> **如果模型拥有与 B-core 完全相同的 16 步历史、动作 backbone 和 direct residual（也就是在基础动作上再加一条可学习的修正支路），但不给它自动团队信念和训练教师信号，它能做到多好？**
+
+第 1 步里 `HC-hidden-only + direct` 比 `ARB_hat + direct` 更强，因此这个对照不能省略。B0-H 至少保留下面两种读法：
+
+1. **history-only：**只增加统一的 16 步历史，用来判断“多看历史”本身带来多少收益；这条先跑探索漏斗（Discovery/Validation5）诊断，不默认重复完整正式判卷；
+2. **hidden-residual：**在相同历史上增加与社会路线等容量的 direct residual，但这条修正支路只读取动作主干已经算出的普通内部特征（hidden），团队信念输入恒为零，也不使用训练教师或 B/P/T 目标。这是正式 B0-H，也是后续 B-core 必须认真比较的强基线。
+
+如果 B-core 的张量形状必须预留社会信息位置（slots），B0-H 可以放全零占位符，但这些占位符不能随样本变化，也不能携带时间、阶段或标签信息。B0-H、B-core、BP、BT、BPT 都从同一个冻结 base 独立初始化，不能从彼此 checkpoint 续训。
+
+这里再加一条硬规则：**正式 B0-H 的效果只由闭环 rollout 成功率评判，不由未来 16 步动作的 MSE/NRMSE 评判。** 16 步误差可以帮助发现 loss 爆炸、动作尺度错误或模型完全没学会，但即使它很好看，也不能代替机器人真正执行整局任务；反过来，只要训练稳定，不能因为 16 步误差略差就提前淘汰一个闭环可能更好的 B0-H。
+
+### 5.4 这一步明确不做什么
+
+- 不重新采集 episode，不修改原 HDF5，不重新划分 train/validation/test；
+- 不重新标注 ARB，也不因为 time-only 很强就人工改标签；
+- 不人为删除正常存在的任务阶段和时间相关性，只禁止显式 frame index、未来信息和 simulator truth 泄漏；
+- 不在这里做 M4 partner-change、M5 失败归因或完整 ARB 机制消融；
+- 不引入跨 episode 长记忆、生成式 world model 或其他与统一样本无关的新结构；
+- 不看完训练结果后再改变历史长度、padding、样本抽法或 B0-H 定义。
+
+如果 F0/F1 发现的是索引错位、未来泄漏、episode 串线或 mask 错误，就修 loader；不能没有新证据便把问题归咎于原始轨迹或人工标注。
+
+### 5.5 按什么顺序执行，什么叫完成
+
+1. **先冻结合同。** 写清样本字段、哪些字段只作审计、16 步 padding、episode reset、sidecar 对齐、训练恢复后“下一批从哪里继续”的 sample cursor、seed、参数和训练预算。
+2. **做 F0 人工可读检查。** 六个任务分别查看 episode 开头、中间、结尾的样本，确认历史没有越界、动作目标属于同一 ego、标签只出现在 target 中。
+3. **做 F1 小训练和恢复检查。** 跑 4 个 update，验证同一个 cursor 能重现同一批样本，暂停恢复后不换数据，episode 切换不串记忆，机器人换位后所有对应字段一起换位。
+4. **训练正式 B0-H。** `history-only` 先跑探索漏斗，用来解释历史收益；`hidden-residual` 走完整正式漏斗，作为主要强基线。两者都要每 5,000 updates 保存未见 episode 学习曲线，其中正式 `hidden-residual` 按第 6.0 节冻结 `U_B0H`，`history-only` 曲线只作解释；B-core 的代码和小规模冒烟检查（smoke test）可以同时进行，但在 B0-H 合格且训练充分性明确前，不签发 B-core 的信号或正式晋级结论。
+
+数据单元通过的标准不是“loss 看起来不错”，而是同一个样本身份始终对应同一段合法历史、同一个动作目标和同一份监督标签，并且没有未来泄漏、episode 串线或不可恢复的 sample cursor。
+
+B0-H 的正式判分来自闭环 Validation20：六个任务各运行 20 局，共 120 局。最低动作资格保持不变：总成功 `>=80/120`；Lift/Long/Photo/Shoe 合计 `>=72/80` 且每项 `>=16/20`；Camera `>=6/20`；Camera+Food `>=8/40`。达到 `>=88/120` 才能声称在原始成功数上达到 W10。未来 16 步 MSE/NRMSE 无论多好，都不能让一个未达到这些闭环门槛的 B0-H 通过。
+
+如果数据单元检查通过但 B0-H 不合格，优先检查 history encoder、动作 backbone 和训练 recipe，不自动返工标签。如果 B0-H 合格，第 2 步完成，B-core 才有一个可信的闭环比较对象。
+
+## 6. 第 3 步：B-core——从原始轨迹自动形成团队信念
+
+第 3 步不再把一组人工 ARB 字段直接放大成正式模型，也不一次性完成所有训练与归因。它把同一个 B-core 研究问题按证据强度拆成四段：
 
 ```text
-样本身份：task + episode + ego arm + 当前时刻 t
-模型输入：t-15 到 t 的合法 global/local RGB、own qpos、own action history、task text
-动作目标：ego 从 t 开始的 100 步 commanded action
-训练标签：同一 episode/t 对应的 B、P、T sidecar；只作 target，不作输入
+3-N1：原始轨迹中是否存在无需人工标签、又对动作有用的团队新信号？
+  ↓ 积极信号
+3-N2：完整的预测式团队信念架构能否把新信号转化为动作和闭环趋势？
+  ↓ 积极信号
+3-N3：趋势究竟来自新信号、整体结构，还是普通容量与时间捷径？
+  ↓ 归因方向成立
+3-N4：冻结唯一 recipe，从共同 base 正式训练并以闭环结果验收
 ```
 
-同一条 episode 中的连续样本必须能按时间顺序组成训练组，才能正确更新和重置 B。随机抽到另一个 episode 时，上一条 episode 的 memory 必须清空。agent slot permutation、padding mask、历史缺帧和 episode 边界都要在 F0/F1 中测试。
+前三段是初期研究探索，核心是尽快判断方向是否值得继续，不为尚无测量依据的问题编造精确百分比。每段都必须提前写清比较对象、希望看到的方向和什么结果会否定当前解释；但只有 3-N4 和后续正式候选使用第 12 节的闭环硬门槛。
 
-### 5.2 B0-H 是什么
+### 6.0 N1～N3 先过“训练充分性”门禁
 
-B0-H 是公平基础模型，不是旧 W10 的逐字复制。它与社会模型读取完全相同的 task text 和 16 步历史，但不预测 B/P/T，也没有 `C_t→action` 的真实社会信息。
+“探索实验”只表示不重复完整的 Validation20/Confirmation50，不表示模型只训练几步。积极信号、弱信号和无信号都必须在训练充分以后判断；训练仍在明显改善时只能写 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`，不能据此淘汰路线。
 
-为了排除“多了历史或参数所以变强”，B0-H 必须有两种控制：
+当前 720 条训练轨迹共有约 22.7 万个时刻；每个时刻按两个 ego 机器人展开后约为 45.5 万条样本。六任务平衡采样器每次更新固定给每个任务 8 条样本，最长的 Long Pipeline Delivery 约有 19.5 万条 ego-time 样本，因此 `5,000` updates 只相当于该任务约 `0.2` 个暴露周期，不能承担 N1～N3 的信号裁决。训练充分性统一按下面的合同执行：
 
-- 与社会路线相同的 history encoder；
-- 与社会路线等参数的 constant 或 input-independent noise slots，但这些 slots 不携带社会标签。
+1. **最低数据暴露。** N1 的表示模型和动作探针必须分别训练至少 `25,000` updates；N2 完整 B-core 与 N3 的每个训练比较组不得早于 `max(25,000, U_B0H)` 做信号裁决。`U_B0H` 是第 2 步正式 `hidden-residual` B0-H 在未见 episode 上首次满足下述平台条件的 update，由其学习曲线事先给出，不能看 N2/N3 结果后修改；若它到 `120,000` updates 仍未形成平台，N2/N3 不得作信号裁决，先把第 2 步记为训练充分性未解决。
+2. **固定频率看曲线。** 每 `5,000` updates 在同一组未见 episode 上记录训练/验证动作损失、各未来锚点损失、教师对齐、表示坍缩、gate 使用和任务级结果；不能只保存最后一个总 loss。
+3. **平台条件。** 过了最低数据暴露和 warmup 以后，预注册主要验证分数的平滑值在连续三个评测点、也就是至少 `15,000` updates 内相对改善均不足 `1%`，并且该平台经过一次预注册的学习率下降后仍未被突破，同时没有某个关键任务或关键辅助目标仍持续明显改善，才算基本训练到位。这里的 `1%` 只用于判断曲线是否还在动，不是模型效果的通过数字。
+4. **统一训练上限。** N1～N3 单次训练的上限统一冻结为 `120,000` updates。若到上限曲线仍明显改善，结论是训练预算不足，不能写 `NO_SIGNAL`；后续是否增加预算必须另立路线修订，不能只给落后组临时加步数。
+5. **过拟合也算可诊断结果。** 若最低暴露后训练损失继续下降、未见 episode 连续三个评测点恶化，则按预注册规则选择恶化前 checkpoint，并写明 `SATURATED_BY_OVERFIT`；这表示模型已经充分拟合但不能泛化，不属于“训练步数不够”。
+6. **先过门禁，再做闭环。** N2/N3 的 Validation5 只能在训练充分 checkpoint 上执行。任何 F1、5,000-step smoke test 或尚未到平台的中间 checkpoint 只检查实现和趋势，不能签发 `POSITIVE_SIGNAL`、`WEAK_SIGNAL` 或 `NO_SIGNAL`。
 
-B0-H、B-core、BP、BT、BPT 使用完全相同的 `TeamTemporalSample`、seed、sample cursor 和 action target。所有路线从同一冻结 base 随机初始化。
+每个 seed 都必须独立通过训练充分性门禁，不能用一个已收敛 seed 带着两个仍在学习的 seed 投票。N1 的表示模型与动作探针分别判断平台，不能用表示损失收敛代替探针收敛。N3 则同时报告两种比较：一是每组各自训练充分后的结果，防止复杂模型因学得慢而吃亏；二是在相同 update 的 matched-compute 截面，防止把更多训练写成结构收益。两种比较方向冲突时，归因结论必须是 `INCONCLUSIVE_ATTRIBUTION`。
 
-B0-H 最低资格保持不变：总成功 `>=80/120`；Lift/Long/Photo/Shoe 合计 `>=72/80` 且每项 `>=16/20`；Camera `>=6/20`；Camera+Food `>=8/40`。达到 `>=88/120` 才能声称在原始成功数上达到 W10。
+### 6.1 3-N1：无人工标签的原始数据团队表示
 
-## 6. 第 3 步：B-core——先学会保存“现场状态”
+3-N1 只回答一个问题：
 
-B-core 只增加 belief 和 `B→C→action` 路径，不启用 P、T。它已获得路线级设计资格；完成第 2 步、冻结模块合同并确认 B0-H 合格后，才启动正式训练。
+> **不用人工 ARB sidecar，只用轨迹天然记录的多视角、时序和机器人状态，能否提取出超出普通 history hidden、并对下一段动作有用的团队信号？**
 
-正式 B-core 不再放大旧 192 维 B，而是继承通过 Measurement 的 `B^AR` schema、action-facing queries、zero-init residual、可靠度回退和全部负对照。`M3-R4` 中没有通过的字段、融合器或记忆机制不得在这里复活。
+运行侧输入只包含部署合法信息：当前与过去 16 步 global/local RGB、ego qpos、已经执行过的 ego action 和合法 task text。训练侧可以自动使用：
 
-**研究锚点：**B 的“历史检索→门控更新→episode reset”参考 [MemoryVLA](https://arxiv.org/abs/2508.19236)；memory representation 与集成消融参考 [RoboMME](https://arxiv.org/abs/2603.04639)；agent 对称性和少量 hub token 参考 [Gamma-World](https://arxiv.org/abs/2605.28816)。这些结果分别来自单机器人 VLA benchmark 或生成式 world model，不能替本项目证明多机器人 B-core 有效。
+- 同步多视角之间的一致性；
+- 当前队友 qpos 和可由相邻帧计算的状态变化；
+- `t+4/8/16/32` 四个时间锚点的冻结 DINO 特征；
+- 队友短期动作或状态变化作为预测目标，但不能作为运行分支或训练教师分支的输入。
 
-每个控制步执行：
+这一小步只训练紧凑团队表示和轻量动作探针，不建设完整记忆系统，不接完整 ACT，不做闭环正式训练。这里的“轻量”指模型结构和验证范围较小，不表示少训练；表示模型和动作探针都必须分别通过第 6.0 节的最低暴露与平台条件。人工 ARB 只可作为事后 probe，检查潜在表示是否碰巧包含已知动作相关语义，不能进入主训练损失。
 
-1. entity/event queries 读取当前观察和最近 16 步历史，只更新已通过 R4 的 contact、custody、handoff、motion、blocking、visibility/staleness 与 reliability；
-2. 用 resettable gate 把新证据与上一时刻 `B^AR_{t-1}` 合并；episode 边界强制清空，过期关系显式衰减；
-3. teammate slots 共享权重并使用置换等变 agent encoding，禁止固定 ID 捷径；
-4. 8 个 coordination queries 只读取 `B^AR_t`，同时保留 R4 已验证的 4 个 action-facing query 职责；扩成 8 个必须在正式合同中作为一次冻结选择，不得中途搜索；
-5. CoordinationAdapter 用 zero-init residual 接入 action queries；低可靠度时回退本候选自己的基础动作主路。强制 gate-off 时结构上退化为与 B0-H 相同的无社会信息路径，但正式 B-core 仍按第 13 节从共同 base 独立初始化，不能加载独立 B0-H checkpoint 充当外部 fallback。
+3-N1 的积极信号标准是方向性的：
 
-B-core 不预测 remaining goals 和 progress。这样 BP 后续增加的收益才不会被 B 提前吃掉。
+- 在未见 episode 上，真实原始目标应比持久值、全零或打乱目标更可预测；
+- 使用该表示的动作探针相对同容量 hidden-only 探针出现跨 seed、跨任务较一致的改善方向，而不是只靠单个任务或单个最好 seed；
+- 同任务阶段打乱、time-only 或 row-shuffle 不能完整复现收益；
+- 表示不能坍缩成常数，也不能只编码 episode 身份、帧号或任务阶段。
 
-B-core 必须额外通过：
+本阶段不要求某个提前臆造的最小提升百分比。若表示只能预测原始目标却不能改善动作探针，结论应写成“可建模但尚无动作价值”，不得带入 3-N2。若真实目标与打乱目标无稳定差别，停止当前目标设计；只有出现明确实现错误时才修复重跑，不能看到结果后不断增加新目标直到变正。
 
-- episode 切换时 memory 被完全清空，同一 episode 连续执行时已经发生的交接不会在短暂遮挡后立刻丢失；
-- 一致交换 teammate slots 后，B、C 和动作影响按同样方式交换；
-- 遮住队友或关键物体后 uncertainty 上升；
-- 加入无关历史或上一 episode 状态时，正式结果不能随干扰量持续恶化；若会恶化，必须先加入检索/过期淘汰并重新走切边实验；
-- 切断 `B→C` 或打乱 B 后，动作和风险行为按预注册方向退化；
-- oracle B 只报告上限，不成为正式模型输入或 fallback。
+### 6.2 3-N2：对称预测式团队信念模型
 
-如果 B 标签准确，但切断 `B→C` 后动作不变，或 B-core 只在 reset-off/stale 条件下“变好”，B-core 失败。
+3-N1 出现动作相关信号后，3-N2 才建设完整 B-core。它不是手工状态机，而是一个面向部分可观测多机器人协作的潜在状态模型：
+
+```text
+                              仅训练时存在
+          同步多视角 + 当前队友状态 + 未来四锚点图像
+                              │
+                              ▼
+                       训练教师分支
+                              │  潜在状态对齐
+                              ▼
+合法当前/过去观测 ──→ 运行分支 ──→ 团队信念 B_t=(μ_t,σ_t)
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+              当前团队状态       关键事件记忆
+                                 由预测意外程度选择
+                    └─────────┬─────────┘
+                              ▼
+                 可靠度控制的 zero-init residual
+                              ▼
+                  基础动作 + 团队信念动作修正
+```
+
+**未来窗口固定为 `1.6` 秒，不是笼统的“短期”。** 原始 720 条轨迹是 `20 Hz`。只看 `0.8` 秒，很多样本仍处在同一小段运动里，容易只学到“下一帧会延续现在”；只看 `3.2` 秒，又会跨过多个接触或分工分支，而且在 Lift Barrier 和 Camera Alignment 中只有约四成时刻还存在合法远端帧。对 720 条轨迹的只读时间尺度审计还显示，六个任务的双机器人关节变化从 `0.8` 秒到 `1.6` 秒都继续明显增大，Long Pipeline Delivery 的中位变化尤其从近乎静止进入可辨运动。因此把 `t+32=1.6` 秒设为最远“后果锚点”，同时保留 `t+4/8/16` 三个较容易学习的近端锚点；这比连续预测 32 张图像更省算力，也避免模型只会短期外推或被单个远未来压垮。
+
+3-N2 的配置和 receipt 必须原样记录下面的合同，不能在看过 Validation5 后改成另一个窗口：
+
+```text
+future_observation_offsets_steps   = [4, 8, 16, 32]
+future_observation_offsets_seconds = [0.2, 0.4, 0.8, 1.6]
+source_frequency_hz                = 20
+maximum_future_seconds             = 1.6
+tail_policy                        = mask_missing_anchor
+teacher_target_space               = frozen_DINO_latent
+```
+
+架构固定为以下六个组成部分：
+
+1. **多视角证据压缩。** 继续使用冻结 DINOv3 patch 特征，用少量可学习 query 把每个时刻的高分辨率视觉证据压成可做时序建模的 token；不训练像素级视频生成器。
+2. **智能体中心表示。** 显式保留 ego/teammate 锚点，但使用共享参数和相对角色编码，不绑定左臂、右臂或固定机器人 ID；其余为自由交互 token，不逐维绑定人工物体/关系标签。
+3. **因果团队状态更新。** 一个 block-causal temporal Transformer 只允许过去影响现在，用上一时刻 B、当前证据和已执行动作更新 `B_t`；episode reset 时全部清空。
+4. **分布式 belief。** 每个团队 token 同时输出中心 `μ_t` 与不确定性 `σ_t`。遮挡、证据冲突或预测失败时不确定性应上升，动作旁路据此减弱。
+5. **预测式关键事件记忆。** 模型先预测下一时刻潜在特征；真正观测到下一时刻后，用预测误差判断刚才是否发生值得保存的事件。只在当前 episode 内保留少量高价值事件，禁止跨 episode 污染。
+6. **直接动作旁路。** B 直接通过 zero-init residual 修正 ACT，不再先压成另一组 C token。C 留到 P、B、T 同时存在的完整模型阶段。
+
+训练目标由动作损失、运行/教师潜在状态对齐、未来潜在特征预测、队友状态变化预测、机器人交换一致性和防坍缩正则组成。四个未来锚点在各自归一化后等权汇总，并分别报告结果，不能用近端锚点的好成绩掩盖 `1.6` 秒后果锚点完全没学会。教师分支只提供训练信号，部署时完全删除。B 不预测 remaining goals、task progress 或显式 teammate future modes，避免提前吞掉 P、T 的研究空间。
+
+模型宽度继续与现有动作主干对齐为 `d_model=384`。团队 token 数、关键事件容量和 temporal block 数在 3-N1 后根据表示饱和、显存和延迟一次冻结；文档不把未经测量的某个 token 数写成真理，也不允许在 3-N2 看到 Validation 结果后继续搜索。
+
+3-N2 只验证完整架构是否出现值得继续的积极效果，不承担机制归因；但积极效果只能从第 6.0 节定义的训练充分 checkpoint 上判断。验收关注：
+
+- 训练稳定、运行分支确实学到非坍缩的团队状态，教师分支删除后仍可独立推理；
+- `0.2/0.4/0.8/1.6` 秒四个锚点分别判卷；最远 `1.6` 秒锚点相对持久值和打乱目标也应出现可重复的积极方向，否则只能说明模型学会局部运动延续，不能声称学到了动作后果；
+- 相对正式 B0-H，动作诊断和 Validation5 的总体方向更好，多个 seed/任务不出现由单个异常点支配的假象；
+- 至少一个预注册合作现象出现改善方向，例如更少重复劳动、争抢、阻挡或不必要等待，同时不能明显破坏强任务；
+- 遮挡或多视角冲突时不确定性方向合理；强制 gate-off 时严格回到本候选的无 B 动作路径；
+- 计算量、显存和延迟没有出现使后续正式训练明显不可行的问题。
+
+这里仍不规定“必须提升 X%”。如果只改善离线动作误差而闭环完全无响应，只能记录为弱信号，不应直接进入正式训练；如果 Validation5 总体方向为负或强任务明显受损，则停止当前架构，先分析失败而不是直接加大模型。
+
+### 6.3 3-N3：整体结构与新信号的机制归因
+
+3-N3 不再发明新模型，只使用 3-N2 冻结的训练 recipe 做一个最小四组比较：
+
+| 方案 | 3-N1 新团队信号 | B-core 时序/不确定性/事件结构 | 回答的问题 |
+|---|---:|---:|---|
+| B0-H | 无 | 无 | 相同历史和通用 residual 本身能做到什么 |
+| 只有新信号 | 有 | 无 | 新信号直接接动作是否已经足够 |
+| 只有结构 | 无 | 有 | 额外时序结构或参数本身能解释多少收益 |
+| 完整 B-core | 有 | 有 | 新信号与整体结构结合后是否最好 |
+
+“只有新信号”把 3-N1 表示直接送入同容量 residual，不使用团队状态更新、分布式不确定性和关键事件记忆。“只有结构”保留同样规模的 B-core 骨架，但移除运行/教师对齐及原始团队目标，只读取普通 history hidden。四组使用相同数据、seed、sample cursor 和总参数控制；每组都先训练到自身平台，再补充相同 update 的 matched-compute 截面，不能拿一个已收敛模型去比较另一个仍在快速学习的模型。
+
+在四组比较之外，只保留少量直接切边：关闭 `B→action`、同阶段打乱 B、关闭运行/教师对齐、关闭事件写入，以及一致交换机器人。它们回答模型是否真的读取新信号、是否使用时序结构、是否依赖固定身份捷径。
+
+3-N3 的积极归因标准同样以方向为主：
+
+- 完整 B-core 相对 B0-H 继续保持 3-N2 的积极趋势；
+- 完整 B-core 应优于“只有结构”，否则收益仍可由容量解释；
+- 完整 B-core 应优于“只有新信号”，否则复杂 B-core 没有必要，应退化成更简单的新信号 residual；
+- 切断 B 或在同阶段打乱 B 后，动作/合作收益按预期减弱，而不是基本不变；
+- 机器人一致换位后，belief 和动作影响也对应换位。
+
+探索样本较小时，不以一次置信区间是否刚好跨零作为唯一裁决；更重要的是四组排序、多个 seed/任务的方向和干预结果是否形成同一解释。若“只有新信号≈完整 B-core”，保留新信号结论并简化结构；若“只有结构≈完整 B-core”，不得声称 team belief 有效；若完整模型没有稳定优于 B0-H，第三步停止且没有正式 B-core 候选。
+
+### 6.4 3-N4：冻结方案并正式验收
+
+只有 3-N3 支持一个可解释的唯一方案后，才进入 3-N4。3-N4 不再改 token 数、记忆形式、融合器、loss 组合或训练数据，只负责：
+
+1. 把 N1 的原始信号学习、N2 的完整架构和 N3 选定的简化/保留项冻结成一份不可变 recipe；
+2. 从与 B0-H 相同的共同 base 重新执行完整 recipe，不加载 N1～N3 的诊断 checkpoint；
+3. 对 B0-H 和必要 capacity control 匹配正式数据、sample cursor、训练更新数和总计算预算；
+4. 走 Formal、Validation20、Selection 和 Confirmation50；
+5. 按第 12 节以闭环成功率、合作指标、安全退化、因果切边和最终配对结果签发正式结论。
+
+因此，N1～N3 的“通过”只表示值得继续研究，不能写成 B-core 已正式有效；只有 N4 达到闭环门槛，才能把 B-core 作为后续 BP、BT 的合格基础。
+
+### 6.5 第 3 步始终不做什么
+
+- 不新增人工 ARB 标注，不把人工 sidecar 作为运行分支输入或主训练依赖；
+- 不生成未来像素视频，不从 720 条轨迹从头训练大型生成式 world model；
+- 不把未来 ego action、未来 peer action、最终成功、remaining goals 或 simulator truth 送进运行分支；
+- 不在 N1～N3 为追求正结果反复搜索 token 数、历史长度、未来窗口、目标集合、memory 类型和 seed；
+- 不跨 episode 保存团队记忆；
+- 不在 B-core 阶段引入 P、T 或重复的 C bottleneck；
+- 不用外部论文数字、人工 ARB probe 准确率或未来 16 步 NRMSE 代替最终闭环验收。
 
 ## 7. 第 4 步：BP——让进度读取 belief
 
-BP 从共同 base 随机初始化，同时训练 B 和 P；它不从 B-core checkpoint 续训。
+BP 只有在 3-N4 正式验收 B-core 后才启动。它从共同 base 按冻结的 B-core recipe 重新训练 B 和 P，不从 3-N4 checkpoint 续训。
 
 **研究锚点：**PALM 支撑 action-progress 联合学习，ProcVLM 支撑按程序步骤和剩余动作定义进度，ProgVLA 支撑把长历史压成少量控制 token。三者都不直接证明本项目的 `B→P→C→action` 有效，因此 BP 仍要用 time-only、切断 `B→P` 和切断 `P→C` 三组对照验证。
 
@@ -534,7 +721,7 @@ BP 必须通过：
 
 ## 8. 第 5 步：BT——让队友未来读取 belief
 
-BT 也从共同 base 随机初始化。在这条受控路线中没有真实 P，T 只读取 B；这条路线用来回答：“知道当前团队状态以后，继续预测队友未来是否还有新增价值？”
+BT 也只有在 3-N4 正式验收 B-core 后才启动，并从共同 base 按冻结 recipe 重新训练。在这条受控路线中没有真实 P，T 只读取 B；这条路线用来回答：“知道当前团队状态以后，继续预测队友未来是否还有新增价值？”
 
 **研究锚点：**Sequential Asymmetric Imitation 主要支撑 delay、phase mismatch、yield 和 targeted intervention 这些合作数据；Gamma-World 只支撑 teammate slot 的共享参数和置换对称。当前没有一套近期开放代码能直接证明“视觉双机器人操作中的 T future-mode tokens”有效，这正是 BT 必须单独做、也允许被实验否决的研究空白。
 
@@ -593,6 +780,8 @@ L = L_action
   + λC × L_cross_module_consistency
 ```
 
+其中 `L_belief` 沿用 N2 冻结的自动学习配方，包括运行分支与训练教师分支的潜在状态对齐、未来潜在变化预测、不确定性和机器人换位一致性；它不要求人工 ARB 标签。
+
 这些 loss 的权重和是否逐步升高，必须在 Discovery 前冻结。可以在同一次训练中先让结构化 loss warm up，再逐渐增加 action loss，但不能保存一个模块 checkpoint 后把它当作下一路线的初始化。
 
 BPT 只有同时满足以下条件才有 winner 资格：
@@ -606,24 +795,29 @@ BPT 只有同时满足以下条件才有 winner 资格：
 
 如果 BP 或 BT 通过而完整 BPT 失败，保留相应部分模型的科学结论，但不能宣称 PBT 交融成功。模块越多不自动代表模型越好。
 
-## 11. 每条训练路线都走同一个漏斗
+## 11. 探索小步与正式候选使用不同强度的漏斗
+
+完整漏斗仍保留，但不再要求 3-N1～3-N3 各自重复 Validation20 和 Confirmation50。这里节省的是大规模闭环判卷和正式候选流程，不是把训练截断在尚未学会的位置：N1～N3 必须先通过第 6.0 节的训练充分性门禁，探索阶段才有资格发现和解释积极信号，正式阶段再给最终结论。
 
 ```text
 F0 静态检查
   ↓
 F1 真实数据集成检查
-  ↓
-Discovery 短预算筛选
-  ↓
-Validation5 小规模闭环
-  ↓
-Formal 120,000 updates
-  ↓
-Validation20 正式闭环
-  ↓
-Selection
-  ↓
-Confirmation50 与 W10 配对确认
+  ├─ N1～N3 探索分支
+  │    ↓
+  │  最低数据暴露 → 训练到平台 → 方向/归因检查
+  │    ↓
+  │  N2/N3 必要时做 Validation5
+  │    ↓
+  │  只签发研究状态
+  │
+  └─ N4 和其他正式候选
+       ↓
+     Discovery 稳定性筛选 → Validation5
+       ↓
+     Formal 120,000 updates → Validation20
+       ↓
+     Selection → Confirmation50
 ```
 
 每一层做什么：
@@ -631,16 +825,28 @@ Confirmation50 与 W10 配对确认
 | 阶段 | 目的 | 失败后怎么办 |
 |---|---|---|
 | F0 | 检查 shape、mask、参数路径、输入白名单、无未来泄漏 | 修实现，不开始训练 |
-| F1 | 用真实 HDF5 跑 forward/backward/optimizer/save/resume | 修集成，不进入 Discovery |
-| Discovery | 用冻结短预算检查 loss、因果干预和机制是否被使用 | 该路线停止，不降低门槛 |
-| Validation5 | 用 5 个固定 seed 快速检查闭环是否值得正式训练 | 失败则不进入 Formal |
+| F1 | 用真实 HDF5 跑 forward/backward/optimizer/save/resume；它只证明代码能跑 | 修集成，不进入 Discovery；不得从 F1 判断模型效果 |
+| Discovery | N1～N3 负责最低暴露、训练平台、方向和反证；正式路线只作进入 Formal 前的稳定性筛选 | N1～N3 未到平台只能记训练未收敛；正式路线异常则不进入 Formal |
+| Validation5 | 用固定小规模闭环检查积极信号是否能触及真实动作和合作行为 | 总体方向为负或强任务明显受损时不进入 Formal |
 | Formal | 完成 120k updates，保存完整 receipt | 训练异常则按同一 manifest 恢复 |
 | Validation20 | 计算正式六任务成绩和 cooperation 指标 | 不合格就没有 winner 资格 |
 | Confirmation50 | 临时 winner 与 W10 在每任务 50 个新 seed 上配对比较 | 非劣下界不通过则无最终 winner |
 
-Discovery 的具体 update 数、loss 门槛和 Validation5 晋级规则必须在 execution prompt 中预注册；本文不在没有测量依据时编造这些数字。
+各阶段实际走到哪里：
+
+| 阶段 | 使用的漏斗 | 能签发什么结论 |
+|---|---|---|
+| 3-N1 | F0/F1 + 表示模型与动作探针分别训练到平台 | 原始数据中是否存在动作相关团队新信号 |
+| 3-N2 | F0/F1 + 完整 B-core 训练到平台 + Validation5 | 完整 B-core 是否出现值得继续的动作/闭环趋势 |
+| 3-N3 | 四组分别训练到平台 + matched-compute 截面 + 必要的 Validation5 | 新信号、整体结构和容量解释的相对方向 |
+| 3-N4 | 完整正式漏斗 | B-core 是否正式合格 |
+| B0-H、BP、BT、BPT 正式候选 | 完整正式漏斗 | 对应模块是否具备正式候选资格 |
+
+N1～N3 的 execution prompt 必须预注册比较对象、预期方向、禁止项、训练充分性和停止条件，但不要求在没有先验测量依据时编造“必须提升 X%”一类效果数字。探索验收先看曲线是否已经训练充分，再看方向是否跨 seed/任务较一致、是否胜过关键对照、干预后是否按解释退化、是否存在明显安全或强任务副作用。只有 N4 和后续正式候选按第 12 节的闭环数字签发最终结论。
 
 ## 12. 最终怎么判断模型合不合格
+
+本节只适用于 3-N4 以及 B0-H、BP、BT、BPT 等正式候选，不反向要求 3-N1～3-N3 用小样本提前达到这些数字。
 
 ### 12.1 基础闭环门槛
 
@@ -680,6 +886,7 @@ Discovery 的具体 update 数、loss 门槛和 Validation5 晋级规则必须�
 
 B0-H、B-core、BP、BT、BPT 必须共享：
 
+- 同一版 `TeamTemporalSample` 字段、16 步 padding、history mask 和 episode reset；
 - 数据 receipt；
 - sample cursor；
 - 随机种子；
@@ -690,6 +897,10 @@ B0-H、B-core、BP、BT、BPT 必须共享：
 - evaluator、max steps 和成功条件。
 
 新增模块带来的参数必须通过缩小 common width 抵消，或者增加同参数但不含真实社会信息的 capacity control。不能把“参数更多”写成“社会状态更有效”。
+
+其中主要基础比较是 B0-H `hidden-residual`：它拥有相同历史和同容量 direct residual，但不使用团队信念、训练教师或原始团队辅助目标。它的效果以及正式 B-core 相对它的效果都以相同配对 seed 的闭环成功率为主，16 步 MSE/NRMSE 只作训练诊断。B-core 如果只胜过旧 W10、却没有在闭环中胜过这个强基线，只能说明新训练栈整体更强，不能说明自动团队信念提供了额外收益。
+
+3-N1～3-N3 属于同一 B-core 路线内部的研究递进，可以为了节约探索时间继承上一小步的表示权重和代码产物，但必须在 receipt 中明确记录来源，且这些 checkpoint 不得参加正式排名。3-N4 必须从共同 base 重新执行包含 N1 预训练在内的完整冻结 recipe；四组正式/机制对照还要匹配原始数据使用量、总更新数和主要参数容量，避免把额外预训练算成“belief 结构收益”。
 
 所有正式路线从同一个 base commit 建兄弟分支。执行顺序是预算顺序，不是 checkpoint 继承顺序：
 
@@ -709,9 +920,13 @@ B0-H、B-core、BP、BT、BPT 必须共享：
 5. F0/F1、launcher、monitor、graceful stop、resume 和 acceptance 脚本；
 6. 每个阶段的结构化 JSON、日志、checkpoint hash 和最终结论。
 
-monitor 至少要显示：当前路线、branch/commit、GPU、PID、stage、update、loss、ETA、checkpoint、Validation、因果 gate、显存、温度、OOM/NaN/stale 和 acceptance 状态。
+B-core 至少使用 `B3-N1-RAW-SIGNAL`、`B3-N2-ARCHITECTURE`、`B3-N3-ATTRIBUTION`、`B3-N4-FORMAL` 四个互不覆盖的 stage ID。N1～N3 只有通过训练充分性门禁后才能写 `POSITIVE_SIGNAL`、`WEAK_SIGNAL` 或 `NO_SIGNAL`；未收敛必须写 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`，归因冲突写 `INCONCLUSIVE_ATTRIBUTION`，不能复用 `PASSED_FORMAL`。只有 N4 可以签发正式通过/失败。
 
-R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1 步详细状态见独立结果文档；当前活动入口是为 `TeamTemporalSample`、B0-H 和后续 ARB-B-core 冻结新的模块合同。M4/M5 与 residual 隔离保留为稳定候选后的机制审计。
+N1～N3 每个 seed 和比较组还必须生成独立的 `training_sufficiency.json`，至少记录最低暴露是否满足、全部 5,000-update 评测点、平滑方法、最近三个相对改善量、学习率下降前后曲线、平台 checkpoint、训练上限、`U_B0H` 和最终训练充分性状态。acceptance 脚本缺少这份 receipt 时必须拒绝签发任何信号结论。
+
+monitor 至少要显示：当前路线、branch/commit、GPU、PID、stage、update、最低暴露进度、各验证曲线斜率、平台计数、loss、ETA、checkpoint、Validation、因果 gate、显存、温度、OOM/NaN/stale 和 acceptance 状态。
+
+R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1 步详细状态见独立结果文档；当前活动入口是把已经验收的数据整理成统一 `TeamTemporalSample`，训练 history-only 与 hidden-residual 两种 B0-H，再按 N1～N4 建立自动团队信念 B-core。M4/M5 保留为正式稳定候选后的补充因果审计。
 
 ## 15. 研究依据、反证和开源采用边界
 
@@ -723,24 +938,28 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1 
 2. **机制锚点**：论文有实验，但仓库不完整、license 不清楚或模型规模差异过大；只允许独立实现思想；
 3. **反证/边界证据**：结果提醒我们某机制并不普遍有效，必须把失败模式写成对照，不能只摘正面数字。
 
-### 15.2 为什么把路线修成 ARB
+### 15.2 为什么把路线修成自动团队信念
 
 | 外部原始证据 | 论文/仓库实际说明了什么 | 对本项目的可证伪推断 | 因而写入的路线决定 |
 |---|---|---|---|
-| [GuidedVLA，RSS 2026](https://arxiv.org/abs/2605.12369) 与[官方仓库](https://github.com/GuidedVLA/GuidedVLA) | 用专门 attention heads 学 object/geometry/skill，并通过 zero-init control branch 加到主路 | 旧 B 负收益可能部分来自“整份状态直接污染动作”，小残差更容易测清增量 | R4 冻结 HC，只训练 action-facing ARB residual；`g_B=0` 必须精确回退 HC |
-| [Action QFormer，2026](https://arxiv.org/abs/2607.14635) | instruction-conditioned action queries 把继承的多模态信息重组为 action-facing representation，并减少上游被动作监督大范围改写 | 动作自己提问可能优于把 192 维 B 原样拼接 | 该推断已在 successor 2×2 中实测；本项目小探针上 query 输给 direct `14.14%`，因此不进入 R4-B 默认方案 |
-| [Event-VLA，2026](https://arxiv.org/abs/2606.29384) | action queries 经 gated cross-attention 选择性融合 event tokens | 新模态/新状态不必直接混入主干，门控选择值得小规模验证 | selective fusion 作为反方消融保留；当前负结果优先于外部论文，R4-B 采用 direct residual |
-| [LangForce，ICML 2026](https://arxiv.org/abs/2601.15197) | 同时建模无语言 prior 与有语言 posterior，以条件 PMI 抑制视觉捷径 | 与其期待网络“自己使用 B”，不如显式比较无 B 主路和有 B 增量 | 使用共享 HC prior + ARB residual 双分支；R4 第一版不用复杂 PMI loss，先用 matched/shuffle/stale 对照验证增量 |
-| [RoboMME，ICML 2026](https://arxiv.org/abs/2603.04639)、[policy learning](https://github.com/RoboMME/robomme_policy_learning) 与 [benchmark](https://github.com/RoboMME/robomme_benchmark) | 16 个 temporal/spatial/object/procedural memory 任务、14 种 π0.5 memory variants；表示效果高度依赖任务 | “加 memory 就会好”不成立 | R4 不先上 recurrent memory；先比较无记忆、frame selection、stale/reset 控制 |
+| [Being-H0.7，2026](https://arxiv.org/abs/2605.00078) | 用可部署 prior 与训练期 future-informed posterior 对齐潜在推理状态，推理时删除 posterior 且不生成未来视频 | 未来原始观测可以只在训练期塑造动作相关 latent，而不成为部署输入 | 3-N1/N2 使用运行/教师双分支；未来只进教师，B 主路不依赖人工 ARB |
+| [AHEAD，2026](https://arxiv.org/abs/2606.02486)、[ω-0，2026](https://arxiv.org/abs/2608.06375) | 都把未来预测放在紧凑视觉特征而非完整像素空间 | 720 条轨迹更适合训练轻量潜在预测，不适合从头训练大型视频生成器 | B-core 预测未来 DINO latent 和队友状态变化，不生成未来像素 |
+| [DLPWM，2025](https://arxiv.org/abs/2511.06136) | 无监督对象中心表示虽能做好重建和预测，但多物体交互中的 latent drift 会让下游策略弱于普通 world model | “看起来可解释的对象槽”不自动等于更好的控制状态 | B-core 只固定智能体锚点，其余使用自由交互 token；不强迫每个 token 对应人工物体类别，N3 检查表示漂移和动作使用 |
+| [RoboMemArena/PrediMem，2026](https://arxiv.org/abs/2605.10921) | 用 recent/keyframe memory 与训练期 predictive coding 提高对关键状态转移的敏感性 | 无人工事件标签时，预测误差可作为“值得记住”的候选信号 | 3-N2 用下一时刻 latent 预测误差驱动 episode 内关键事件写入，3-N3 单独关闭验证 |
+| [GuidedVLA，RSS 2026](https://arxiv.org/abs/2605.12369) 与[官方仓库](https://github.com/GuidedVLA/GuidedVLA) | 用专门 attention heads 学 object/geometry/skill，并通过 zero-init control branch 加到主路 | 旧 B 负收益可能部分来自“整份状态直接污染动作”，小残差更容易测清增量 | N2 冻结基础动作主干，通过 zero-init direct belief residual 注入 B；`g_B=0` 必须精确回退 B0-H |
+| [Action QFormer，2026](https://arxiv.org/abs/2607.14635) | instruction-conditioned action queries 把继承的多模态信息重组为 action-facing representation，并减少上游被动作监督大范围改写 | 动作自己提问可能优于把 192 维 B 原样拼接 | 该推断已在 successor 2×2 中实测；本项目小探针上 query 输给 direct `14.14%`，所以 N2 默认采用 direct belief residual |
+| [Event-VLA，2026](https://arxiv.org/abs/2606.29384) | action queries 经 gated cross-attention 选择性融合 event tokens | 新模态/新状态不必直接混入主干，门控选择值得小规模验证 | selective fusion 只作反方消融保留；当前本项目负结果优先于外部论文，N2 默认采用 direct belief residual |
+| [LangForce，ICML 2026](https://arxiv.org/abs/2601.15197) | 同时建模无语言 prior 与有语言 posterior，以条件 PMI 抑制视觉捷径 | 与其期待网络“自己使用 B”，不如显式比较无 B 主路和有 B 增量 | N2 保留无 B 主路与 B 增量的双分支接口；N3 用 matched/shuffle/stale 和 no-B 对照验证增量，不先引入复杂 PMI loss |
+| [RoboMME，ICML 2026](https://arxiv.org/abs/2603.04639)、[policy learning](https://github.com/RoboMME/robomme_policy_learning) 与 [benchmark](https://github.com/RoboMME/robomme_benchmark) | 16 个 temporal/spatial/object/procedural memory 任务、14 种 π0.5 memory variants；表示效果高度依赖任务 | “加 memory 就会好”不成立，结构必须服从具体遮挡和时序问题 | N2 只冻结一种短期因果状态+关键事件结构；N3 用 structure-only、关闭 event write 和 stale/reset 控制判断它是否必要 |
 | [RoboMME-Interference，2026](https://arxiv.org/abs/2606.22338) | perceptual memory 在无干扰时受益，但随无关 session 增加而持续衰减；检索相关演示可恢复 | 长记忆会污染，不只是遗忘 | episode 强制 reset，增加 previous-episode、stale 和无关历史干扰测试；需要时先检索再写入 |
-| [MemoryVLA，ICLR 2026](https://arxiv.org/abs/2508.19236) 与[官方仓库](https://github.com/shihao1895/MemoryVLA) | perceptual/cognitive memory 用于长时依赖 | 遮挡和交接可能需要可更新的短时状态，但不能从单机器人结果外推多机器人收益 | 只有无记忆 ARB 已通过且遮挡保留率不足，才允许 R4-D resettable memory；license 未明前不复制源码 |
-| [Gamma-World，2026](https://arxiv.org/abs/2605.28816) 与[官方仓库](https://github.com/nv-tlabs/Gamma-World) | Simplex Rotary Agent Encoding 支持 permutation-symmetric agent conditioning；Sparse Hub Attention 用少量 hub 交换多主体信息 | teammate slot 不应绑定固定编号，大量两两 attention 也不是第一选择 | B-core 使用共享 slot、置换测试和少量 coordination queries；不迁移视频生成主干 |
-| [CHORUS，2026](https://arxiv.org/abs/2606.12352) | 单个共享 VLA 可只凭各机器人本地观察和 robot-identifying prompt 做去中心化协作，无需推理时通信 | 显式 B 不是协作唯一道路，强直接策略是必要反方 | 保留不依赖 B 的 reactive/shared-policy 基线路线；若 ARB 失败，不把“无 B”误判成“无法协作” |
+| [MemoryVLA，ICLR 2026](https://arxiv.org/abs/2508.19236) 与[官方仓库](https://github.com/shihao1895/MemoryVLA) | perceptual/cognitive memory 用于长时依赖，相关性检索、门控融合和记忆合并优于朴素堆叠 | 遮挡和交接需要可更新状态，但不能从单机器人结果外推多机器人收益 | B-core 使用 episode 内短期状态、检索和 reset；不复制外部源码，不跨 episode 保存 |
+| [Gamma-World，2026](https://arxiv.org/abs/2605.28816) 与[官方仓库](https://github.com/nv-tlabs/Gamma-World) | Simplex Rotary Agent Encoding 支持 permutation-symmetric agent conditioning；Sparse Hub Attention 用少量 hub 交换多主体信息 | teammate slot 不应绑定固定编号，共享团队状态应避免固定 roster 捷径 | B-core 使用共享智能体锚点和置换测试，B token 自身作为共享状态；C 只在完整 PBT 中启用，不迁移视频生成主干 |
+| [CHORUS，2026](https://arxiv.org/abs/2606.12352) | 单个共享 VLA 可只凭各机器人本地观察和 robot-identifying prompt 做去中心化协作，无需推理时通信 | 显式 B 不是协作唯一道路，强直接策略是必要反方 | 保留不依赖 B 的 reactive/shared-policy 基线路线；若 B-core 失败，不把“无 B”误判成“无法协作” |
 | [Sequential Asymmetric Imitation，2026](https://arxiv.org/abs/2606.16490) | staged curriculum 暴露 delay、phase mismatch、insufficient yielding 和 conflict | 仅正常专家轨迹可能缺少让 B 改变动作的关键分歧样本 | 后置 M4/M5 与后续数据修订必须覆盖 delay/yield/wrong-role；不能靠结构弥补完全缺失的数据 |
-| [Embodied Interpretability，ICML 2026](https://arxiv.org/abs/2605.00321) 与[作者代码](https://github.com/robot-future/vla-explain) | ISS 用干预式 masking 估计视觉区域对动作的因果影响，NMR 衡量 nuisance 依赖 | 只看 attention 或标签准确率不能证明动作在用正确原因 | R4 把 ARB-off/shuffle/stale 作为主 gate；ISS/NMR 只作诊断，不替代 paired action/闭环指标 |
-| [VLA-ATTC，2026](https://arxiv.org/abs/2605.01194) 与 [VLAConf，2026](https://arxiv.org/abs/2605.29605) | 前者用不确定性 clutch 切换额外推理，后者以轻量 head 做单次前向 confidence | 不确定性有用的前提是被校准，并且有明确的 fallback 行为 | R4 先用可靠度衰减 ARB residual；主动观察/候选动作 critic 属于以后独立路线，不能用来救 oracle 负收益 |
+| [Embodied Interpretability，ICML 2026](https://arxiv.org/abs/2605.00321) 与[作者代码](https://github.com/robot-future/vla-explain) | ISS 用干预式 masking 估计视觉区域对动作的因果影响，NMR 衡量 nuisance 依赖 | 只看 attention 或标签准确率不能证明动作在用正确原因 | N3 把 B-off/shuffle/stale 作为主归因；ISS/NMR 只作诊断，不替代 paired action/闭环指标 |
+| [VLA-ATTC，2026](https://arxiv.org/abs/2605.01194) 与 [VLAConf，2026](https://arxiv.org/abs/2605.29605) | 前者用不确定性 clutch 切换额外推理，后者以轻量 head 做单次前向 confidence | 不确定性有用的前提是被校准，并且有明确的 fallback 行为 | N2 用 B 的不确定性衰减 direct belief residual；主动观察/候选动作 critic 属于以后独立路线，不能用来挽救 B-core 负结果 |
 
-上表故意同时保留支持和反对证据。最强的反对意见有三个：RoboMME 说明 memory design 是 task-dependent；其官方 policy 仓库直接披露 recurrent variants 仍 underperforming；CHORUS 说明无需显式 B 也可能合作。因此 V7.3 的判断不是“ARB 一定成功”，而是“当前纸面信号足以支持先完成模块工程，再用后置消融判断机制”。
+上表故意同时保留支持和反对证据。最强的反对意见有三个：RoboMME 说明 memory design 是 task-dependent；无监督对象中心状态可能发生 latent drift；CHORUS 说明无需显式 B 也可能合作。因此 V7.3 的判断不是“自动 team belief 一定成功”，而是“原始数据潜在预测、智能体对称和短期记忆的组合值得按 N1～N3 逐级寻找信号，再由 N4 闭环裁决”。
 
 ### 15.3 2026-08-13 官方仓库只读核查
 
@@ -753,35 +972,38 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1 
 | [MemoryVLA](https://github.com/shihao1895/MemoryVLA) | `d732ea9072bc063399ccc817aed74ab172eb50be` | 有代码、权重和数据入口；当前 HEAD 未发现顶层 LICENSE | 只读分析 retrieval/gate/reset；license 澄清前不复制任何源码 |
 | [LangForce](https://github.com/ZGC-EmbodyAI/LangForce) | `ff35aab1c9c6a02b4daf73c71248350f30d22048` | 有训练说明和权重；当前 HEAD 未发现顶层 LICENSE | 只借 dual-branch/conditional-information 思想，独立实现 |
 | [vla-explain](https://github.com/robot-future/vla-explain) | `202d2a9a00fb4b99083559525d54d8f2a7eb4d3f` | 已发布 ISS/NMR toolkit；当前 HEAD 未发现顶层 LICENSE | 只作只读诊断参考；license 澄清前不复制工具代码 |
-| [AffordanceVLA](https://github.com/Skywalker-yqz/AffordanceVLA) | `7689e423fc264a16ce9a662dd10e4b0470066f98` | MIT；含 model/training/attention mask | 通过 ARB 后才可参考后续 B→P→T block-causal mask |
-| [ProcVLM](https://github.com/RUCKBReasoning/ProcVLM) | `377523a31f05bab9c0db5ac8b9edfa7b7f03968a` | 当前 HEAD 未发现顶层 LICENSE | 仅供以后 P 标签/进度审计，不进入 R4 |
+| [AffordanceVLA](https://github.com/Skywalker-yqz/AffordanceVLA) | `7689e423fc264a16ce9a662dd10e4b0470066f98` | MIT；含 model/training/attention mask | 3-N4 正式验收 B-core 后才可参考后续 B→P→T block-causal mask |
+| [ProcVLM](https://github.com/RUCKBReasoning/ProcVLM) | `377523a31f05bab9c0db5ac8b9edfa7b7f03968a` | 当前 HEAD 未发现顶层 LICENSE | 仅供以后 P 标签/进度审计，不进入 B-core N1～N3 |
 
 这张表仍不是源码迁移 receipt。真正复制任何符号前，必须再冻结 commit、逐文件 hash、LICENSE/NOTICE/SPDX、依赖/权重/数据条款和“外部符号→本项目符号”映射。论文声称“will release code”不等于本轮已核验到可迁移代码；[Action QFormer](https://arxiv.org/abs/2607.14635)、[Event-VLA](https://arxiv.org/abs/2606.29384)、[CHORUS](https://arxiv.org/abs/2606.12352) 和 [VLA-ATTC](https://arxiv.org/abs/2605.01194) 本轮均按机制锚点处理。
 
-### 15.4 不进入 R4 第一版的东西
+### 15.4 不进入 B-core N1～N3 的东西
 
-- 不引入 RMT、TTT、跨 episode 长记忆或生成式 world model；先证明短窗口 ARB 有动作价值；
-- 不引入 P、T、progress critic、teammate future 或多轮 PBT 互读；它们会让 oracle B 失败原因重新混在一起；
-- 不换 π0/π0.5/OpenVLA，不迁移外部 checkpoint；R4 仍用本项目小探针回答局部因果问题；
-- 不以 attention map、B 分类准确率、论文 SOTA 数字或单个好 seed 代替未来 16 步动作门槛；
-- 不删除 direct/reactive baseline。若 ARB 失败，应允许另立 shared-policy、数据课程或纯动作架构路线，而不是无限加深 B。
+- 不引入跨 episode 长记忆、像素级生成式 world model 或测试时未来视频 rollout；先证明轻量潜在团队状态有动作价值；
+- 不引入 P、T、progress critic、显式 teammate future modes 或多轮 PBT 互读；它们会让 B-core 的新信号与结构来源重新混在一起；
+- 不换 π0/π0.5/OpenVLA，不迁移外部大模型 checkpoint；仍用冻结 DINOv3 和现有 ACT 回答本项目问题；
+- 不强迫自由交互 token 对齐人工对象类别，也不把 ARB probe 准确率、attention map、论文 SOTA 或单个好 seed 当作积极信号；
+- 不在 N1～N3 编造没有测量依据的固定提升百分比，也不把方向性通过写成正式闭环成功；
+- 不删除 B0-H/direct/reactive baseline。若 B-core 失败，应保留“原始信号可用但结构无效”或“无需显式 B 也可合作”的结论，而不是无限加深 B。
 
 [PALM](https://openaccess.thecvf.com/content/CVPR2026/html/Liu_PALM_Progress-Aware_Policy_Learning_via_Affordance_Reasoning_for_Long-Horizon_Robotic_CVPR_2026_paper.html)、[ProcVLM](https://procvlm.github.io/)、[ProgVLA](https://arxiv.org/abs/2605.28231) 继续作为以后 P 的近期锚点；[AffordanceVLA](https://arxiv.org/abs/2606.06155) 继续支撑单向 `B→P→T→C→Action` mask。SARM、MARIE、GPL、LIAM、ROMA、MAMBA 等较早工作只保留为历史来源，不能承担 V7.3 的通过证明。
 
 ## 16. 现在按什么顺序做
 
-一句话：**第 1 步已经按 signal-first 路线决策完成；现在先把数据单元、公平基础模型和 ARB-B-core 做成稳定候选，再逐级训练 BP/BT/BPT，最后集中完成 M4/M5 与 residual 机制消融。**
+一句话：**第 1 步已经按 signal-first 路线决策完成；现在先完成统一 16 步样本和强 B0-H，再按 N1 新信号、N2 完整架构、N3 机制归因、N4 正式闭环的顺序，用原始轨迹建立不依赖新增人工标签的 B-core。**
 
 ### 16.1 最小可行执行清单
 
 1. **归档第 1 步（已完成）。** 原始严格状态和后续 signal-first 状态全部保留；详细数字只在独立结果文档维护，主路线不再重复展开。
-2. **冻结 V7.3 模块合同。** 固定 base commit、TeamTemporalSample schema、数据 receipt、seed、sample cursor、参数预算、训练预算、停止规则、Validation/Confirmation 和兄弟分支。
-3. **实现 TeamTemporalSample 并完成 F0/F1。** 正确组织同一 episode、同一时刻、同一 ego 的 16 步合法历史、动作目标和只作监督的 sidecar；episode 切换必须 reset。
-4. **训练公平 B0-H。** 与社会路线使用相同历史、参数预算和动作目标，先确认基础动作能力达到第 5.2 节门槛。
-5. **设计并训练 ARB-B-core。** 只启用 B→C→action，继承 ARB schema、direct residual、zero-init、可靠度回退、置换和 stale/reset 约束；不复活完整旧 B 或 query 默认融合。
-6. **逐级执行 BP、BT、BPT。** 每条路线从共同 base 独立训练，先过前一模块的漏斗再开下一模块，禁止 checkpoint 串行继承。
-7. **完成闭环 Selection 与 Confirmation。** 纸面 NRMSE 只作早期筛选；最终候选必须用闭环成功率、合作指标和 W10 配对确认。
-8. **对稳定候选执行后置机制审计。** M4 做 partner-change，M5 做失败根因，嵌套 residual 对照隔离 ARB 相对 hidden-only 的净增量。
+2. **冻结 V7.3 模块合同。** 固定 base commit、统一样本里什么能给运行分支看、什么只能给训练教师或判卷，以及 16 步 padding、episode reset、数据 receipt、seed、sample cursor、参数预算、训练预算、停止规则、Validation/Confirmation 和兄弟分支。
+3. **实现 TeamTemporalSample 并完成 F0/F1。** 正确组织同一 episode、同一时刻、同一 ego 的 16 步合法历史、100 步动作目标、训练教师所需原始字段和只作审计的 sidecar；检查 episode 开头/中间/结尾、暂停恢复、机器人换位和 episode 切换，确保未来材料不会进入运行分支。
+4. **训练两种公平 B0-H。** history-only 先跑探索漏斗，说明历史本身的价值；hidden-residual 在相同历史上使用同容量 direct residual、但团队信念恒为零且不使用训练教师，并走完整正式漏斗，作为主要强基线。两者都记录训练平台并冻结 `U_B0H`；正式资格按第 5.5 节的闭环 Validation20 判断，16 步 MSE/NRMSE 只作训练诊断，不能代替成功率。
+5. **执行 3-N1 原始数据新信号。** 只训练团队表示和动作探针；真实目标、打乱目标、hidden-only 与 time/phase 对照形成一致积极方向后才进入 N2。
+6. **执行 3-N2 完整 B-core。** 冻结运行/教师双分支、智能体对称、因果团队状态、分布式不确定性、关键事件记忆和 direct belief residual；先达到最低数据暴露并训练到平台，再用 Validation5 寻找动作和闭环积极信号。
+7. **执行 3-N3 机制归因。** 比较 B0-H、只有新信号、只有结构、完整 B-core，并做最少必要切边；确认收益不能由普通容量或时间捷径解释。
+8. **执行 3-N4 正式验收。** 冻结唯一 recipe，从共同 base 完整重训，走 Formal、Validation20 和 Confirmation50；只有这里使用第 12 节闭环硬门槛签发 B-core 结论。
+9. **逐级执行 BP、BT、BPT。** 每条路线从共同 base 独立训练，先过前一模块的正式漏斗再开下一模块，禁止正式 checkpoint 串行继承。
+10. **对稳定候选执行补充因果审计。** M4 做 partner-change，M5 做失败根因；N3 已完成 B-core 主机制归因，M4/M5 进一步限定合作因果 claim。
 
 ### 16.2 当前仍然禁止什么
 
@@ -789,9 +1011,13 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1 
 - 不能继续旧 192 维 B/B_hat 路线，也不能用 R2 的历史正数覆盖 R3；
 - 不能把 `26.05%` 写成 ARB 语义收益、闭环成功率或因果合作提升；
 - 不能把 hidden-only、time-only、row-shuffle 和同阶段 shuffle 的反证从报告中删除；
-- 不能在正式训练途中搜索 token 数、memory 类型、fusion、loss、历史长度、label schema 或挑最好 seed；
+- 不能把第 2 步扩大成没有新证据支持的重新采集、数据清洗或重新标注工程；
+- 不能把 episode ID、frame index、未来动作、未来标签或 simulator truth 混进统一样本的运行分支；`t+4/8/16/32` 的未来图像锚点只允许进入训练教师并在部署时删除；
+- 不能用未来 16 步 MSE/NRMSE 给 B0-H 签发通过结论，也不能用它代替闭环成功率比较 B0-H 与 B-core；
+- 不能在 N1～N3 看到结果后反复搜索 token 数、memory 类型、fusion、目标集合、历史长度或最好 seed；N4 及后续正式训练更不得修改冻结 recipe；
 - 不能让 B0-H、B-core、BP、BT、BPT 从彼此 checkpoint 续训后再冒充公平兄弟比较；
 - 不能用外部论文收益替代本项目闭环结果，也不能在 license 未明确时复制外部源码；
-- M4/M5 虽然后置，但完成前不能提出严格 ARB 独立机制或 partner-change 因果 claim。
+- 不能把 N1～N3 的 `POSITIVE_SIGNAL` 写成正式 B-core 通过；
+- M4/M5 虽然后置，但完成前不能提出严格 partner-change 或合作根因因果 claim。
 
 当前路线级状态是 `COMPLETED_STEP1_SIGNAL_FIRST_MODULE_AUTHORIZED`。原始实验账本仍同时保留 `FAILED_STRICT_M3_R4_B_OBSERVABILITY_GATE` 与 `PASSED_M3_R4_C_SIGNAL_FIRST_SEALED_TEST`：前者限制归因，后者支持继续工程化。二者不冲突，也不再阻断第 2 步。
