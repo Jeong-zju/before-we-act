@@ -138,10 +138,10 @@ def main() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if EFFECTIVE_BATCH % world_size:
         raise ValueError(f"world size must divide effective batch {EFFECTIVE_BATCH}")
-    if world_size > 1:
-        dist.init_process_group(backend="nccl")
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
+    if world_size > 1:
+        dist.init_process_group(backend="nccl", device_id=device)
     torch.set_num_threads(max(1, min(12, (os.cpu_count() or 12) // world_size)))
 
     contract_raw = args.contract.read_bytes()
