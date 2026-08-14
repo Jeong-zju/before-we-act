@@ -5,12 +5,24 @@ from types import ModuleType
 
 import pytest
 
-sys.modules.setdefault("h5py", ModuleType("h5py"))
-
-from scripts.before_we_act.audit_ssc_v7_m2 import (
-    causal_review_indices,
-    select_manual_events,
-)
+try:
+    import h5py as _h5py  # noqa: F401
+except ModuleNotFoundError:
+    # These unit tests exercise pure selection helpers and do not need HDF5.
+    # Keep the import shim local so it cannot contaminate later test modules.
+    sys.modules["h5py"] = ModuleType("h5py")
+    try:
+        from scripts.before_we_act.audit_ssc_v7_m2 import (
+            causal_review_indices,
+            select_manual_events,
+        )
+    finally:
+        sys.modules.pop("h5py", None)
+else:
+    from scripts.before_we_act.audit_ssc_v7_m2 import (
+        causal_review_indices,
+        select_manual_events,
+    )
 
 
 def test_causal_review_window_uses_only_past_and_current_frames() -> None:
