@@ -40,7 +40,7 @@ on_error() {
 trap on_error ERR
 trap 'write_status STOPPED interrupted "signal"; exit 130' INT TERM
 
-[[ -d "${ROOT}/.git" ]] || fail "repository is missing: ${ROOT}"
+[[ -e "${ROOT}/.git" ]] || fail "repository is missing: ${ROOT}"
 [[ -x "${PYTHON_BIN}" ]] || fail "Python is missing: ${PYTHON_BIN}"
 [[ -x "${TORCHRUN_BIN}" ]] || fail "torchrun is missing: ${TORCHRUN_BIN}"
 if [[ ! -f "${DINO_MODEL}/foundation_receipt.json" ]]; then
