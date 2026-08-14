@@ -2,7 +2,7 @@
 set -euo pipefail
 
 utils=/opt/supervisor-scripts/utils
-. "${utils}/logging.sh"
+. "${utils}/logging.sh" ""
 . "${utils}/environment.sh"
 
 export STEP2_REPO_ROOT="${STEP2_REPO_ROOT:-/workspace/fe-pc-wam-step2}"
