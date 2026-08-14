@@ -52,7 +52,7 @@ def make_episode(tmp_path: Path, task: str = "lift_barrier", length: int = 20):
         task=task,
         task_text={
             "lift_barrier": "Lift the barrier together",
-            "place_food": "Pick up the meat and place it into the pot",
+            "place_food": "Place the food together",
         }[task],
         arms=arms,
         length=length,

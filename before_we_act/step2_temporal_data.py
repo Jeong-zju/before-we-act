@@ -31,11 +31,11 @@ SIX_TASKS = (
 )
 TASK_TEXT = {
     "lift_barrier": "Lift the barrier together",
-    "camera_alignment": "Align and lift the camera and meat together",
-    "long_pipeline_delivery": "Deliver the shoe through the robot pipeline",
-    "take_photo": "Support the camera, lift the meat, and take a photo",
-    "pass_shoe": "Pass the shoe to the teammate and place it in the goal",
-    "place_food": "Pick up the meat and place it into the pot",
+    "camera_alignment": "Align the cameras together",
+    "long_pipeline_delivery": "Deliver the long pipeline together",
+    "take_photo": "Take a photo together",
+    "pass_shoe": "Pass the shoe between robots",
+    "place_food": "Place the food together",
 }
 HISTORY_STEPS = 16
 ACTION_HORIZON = 100
