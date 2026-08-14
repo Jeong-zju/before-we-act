@@ -319,7 +319,7 @@ def main() -> None:
             },
         )
     if world_size > 1:
-        dist.barrier()
+        dist.barrier(device_ids=[local_rank])
 
     started = time.time()
     last: dict[str, float] = saved.get("last_metrics", {}) if saved else {}
@@ -471,7 +471,7 @@ def main() -> None:
         )
         if should_save:
             if world_size > 1:
-                dist.barrier()
+                dist.barrier(device_ids=[local_rank])
             if rank == 0:
                 global_sampler = ExactSixTaskDistributedBatchSampler(
                     episodes,
@@ -498,7 +498,7 @@ def main() -> None:
                     )
                 print(json.dumps({"saved_update": update}), flush=True)
             if world_size > 1:
-                dist.barrier()
+                dist.barrier(device_ids=[local_rank])
 
     if rank == 0:
         complete = {
@@ -515,7 +515,7 @@ def main() -> None:
         atomic_json(args.output / "status.json", complete)
         print(json.dumps(complete, sort_keys=True), flush=True)
     if world_size > 1:
-        dist.barrier()
+        dist.barrier(device_ids=[local_rank])
         dist.destroy_process_group()
 
 

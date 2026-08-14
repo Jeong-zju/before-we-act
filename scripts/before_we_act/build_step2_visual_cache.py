@@ -195,7 +195,7 @@ def main() -> None:
         },
     )
     if world_size > 1:
-        torch.distributed.barrier()
+        torch.distributed.barrier(device_ids=[local_rank])
     if rank == 0:
         rows = []
         per_task = {task: 0 for task in SIX_TASKS}
@@ -232,7 +232,7 @@ def main() -> None:
         )
         print("STEP2_VISUAL_CACHE_PASSED", flush=True)
     if world_size > 1:
-        torch.distributed.barrier()
+        torch.distributed.barrier(device_ids=[local_rank])
         torch.distributed.destroy_process_group()
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUN_ROOT="${STEP2_RUN_ROOT:-/workspace/bwa_runs/p1-step2-b0h-v4}"
+RUN_ROOT="${STEP2_RUN_ROOT:-/workspace/bwa_runs/p1-step2-b0h-v5}"
 printf 'time=%s\n' "$(date -u +%FT%TZ)"
 jq -c '{status,stage,detail,updated_at_epoch}' "${RUN_ROOT}/pipeline_status.json" 2>/dev/null || true
 for file in \
