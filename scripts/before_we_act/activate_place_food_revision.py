@@ -109,7 +109,8 @@ def main() -> None:
                 def visitor(name: str, value: object) -> None:
                     components = name.split("/")
                     visual = any(
-                        part == "images" or part.startswith("image_")
+                        part in {"images", "camera_calibration"}
+                        or part.startswith("image_")
                         for part in components
                     )
                     if isinstance(value, h5py.Dataset) and not visual:
