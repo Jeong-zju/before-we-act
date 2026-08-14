@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import nullcontext
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -26,7 +25,6 @@ from before_we_act.step2_temporal_data import (
     ExactSixTaskDistributedBatchSampler,
     SIX_TASKS,
     TeamTemporalDataset,
-    canonical_sha256,
     load_step2_episodes,
     sha256_file,
 )

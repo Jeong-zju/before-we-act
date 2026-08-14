@@ -101,6 +101,18 @@ def contract(args: argparse.Namespace) -> None:
         raise FileNotFoundError(args.measurement_label_receipt)
     if not args.dino_model.is_dir():
         raise FileNotFoundError(args.dino_model)
+    foundation_receipt_path = args.dino_model / "foundation_receipt.json"
+    if not foundation_receipt_path.is_file():
+        raise FileNotFoundError(foundation_receipt_path)
+    foundation_receipt = json.loads(
+        foundation_receipt_path.read_text(encoding="utf-8")
+    )
+    if (
+        foundation_receipt.get("status") != "PASSED"
+        or foundation_receipt.get("non_vision_policy_tensors_loaded") is not False
+        or foundation_receipt.get("candidate_initialization_from_w10_policy") is not False
+    ):
+        raise RuntimeError("DINO foundation-only recovery boundary failed")
     payload = {
         "format_version": "before-we-act.step2.contract/1",
         "status": "FROZEN_BEFORE_F0_F1",
@@ -156,6 +168,9 @@ def contract(args: argparse.Namespace) -> None:
             "representation": "mean of raw 30x40 patch tokens, float16, width 768",
             "current_frame_rule": "cache slot is replaced by the exact current forward feature",
             "dino_model": str(args.dino_model.resolve()),
+            "foundation_receipt": str(foundation_receipt_path.resolve()),
+            "foundation_receipt_sha256": sha256_file(foundation_receipt_path),
+            "non_vision_policy_tensors_loaded": False,
         },
         "models": {
             "history_only": {
