@@ -1,0 +1,56 @@
+{
+  "format_version": "ssc-v7.m2.manual_packet_repair_contract/2",
+  "stage_id": "SSC-V7-M2-R3-MANUAL-PACKET-R2",
+  "status": "FROZEN_BEFORE_HUMAN_REVIEW",
+  "reason": "The first corrected 120-packet render was past-causal, but its global lowest-20 selection covered only four of five Lift Barrier episodes. The M2 gate requires five episodes per task.",
+  "source_of_truth": "executed expert trajectories",
+  "source_artifacts": {
+    "gate_contract_sha256": "a0807ffee063bdfb82e82762562a4d70aa57bdf07017a5dbddfa33f9d2b1d41a",
+    "formal_manifest_sha256": "1838365f8e36d438bf4863a6ec6ce25fde18a80f06d22dad36f8bd29132113dc",
+    "formal_automatic_audit_sha256": "8d0a3a18c10b6d57228d7779f7684feb663bcea67216006cfa18a51afb15b24e",
+    "past_causal_r1_template_sha256": "1ed9b47bb1b5480515289f4fcb23338505656f2142e3a8e59a8d933177129c4b",
+    "past_causal_r1_artifact_manifest_sha256": "ce61eccb14f9564878383e480f1f764c474b6b784cbad25b070f01d2595f563b"
+  },
+  "implementation": {
+    "branch": "feat/ssc-v7-m2-oracle-sidecar",
+    "commit": "40be1883754683b7c29f7f73cc95d236f8527cb6",
+    "script": "scripts/before_we_act/audit_ssc_v7_m2.py",
+    "script_sha256": "048a95031fbbabb1e96af24180c96fc145aaa723001f62851317cf09b6daafc6",
+    "tests_passed": 30
+  },
+  "selection_repair": {
+    "primary_rule": "Keep the original hash-ranked lowest 20 event boundaries per task in their original order.",
+    "supplement_rule": "For every collected expert episode missing from those primary windows, append that episode's lowest-ranked event boundary by SHA256(task|episode_sha256|frame_index).",
+    "anti_cherry_pick": "The supplement is selected from metadata before rendering and without viewing its image or oracle correctness.",
+    "expected_primary_packets": 120,
+    "expected_supplement_packets": 1,
+    "expected_total_packets": 121,
+    "expected_task_counts": {
+      "lift_barrier": 21,
+      "camera_alignment": 20,
+      "long_pipeline_delivery": 20,
+      "take_photo": 20,
+      "pass_shoe": 20,
+      "place_food": 20
+    },
+    "expected_unique_episodes_per_task": 5
+  },
+  "render_rule": {
+    "window_width": 5,
+    "frame_order": "four past frames followed by the audited current frame",
+    "future_frames_allowed": false,
+    "early_event_padding": "repeat frame 0 on the left"
+  },
+  "review_gate": {
+    "all_packets_must_be_reviewed": true,
+    "predicate_agreement_min": 0.95,
+    "predicate_true_min_for_121_packets": 115,
+    "terminal_errors_max": 0,
+    "role_errors_max": 0,
+    "custody_errors_max": 0,
+    "reviewer_type": "human"
+  },
+  "human_review_completed": false,
+  "m3_authorized": false,
+  "training_authorized": false
+}

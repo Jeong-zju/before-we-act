@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "stage_id": "SSC-V7-M2-R3-MANUAL-PACKET-R1",
+  "stage_family": "SSC-V7",
+  "status": "FROZEN_PENDING_RENDER",
+  "scope": "Render corrected past/current-only manual review packets from the frozen R3 formal episodes; no recollection, relabeling, event reselection, probe, or policy training",
+  "reason": "The original R3 packet renderer used center-2..center+2 and therefore exposed two future frames despite the frozen review rule. Those packets are invalid for formal human review.",
+  "frozen_inputs": {
+    "r3_formal_manifest_sha256": "1838365f8e36d438bf4863a6ec6ce25fde18a80f06d22dad36f8bd29132113dc",
+    "r3_automatic_audit_sha256": "8d0a3a18c10b6d57228d7779f7684feb663bcea67216006cfa18a51afb15b24e",
+    "r3_original_manual_template_sha256": "075a98210f926662dd54b56d78c0137355faa99b372c19931b340e8de536fdf4",
+    "selected_event_count": 120,
+    "selected_events_sha256": "a6f7a1bfb3699721e8d5a1a324df62003fc9006d748b03d3b6d84a6dc1cd930a"
+  },
+  "renderer": {
+    "repository_branch": "feat/ssc-v7-m2-oracle-sidecar",
+    "commit": "e4bd9c221c0c8275a5510839911b8613e743599c",
+    "script": "scripts/before_we_act/audit_ssc_v7_m2.py",
+    "script_sha256": "6eef2109e4947eeec3613e61caa8d3a643ad77f50e4dc4d78b0733061b3b5f1e",
+    "tests": "29 passed"
+  },
+  "window_policy": {
+    "width": 5,
+    "indices": "center-4, center-3, center-2, center-1, center",
+    "future_frames_allowed": false,
+    "episode_start_padding": "repeat frame 0 on the left until five frames are present",
+    "target_frame": "the fifth/rightmost frame in every contact sheet and the final frame of every MP4"
+  },
+  "identity_lock": {
+    "task": "unchanged",
+    "episode_sha256": "unchanged",
+    "frame_index": "unchanged",
+    "packet_order": "unchanged",
+    "oracle_label": "unchanged"
+  },
+  "invalid_original_packets": "The original center-2..center+2 packet files and montages must not be used for formal human review.",
+  "output_root": "/workspace/bwa_runs/ssc-v7-social-state-cooperation-v2/measurement/m2_r3_manual_packets_past_causal_r1",
+  "training_authorized": false,
+  "m3_authorized": false
+}

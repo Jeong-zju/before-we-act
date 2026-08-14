@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "stage_id": "SSC-V7-M2-R1",
+  "stage_family": "SSC-V7",
+  "status": "FROZEN_PENDING_DRY_RUN",
+  "authorized_scope": "M2 oracle sidecar collection and label audit only; no probe or policy training",
+  "implementation": {
+    "branch": "feat/ssc-v7-m2-oracle-sidecar",
+    "commit": "6b0d99ddd95cbb7d277576bfe7580cfc1fffda9f",
+    "module": "before_we_act/ssc_v7_oracle_labels.py",
+    "module_sha256": "ab78d75a1880d5bb653a510e71a3087c89c3a7f2e5e51c0bcc518f0a6e04253c",
+    "script": "scripts/before_we_act/audit_ssc_v7_m2.py",
+    "script_sha256": "e8c71d5a4183398e9e465f491fe7cf51259f70d4d8765f72aa05255c9dbc35ad"
+  },
+  "collection": {
+    "dry-run": {
+      "seed_purpose": "pilot",
+      "successful_episodes_per_task": 1,
+      "candidate_prefix_max": 4,
+      "selection_rule": "first successful episode in the frozen four-seed pilot prefix"
+    },
+    "execute": {
+      "seed_purpose": "expert_candidate_pool",
+      "successful_episodes_per_task": 5,
+      "candidate_prefix_max": 120,
+      "selection_rule": "first five successful episodes in frozen candidate-pool order; outcomes cannot reorder seeds"
+    },
+    "observation_contract": {
+      "rgb": "lossless uint8 640x480 global and per-agent RGB; Place Food reuses the global HDF5 dataset through hard links",
+      "qpos": "all-agent qpos is audit-only; deployment later receives only the matching ego slot",
+      "action": "commanded joint action in fixed panda-0..N order",
+      "privileged_snapshot": "measurement-only JSONL sidecar; never a deployment input"
+    }
+  },
+  "thresholds": {
+    "required_field_presence_fraction": 1.0,
+    "finite_and_domain_valid_fraction": 1.0,
+    "terminal_progress_matches_environment_success": 1.0,
+    "same_sufficient_state_consistency_fraction": 1.0,
+    "agent_slot_equivariance_fraction": 1.0,
+    "legal_automaton_transition_fraction": 1.0,
+    "undeclared_recovery_or_stage_jump_count_max": 0,
+    "independent_episodes_per_category_min": 3,
+    "ambiguous_frame_fraction_max": 0.01
+  },
+  "manual_audit": {
+    "episodes_per_task": 5,
+    "transition_windows_per_task_min": 20,
+    "predicate_level_agreement_min": 0.95,
+    "terminal_role_custody_disagreements_max": 0,
+    "selection_rule": "rank every stage/predicate/role/custody event boundary by SHA256(task|episode_sha256|frame_index), then take the lowest 20 per task",
+    "review_rule": "judge only the five-frame current/past neighborhood in each packet; do not inspect later frames; mark predicate, terminal, role, and custody agreement separately",
+    "reviewer_disclosure": "record whether the reviewer is a human or an AI visual reviewer; do not call AI-only review human review"
+  },
+  "legal_transitions": {
+    "lift_barrier": {
+      "approach": ["single_support", "dual_support", "lifted"],
+      "single_support": ["approach", "dual_support", "lifted"],
+      "dual_support": ["approach", "single_support", "lifted"],
+      "lifted": ["dual_support", "single_support"]
+    },
+    "camera_alignment": {
+      "approach": ["partial_support_or_grasp", "camera_and_meat_controlled", "camera_and_meat_lifted"],
+      "partial_support_or_grasp": ["approach", "camera_and_meat_controlled", "camera_and_meat_lifted"],
+      "camera_and_meat_controlled": ["approach", "partial_support_or_grasp", "camera_and_meat_lifted"],
+      "camera_and_meat_lifted": ["camera_and_meat_controlled", "partial_support_or_grasp"]
+    },
+    "long_pipeline_delivery": {
+      "approach": ["custody_0"],
+      "custody_0": ["approach", "handoff_01", "custody_1"],
+      "handoff_01": ["custody_0", "custody_1"],
+      "custody_1": ["handoff_01", "handoff_12", "custody_2"],
+      "handoff_12": ["custody_1", "custody_2"],
+      "custody_2": ["handoff_12", "handoff_23", "custody_3"],
+      "handoff_23": ["custody_2", "custody_3"],
+      "custody_3": ["handoff_23", "goal"],
+      "goal": ["custody_3"]
+    },
+    "take_photo": {
+      "approach": ["partial_support_or_grasp", "camera_and_meat_controlled", "button_aligned", "photo_complete"],
+      "partial_support_or_grasp": ["approach", "camera_and_meat_controlled", "button_aligned", "photo_complete"],
+      "camera_and_meat_controlled": ["approach", "partial_support_or_grasp", "button_aligned", "photo_complete"],
+      "button_aligned": ["camera_and_meat_controlled", "partial_support_or_grasp", "photo_complete"],
+      "photo_complete": ["button_aligned", "camera_and_meat_controlled"]
+    },
+    "pass_shoe": {
+      "approach": ["agent0_custody"],
+      "agent0_custody": ["approach", "handoff", "agent1_custody"],
+      "handoff": ["agent0_custody", "agent1_custody"],
+      "agent1_custody": ["handoff", "goal"],
+      "goal": ["agent1_custody"]
+    },
+    "place_food": {
+      "approach": ["partial_grasp", "joint_control", "joint_lift", "aligned", "released"],
+      "partial_grasp": ["approach", "joint_control", "joint_lift", "aligned", "released"],
+      "joint_control": ["approach", "partial_grasp", "joint_lift", "aligned", "released"],
+      "joint_lift": ["partial_grasp", "joint_control", "aligned", "released"],
+      "aligned": ["partial_grasp", "joint_control", "joint_lift", "released"],
+      "released": ["aligned"]
+    }
+  },
+  "required_support_categories": {
+    "lift_barrier": [
+      {"category": "stage:single_support", "sources": ["P", "B"]},
+      {"category": "stage:dual_support", "sources": ["P", "B"]},
+      {"category": "stage:lifted", "sources": ["P"]},
+      {"category": "role:barrier:support", "sources": ["T", "B"]}
+    ],
+    "camera_alignment": [
+      {"category": "stage:partial_support_or_grasp", "sources": ["P"]},
+      {"category": "stage:camera_and_meat_controlled", "sources": ["P", "B"]},
+      {"category": "stage:camera_and_meat_lifted", "sources": ["P"]},
+      {"category": "role:camera:support", "sources": ["T", "B"]},
+      {"category": "role:meat:handler", "sources": ["T", "B"]}
+    ],
+    "long_pipeline_delivery": [
+      {"category": "stage:custody_0", "sources": ["P", "B"]},
+      {"category": "stage:handoff_01", "sources": ["P", "T", "B"]},
+      {"category": "stage:custody_1", "sources": ["P", "B"]},
+      {"category": "stage:handoff_12", "sources": ["P", "T", "B"]},
+      {"category": "stage:custody_2", "sources": ["P", "B"]},
+      {"category": "stage:handoff_23", "sources": ["P", "T", "B"]},
+      {"category": "stage:custody_3", "sources": ["P", "B"]},
+      {"category": "stage:goal", "sources": ["P"]},
+      {"category": "custody:shoe", "sources": ["T", "B"]},
+      {"category": "role:shoe:receiver", "sources": ["T", "B"]}
+    ],
+    "take_photo": [
+      {"category": "stage:partial_support_or_grasp", "sources": ["P"]},
+      {"category": "stage:camera_and_meat_controlled", "sources": ["P", "B"]},
+      {"category": "stage:button_aligned", "sources": ["P", "T"]},
+      {"category": "stage:photo_complete", "sources": ["P"]},
+      {"category": "role:camera:button_operator", "sources": ["T", "B"]},
+      {"category": "role:camera:support", "sources": ["T", "B"]},
+      {"category": "role:meat:handler", "sources": ["T", "B"]}
+    ],
+    "pass_shoe": [
+      {"category": "stage:agent0_custody", "sources": ["P", "B"]},
+      {"category": "stage:handoff", "sources": ["P", "T", "B"]},
+      {"category": "stage:agent1_custody", "sources": ["P", "B"]},
+      {"category": "stage:goal", "sources": ["P"]},
+      {"category": "custody:shoe", "sources": ["T", "B"]},
+      {"category": "role:shoe:receiver", "sources": ["T", "B"]}
+    ],
+    "place_food": [
+      {"category": "stage:partial_grasp", "sources": ["P"]},
+      {"category": "stage:joint_control", "sources": ["P", "B"]},
+      {"category": "stage:joint_lift", "sources": ["P", "B"]},
+      {"category": "stage:aligned", "sources": ["P"]},
+      {"category": "stage:released", "sources": ["P"]},
+      {"category": "role:meat:handler", "sources": ["T", "B"]},
+      {"category": "role:pot:handler", "sources": ["T", "B"]}
+    ]
+  },
+  "decision_codes": [
+    "SSC_V7_M2_DRY_RUN_PASSED",
+    "PENDING_M2_MANUAL_AUDIT",
+    "PASSED_M2_ORACLE_LABEL_GATE",
+    "FAILED_SCHEMA/ORACLE_LABEL_MISMATCH",
+    "FAILED_MEASUREMENT/LEAKAGE_OR_SHORTCUT",
+    "INCONCLUSIVE_MEASUREMENT/INSUFFICIENT_LABEL_SUPPORT"
+  ],
+  "stop_rule": "a global hard failure stops all Measurement; insufficient category support locks only its listed P/T/B sources; M2 never authorizes B0-H or social-policy training"
+}

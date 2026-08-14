@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "stage_id": "SSC-V7-M3-R1",
+  "completed_at_utc": "2026-08-12T11:46:19Z",
+  "decision_code": "FAILED_M3_PILOT/INSUFFICIENT_PILOT_CANDIDATES",
+  "plain_language_conclusion": "R1 的 Place Food pilot 只冻结了 4 个候选 seed，却要求收齐 4 条专家成功轨迹。实际第 3 个候选失败，因此固定池耗尽后只有 3 条成功轨迹，R1 按合同停止。这个结果说明 pilot 候选池设计得太紧，不是社会信息路线或模型效果失败；没有打开任何正式测试数据。",
+  "gate_contract": "docs/experiments/ssc_v7/m3_r1_gate_contract.json",
+  "gate_contract_sha256": "5ee16dceaafabcc53a2a00b05d02c4f81570a433a550f5e29d93eed39702a4b5",
+  "frozen_requirement": {
+    "required_successes_per_task": 4,
+    "available_pilot_candidates_per_task": 4,
+    "selection": "first successful episodes in frozen candidate order"
+  },
+  "place_food": {
+    "candidate_outcomes": [
+      {"candidate_index": 0, "seed": 655571418, "success": true},
+      {"candidate_index": 1, "seed": 1598545967, "success": true},
+      {"candidate_index": 2, "seed": 73269756, "success": false},
+      {"candidate_index": 3, "seed": 1224352155, "success": true}
+    ],
+    "successful_episodes": 3,
+    "required_successful_episodes": 4,
+    "terminal_error": "RuntimeError: place_food produced 3/4 successful episodes"
+  },
+  "other_task_status_at_stop": {
+    "lift_barrier": {"successful_episodes": 4, "complete": true},
+    "camera_alignment": {"successful_episodes": 4, "complete": true},
+    "long_pipeline_delivery": {"successful_episodes": 1, "complete": false, "stop_reason": "global R1 pilot could no longer pass after Place Food exhausted its pool"},
+    "take_photo": {"successful_episodes": 4, "complete": true},
+    "pass_shoe": {"successful_episodes": 4, "complete": true}
+  },
+  "test_paths_opened": 0,
+  "formal_collection_started": false,
+  "scientific_result": "NOT_ADJUDICATED",
+  "r2_revision_rule": "Keep four required pilot successes and all formal model/statistical gates unchanged. Use a new, disjoint twelve-candidate pilot purpose; do not reuse R1 pilot seeds. Freeze and hash the R2 implementation and seed contract before running any R2 pilot seed."
+}

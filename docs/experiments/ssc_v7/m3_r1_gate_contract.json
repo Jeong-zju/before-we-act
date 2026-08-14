@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "stage_id": "SSC-V7-M3-R1",
+  "status": "FROZEN_BEFORE_PILOT",
+  "authorized_scope": "M3 small-model measurement only; M4, M5, B0-H and all formal policy training remain unauthorized",
+  "prerequisites": {
+    "m2_decision_code": "PASSED_M2_ORACLE_LABEL_GATE",
+    "m2_owner_approval_receipt": "measurement/m2_r3_finalize_owner_approval_r2/oracle_label_audit.json",
+    "m2_owner_approval_sha256": "0a49fe4f674790c7b28eec1f62e32a6e36534d0bc4ba1fb42a94e6d97ca13341"
+  },
+  "collection": {
+    "tasks": [
+      "lift_barrier",
+      "camera_alignment",
+      "long_pipeline_delivery",
+      "take_photo",
+      "pass_shoe",
+      "place_food"
+    ],
+    "pilot_successes_per_task": 4,
+    "formal_successes_per_task": 60,
+    "formal_selection": "first 60 successful expert_candidate_pool episodes in frozen candidate order",
+    "formal_split_by_success_rank": {
+      "train": [0, 36],
+      "tune": [36, 48],
+      "read_only_test": [48, 60]
+    },
+    "test_visibility": "collection writes and hashes the sealed test files, but tuning and power-audit commands reject test paths; test can be read only after the final configuration/checkpoint manifest is hashed",
+    "compact_rgb": {
+      "source": "the exact current 480x640 uint8 fixed RGB observation rendered online by RoboFactory",
+      "transform": "non-overlapping 8x8 area mean followed by round-to-nearest uint8",
+      "stored_shape_hwc": [60, 80, 3],
+      "reason": "deterministic preprocessing of legal RGB keeps the 360-episode Measurement corpus auditable without storing another roughly 150 GiB of raw frames"
+    }
+  },
+  "sample_protocol": {
+    "statistical_unit": "episode",
+    "history_control_steps": 16,
+    "primary_future_action_steps": 16,
+    "diagnostic_future_action_steps": 100,
+    "windows_per_episode_max": 64,
+    "window_selection": "uniform integer quantiles over every valid target index; independent of labels and outcomes",
+    "agent_view": "one row per robot; shared weights predict that robot's own future action; no explicit agent-slot ID",
+    "ambiguity_rule": "drop a window when its current oracle label is invalid or ambiguous; never replace the episode",
+    "frame_level_independence_forbidden": true
+  },
+  "legal_feature_encoder": {
+    "task_text": "64-value deterministic UTF-8 byte sequence encoding of canonical task text; no task ID",
+    "current_rgb": "6x8 RGB area means from current compact global and matching-agent views",
+    "history_rgb": "3x4 RGB area means from each of the preceding 15 compact global and matching-agent views",
+    "qpos": "16-step own qpos history, padded only by the earliest legal observation",
+    "action_history": "16-step lag-one own commanded-action history with causal zero padding",
+    "e0_mask": "same fixed-width tensor and parameter count, but all pre-current RGB/qpos and action-history values are zero",
+    "place_food_local_fallback": "global compact RGB, matching the frozen input contract"
+  },
+  "social_feature_encoder": {
+    "slot_width_per_source": 64,
+    "total_social_width": 192,
+    "encoding": "signed SHA256 feature hashing of named, past-causal oracle leaves plus direct finite numeric values; fitted train-only mean/std normalization",
+    "P": [
+      "stage_id",
+      "within_stage_progress",
+      "remaining_goal_mask",
+      "factorized_predicates",
+      "causal_automaton_state.completed_goal_mask",
+      "causal_automaton_state.completed_handoff_mask",
+      "causal_automaton_state.custody_transfer_count",
+      "causal_automaton_state.previous_stage_id"
+    ],
+    "T": [
+      "peer entries of per_agent_contribution",
+      "peer entries of agent_object_role_slots",
+      "peer membership in current contact/grasp/controller lists"
+    ],
+    "B": [
+      "remaining_goal_mask",
+      "full grasp_contact_custody_state",
+      "collision_drop_contention_risk",
+      "causal_automaton_state.last_confirmed_custodian",
+      "causal_automaton_state.custody_transfer_count"
+    ],
+    "deployment_hat": "one shared legal-input social predictor is episode-cross-fitted in three folds on train; a final train-only predictor supplies tune and sealed-test P_hat/T_hat/B_hat",
+    "forbidden": [
+      "privileged_snapshot",
+      "peer qpos",
+      "future action",
+      "future success",
+      "episode final length",
+      "test-fit normalization"
+    ]
+  },
+  "conditions": [
+    "E0",
+    "HC",
+    "label_shuffled",
+    "time_phase_only",
+    "P",
+    "T",
+    "B",
+    "PT",
+    "PB",
+    "TB",
+    "PTB",
+    "P_hat",
+    "T_hat",
+    "B_hat",
+    "PTB_hat"
+  ],
+  "controls": {
+    "HC": "full legal history plus an input-independent deterministic noise social token",
+    "label_shuffled": "PTB oracle vectors permuted at episode level within task and split using the frozen dataset-sampler seed",
+    "time_phase_only": "elapsed control step divided by the public task time limit and four fixed elapsed bins; never divided by realized episode length",
+    "primary_baseline": "HC",
+    "negative_controls_are_not_primary_baselines": true
+  },
+  "public_time_scales_control_steps": {
+    "lift_barrier": 120,
+    "camera_alignment": 120,
+    "long_pipeline_delivery": 900,
+    "take_photo": 250,
+    "pass_shoe": 450,
+    "place_food": 320
+  },
+  "action_probe": {
+    "architecture": "LayerNorm(input) -> Linear(input,256) -> SiLU -> Linear(256,256) -> SiLU -> Linear(256,800)",
+    "output": "100 future 8D own-action steps; masked training loss; first 16 steps are primary",
+    "same_input_width_all_conditions": true,
+    "same_trainable_parameter_count_all_conditions": true,
+    "optimizer": "AdamW",
+    "weight_decay": 0.0001,
+    "batch_size": 512,
+    "max_epochs": 120,
+    "early_stopping_patience": 12,
+    "selection_metric": "HC tune macro episode NRMSE only",
+    "hyperparameter_grid": [
+      {"learning_rate": 0.001, "hidden_width": 256},
+      {"learning_rate": 0.0003, "hidden_width": 256}
+    ],
+    "randomness": "one frozen common initialization seed and one frozen dataset-sampler seed; deterministic CUDA algorithms where supported"
+  },
+  "social_predictor": {
+    "architecture": "LayerNorm(legal input) -> Linear(input,256) -> SiLU -> Linear(256,192)",
+    "optimizer": "AdamW",
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "batch_size": 512,
+    "max_epochs": 80,
+    "early_stopping_patience": 10,
+    "folds": 3
+  },
+  "metric": {
+    "normalization": "train-only per-task per-action-dimension mean/std; std floor 1e-3",
+    "primary": "episode NRMSE over all eligible robots, windows, first 16 future steps and 8 action dimensions",
+    "diagnostics": [
+      "100-step masked episode NRMSE",
+      "gripper-dimension RMSE",
+      "per-task results",
+      "hat social-vector MSE"
+    ],
+    "effect": "(HC episode NRMSE - condition episode NRMSE) / HC episode NRMSE; positive is better"
+  },
+  "power_audit": {
+    "timing": "after tuning and checkpoint hashing, before unsealing test",
+    "data": "pilot and tune only",
+    "target_power": 0.8,
+    "alpha": 0.05,
+    "registered_relative_effects": [0.03, 0.05],
+    "method": "normal approximation using task-stratified paired episode-effect variance with 12 future test episodes per task",
+    "underpowered_decision": "INCONCLUSIVE_MEASUREMENT/INSUFFICIENT_POWER"
+  },
+  "statistics": {
+    "bootstrap": "10000 task-stratified paired episode resamples, 95% percentile CI",
+    "source_test": "10000 paired episode sign-flip permutations on task-macro gain",
+    "source_family": ["P", "T", "B"],
+    "multiple_testing": "Holm-Bonferroni family-wise alpha 0.05",
+    "statistics_seed_purpose": "measurement_statistics"
+  },
+  "acceptance": {
+    "combined": {
+      "oracle_gain_min": 0.05,
+      "ci_lower_gt": 0.0,
+      "positive_tasks_min": 2,
+      "must_include_one_of": ["camera_alignment", "place_food"],
+      "stable_harm_threshold": -0.05,
+      "deployable_retention_min": 0.5,
+      "deployable_ci_lower_gt": 0.0
+    },
+    "per_source": {
+      "oracle_gain_min": 0.03,
+      "ci_lower_gt": 0.0,
+      "holm_adjusted_p_lte": 0.05,
+      "positive_tasks_min": 2,
+      "stable_harm_threshold": -0.03,
+      "deployable_retention_min": 0.5,
+      "deployable_ci_lower_gt": 0.0
+    },
+    "overlap_report": "for every pair among P/T/B, report both single-source gain and its conditional increment over the other source",
+    "negative_control_policy": "report label-shuffled and time/phase-only gains and CIs; they cannot replace HC or rescue a source",
+    "decision_scope": "M3 may pass or fail P, T and B independently; it never authorizes B0-H or formal model training"
+  },
+  "implementation": {
+    "repository": "/workspace/fe-pc-wam",
+    "script": "scripts/before_we_act/run_ssc_v7_m3.py",
+    "script_sha256": "000ca5cdffd2709f5c8a1b488ef727ee568b9f590f1c799aa7b3459480f58d3b",
+    "implementation_commit": "79e5e55c956550486a594e7dd6e58b6532007377"
+  }
+}

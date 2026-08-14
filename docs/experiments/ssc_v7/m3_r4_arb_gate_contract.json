@@ -1,0 +1,199 @@
+{
+  "schema_version": 3,
+  "stage_id": "SSC-V7-M3-R4",
+  "status": "FROZEN_BEFORE_R4_TUNE_ACCESS",
+  "supersedes_for_b_measurement_only": "SSC-V7-M3-R3",
+  "authorized_scope": "R4-0 train-only convergence pilot followed by the R4-A action-relevant oracle utility gate. R4-B, a new test, M4, M5, B-core and formal policy training remain unauthorized unless the preceding gate explicitly passes.",
+  "revision_reason": "R3 showed that a converged old B representation degraded the 16-step action metric. R4 changes both the information bottleneck and the fusion mechanism while preserving a hard HC fallback and matched capacity controls. The first train-only R4-0 pilot under gate SHA256 7a95bec8d1ed47c8210f408487c6ef1afb8b72e561e5ab0fce24c81bbcbad9c8 reached the 360-epoch cap before tune access. Its successor gate SHA256 3dbfeacc34389c547baa8693a8e36ae480aee36af52b1549997d33197f569445 completed the train-only pilot and froze 520 formal epochs, but the first oracle_arb and noise_residual formal seeds both reached that cap while still improving (best epochs 514 and 516); test_paths_opened=0. Per the preregistered CAP_REACHED rule, their R4-A results remain inconclusive and are preserved under the old run root. This budget-only revision keeps architecture, data, seeds, learning rates, metrics, controls and acceptance thresholds unchanged, reruns the train-only pilot, and increases only the formal post-pilot safety margin before any R4-A result from this revision exists.",
+  "prerequisites": {
+    "m2_decision": "PASSED_M2_ORACLE_LABEL_GATE",
+    "m3_r3_decision": "FAILED_MEASUREMENT/NO_SOCIAL_HEADROOM",
+    "m3_r3_hc_checkpoint": "/workspace/bwa_runs/ssc-v7-social-state-cooperation-v2/measurement/m3_r3_convergence/tuning/checkpoints/action_HC.pt",
+    "m3_r3_hc_checkpoint_sha256": "1c8a37be2cd031c8fb4b35ebf081c9d481248ab1cbdc5b2eae34066a999e20e0",
+    "note": "The R3 HC checkpoint is audit context only. It hit the 200-epoch cap before exhausting patience, so R4 trains and freezes a new converged HC before any oracle comparison."
+  },
+  "data": {
+    "manifest": "/workspace/bwa_runs/ssc-v7-social-state-cooperation-v2/measurement/m3_r2/formal_dataset/dataset_manifest.json",
+    "manifest_sha256": "6eceb47f6d651ecc66b5acf9747df2a4905d31d8b8605a74206bf57f1c9499b2",
+    "r4_0_allowed_split": [
+      "train"
+    ],
+    "r4_a_allowed_splits": [
+      "train",
+      "tune"
+    ],
+    "forbidden_split": "read_only_test",
+    "rule": "R4-A failure terminates R4 without generating, collecting, opening or reusing any test episode."
+  },
+  "arb_schema": {
+    "representation": "six typed relation/event tokens with eight binary fields each; no frame index, episode id, fixed robot id, stage/progress, remaining goals, teammate future action, P or T input",
+    "token_count": 6,
+    "token_width": 8,
+    "action_query_count": 4,
+    "token_names": [
+      "contact_grasp_custody",
+      "handoff_event",
+      "teammate_motion_state",
+      "blocking_collision",
+      "visibility_staleness",
+      "uncertainty_missingness"
+    ],
+    "field_names": [
+      [
+        "self_contact_any",
+        "self_grasp_any",
+        "self_controller_any",
+        "peer_contact_any",
+        "peer_grasp_any",
+        "peer_controller_any",
+        "shared_control_any",
+        "peer_current_custodian_any"
+      ],
+      [
+        "handoff_completed_now",
+        "custody_changed_now",
+        "self_gained_custody_now",
+        "self_lost_custody_now",
+        "peer_gained_custody_now",
+        "peer_lost_custody_now",
+        "shared_control_started_now",
+        "shared_control_ended_now"
+      ],
+      [
+        "peer_active_any",
+        "peer_inactive_any",
+        "multiple_peers_active",
+        "peer_contacting_any",
+        "peer_grasping_any",
+        "peer_support_role_any",
+        "peer_receiver_role_any",
+        "peer_handler_or_button_role_any"
+      ],
+      [
+        "robot_collision",
+        "robot_proximity_risk",
+        "contested_object_any",
+        "dropped_object_any",
+        "multi_agent_contact_any",
+        "multi_agent_grasp_any",
+        "shared_control_risk_any",
+        "custody_conflict_any"
+      ],
+      [
+        "relation_changed_within_1",
+        "relation_changed_within_4",
+        "relation_changed_within_8",
+        "relation_changed_within_16",
+        "relation_unchanged_for_16",
+        "peer_relation_present_now",
+        "relevant_event_present_now",
+        "source_is_current"
+      ],
+      [
+        "contact_label_valid",
+        "handoff_label_valid",
+        "motion_label_valid",
+        "risk_label_valid",
+        "ambiguity_free",
+        "source_is_fresh",
+        "source_not_missing",
+        "oracle_truth_available"
+      ]
+    ],
+    "field_to_action_semantics": {
+      "contact_grasp_custody": "continue, release, wait or take over",
+      "handoff_event": "release after confirmed transfer or hold when transfer is incomplete",
+      "teammate_motion_state": "synchronize, yield or cover a missing role",
+      "blocking_collision": "pause, avoid contention or change grasp timing",
+      "visibility_staleness": "use a current relation or suppress an obsolete residual",
+      "uncertainty_missingness": "fall back exactly to HC when the side path is not trustworthy"
+    }
+  },
+  "architecture": {
+    "hc": "R3-size LayerNorm-MLP trained on legal current observation plus 16-step history; selected by the six-task macro episode NRMSE over the first 16 future steps and then frozen",
+    "arb_side_path": "four 64-dimensional action queries attend to six typed ARB tokens through four-head cross-attention",
+    "query_roles": [
+      "future steps 0-3",
+      "future steps 4-7",
+      "future steps 8-15",
+      "risk/wait reliability gate"
+    ],
+    "residual": "zero-initialized final residual heads modify only the first 16 future action steps",
+    "fallback": "final_action = frozen_HC + reliability * sigmoid(gate) * delta_action; reliability=0 must be elementwise identical to frozen HC",
+    "legacy_control": "the old 192-width social interface with only the frozen R3 B slice active enters a direct residual MLP; P and T remain zero"
+  },
+  "seeds": {
+    "hc_initialization_seed": 1879354564,
+    "hc_sampler_seed": 2119342877,
+    "hc_noise_seed": 2119342877,
+    "residual_initialization": [
+      1387076084,
+      503587585,
+      2078907321
+    ],
+    "residual_sampler": [
+      1028085745,
+      2137973027,
+      1577133857
+    ],
+    "input_independent_noise_seed": 1112160678,
+    "statistics_seed": 799379443,
+    "selection_rule": "all three residual seeds are reported; no best-seed selection"
+  },
+  "r4_0_pilot": {
+    "split": "train episodes only, with an episode-disjoint deterministic six-episode-per-task holdout",
+    "holdout_episodes_per_task": 6,
+    "split_seed": 1720448731,
+    "max_epochs": 520,
+    "patience": 40,
+    "formal_budget_margin_epochs": 440,
+    "formal_max_epochs_floor": 480,
+    "formal_max_epochs_ceiling": 900,
+    "rule": "Freeze the formal max epoch and patience from the HC and oracle-residual train-only curves. If either pilot branch reaches the cap before exhausting patience, report INCONCLUSIVE_TRAINING/CAP_REACHED and do not read tune."
+  },
+  "training": {
+    "hc_learning_rate": 0.001,
+    "residual_learning_rate": 0.0003,
+    "optimizer": "AdamW",
+    "weight_decay": 0.0001,
+    "batch_size": 512,
+    "hc_training_loss": "masked MSE over up to 100 future steps, as in R3",
+    "residual_training_loss": "masked MSE over exactly the first 16 future steps",
+    "checkpoint_selection_metric": "six-task macro episode NRMSE over exactly the first 16 future steps",
+    "formal_convergence_rule": "every formal HC and residual branch must exhaust frozen patience; hitting max epoch while still improving is INCONCLUSIVE_TRAINING/CAP_REACHED"
+  },
+  "r4_a_conditions": [
+    "HC",
+    "oracle_arb",
+    "zero_residual",
+    "noise_residual",
+    "legacy_concat"
+  ],
+  "r4_a_acceptance": {
+    "oracle_gain_min": 0.03,
+    "ci_lower_gt": 0.0,
+    "positive_tasks_min": 2,
+    "stable_harm_threshold_abs": 0.03,
+    "seed_direction_rule": "at least two of three oracle seeds have positive macro gain and no seed has a 95% CI entirely at or below -3%",
+    "aggregation": "per-episode median error over three frozen seeds, followed by 10000 task-stratified paired episode bootstrap resamples",
+    "control_rule": "oracle ARB must have a positive 95% CI lower bound versus zero residual, input-independent noise residual and legacy concat",
+    "failure_rule": "if any oracle check fails, stop R4 without training an ARB predictor or opening a test split"
+  },
+  "later_stages_frozen_but_unauthorized": {
+    "r4_b": "Only PASSED_M3_R4_A_ORACLE_UTILITY may authorize implementation and execution of the predictor/calibration/shortcut gate already described in the roadmap.",
+    "r4_c": "Only an R4-B pass may authorize one newly generated and sealed test; R2 test episodes must never be reused.",
+    "m4": "Only R4-C may unlock M4.",
+    "b_core": "R4 never directly unlocks B-core; M4 and M5 must also pass."
+  },
+  "implementation": {
+    "script": "scripts/before_we_act/run_ssc_v7_m3_r4.py",
+    "test": "tests/before_we_act/test_ssc_v7_m3_r4.py",
+    "branch": "feat/ssc-v7-m3-r4-arb",
+    "script_sha256": "d5f7c0d97ce9dbd8abd30b472dbe0be2e5889e4637458ccb89d0fd1cc5790a9c",
+    "test_sha256": "427dd86e8552ce8f30c7fad6f038d1913a15d9f0c9eedac8246e65e7f35930d2",
+    "implementation_commit": "1184a53dd49b8467aea91c3752fa81334032cbd7"
+  },
+  "integrity": {
+    "payload_sha256": "c500061e02bd70f5de16e980d445049a31fe6ff528951ce50781a6ef354505e7"
+  }
+}
