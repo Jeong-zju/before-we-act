@@ -85,7 +85,7 @@ def main() -> None:
     if world_size > 1:
         # Bind the rank to its CUDA device before NCCL is created.  Otherwise
         # the final cache barrier can guess a device and deadlock.
-        torch.distributed.init_process_group(backend="nccl", device_id=device)
+        torch.distributed.init_process_group(backend="nccl")
     from transformers import AutoImageProcessor, AutoModel
 
     processor = AutoImageProcessor.from_pretrained(args.dino_model)

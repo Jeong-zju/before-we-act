@@ -141,7 +141,7 @@ def main() -> None:
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
     if world_size > 1:
-        dist.init_process_group(backend="nccl", device_id=device)
+        dist.init_process_group(backend="nccl")
     torch.set_num_threads(max(1, min(12, (os.cpu_count() or 12) // world_size)))
 
     contract_raw = args.contract.read_bytes()
