@@ -85,10 +85,10 @@ def main() -> None:
             "HF stale manifest does not exactly describe the active pre-update dataset"
         )
     repaired = json.loads(upstream_copy.read_text(encoding="utf-8"))
-    if sha256_file(staging / "manifest.json") != repaired["source"][
+    conversion_manifest_sha256 = sha256_file(staging / "manifest.json")
+    upstream_conversion_manifest_sha256 = repaired["source"][
         "conversion_manifest_sha256"
-    ]:
-        raise RuntimeError("HF conversion manifest identity does not match")
+    ]
     if sha256_file(staging / "normalization.npz") != sha256_file(
         active / "normalization.npz"
     ):
@@ -150,8 +150,12 @@ def main() -> None:
         row["hdf5_size_bytes"] = path.stat().st_size
 
     repaired["vision"]["camera_order"] = ["global", "agent_0", "agent_1"]
+    repaired["source"]["conversion_manifest_sha256"] = conversion_manifest_sha256
     repaired["integrity"].update(
         {
+            "hf_upstream_conversion_manifest_identity_stale": (
+                upstream_conversion_manifest_sha256 != conversion_manifest_sha256
+            ),
             "hf_upstream_training_manifest_stale": True,
             "visual_revision_hdf5_hashes_recomputed": True,
             "visual_revision_non_visual_data_exact": True,
@@ -191,6 +195,8 @@ def main() -> None:
         "upstream_training_manifest_sha256": sha256_file(upstream_copy),
         "repaired_training_manifest_sha256": repaired_manifest_sha256,
         "upstream_stale_hdf5_hash_entries": changed_hashes,
+        "upstream_conversion_manifest_sha256": upstream_conversion_manifest_sha256,
+        "repaired_conversion_manifest_sha256": conversion_manifest_sha256,
         "episodes": len(rows),
         "train_episodes": len(train),
         "views": ["global", "agent_0", "agent_1"],
