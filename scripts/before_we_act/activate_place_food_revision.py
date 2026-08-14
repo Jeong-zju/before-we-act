@@ -9,13 +9,11 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
-import sys
 
 import h5py
+import numpy as np
 
 
-ROOT = Path(__file__).resolve().parents[2]
 HF_REPO = "zeno-ai/robofactory-place-food-multiview"
 HF_REVISION = "c912342823d41e3b1969311ec8c34e20aab22ea4"
 
@@ -57,9 +55,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("/workspace/datasets/robofactory_multitask/.archive"),
     )
-    parser.add_argument(
-        "--python", default="/venv/robofactory-act/bin/python"
-    )
     return parser.parse_args()
 
 
@@ -84,48 +79,93 @@ def main() -> None:
     shutil.copy2(upstream_manifest, upstream_copy)
     upstream = json.loads(upstream_copy.read_text(encoding="utf-8"))
 
-    command = [
-        args.python,
-        str(ROOT / "scripts/prepare_robofactory_m1_training_artifacts.py"),
-        "--dataset-dir", str(staging),
-        "--transition-selection", "through-first-done-inclusive",
-        "--split-seed", "7",
-        "--expected-episodes", "150",
-        "--expected-state-dim", "36",
-        "--expected-action-dim", "16",
-        "--expected-task-id", "place_food",
-        "--expected-camera", "global",
-        "--expected-camera", "agent_0",
-        "--expected-camera", "agent_1",
-        "--expected-fps", "20",
-        "--action-codec",
-        str(ROOT / "configs/action_codecs/robofactory_2panda_pd_joint_pos_16d.json"),
-        "--overwrite",
-    ]
-    subprocess.run(command, cwd=ROOT, check=True)
-
-    repaired = json.loads(upstream_manifest.read_text(encoding="utf-8"))
+    active_manifest = active / "training_manifest.json"
+    if sha256_file(active_manifest) != sha256_file(upstream_copy):
+        raise RuntimeError(
+            "HF stale manifest does not exactly describe the active pre-update dataset"
+        )
+    repaired = json.loads(upstream_copy.read_text(encoding="utf-8"))
+    if sha256_file(staging / "manifest.json") != repaired["source"][
+        "conversion_manifest_sha256"
+    ]:
+        raise RuntimeError("HF conversion manifest identity does not match")
+    if sha256_file(staging / "normalization.npz") != sha256_file(
+        active / "normalization.npz"
+    ):
+        raise RuntimeError("Place Food non-visual normalization unexpectedly changed")
     rows = repaired.get("episodes", [])
     train = [row for row in rows if row.get("split") == "train"]
     if len(rows) != 150 or len(train) != 120:
         raise RuntimeError("repaired Place Food split is not 120/15/15")
-    if repaired.get("vision", {}).get("camera_order") != [
-        "global", "agent_0", "agent_1"
-    ]:
-        raise RuntimeError("repaired Place Food manifest does not expose three views")
-
     shape_audit = 0
+    non_visual_datasets_compared = 0
     for row in rows:
         path = staging / str(row["hdf5_path"])
-        with h5py.File(path, "r") as source:
-            images = source["data/observation/images"]
-            if sorted(images.keys()) != ["agent_0", "agent_1", "global"]:
-                raise RuntimeError(f"unexpected Place Food views: {path}")
-            for key in ("global", "agent_0", "agent_1"):
-                shape = images[key].shape
-                if shape[0] < int(row["steps"]) or shape[1:] != (480, 640, 3):
-                    raise RuntimeError(f"invalid original RGB shape: {path}/{key}={shape}")
-                shape_audit += 1
+        old_path = active / str(row["hdf5_path"])
+        with h5py.File(path, "r") as source, h5py.File(old_path, "r") as old:
+            def non_visual_names(handle: h5py.File) -> list[str]:
+                result: list[str] = []
+
+                def visitor(name: str, value: object) -> None:
+                    components = name.split("/")
+                    visual = any(
+                        part == "images" or part.startswith("image_")
+                        for part in components
+                    )
+                    if isinstance(value, h5py.Dataset) and not visual:
+                        result.append(name)
+
+                handle.visititems(visitor)
+                return sorted(result)
+
+            new_names = non_visual_names(source)
+            old_names = non_visual_names(old)
+            if new_names != old_names:
+                raise RuntimeError(f"non-visual schema changed: {path}")
+            for name in new_names:
+                current = source[name]
+                previous = old[name]
+                if (
+                    current.shape != previous.shape
+                    or current.dtype != previous.dtype
+                    or not np.array_equal(current[...], previous[...])
+                ):
+                    raise RuntimeError(f"non-visual data changed: {path}/{name}")
+                non_visual_datasets_compared += 1
+            for prefix in (
+                "data/observation/images",
+                "data/next_observation/images",
+            ):
+                images = source[prefix]
+                if sorted(images.keys()) != ["agent_0", "agent_1", "global"]:
+                    raise RuntimeError(f"unexpected Place Food views: {path}/{prefix}")
+                for key in ("global", "agent_0", "agent_1"):
+                    shape = images[key].shape
+                    if shape[0] < int(row["steps"]) or shape[1:] != (480, 640, 3):
+                        raise RuntimeError(
+                            f"invalid original RGB shape: {path}/{prefix}/{key}={shape}"
+                        )
+                    shape_audit += 1
+        row["hdf5_sha256"] = sha256_file(path)
+        row["hdf5_size_bytes"] = path.stat().st_size
+
+    repaired["vision"]["camera_order"] = ["global", "agent_0", "agent_1"]
+    repaired["integrity"].update(
+        {
+            "hf_upstream_training_manifest_stale": True,
+            "visual_revision_hdf5_hashes_recomputed": True,
+            "visual_revision_non_visual_data_exact": True,
+        }
+    )
+    atomic_json(upstream_manifest, repaired)
+    repaired_manifest_sha256 = sha256_file(upstream_manifest)
+    sidecar = upstream_manifest.with_suffix(upstream_manifest.suffix + ".sha256")
+    temporary_sidecar = sidecar.with_name(f".{sidecar.name}.{os.getpid()}.tmp")
+    temporary_sidecar.write_text(
+        f"{repaired_manifest_sha256}  {upstream_manifest.name}\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary_sidecar, sidecar)
 
     old_by_index = {int(row["episode_index"]): row for row in upstream["episodes"]}
     changed_hashes = sum(
@@ -149,16 +189,17 @@ def main() -> None:
         "hf_revision": HF_REVISION,
         "previous_hf_revision": previous_revision,
         "upstream_training_manifest_sha256": sha256_file(upstream_copy),
-        "repaired_training_manifest_sha256": sha256_file(upstream_manifest),
+        "repaired_training_manifest_sha256": repaired_manifest_sha256,
         "upstream_stale_hdf5_hash_entries": changed_hashes,
         "episodes": len(rows),
         "train_episodes": len(train),
         "views": ["global", "agent_0", "agent_1"],
         "original_rgb_shape": [480, 640, 3],
         "image_datasets_audited": shape_audit,
-        "hdf5_hashes_and_schema_verified_by": (
-            "prepare_robofactory_m1_training_artifacts.py"
-        ),
+        "non_visual_datasets_exactly_compared": non_visual_datasets_compared,
+        "hdf5_hashes_recomputed": len(rows),
+        "normalization_unchanged_sha256": sha256_file(staging / "normalization.npz"),
+        "hdf5_hashes_and_schema_verified_by": Path(__file__).name,
         "source_hdf5_bytes": sum(int(row["hdf5_size_bytes"]) for row in rows),
         "activated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "recoverable_previous_path": str(archive),
@@ -177,4 +218,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
