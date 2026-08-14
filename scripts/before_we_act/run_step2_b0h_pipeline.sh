@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ROOT="${STEP2_REPO_ROOT:-/workspace/fe-pc-wam-step2}"
-RUN_ROOT="${STEP2_RUN_ROOT:-/workspace/bwa_runs/p1-step2-b0h-v6}"
+RUN_ROOT="${STEP2_RUN_ROOT:-/workspace/bwa_runs/p1-step2-b0h-v7}"
 DATA_ROOT="${STEP2_DATA_ROOT:-/workspace/datasets/robofactory_multitask}"
 CACHE_ROOT="${STEP2_CACHE_ROOT:-/workspace/bwa_runs/shared/p1-step2-dino-history-cache-v2}"
 PYTHON_BIN="${STEP2_PYTHON:-/venv/robofactory-act/bin/python}"
@@ -16,6 +16,12 @@ STATUS="${RUN_ROOT}/pipeline_status.json"
 CONTRACT_ROOT="${RUN_ROOT}/contract"
 CONTRACT="${CONTRACT_ROOT}/step2_contract.json"
 NORMALIZATION="${CONTRACT_ROOT}/normalization.pt"
+
+# Freeze the four-rank reduction/kernel choices used by both uninterrupted
+# and resumed training.  This is part of the F1 reproducibility contract.
+export CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"
+export NCCL_ALGO="${NCCL_ALGO:-Ring}"
+export NCCL_PROTO="${NCCL_PROTO:-Simple}"
 
 fail() {
   printf >&2 'Step-2 B0-H pipeline: %s\n' "$*"
@@ -124,17 +130,13 @@ if [[ ! -f "${F1_REFERENCE}/checkpoint_000004.pt" ]]; then
     --variant hidden_residual --stage f1 --updates 4 \
     --output "${F1_REFERENCE}" --save-every 2 "${COMMON[@]}"
 fi
-if [[ ! -f "${F1_RESUMED}/checkpoint_000002.pt" ]]; then
-  "${TORCHRUN_BIN}" --standalone --nproc_per_node=4 \
-    "${ROOT}/before_we_act/train_step2_b0h.py" \
-    --variant hidden_residual --stage f1 --updates 2 \
-    --output "${F1_RESUMED}" --save-every 2 "${COMMON[@]}"
-fi
 if [[ ! -f "${F1_RESUMED}/checkpoint_000004.pt" ]]; then
+  [[ -f "${F1_REFERENCE}/checkpoint_000002.pt" ]] || \
+    fail "F1 uninterrupted run did not preserve its update-2 checkpoint"
   "${TORCHRUN_BIN}" --standalone --nproc_per_node=4 \
     "${ROOT}/before_we_act/train_step2_b0h.py" \
     --variant hidden_residual --stage f1 --updates 4 \
-    --resume "${F1_RESUMED}/checkpoint_000002.pt" \
+    --resume "${F1_REFERENCE}/checkpoint_000002.pt" \
     --output "${F1_RESUMED}" --save-every 2 "${COMMON[@]}"
 fi
 "${PYTHON_BIN}" -u "${ROOT}/scripts/before_we_act/verify_step2_f1.py" \

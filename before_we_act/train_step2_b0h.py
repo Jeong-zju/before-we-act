@@ -139,6 +139,14 @@ def main() -> None:
     if EFFECTIVE_BATCH % world_size:
         raise ValueError(f"world size must divide effective batch {EFFECTIVE_BATCH}")
     device = torch.device(f"cuda:{local_rank}")
+    # F1 compares an uninterrupted run against a process-restarted run.  Keep
+    # the CUDA kernels on deterministic implementations so that the resume
+    # audit measures checkpoint fidelity instead of launch-to-launch kernel
+    # scheduling noise.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
     torch.cuda.set_device(device)
     if world_size > 1:
         dist.init_process_group(backend="nccl")
@@ -492,7 +500,11 @@ def main() -> None:
                     "sample_cursor": global_sampler.cursor_receipt(update),
                 }
                 atomic_torch_save(payload, args.output / "checkpoint_latest.pt")
-                if update in milestones or update == args.updates:
+                if (
+                    update in milestones
+                    or update == args.updates
+                    or update % args.save_every == 0
+                ):
                     atomic_torch_save(
                         payload, args.output / f"checkpoint_{update:06d}.pt"
                     )
