@@ -1,12 +1,33 @@
 """Fair Step-2 B0-H policies with legal history and no social-state input."""
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from torch import nn
 
-from no_wrist_pair_model import NoWristPAIRRoute
+try:
+    from stereo_core.no_wrist_pair_model import NoWristPAIRRoute
+except ImportError:  # Training-server launchers also support the legacy path.
+    from no_wrist_pair_model import NoWristPAIRRoute
 
 from before_we_act.step2_temporal_data import HISTORY_STEPS, PAD_BYTE
+
+
+@dataclass(frozen=True)
+class B0HActionContext:
+    """Internal action context shared by B0-H and later social residuals."""
+
+    observation: torch.Tensor
+    current_visual_raw: torch.Tensor
+    history: torch.Tensor
+    history_summary: torch.Tensor
+    task_token: torch.Tensor
+    query: torch.Tensor
+    memory: torch.Tensor
+    decoded: torch.Tensor
+    mu: torch.Tensor | None
+    logvar: torch.Tensor | None
 
 
 class B0HPolicy(NoWristPAIRRoute):
@@ -192,7 +213,7 @@ class B0HPolicy(NoWristPAIRRoute):
         summary = encoded.sum(1) / valid.sum(1, keepdim=True).clamp_min(1)
         return encoded, summary, task_token
 
-    def forward(
+    def _decode_action_context(
         self,
         global_rgb: torch.Tensor,
         local_rgb: torch.Tensor,
@@ -204,12 +225,15 @@ class B0HPolicy(NoWristPAIRRoute):
         task_bytes: torch.Tensor,
         task_text_mask: torch.Tensor,
         episode_reset: torch.Tensor,
-        actions: torch.Tensor | None = None,
-        *,
-        return_routing: bool = False,
-        counterfactual: bool = False,
-        return_current_visual: bool = False,
-    ):
+        actions: torch.Tensor | None,
+    ) -> B0HActionContext:
+        """Build the unchanged B0-H action hidden state once.
+
+        Keeping this path factored lets B-core consume the same action hidden
+        without a forward hook or a second visual-backbone pass.  The operation
+        and random-number order are identical to the original B0-H forward.
+        """
+
         observation, current_visual_raw = self._paired_tokens_and_raw_pool(
             global_rgb, local_rgb
         )
@@ -250,17 +274,70 @@ class B0HPolicy(NoWristPAIRRoute):
         )
         query = self.query.expand(global_rgb.shape[0], -1, -1)
         decoded = self.decoder(query, memory, observation, gates)
-        base_prediction = self.out(decoded)
+        return B0HActionContext(
+            observation=observation,
+            current_visual_raw=current_visual_raw,
+            history=history,
+            history_summary=history_summary,
+            task_token=task_token,
+            query=query,
+            memory=memory,
+            decoded=decoded,
+            mu=mu,
+            logvar=logvar,
+        )
+
+    def forward(
+        self,
+        global_rgb: torch.Tensor,
+        local_rgb: torch.Tensor,
+        history_visual_raw: torch.Tensor,
+        history_qpos: torch.Tensor,
+        history_action: torch.Tensor,
+        history_mask: torch.Tensor,
+        action_history_mask: torch.Tensor,
+        task_bytes: torch.Tensor,
+        task_text_mask: torch.Tensor,
+        episode_reset: torch.Tensor,
+        actions: torch.Tensor | None = None,
+        *,
+        return_routing: bool = False,
+        counterfactual: bool = False,
+        return_current_visual: bool = False,
+    ):
+        context = self._decode_action_context(
+            global_rgb,
+            local_rgb,
+            history_visual_raw,
+            history_qpos,
+            history_action,
+            history_mask,
+            action_history_mask,
+            task_bytes,
+            task_text_mask,
+            episode_reset,
+            actions,
+        )
+        base_prediction = self.out(context.decoded)
         residual = torch.zeros_like(base_prediction)
         if self.hidden_residual is not None:
-            context = history_summary.unsqueeze(1).expand(-1, self.horizon, -1)
-            residual = self.hidden_residual(torch.cat((decoded, context), dim=-1))
+            history_context = context.history_summary.unsqueeze(1).expand(
+                -1, self.horizon, -1
+            )
+            residual = self.hidden_residual(
+                torch.cat((context.decoded, history_context), dim=-1)
+            )
         prediction = base_prediction + residual
 
         if not return_routing:
             if return_current_visual:
-                return prediction, mu, logvar, current_visual_raw
-            return prediction, mu, logvar
+                return (
+                    prediction,
+                    context.mu,
+                    context.logvar,
+                    context.current_visual_raw,
+                )
+            return prediction, context.mu, context.logvar
 
         cf_predictions = prediction.new_empty(
             (0, self.horizon, self.roles_n, prediction.shape[-1])
@@ -272,12 +349,15 @@ class B0HPolicy(NoWristPAIRRoute):
                 forced = prediction.new_zeros((1, self.horizon, self.roles_n))
                 forced[..., role] = 1
                 role_decoded = self.decoder(
-                    query[:1], memory[:1], observation[:1], forced
+                    context.query[:1],
+                    context.memory[:1],
+                    context.observation[:1],
+                    forced,
                 )
                 role_base = self.out(role_decoded)
                 role_residual = torch.zeros_like(role_base)
                 if self.hidden_residual is not None:
-                    role_context = history_summary[:1].unsqueeze(1).expand(
+                    role_context = context.history_summary[:1].unsqueeze(1).expand(
                         -1, self.horizon, -1
                     )
                     role_residual = self.hidden_residual(
@@ -288,15 +368,15 @@ class B0HPolicy(NoWristPAIRRoute):
             cf_targets = actions[:1]
         return (
             prediction,
-            mu,
-            logvar,
+            context.mu,
+            context.logvar,
             self.last_dense_routes,
             cf_predictions,
             cf_targets,
             base_prediction,
             residual,
-            current_visual_raw,
+            context.current_visual_raw,
         )
 
 
-__all__ = ["B0HPolicy"]
+__all__ = ["B0HActionContext", "B0HPolicy"]
