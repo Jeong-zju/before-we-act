@@ -69,6 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--normalization-source", type=Path, required=True)
     parser.add_argument("--visual-cache", type=Path, required=True)
     parser.add_argument("--measurement-label-receipt", type=Path, required=True)
+    parser.add_argument("--place-food-activation-receipt", type=Path, required=True)
     parser.add_argument("--dino-model", type=Path, required=True)
     parser.add_argument("--base-commit", required=True)
     return parser.parse_args()
@@ -100,6 +101,23 @@ def contract(args: argparse.Namespace) -> None:
     stats = load_stats(args.normalization_source)
     if not args.measurement_label_receipt.is_file():
         raise FileNotFoundError(args.measurement_label_receipt)
+    if not args.place_food_activation_receipt.is_file():
+        raise FileNotFoundError(args.place_food_activation_receipt)
+    place_food_receipt = json.loads(
+        args.place_food_activation_receipt.read_text(encoding="utf-8")
+    )
+    if (
+        place_food_receipt.get("status") != "PASSED"
+        or place_food_receipt.get("hf_revision")
+        != "c912342823d41e3b1969311ec8c34e20aab22ea4"
+        or place_food_receipt.get("episodes") != 150
+        or place_food_receipt.get("train_episodes") != 120
+        or place_food_receipt.get("hdf5_hashes_recomputed") != 150
+        or place_food_receipt.get("image_datasets_audited") != 900
+        or place_food_receipt.get("views") != ["global", "agent_0", "agent_1"]
+        or place_food_receipt.get("original_rgb_shape") != [480, 640, 3]
+    ):
+        raise RuntimeError("updated Place Food HF activation receipt is invalid")
     if not args.dino_model.is_dir():
         raise FileNotFoundError(args.dino_model)
     foundation_receipt_path = args.dino_model / "foundation_receipt.json"
@@ -121,6 +139,19 @@ def contract(args: argparse.Namespace) -> None:
         "base_commit": args.base_commit,
         "repository_branch": git_value("branch", "--show-current"),
         "dataset": dataset,
+        "place_food_hf_activation": {
+            "receipt": str(args.place_food_activation_receipt.resolve()),
+            "receipt_sha256": sha256_file(args.place_food_activation_receipt),
+            "hf_repo": place_food_receipt["hf_repo"],
+            "hf_revision": place_food_receipt["hf_revision"],
+            "upstream_manifest_was_stale": True,
+            "repaired_training_manifest_sha256": place_food_receipt[
+                "repaired_training_manifest_sha256"
+            ],
+            "non_visual_datasets_exactly_compared": place_food_receipt[
+                "non_visual_datasets_exactly_compared"
+            ],
+        },
         "sample": {
             "name": "TeamTemporalSample",
             "history_observation_indices": "t-15..t, zero-left-pad with history_mask",

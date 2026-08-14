@@ -11,6 +11,7 @@ DINO_MODEL="${STEP2_DINO_MODEL:-/workspace/artifacts/dinov3-vitb16-pretrain-lvd1
 DINO_CARRIER="${STEP2_DINO_CARRIER:-/workspace/bwa_runs/w10-six-task-v1/train/formal/checkpoint_120000.pt}"
 NORMALIZATION_SOURCE="${STEP2_NORMALIZATION_SOURCE:-/workspace/bwa_runs/w10-six-task-v1/train/formal/normalization.pt}"
 LABEL_RECEIPT="${STEP2_LABEL_RECEIPT:-/workspace/bwa_runs/ssc-v7-social-state-cooperation-v2/measurement/m2_r3_formal/m2_r3_conclusion.json}"
+PLACE_FOOD_RECEIPT="${STEP2_PLACE_FOOD_RECEIPT:-${DATA_ROOT}/place_food/place_food_hf_activation_receipt.json}"
 STATUS="${RUN_ROOT}/pipeline_status.json"
 CONTRACT_ROOT="${RUN_ROOT}/contract"
 CONTRACT="${CONTRACT_ROOT}/step2_contract.json"
@@ -51,6 +52,7 @@ fi
 [[ -d "${DINO_MODEL}" ]] || fail "DINO model is missing"
 [[ -f "${NORMALIZATION_SOURCE}" ]] || fail "normalization source is missing"
 [[ -f "${LABEL_RECEIPT}" ]] || fail "Measurement label receipt is missing"
+[[ -f "${PLACE_FOOD_RECEIPT}" ]] || fail "Place Food activation receipt is missing"
 [[ -z "$(git -C "${ROOT}" status --short)" ]] || fail "Step-2 worktree must be clean"
 [[ "$(git -C /workspace/RoboFactory rev-parse HEAD)" == 5868242322414a91454e22f1dd9641f613ba1bcf ]] || fail "RoboFactory commit drift"
 [[ -z "$(git -C /workspace/RoboFactory status --short)" ]] || fail "RoboFactory worktree is dirty"
@@ -74,6 +76,7 @@ if [[ ! -f "${CONTRACT}" ]]; then
     --normalization-source "${NORMALIZATION_SOURCE}" \
     --visual-cache "${CACHE_ROOT}" \
     --measurement-label-receipt "${LABEL_RECEIPT}" \
+    --place-food-activation-receipt "${PLACE_FOOD_RECEIPT}" \
     --dino-model "${DINO_MODEL}" \
     --base-commit "${BASE_COMMIT}"
 fi
@@ -93,11 +96,13 @@ write_status RUNNING f0 "auditing begin/middle/end, masks, reset and agent slots
   --manifests "${MANIFESTS[@]}" --output "${CONTRACT_ROOT}" \
   --normalization-source "${NORMALIZATION_SOURCE}" --visual-cache "${CACHE_ROOT}" \
   --measurement-label-receipt "${LABEL_RECEIPT}" --dino-model "${DINO_MODEL}" \
+  --place-food-activation-receipt "${PLACE_FOOD_RECEIPT}" \
   --base-commit "${BASE_COMMIT}"
 "${PYTHON_BIN}" -u "${ROOT}/scripts/before_we_act/prepare_step2_b0h.py" cursor \
   --manifests "${MANIFESTS[@]}" --output "${CONTRACT_ROOT}" \
   --normalization-source "${NORMALIZATION_SOURCE}" --visual-cache "${CACHE_ROOT}" \
   --measurement-label-receipt "${LABEL_RECEIPT}" --dino-model "${DINO_MODEL}" \
+  --place-food-activation-receipt "${PLACE_FOOD_RECEIPT}" \
   --base-commit "${BASE_COMMIT}"
 
 COMMON=(
