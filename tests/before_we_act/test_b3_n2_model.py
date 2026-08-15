@@ -209,6 +209,55 @@ def test_mixed_padding_backward_is_finite() -> None:
     assert all(torch.isfinite(gradient).all() for gradient in gradients)
 
 
+def test_future_predictor_starts_at_persistence_and_is_action_conditioned() -> None:
+    torch.manual_seed(15)
+    config = tiny_config()
+    model = PredictiveTeamBeliefCore(config, include_teacher=False).eval()
+    values = runtime_inputs(config, batch=2)
+    action = torch.randn(2, 40, config.action_dim)
+    action_mask = torch.ones(2, 40, dtype=torch.bool)
+    baseline = model(
+        *values,
+        future_action=action,
+        future_action_mask=action_mask,
+    )
+    persistence = baseline.current_visual_reference[:, None].expand_as(
+        baseline.future_latent_prediction
+    )
+    torch.testing.assert_close(
+        baseline.future_latent_prediction, persistence, rtol=0, atol=0
+    )
+    assert torch.equal(
+        baseline.current_visual_view_mask,
+        torch.tensor([[True, True, False], [True, True, False]]),
+    )
+
+    with torch.no_grad():
+        model.future_predictor.delta_head.weight.fill_(0.05)
+    changed_action = action.clone()
+    changed_action[:, :32] += 2.0
+    first = model(
+        *values,
+        future_action=action,
+        future_action_mask=action_mask,
+    )
+    second = model(
+        *values,
+        future_action=changed_action,
+        future_action_mask=action_mask,
+    )
+    assert not torch.allclose(
+        first.future_latent_prediction[:, :, :2],
+        second.future_latent_prediction[:, :, :2],
+    )
+    torch.testing.assert_close(
+        first.future_latent_prediction[:, :, 2],
+        second.future_latent_prediction[:, :, 2],
+        rtol=0,
+        atol=0,
+    )
+
+
 def teacher_inputs(config: B3N2Config) -> TeacherBeliefInputs:
     generator = torch.Generator().manual_seed(91)
     current = torch.randn(1, 3, 2, config.vision_dim, generator=generator)
@@ -311,7 +360,7 @@ def test_auxiliary_losses_mask_tail_anchors_and_report_each_horizon() -> None:
         torch.ones(1, 4, dtype=torch.bool),
         torch.zeros(1, 16, core.config.action_dim),
         torch.ones(1, 16, dtype=torch.bool),
-        B3N2LossWeights(1, 1, 1, 1, 1, 1, 1, 1, 1),
+        B3N2LossWeights(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.1, 0.01),
     )
     assert torch.isfinite(losses["total"])
     assert losses["future_0.4s"] == 0
@@ -327,6 +376,58 @@ def test_auxiliary_losses_mask_tail_anchors_and_report_each_horizon() -> None:
     ]
     assert teacher_gradients
     assert all(torch.isfinite(gradient).all() for gradient in teacher_gradients)
+
+
+def test_action_pairing_penalizes_an_indistinguishable_wrong_belief() -> None:
+    from before_we_act.b3_n2_model import B3N2PolicyOutput
+    from before_we_act.team_belief.n2_losses import (
+        B3N2LossWeights,
+        compute_b3_n2_losses,
+    )
+
+    torch.manual_seed(21)
+    core = PredictiveTeamBeliefCore(tiny_config(), include_teacher=True).train()
+    values = runtime_inputs(core.config, batch=1)
+    belief = run_core(core, values)
+    teacher = core.forward_teacher(teacher_inputs(core.config), values[-2])
+    prediction = torch.zeros(
+        1, 3, core.config.action_dim, requires_grad=True
+    )
+    counterfactual = torch.zeros_like(prediction, requires_grad=True)
+    output = B3N2PolicyOutput(
+        prediction=prediction,
+        base_prediction=torch.zeros_like(prediction),
+        belief_residual=prediction,
+        residual_gate=torch.ones(1, 3, 1),
+        action_posterior_mu=None,
+        action_posterior_logvar=None,
+        belief=belief,
+        teacher=teacher,
+        current_visual_raw=torch.zeros(1, 2, core.config.vision_dim),
+        dense_routes=torch.ones(1, 3, 4) / 4,
+    )
+    mask = torch.ones(1, 3, dtype=torch.bool)
+    weights = B3N2LossWeights(
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0.5, 0.1
+    )
+    losses = compute_b3_n2_losses(
+        output,
+        torch.ones_like(prediction),
+        mask,
+        torch.zeros(1, 4, core.config.state_dim),
+        torch.ones(1, 4, dtype=torch.bool),
+        torch.zeros(1, 16, core.config.action_dim),
+        torch.ones(1, 16, dtype=torch.bool),
+        weights,
+        counterfactual_prediction=counterfactual,
+        counterfactual_residual_target=torch.zeros_like(prediction),
+        counterfactual_action_mask=mask,
+    )
+    assert losses["action_pairing"] == pytest.approx(0.1)
+    assert losses["action_pairing_active_fraction"] == 1
+    losses["total"].backward()
+    assert prediction.grad is not None and prediction.grad.abs().sum() > 0
+    assert counterfactual.grad is not None and counterfactual.grad.abs().sum() > 0
 
 
 class _FakeProcessor:

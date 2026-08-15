@@ -26,6 +26,9 @@ class B3N2LossWeights:
     teammate_action: float
     exchange_consistency: float
     anti_collapse: float
+    action_pairing: float
+    action_pairing_margin_fraction: float
+    action_pairing_margin_cap: float
 
 
 def _masked_mean(value: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -34,6 +37,15 @@ def _masked_mean(value: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         weight = weight.unsqueeze(-1)
     expanded = weight.expand_as(value)
     return (value * expanded).sum() / expanded.sum().clamp_min(1)
+
+
+def _row_masked_action_mse(
+    prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor
+) -> torch.Tensor:
+    if prediction.shape != target.shape or mask.shape != prediction.shape[:2]:
+        raise ValueError("row action-MSE contract differs")
+    squared = (prediction - target).float().square().mean(-1)
+    return (squared * mask).sum(-1) / mask.sum(-1).clamp_min(1)
 
 
 def _balanced_categorical_kl(
@@ -117,6 +129,9 @@ def compute_b3_n2_losses(
     weights: B3N2LossWeights,
     *,
     swapped_output: B3N2PolicyOutput | None = None,
+    counterfactual_prediction: torch.Tensor | None = None,
+    counterfactual_residual_target: torch.Tensor | None = None,
+    counterfactual_action_mask: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """Compute N2 losses without merging the four future-anchor reports."""
 
@@ -161,7 +176,11 @@ def compute_b3_n2_losses(
     ):
         raise ValueError("future prediction/teacher anchor contract differs")
     future_latent, per_anchor = _future_anchor_losses(
-        prediction, target, anchor_mask, view_mask, action
+        prediction,
+        target,
+        anchor_mask,
+        view_mask & output.belief.current_visual_view_mask[:, None],
+        action,
     )
     teacher_reconstruction, teacher_per_anchor = _future_anchor_losses(
         output.teacher.future_latent_reconstruction,
@@ -210,6 +229,42 @@ def compute_b3_n2_losses(
         exchanged = swapped_output.belief.mu.index_select(1, token_permutation)
         exchange = F.mse_loss(output.belief.mu, exchanged)
 
+    action_pairing = action.new_zeros(())
+    pairing_margin = action.new_zeros(())
+    pairing_active_fraction = action.new_zeros(())
+    if counterfactual_prediction is not None:
+        if (
+            counterfactual_residual_target is None
+            or counterfactual_action_mask is None
+        ):
+            raise ValueError("counterfactual pairing requires target and mask")
+        if counterfactual_prediction.shape != output.prediction.shape:
+            raise ValueError("counterfactual prediction shape differs")
+        if counterfactual_residual_target.shape != output.prediction.shape:
+            raise ValueError("counterfactual residual-target shape differs")
+        if counterfactual_action_mask.shape != action_mask.shape:
+            raise ValueError("counterfactual action mask shape differs")
+        positive_error = _row_masked_action_mse(
+            output.prediction, action_target, action_mask
+        )
+        negative_error = _row_masked_action_mse(
+            counterfactual_prediction, action_target, action_mask
+        )
+        residual_target = action_target - output.base_prediction
+        common_mask = action_mask & counterfactual_action_mask
+        target_separation = _row_masked_action_mse(
+            residual_target, counterfactual_residual_target, common_mask
+        )
+        identifiable = common_mask.any(-1) & (target_separation > 1e-6)
+        margin_rows = (
+            weights.action_pairing_margin_fraction * target_separation.detach()
+        ).clamp(max=weights.action_pairing_margin_cap)
+        hinge = F.relu(positive_error + margin_rows - negative_error)
+        if identifiable.any():
+            action_pairing = hinge[identifiable].mean().to(action.dtype)
+            pairing_margin = margin_rows[identifiable].mean().to(action.dtype)
+        pairing_active_fraction = identifiable.float().mean().to(action.dtype)
+
     # A variance floor is only an anti-collapse guard, not an ARB semantic
     # target.  It is computed across examples and slots, never episode IDs.
     feature_std = output.belief.mu.float().flatten(0, 1).std(0, unbiased=False)
@@ -224,6 +279,7 @@ def compute_b3_n2_losses(
         + weights.teammate_action * teammate_action
         + weights.exchange_consistency * exchange
         + weights.anti_collapse * anti_collapse
+        + weights.action_pairing * action_pairing
     )
     result = {
         "total": total,
@@ -238,6 +294,9 @@ def compute_b3_n2_losses(
         "teammate_action": teammate_action,
         "exchange_consistency": exchange,
         "anti_collapse": anti_collapse,
+        "action_pairing": action_pairing,
+        "action_pairing_margin": pairing_margin,
+        "action_pairing_active_fraction": pairing_active_fraction,
     }
     for seconds, value in zip(FUTURE_OFFSETS_SECONDS, per_anchor, strict=True):
         result[f"future_{seconds:.1f}s"] = value

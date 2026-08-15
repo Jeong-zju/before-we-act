@@ -9,7 +9,7 @@ teacher tensors.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Mapping
 
 import torch
@@ -48,7 +48,7 @@ class DirectBeliefResidual(nn.Module):
         self.query_norm = nn.LayerNorm(d_model)
         self.memory_norm = nn.LayerNorm(d_model)
         self.cross_attention = nn.MultiheadAttention(
-            d_model, 8, dropout=0.1, batch_first=True
+            d_model, 8, dropout=0.1, batch_first=True, bias=False
         )
         self.fusion = nn.Sequential(
             nn.LayerNorm(2 * d_model),
@@ -79,10 +79,12 @@ class DirectBeliefResidual(nn.Module):
         # in the interface for diagnostics, but must never rescale memory:
         # reciprocal uncertainty amplified the old Gaussian collapse.
         memory = self.memory_norm(belief_mu)
-        attended = self.cross_attention(
-            self.query_norm(action_hidden), memory, memory, need_weights=False
-        )[0]
-        state = self.fusion(torch.cat((action_hidden, attended), dim=-1))
+        query = self.query_norm(action_hidden)
+        attended = self.cross_attention(query, memory, memory, need_weights=False)[0]
+        # There is intentionally no raw action-hidden bypass. Both halves of
+        # the fusion vanish when belief memory vanishes; action queries can
+        # only modulate a value actually read from B.
+        state = self.fusion(torch.cat((attended, query * attended), dim=-1))
         learned_gate = torch.sigmoid(self.gate(state))
         residual = reliability.to(state.dtype) * learned_gate * self.output(state)
         return residual, learned_gate
@@ -213,6 +215,14 @@ class B3N2Policy(B0HPolicy):
             context.task_token,
             reset_mask,
             initial_state=initial_belief_state,
+            future_action=actions,
+            future_action_mask=(
+                torch.ones(
+                    actions.shape[:2], dtype=torch.bool, device=actions.device
+                )
+                if actions is not None
+                else None
+            ),
         )
         base_prediction = self.out(context.decoded)
         if self.hidden_residual is None:
@@ -235,10 +245,32 @@ class B3N2Policy(B0HPolicy):
             residual_gate = torch.zeros_like(residual_gate)
             prediction = base_prediction
 
+        # Deployment has no oracle future actions. Its own candidate action
+        # sequence therefore drives exactly the same latent dynamics module.
+        if actions is None:
+            prediction_mask = torch.ones(
+                prediction.shape[:2], dtype=torch.bool, device=prediction.device
+            )
+            belief = replace(
+                belief,
+                future_latent_prediction=self.belief_core.predict_future(
+                    belief.mu,
+                    belief.current_visual_reference,
+                    belief.current_visual_view_mask,
+                    prediction,
+                    prediction_mask,
+                ),
+            )
+
         teacher = None
         if teacher_inputs is not None:
             teacher = self.belief_core.forward_teacher(
-                teacher_inputs, context.task_token
+                teacher_inputs,
+                context.task_token,
+                future_action=actions if actions is not None else prediction,
+                future_action_mask=torch.ones(
+                    prediction.shape[:2], dtype=torch.bool, device=prediction.device
+                ),
             )
         if self.last_dense_routes is None:
             raise RuntimeError("action routing diagnostics were not produced")

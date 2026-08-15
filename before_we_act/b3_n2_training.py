@@ -100,6 +100,8 @@ class B3N2Experiment(nn.Module):
             batch["action_history_mask"],
             batch["task_token"],
             batch["episode_reset_mask"],
+            future_action=batch["action"],
+            future_action_mask=batch["action_mask"],
         )
         teacher = self.belief_core.forward_teacher(
             TeacherBeliefInputs(
@@ -113,6 +115,8 @@ class B3N2Experiment(nn.Module):
                 relative_agent_role=batch["teacher_relative_agent_role"],
             ),
             batch["task_token"],
+            future_action=batch["action"],
+            future_action_mask=batch["action_mask"],
         )
         residual, gate = self.belief_residual(
             batch["decoded_action_hidden"],

@@ -132,6 +132,8 @@ class BeliefCoreOutput:
     event_memory: torch.Tensor
     event_scores: torch.Tensor
     event_mask: torch.Tensor
+    current_visual_reference: torch.Tensor
+    current_visual_view_mask: torch.Tensor
     future_latent_prediction: torch.Tensor
     teammate_state_delta_prediction: torch.Tensor
     teammate_action_mean: torch.Tensor
@@ -164,6 +166,126 @@ class TeacherBeliefOutput:
     future_latent_target: torch.Tensor
     future_anchor_mask: torch.Tensor
     future_view_mask: torch.Tensor
+
+
+class ActionConditionedFuturePredictor(nn.Module):
+    """Predict action-conditioned DINO deltas above a persistence reference.
+
+    This is the small recurrent form of the action-conditioned latent predictor
+    used by V-JEPA 2-AC and DINO-WM. Predicting a delta, with a zero-initialized
+    output layer, makes the untrained model exactly equal to legal-view
+    persistence instead of asking an unconditional MLP to relearn persistence.
+    """
+
+    def __init__(self, config: B3N2Config) -> None:
+        super().__init__()
+        self.config = config
+        d = config.d_model
+        self.belief_projection = nn.Sequential(nn.LayerNorm(d), nn.Linear(d, d))
+        self.visual_projection = nn.Linear(config.vision_dim, d)
+        self.view_role = nn.Embedding(config.max_views, d)
+        self.action_projection = nn.Linear(config.action_dim, d)
+        self.recurrent = nn.GRU(
+            d,
+            d,
+            num_layers=config.temporal_layers,
+            dropout=config.dropout if config.temporal_layers > 1 else 0.0,
+            batch_first=True,
+        )
+        self.output_norm = nn.LayerNorm(d)
+        self.delta_head = nn.Linear(d, config.vision_dim)
+        nn.init.zeros_(self.delta_head.weight)
+        nn.init.zeros_(self.delta_head.bias)
+
+    def forward(
+        self,
+        belief: torch.Tensor,
+        current_visual: torch.Tensor,
+        current_view_mask: torch.Tensor,
+        future_action: torch.Tensor | None,
+        future_action_mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if belief.ndim != 3:
+            raise ValueError("future predictor belief must be [batch,token,width]")
+        batch = belief.shape[0]
+        expected_visual = (
+            batch,
+            self.config.max_views,
+            self.config.vision_dim,
+        )
+        if tuple(current_visual.shape) != expected_visual:
+            raise ValueError("future predictor current-visual shape differs")
+        if (
+            current_view_mask.shape != expected_visual[:2]
+            or current_view_mask.dtype != torch.bool
+        ):
+            raise ValueError("future predictor view mask must be boolean [batch,view]")
+
+        horizon = max(FUTURE_OFFSETS_STEPS)
+        if future_action is None:
+            future_action = current_visual.new_zeros(
+                batch, horizon, self.config.action_dim
+            )
+            future_action_mask = torch.zeros(
+                batch, horizon, dtype=torch.bool, device=current_visual.device
+            )
+        elif (
+            future_action.ndim != 3
+            or future_action.shape[0] != batch
+            or future_action.shape[2] != self.config.action_dim
+        ):
+            raise ValueError("future action must be [batch,horizon,action_dim]")
+        if future_action_mask is None:
+            future_action_mask = torch.ones(
+                future_action.shape[:2], dtype=torch.bool, device=future_action.device
+            )
+        if (
+            future_action_mask.shape != future_action.shape[:2]
+            or future_action_mask.dtype != torch.bool
+        ):
+            raise ValueError("future action mask must be boolean [batch,horizon]")
+
+        # Short synthetic/test horizons are padded rather than allowed to alter
+        # the frozen 0.2/0.4/0.8/1.6-second anchor contract.
+        if future_action.shape[1] < horizon:
+            missing = horizon - future_action.shape[1]
+            future_action = F.pad(future_action, (0, 0, 0, missing))
+            future_action_mask = F.pad(future_action_mask, (0, missing))
+        else:
+            future_action = future_action[:, :horizon]
+            future_action_mask = future_action_mask[:, :horizon]
+
+        view_ids = torch.arange(self.config.max_views, device=belief.device)
+        initial = (
+            self.belief_projection(belief.mean(1)).unsqueeze(1)
+            + self.visual_projection(current_visual)
+            + self.view_role(view_ids).unsqueeze(0).to(current_visual.dtype)
+        )
+        initial = initial * current_view_mask.unsqueeze(-1).to(initial.dtype)
+        initial = initial.reshape(batch * self.config.max_views, self.config.d_model)
+        hidden = initial.unsqueeze(0).expand(
+            self.config.temporal_layers, -1, -1
+        ).contiguous()
+
+        action = self.action_projection(future_action)
+        action = action * future_action_mask.unsqueeze(-1).to(action.dtype)
+        action = action[:, None].expand(
+            -1, self.config.max_views, -1, -1
+        ).reshape(batch * self.config.max_views, horizon, self.config.d_model)
+        rollout, _ = self.recurrent(action, hidden)
+        anchor_indices = torch.tensor(
+            [offset - 1 for offset in FUTURE_OFFSETS_STEPS],
+            device=rollout.device,
+        )
+        anchored = rollout.index_select(1, anchor_indices).view(
+            batch,
+            self.config.max_views,
+            len(FUTURE_OFFSETS_STEPS),
+            self.config.d_model,
+        ).transpose(1, 2)
+        delta = self.delta_head(self.output_norm(anchored))
+        delta = delta * current_view_mask[:, None, :, None].to(delta.dtype)
+        return current_visual[:, None] + delta
 
 
 class MultiViewEvidenceCompressor(nn.Module):
@@ -503,10 +625,7 @@ class PredictiveTeamBeliefCore(nn.Module):
         )
         self.belief_feature_norm = nn.LayerNorm(d)
         self.uncertainty_gain_raw = nn.Parameter(torch.tensor(-2.25))
-        self.future_latent_head = nn.Linear(
-            d,
-            len(FUTURE_OFFSETS_STEPS) * config.max_views * config.vision_dim,
-        )
+        self.future_predictor = ActionConditionedFuturePredictor(config)
         self.teammate_delta_head = nn.Linear(
             d, len(FUTURE_OFFSETS_STEPS) * config.state_dim
         )
@@ -599,6 +718,9 @@ class PredictiveTeamBeliefCore(nn.Module):
         task_token: torch.Tensor,
         episode_reset_mask: torch.Tensor,
         initial_state: BeliefRuntimeState | None = None,
+        *,
+        future_action: torch.Tensor | None = None,
+        future_action_mask: torch.Tensor | None = None,
     ) -> BeliefCoreOutput:
         if history_qpos.ndim != 3 or history_qpos.shape[-1] != self.config.state_dim:
             raise ValueError("runtime qpos contract differs")
@@ -740,12 +862,18 @@ class PredictiveTeamBeliefCore(nn.Module):
         assert final_probs is not None
         assert final_entropy is not None
         reliability = self.reliability_from_sigma(final_sigma)
-        pooled = final_mu.mean(1)
-        future = self.future_latent_head(pooled).view(
-            batch,
-            len(FUTURE_OFFSETS_STEPS),
-            self.config.max_views,
-            self.config.vision_dim,
+        current_visual = evidence.raw_dino_view_pool[:, -1]
+        current_view_mask = evidence.view_valid[:, -1]
+        if current_visual.shape[1] < self.config.max_views:
+            missing = self.config.max_views - current_visual.shape[1]
+            current_visual = F.pad(current_visual, (0, 0, 0, missing))
+            current_view_mask = F.pad(current_view_mask, (0, missing))
+        future = self.predict_future(
+            final_mu,
+            current_visual,
+            current_view_mask,
+            future_action,
+            future_action_mask,
         )
         teammate_delta = self.teammate_delta_head(final_mu[:, 1]).view(
             batch, len(FUTURE_OFFSETS_STEPS), self.config.state_dim
@@ -769,6 +897,8 @@ class PredictiveTeamBeliefCore(nn.Module):
             event_memory=events.tokens,
             event_scores=events.scores,
             event_mask=events.valid_mask,
+            current_visual_reference=current_visual,
+            current_visual_view_mask=current_view_mask,
             future_latent_prediction=future,
             teammate_state_delta_prediction=teammate_delta,
             teammate_action_mean=teammate_action_parameters[..., 0],
@@ -776,8 +906,29 @@ class PredictiveTeamBeliefCore(nn.Module):
             runtime_state=BeliefRuntimeState(hidden, events, previous_valid),
         )
 
+    def predict_future(
+        self,
+        belief: torch.Tensor,
+        current_visual: torch.Tensor,
+        current_view_mask: torch.Tensor,
+        future_action: torch.Tensor | None,
+        future_action_mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        return self.future_predictor(
+            belief,
+            current_visual,
+            current_view_mask,
+            future_action,
+            future_action_mask,
+        )
+
     def forward_teacher(
-        self, inputs: TeacherBeliefInputs, task_token: torch.Tensor
+        self,
+        inputs: TeacherBeliefInputs,
+        task_token: torch.Tensor,
+        *,
+        future_action: torch.Tensor | None = None,
+        future_action_mask: torch.Tensor | None = None,
     ) -> TeacherBeliefOutput:
         if self.teacher_branch is None:
             raise RuntimeError("the privileged teacher has been stripped")
@@ -811,11 +962,23 @@ class PredictiveTeamBeliefCore(nn.Module):
         )
         # The privileged posterior must reconstruct through the same belief
         # bottleneck used at runtime; reading raw hidden bypassed estimability.
-        future_reconstruction = self.future_latent_head(mu.mean(1)).view(
-            hidden.shape[0],
-            len(FUTURE_OFFSETS_STEPS),
-            self.config.max_views,
-            self.config.vision_dim,
+        current_mask = inputs.current_visual_mask.any(-1)
+        current_count = inputs.current_visual_mask.unsqueeze(-1).sum(2).clamp_min(1)
+        current_visual = (
+            inputs.current_visual_tokens
+            * inputs.current_visual_mask.unsqueeze(-1).to(
+                inputs.current_visual_tokens.dtype
+            )
+        ).sum(2) / current_count
+        current_visual = current_visual * current_mask.unsqueeze(-1).to(
+            current_visual.dtype
+        )
+        future_reconstruction = self.predict_future(
+            mu,
+            current_visual,
+            current_mask,
+            future_action,
+            future_action_mask,
         )
         return TeacherBeliefOutput(
             mu=mu,
@@ -837,6 +1000,7 @@ class PredictiveTeamBeliefCore(nn.Module):
 
 
 __all__ = [
+    "ActionConditionedFuturePredictor",
     "B3N2Config",
     "BeliefCoreOutput",
     "BeliefRuntimeState",

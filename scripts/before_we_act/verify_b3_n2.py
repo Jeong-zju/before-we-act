@@ -19,6 +19,7 @@ from before_we_act.train_b3_n2 import (
     config_from_contract,
     device_batch,
     loss_weights,
+    shuffle_permutation,
 )
 from before_we_act.team_belief.n2_losses import compute_b3_n2_losses
 
@@ -61,6 +62,14 @@ def f0(args) -> None:
     with torch.autocast("cuda", dtype=torch.bfloat16):
         output = model(batch)
         partner = paired_permutation(batch["pair_id"])
+        negative = shuffle_permutation(batch["task_index"], batch["phase_bin"])
+        counterfactual_residual, _ = model.belief_residual(
+            batch["decoded_action_hidden"],
+            output.candidate.belief.mu[negative],
+            output.candidate.belief.sigma[negative],
+            output.candidate.belief.reliability[negative],
+        )
+        residual_target = batch["action"] - batch["base_action"]
         losses = compute_b3_n2_losses(
             output.candidate,
             batch["action"],
@@ -70,6 +79,11 @@ def f0(args) -> None:
             batch["teammate_action"],
             batch["teammate_action_mask"],
             loss_weights(contract),
+            counterfactual_prediction=(
+                batch["base_action"] + counterfactual_residual
+            ),
+            counterfactual_residual_target=residual_target[negative],
+            counterfactual_action_mask=batch["action_mask"][negative],
         )
         loss = losses["total"] + (output.direct_prediction - batch["action"]).square().mean()
     loss.backward()
@@ -77,6 +91,9 @@ def f0(args) -> None:
     elapsed = time.perf_counter() - started
     zero_belief = torch.equal(output.candidate.prediction, batch["base_action"])
     zero_direct = torch.equal(output.direct_prediction, batch["base_action"])
+    persistence = output.candidate.belief.current_visual_reference[:, None].expand_as(
+        output.candidate.belief.future_latent_prediction
+    )
     gradients = [
         parameter.grad
         for parameter in model.parameters()
@@ -88,6 +105,14 @@ def f0(args) -> None:
         "paired_rows_complete": torch.equal(partner[partner], torch.arange(len(partner), device=device)),
         "zero_init_belief_exact_base": zero_belief,
         "zero_init_direct_exact_base": zero_direct,
+        "zero_init_future_exact_legal_persistence": torch.equal(
+            output.candidate.belief.future_latent_prediction, persistence
+        ),
+        "runtime_future_has_only_two_legal_views": bool(
+            output.candidate.belief.current_visual_view_mask[:, :2].all()
+            and not output.candidate.belief.current_visual_view_mask[:, 2].any()
+        ),
+        "action_pairing_loss_reported": "action_pairing" in losses,
         "loss_finite": bool(torch.isfinite(loss)),
         "gradients_exist_and_finite": bool(gradients) and all(torch.isfinite(value).all() for value in gradients),
         "future_anchor_mask_has_four_slots": batch["teacher_future_anchor_mask"].shape[1] == 4,

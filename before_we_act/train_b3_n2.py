@@ -118,6 +118,13 @@ def loss_weights(contract: Mapping) -> B3N2LossWeights:
         teammate_action=float(values["teammate_action"]),
         exchange_consistency=float(values["exchange_consistency"]),
         anti_collapse=float(values["anti_collapse"]),
+        action_pairing=float(values.get("action_pairing", 0.0)),
+        action_pairing_margin_fraction=float(
+            values.get("action_pairing_margin_fraction", 0.0)
+        ),
+        action_pairing_margin_cap=float(
+            values.get("action_pairing_margin_cap", 0.0)
+        ),
     )
 
 
@@ -144,8 +151,8 @@ def shuffle_permutation(task: torch.Tensor, phase: torch.Tensor) -> torch.Tensor
             ).flatten()
             if len(rows) > 1:
                 result[rows] = rows.roll(1)
-    if torch.equal(result, torch.arange(len(task), device=task.device)):
-        result = result.roll(1)
+    # A singleton task/phase group has no legal negative. Keep it self-paired;
+    # the target-separation mask will exclude it from the ranking loss.
     return result
 
 
@@ -171,6 +178,25 @@ def evaluate(
         for name in ("model", "persistence", "shuffle")
     }
     future_denominator = np.zeros(4, dtype=np.float64)
+    observable_future_numerator = {
+        name: np.zeros(4, dtype=np.float64)
+        for name in (
+            "oracle_action",
+            "policy_action",
+            "shuffled_action",
+            "shuffled_belief",
+            "persistence",
+        )
+    }
+    observable_future_denominator = np.zeros(4, dtype=np.float64)
+    pairing_rows: dict[str, list[float]] = {
+        "correct_mse": [],
+        "shuffled_mse": [],
+        "belief_pair_mse": [],
+        "residual_output_mse": [],
+        "residual_target_mse": [],
+        "residual_energy": [],
+    }
     belief_off_max_abs = 0.0
     gate_values: list[float] = []
     reliability_values: list[float] = []
@@ -191,6 +217,27 @@ def evaluate(
                 output.candidate.belief.reliability[permutation],
             )
             shuffled = batch["base_action"] + shuffled_residual
+            policy_future = model.belief_core.predict_future(
+                output.candidate.belief.mu,
+                output.candidate.belief.current_visual_reference,
+                output.candidate.belief.current_visual_view_mask,
+                output.candidate.prediction,
+                batch["action_mask"],
+            )
+            shuffled_action_future = model.belief_core.predict_future(
+                output.candidate.belief.mu,
+                output.candidate.belief.current_visual_reference,
+                output.candidate.belief.current_visual_view_mask,
+                batch["action"][permutation],
+                batch["action_mask"][permutation],
+            )
+            shuffled_belief_future = model.belief_core.predict_future(
+                output.candidate.belief.mu[permutation],
+                output.candidate.belief.current_visual_reference,
+                output.candidate.belief.current_visual_view_mask,
+                batch["action"],
+                batch["action_mask"],
+            )
         predictions = {
             "b0h": batch["base_action"],
             "b_core": output.candidate.prediction,
@@ -207,6 +254,42 @@ def evaluate(
             values[name].extend(scores.cpu().tolist())
             for task in range(6):
                 tasks[name][task].extend(scores[batch["task_index"] == task].cpu().tolist())
+        correct_mse = row_action_mse(
+            output.candidate.prediction, batch["action"], batch["action_mask"]
+        )
+        shuffled_mse = row_action_mse(
+            shuffled, batch["action"], batch["action_mask"]
+        )
+        belief_pair_mse = (
+            output.candidate.belief.mu
+            - output.candidate.belief.mu[permutation]
+        ).float().square().mean((1, 2))
+        residual_output_mse = row_action_mse(
+            output.candidate.belief_residual,
+            shuffled_residual,
+            batch["action_mask"],
+        )
+        residual_target = batch["action"] - batch["base_action"]
+        common_action_mask = batch["action_mask"] & batch["action_mask"][permutation]
+        residual_target_mse = row_action_mse(
+            residual_target,
+            residual_target[permutation],
+            common_action_mask,
+        )
+        residual_energy = row_action_mse(
+            output.candidate.belief_residual,
+            torch.zeros_like(output.candidate.belief_residual),
+            batch["action_mask"],
+        )
+        for name, tensor in (
+            ("correct_mse", correct_mse),
+            ("shuffled_mse", shuffled_mse),
+            ("belief_pair_mse", belief_pair_mse),
+            ("residual_output_mse", residual_output_mse),
+            ("residual_target_mse", residual_target_mse),
+            ("residual_energy", residual_energy),
+        ):
+            pairing_rows[name].extend(tensor.float().cpu().tolist())
         losses = compute_b3_n2_losses(
             output.candidate,
             batch["action"],
@@ -222,6 +305,9 @@ def evaluate(
         target = output.candidate.teacher.future_latent_target
         prediction = output.candidate.belief.future_latent_prediction
         persistence = batch["teacher_current_visual_tokens"].squeeze(2)[:, None].expand_as(target)
+        legal_persistence = output.candidate.belief.current_visual_reference[
+            :, None
+        ].expand_as(target)
         shuffled_target = target[permutation]
         view_mask = output.candidate.teacher.future_view_mask
         anchor_mask = output.candidate.teacher.future_anchor_mask
@@ -238,6 +324,26 @@ def evaluate(
             ):
                 error = (candidate[:, anchor][active] - target[:, anchor][active]).float()
                 future_numerator[name][anchor] += float(error.square().sum().cpu())
+            observable_active = (
+                active & output.candidate.belief.current_visual_view_mask
+            )
+            observable_count = int(observable_active.sum()) * target.shape[-1]
+            if observable_count:
+                observable_future_denominator[anchor] += observable_count
+                for name, candidate in (
+                    ("oracle_action", prediction),
+                    ("policy_action", policy_future),
+                    ("shuffled_action", shuffled_action_future),
+                    ("shuffled_belief", shuffled_belief_future),
+                    ("persistence", legal_persistence),
+                ):
+                    error = (
+                        candidate[:, anchor][observable_active]
+                        - target[:, anchor][observable_active]
+                    ).float()
+                    observable_future_numerator[name][anchor] += float(
+                        error.square().sum().cpu()
+                    )
         gate_values.append(float(output.candidate.residual_gate.float().mean().cpu()))
         reliability_values.append(float(output.candidate.belief.reliability.float().mean().cpu()))
         sigma_values.append(float(output.candidate.belief.sigma.float().mean().cpu()))
@@ -297,6 +403,19 @@ def evaluate(
         }
         for name in future_numerator
     }
+    observable_future = {
+        name: {
+            f"{seconds:.1f}s": float(
+                observable_future_numerator[name][index]
+                / max(observable_future_denominator[index], 1)
+            )
+            for index, seconds in enumerate(FUTURE_OFFSETS_SECONDS)
+        }
+        for name in observable_future_numerator
+    }
+    pairing_means = {
+        name: float(np.mean(rows)) for name, rows in pairing_rows.items()
+    }
     return {
         "macro": {name: float(np.mean(rows)) for name, rows in values.items()},
         "per_task": {
@@ -305,6 +424,16 @@ def evaluate(
         },
         "auxiliary": {name: float(np.mean(rows)) for name, rows in auxiliary.items()},
         "future_mse": future,
+        "future_observable_mse": observable_future,
+        "action_pairing": {
+            **pairing_means,
+            "shuffle_minus_correct_mse": pairing_means["shuffled_mse"]
+            - pairing_means["correct_mse"],
+            "output_to_target_sensitivity": pairing_means["residual_output_mse"]
+            / max(pairing_means["residual_target_mse"], 1e-12),
+            "output_to_residual_energy": pairing_means["residual_output_mse"]
+            / max(pairing_means["residual_energy"], 1e-12),
+        },
         "belief_off_max_abs": belief_off_max_abs,
         "belief": {
             "feature_std_mean": float(feature_std.mean()),
@@ -539,6 +668,19 @@ def main() -> None:
                 mu=output.candidate.belief.mu[partner],
             )
             swapped_output = replace(output.candidate, belief=swapped_belief)
+            negative_permutation = shuffle_permutation(
+                batch["task_index"], batch["phase_bin"]
+            )
+            counterfactual_residual, _ = model.belief_residual(
+                batch["decoded_action_hidden"],
+                output.candidate.belief.mu[negative_permutation],
+                output.candidate.belief.sigma[negative_permutation],
+                output.candidate.belief.reliability[negative_permutation],
+            )
+            counterfactual_prediction = (
+                batch["base_action"] + counterfactual_residual
+            )
+            residual_target = batch["action"] - batch["base_action"]
             losses = compute_b3_n2_losses(
                 output.candidate,
                 batch["action"],
@@ -549,6 +691,13 @@ def main() -> None:
                 batch["teammate_action_mask"],
                 weights,
                 swapped_output=swapped_output,
+                counterfactual_prediction=counterfactual_prediction,
+                counterfactual_residual_target=residual_target[
+                    negative_permutation
+                ],
+                counterfactual_action_mask=batch["action_mask"][
+                    negative_permutation
+                ],
             )
             direct = masked_action_mse(
                 output.direct_prediction, batch["action"], batch["action_mask"]

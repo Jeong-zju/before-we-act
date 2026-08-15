@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the discrete-belief 3-N2 repair contract before F0."""
+"""Freeze the action-conditioned predictive-pairing 3-N2 contract before F0."""
 from __future__ import annotations
 
 import argparse
@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n1-cache", type=Path, required=True)
     parser.add_argument("--action-context-cache", type=Path, required=True)
     parser.add_argument("--failed-n2-run", type=Path, required=True)
+    parser.add_argument("--stabilized-n2-run", type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
@@ -65,6 +66,22 @@ def main() -> None:
     failed_status = json.loads(failed_status_path.read_text(encoding="utf-8"))
     if failed_status.get("status") != "STOPPED":
         raise RuntimeError("the superseded Gaussian N2 run is not stopped")
+    stabilized_conclusion_path = args.stabilized_n2_run / "repair_pilot_conclusion.json"
+    stabilized_pilot_path = (
+        args.stabilized_n2_run
+        / "repair_pilot"
+        / "seed_20260815"
+        / "status.json"
+    )
+    stabilized = json.loads(
+        stabilized_conclusion_path.read_text(encoding="utf-8")
+    )
+    stabilized_pilot = json.loads(stabilized_pilot_path.read_text(encoding="utf-8"))
+    if stabilized.get("status") != (
+        "PASSED_REPAIR_GATES_FORMAL_TRAINING_REQUIRES_OWNER_DECISION"
+    ):
+        raise RuntimeError("the discrete-belief stabilization pilot did not pass")
+    stabilized_validation = stabilized_pilot["selected_validation"]
     failed_seed_evidence = {}
     for seed in SEEDS:
         evaluation_path = args.failed_n2_run / f"training/seed_{seed}/evaluations.jsonl"
@@ -92,11 +109,11 @@ def main() -> None:
         raise RuntimeError("N2 frozen action-context cache is not complete")
     payload = {
         "format_version": "before-we-act.b3-n2-contract/2",
-        "stage_id": "B3-N2-R1-DISCRETE-BELIEF-STABILIZATION",
+        "stage_id": "B3-N2-R2-ACTION-CONDITIONED-PREDICTIVE-PAIRING",
         "status": "FROZEN_BEFORE_F0_F1",
         "created_at_utc": utc_now(),
         "source_commit": args.source_commit,
-        "question": "Can one DreamerV3-style bounded discrete-state migration stop belief KL explosion and make the runtime belief estimable before any new full-budget training?",
+        "question": "Can one action-conditioned predictive-pairing migration make the action residual causally depend on the correctly paired belief and beat a legal-view persistence baseline before any new full-budget training?",
         "authorization": {
             "status": authorization,
             "roadmap": str(args.roadmap.resolve()),
@@ -127,6 +144,18 @@ def main() -> None:
             "superseded_gaussian_n2_run": str(args.failed_n2_run.resolve()),
             "superseded_gaussian_n2_contract_sha256": sha256_file(failed_contract_path),
             "superseded_gaussian_n2_pipeline_status_sha256": sha256_file(failed_status_path),
+            "stabilized_discrete_n2_conclusion": str(
+                stabilized_conclusion_path.resolve()
+            ),
+            "stabilized_discrete_n2_conclusion_sha256": sha256_file(
+                stabilized_conclusion_path
+            ),
+            "stabilized_discrete_n2_pilot_status": str(
+                stabilized_pilot_path.resolve()
+            ),
+            "stabilized_discrete_n2_pilot_status_sha256": sha256_file(
+                stabilized_pilot_path
+            ),
         },
         "architecture": {
             "d_model": 384,
@@ -146,7 +175,7 @@ def main() -> None:
             "belief_representation_scale": 0.1,
             "belief_feature_interface": "centered categorical probabilities projected to d_model; teacher reconstruction and runtime prediction must pass through this bottleneck",
             "capacity_rationale": "R1 only established the action signal with all 16 student tokens; retain that measured capacity, use four evidence queries/four bounded events, and match the two-layer legal-history depth. These values are frozen before N2 metrics and will not be searched.",
-            "action_interface": "all 100 B0-H decoded action queries cross-attend all 16 projected categorical belief tokens through a zero-init entropy-reliability-gated residual; entropy is never inverted as precision",
+            "action_interface": "all 100 B0-H decoded action queries cross-attend all 16 projected categorical belief tokens through a zero-init entropy-reliability-gated residual; raw decoded-action hidden is forbidden from bypassing the belief readout",
             "base": "formal B0-H hidden-residual checkpoint; belief-off is bitwise the same base action",
             "teacher": "training-only synchronized three-view/future/joint-state posterior; physically absent from deployment export",
             "runtime": "legal 16-step global+ego-local pooled DINO, ego qpos, executed ego action, task text, validity/reset masks",
@@ -157,16 +186,54 @@ def main() -> None:
             "seeds": failed_seed_evidence,
             "interpretation": "All seeds beat B0-H slightly but lose to the equally sized direct-history control; belief shuffle is effectively unchanged, future prediction loses badly to persistence, effective rank is below two, and Gaussian teacher KL exploded. The old run is retained as negative evidence, not resumed.",
         },
+        "retained_discrete_belief_repair": {
+            "status": stabilized["status"],
+            "kl_stable": stabilized["gates"]["kl_stable"],
+            "belief_estimable": stabilized["gates"]["belief_estimable"],
+            "multidimensional_team_state": stabilized["gates"][
+                "multidimensional_team_state"
+            ],
+            "action": {
+                "b_core_mse": stabilized_validation["macro"]["b_core"],
+                "b_shuffle_mse": stabilized_validation["macro"]["b_shuffle"],
+                "direct_reactive_mse": stabilized_validation["macro"][
+                    "direct_reactive"
+                ],
+                "interpretation": "The bounded categorical belief is estimable and multidimensional, but the action output is unchanged by a within-task/phase belief shuffle.",
+            },
+            "future": {
+                "model_mse": stabilized_validation["future_mse"]["model"],
+                "persistence_mse": stabilized_validation["future_mse"][
+                    "persistence"
+                ],
+                "interpretation": "The old absolute future head sees no future action and loses to persistence at every horizon; its persistence comparator also included a training-only teammate view.",
+            },
+        },
         "single_idea_migration": {
-            "name": "DreamerV3 bounded discrete stochastic state and balanced KL",
-            "paper": "https://arxiv.org/abs/2301.04104",
-            "official_repository": "https://github.com/danijar/dreamerv3",
-            "official_repository_commit": "e3f02248693a79dc8b0ebd62c93683888ddaccfe",
-            "official_source": "dreamerv3/rssm.py",
-            "license": "MIT",
-            "implementation": "PyTorch reimplementation of the equations; no JAX source copied",
-            "mechanism": "categorical factors with 1% uniform probability mixing, per-factor one-nat free region, dynamics KL with stopped posterior target, and 0.1-scale representation KL with stopped runtime prior",
-            "fixed_kl_upper_bound_nats_per_factor_before_free_region": 8.061172,
+            "name": "action-conditioned predictive pairing",
+            "primary_model": {
+                "paper": "V-JEPA 2",
+                "paper_url": "https://arxiv.org/abs/2506.09985",
+                "official_repository": "https://github.com/facebookresearch/vjepa2",
+                "official_source": "src/models/ac_predictor.py and app/vjepa_droid/train.py",
+                "license": "MIT",
+            },
+            "dino_latent_precedent": {
+                "paper": "DINO-WM",
+                "paper_url": "https://arxiv.org/abs/2411.04983",
+                "official_repository": "https://github.com/gaoyuezhou/dino_wm",
+                "license": "MIT",
+            },
+            "pairing_objective": {
+                "paper": "TACO",
+                "paper_url": "https://proceedings.neurips.cc/paper_files/paper/2023/file/96d00450ed65531ffe2996daed487536-Paper-Conference.pdf",
+                "official_repository": "https://github.com/FrankZheng2022/TACO",
+                "official_source": "agents/taco.py",
+                "license": "MIT",
+            },
+            "implementation": "PyTorch adaptation of the mechanisms; no upstream source copied",
+            "mechanism": "A shared recurrent predictor rolls legal current DINO features and belief forward under the future ego-action sequence, predicts only a zero-initialized delta over persistence, and trains the real policy output so a correct belief/action pairing outranks a within-task/phase shuffled pairing whenever their residual targets are measurably different.",
+            "one_idea_rationale": "Both repairs enforce the same causal statement: the latent must contain information that is useful only when paired with the correct action-conditioned transition. They are evaluated together by correct-vs-shuffled interventions, not treated as independent score boosters.",
         },
         "future_contract": {
             "source_frequency_hz": 20,
@@ -174,6 +241,14 @@ def main() -> None:
             "offset_seconds": [0.2, 0.4, 0.8, 1.6],
             "tail_policy": "mask_missing_anchor",
             "teacher_target_space": "frozen_DINO_latent",
+            "runtime_prediction_views": ["global", "ego_local"],
+            "teacher_reconstruction_views": [
+                "global",
+                "ego_local",
+                "teammate_local"
+            ],
+            "baseline": "persistence from the same legal current runtime views only",
+            "conditioning": "ground-truth ego action during world-model training; policy action at deployment; report both plus shuffled-action and shuffled-belief interventions",
         },
         "training": {
             "seeds": list(SEEDS),
@@ -195,9 +270,9 @@ def main() -> None:
             "platform": "after the LR drop, the last four smoothed primary scores each improve by less than 1%; no key auxiliary is still improving by >=1%; no three-point validation overfit streak",
             "repair_pilot": {
                 "seed": 20260815,
-                "updates": 2000,
+                "updates": 4000,
                 "evaluate_at_end": True,
-                "purpose": "diagnose KL boundedness and belief estimability only; this cannot authorize formal training or Validation5",
+                "purpose": "test action/belief binding and action-conditioned future prediction against fair interventions; this cannot authorize formal training or Validation5",
             },
         },
         "objectives": {
@@ -210,9 +285,20 @@ def main() -> None:
             "teammate_action": 0.1,
             "exchange_consistency": 0.05,
             "anti_collapse": 0.01,
+            "action_pairing": 1.0,
+            "action_pairing_margin_fraction": 0.1,
+            "action_pairing_margin_cap": 0.01,
             "direct_reactive_action": 1.0,
         },
-        "controls": ["formal_b0h", "direct_reactive", "belief_shuffle", "belief_off"],
+        "controls": [
+            "formal_b0h",
+            "direct_reactive",
+            "belief_shuffle",
+            "belief_off",
+            "future_legal_persistence",
+            "future_shuffled_action",
+            "future_shuffled_belief"
+        ],
         "cooperation_diagnostic": {
             "name": "paired_inactivity_steps",
             "definition": "before success, count steps where both arms' commanded seven-joint change from current qpos has L2 norm <0.02",
@@ -231,10 +317,12 @@ def main() -> None:
             "formal_pass_forbidden": True,
         },
         "repair_gates": {
-            "kl_stable": "every logged teacher_alignment is finite and <= 8.867290 (8.061172 dynamics + 0.1 representation)",
-            "belief_estimable": "future model improves over its initialization and categorical mutual information is non-zero",
-            "multidimensional_team_state": "effective rank > 4 and at least 4/12 categorical factors have normalized mutual information > 0.01",
-            "resume_rule": "do not start a new 120k three-seed run until all three gates pass; if only the third fails, introduce exactly one separate structural idea",
+            "retained_kl_stability": "every logged teacher_alignment is finite and <= 8.867290 (8.061172 dynamics + 0.1 representation)",
+            "retained_multidimensional_state": "effective rank > 4 and at least 4/12 categorical factors have normalized mutual information > 0.01",
+            "action_binding": "validation b_shuffle MSE must be strictly worse than b_core MSE and shuffled-belief residual-output MSE divided by residual energy must be >= 0.01",
+            "future_prediction": "oracle-action future MSE must beat same-view persistence at at least 3/4 horizons and shuffled-action MSE must be worse than oracle-action MSE at at least 3/4 horizons",
+            "action_quality_guard": "b_core action MSE must not exceed direct-reactive MSE by more than 1%",
+            "resume_rule": "do not start a new 120k three-seed run until every retained and new causal gate passes; owner authorization remains separately required",
         },
         "validation5_gate": "run only if every seed is training-sufficient; use the existing frozen per-task seed files and compare aggregate/task direction with the formal B0-H results",
     }
