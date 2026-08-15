@@ -120,8 +120,14 @@ def test_incremental_runtime_matches_one_pass_and_memory_is_bounded() -> None:
             second_values.append(value)
     first_output = run_core(model, first)
     second = run_core(model, tuple(second_values), state=first_output.runtime_state)
-    torch.testing.assert_close(full.mu, second.mu, rtol=0, atol=0)
-    torch.testing.assert_close(full.event_memory, second.event_memory, rtol=0, atol=0)
+    # Batched attention kernels may round differently when the same sequence is
+    # presented as 6 steps or two 3-step chunks.  State carry must agree to
+    # normal float32 numerical precision; bitwise identity is not a valid GPU
+    # resume contract across different batch shapes.
+    torch.testing.assert_close(full.mu, second.mu, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(
+        full.event_memory, second.event_memory, rtol=1e-6, atol=1e-6
+    )
     assert full.event_memory.shape[1] == model.config.event_capacity
     assert full.event_mask.sum() == model.config.event_capacity
 
@@ -245,9 +251,11 @@ def test_auxiliary_losses_mask_tail_anchors_and_report_each_horizon() -> None:
         output,
         torch.ones_like(prediction),
         torch.ones(1, 3, dtype=torch.bool),
-        torch.zeros(1, core.config.state_dim),
-        torch.ones(1, dtype=torch.bool),
-        B3N2LossWeights(1, 1, 1, 1, 1, 1, 1, 1),
+        torch.zeros(1, 4, core.config.state_dim),
+        torch.ones(1, 4, dtype=torch.bool),
+        torch.zeros(1, 16, core.config.action_dim),
+        torch.ones(1, 16, dtype=torch.bool),
+        B3N2LossWeights(1, 1, 1, 1, 1, 1, 1, 1, 1),
     )
     assert torch.isfinite(losses["total"])
     assert losses["future_0.4s"] == 0
@@ -338,8 +346,6 @@ def test_policy_zero_init_and_b_off_are_exact(fake_policy_dependencies) -> None:
     history_mask = torch.zeros(1, 16, dtype=torch.bool)
     history_mask[:, -1] = True
     action_mask = torch.zeros_like(history_mask)
-    visual_mask = torch.zeros(1, 16, 2, 1, dtype=torch.bool)
-    visual_mask[:, -1] = True
     kwargs = {
         "global_rgb": torch.zeros(1, 3, 480, 640),
         "local_rgb": torch.ones(1, 3, 480, 640),
@@ -351,8 +357,6 @@ def test_policy_zero_init_and_b_off_are_exact(fake_policy_dependencies) -> None:
         "task_bytes": torch.tensor([[65] + [256] * 63]),
         "task_text_mask": torch.tensor([[True] + [False] * 63]),
         "episode_reset": torch.tensor([True]),
-        "runtime_visual_tokens": torch.zeros(1, 16, 2, 1, 768),
-        "runtime_visual_mask": visual_mask,
     }
     with torch.no_grad():
         initial = model(**kwargs)

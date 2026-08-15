@@ -41,10 +41,15 @@ class B3N2PolicyOutput:
 
 
 class DirectBeliefResidual(nn.Module):
-    """Low-capacity direct MLP matching the successful R4 fusion family."""
+    """Zero-init direct residual whose action queries read every B token."""
 
     def __init__(self, d_model: int, action_dim: int) -> None:
         super().__init__()
+        self.query_norm = nn.LayerNorm(d_model)
+        self.memory_norm = nn.LayerNorm(d_model)
+        self.cross_attention = nn.MultiheadAttention(
+            d_model, 8, dropout=0.1, batch_first=True
+        )
         self.fusion = nn.Sequential(
             nn.LayerNorm(2 * d_model),
             nn.Linear(2 * d_model, d_model),
@@ -71,9 +76,11 @@ class DirectBeliefResidual(nn.Module):
         if reliability.shape != (action_hidden.shape[0], 1, 1):
             raise ValueError("belief reliability must be [batch,1,1]")
         precision = belief_sigma.clamp_min(1e-4).reciprocal()
-        belief = (belief_mu * precision).sum(1) / precision.sum(1).clamp_min(1e-4)
-        belief = belief.unsqueeze(1).expand(-1, action_hidden.shape[1], -1)
-        state = self.fusion(torch.cat((action_hidden, belief), dim=-1))
+        memory = self.memory_norm(belief_mu * precision.sqrt())
+        attended = self.cross_attention(
+            self.query_norm(action_hidden), memory, memory, need_weights=False
+        )[0]
+        state = self.fusion(torch.cat((action_hidden, attended), dim=-1))
         learned_gate = torch.sigmoid(self.gate(state))
         residual = reliability.to(state.dtype) * learned_gate * self.output(state)
         return residual, learned_gate
@@ -109,7 +116,7 @@ class B3N2Policy(B0HPolicy):
         super().__init__(
             state_dim,
             action_dim,
-            variant="history_only",
+            variant="hidden_residual",
             horizon=horizon,
             d_model=d_model,
             enc_layers=enc_layers,
@@ -145,8 +152,6 @@ class B3N2Policy(B0HPolicy):
         task_bytes: torch.Tensor,
         task_text_mask: torch.Tensor,
         episode_reset: torch.Tensor,
-        runtime_visual_tokens: torch.Tensor,
-        runtime_visual_mask: torch.Tensor,
         actions: torch.Tensor | None = None,
         *,
         episode_reset_mask: torch.Tensor | None = None,
@@ -182,6 +187,20 @@ class B3N2Policy(B0HPolicy):
         if torch.any(episode_reset & ~reset_mask[:, -1]):
             raise ValueError("episode start must reset B at the current timestep")
 
+        # The B runtime path is closed over the same legal frozen-DINO history
+        # consumed by B0-H.  The exact current pooled features replace the
+        # cached last slot, matching B0-H and preventing a second caller-owned
+        # visual channel from smuggling privileged/future information into B.
+        runtime_visual_tokens = torch.cat(
+            (
+                history_visual_raw[:, :-1].to(context.current_visual_raw.dtype),
+                context.current_visual_raw.unsqueeze(1),
+            ),
+            dim=1,
+        ).unsqueeze(-2)
+        runtime_visual_mask = history_mask[:, :, None, None].expand(
+            -1, -1, runtime_visual_tokens.shape[2], 1
+        )
         belief = self.belief_core(
             runtime_visual_tokens,
             runtime_visual_mask,
@@ -194,6 +213,14 @@ class B3N2Policy(B0HPolicy):
             initial_state=initial_belief_state,
         )
         base_prediction = self.out(context.decoded)
+        if self.hidden_residual is None:
+            raise RuntimeError("3-N2 requires the formal hidden-residual B0-H base")
+        history_context = context.history_summary.unsqueeze(1).expand(
+            -1, self.horizon, -1
+        )
+        base_prediction = base_prediction + self.hidden_residual(
+            torch.cat((context.decoded, history_context), dim=-1)
+        )
         residual, residual_gate = self.direct_belief_residual(
             context.decoded, belief.mu, belief.sigma, belief.reliability
         )

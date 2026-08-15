@@ -80,6 +80,7 @@ class CompressedEvidence:
     tokens: torch.Tensor
     step_valid: torch.Tensor
     conflict: torch.Tensor
+    missing_fraction: torch.Tensor
     raw_dino_pool: torch.Tensor
     raw_dino_view_pool: torch.Tensor
     view_valid: torch.Tensor
@@ -115,6 +116,8 @@ class BeliefCoreOutput:
     event_mask: torch.Tensor
     future_latent_prediction: torch.Tensor
     teammate_state_delta_prediction: torch.Tensor
+    teammate_action_mean: torch.Tensor
+    teammate_action_logvar: torch.Tensor
     runtime_state: BeliefRuntimeState
 
 
@@ -222,10 +225,13 @@ class MultiViewEvidenceCompressor(nn.Module):
             * view_mask.to(view_pool.dtype)
         ).sum(2) / view_mask.sum(2).clamp_min(1)
         conflict = conflict * step_valid.to(conflict.dtype)
+        missing_fraction = 1.0 - view_mask.float().mean(2)
+        missing_fraction = missing_fraction * step_valid.to(missing_fraction.dtype)
         return CompressedEvidence(
             compressed,
             step_valid,
             conflict,
+            missing_fraction,
             raw_pool,
             raw_view_pool,
             view_mask,
@@ -475,7 +481,10 @@ class PredictiveTeamBeliefCore(nn.Module):
             d,
             len(FUTURE_OFFSETS_STEPS) * config.max_views * config.vision_dim,
         )
-        self.teammate_delta_head = nn.Linear(d, config.state_dim)
+        self.teammate_delta_head = nn.Linear(
+            d, len(FUTURE_OFFSETS_STEPS) * config.state_dim
+        )
+        self.teammate_action_head = nn.Linear(d, 16 * config.action_dim * 2)
         self.teacher_branch: TrainingTeacherBranch | None = (
             TrainingTeacherBranch(config) if include_teacher else None
         )
@@ -633,7 +642,11 @@ class PredictiveTeamBeliefCore(nn.Module):
                 step_valid[:, None, None], candidate_hidden, hidden
             )
             uncertainty = surprise * candidate_valid.to(surprise.dtype)
-            uncertainty = uncertainty + evidence.conflict[:, index]
+            uncertainty = (
+                uncertainty
+                + evidence.conflict[:, index]
+                + evidence.missing_fraction[:, index]
+            )
             mu, sigma = self._distribution(hidden, uncertainty, step_valid)
             mu_rows.append(mu)
             sigma_rows.append(sigma)
@@ -653,7 +666,12 @@ class PredictiveTeamBeliefCore(nn.Module):
             self.config.max_views,
             self.config.vision_dim,
         )
-        teammate_delta = self.teammate_delta_head(final_mu[:, 1])
+        teammate_delta = self.teammate_delta_head(final_mu[:, 1]).view(
+            batch, len(FUTURE_OFFSETS_STEPS), self.config.state_dim
+        )
+        teammate_action_parameters = self.teammate_action_head(final_mu[:, 1]).view(
+            batch, 16, self.config.action_dim, 2
+        )
         return BeliefCoreOutput(
             mu=final_mu,
             sigma=final_sigma,
@@ -667,6 +685,8 @@ class PredictiveTeamBeliefCore(nn.Module):
             event_mask=events.valid_mask,
             future_latent_prediction=future,
             teammate_state_delta_prediction=teammate_delta,
+            teammate_action_mean=teammate_action_parameters[..., 0],
+            teammate_action_logvar=teammate_action_parameters[..., 1].clamp(-8.0, 5.0),
             runtime_state=BeliefRuntimeState(hidden, events, previous_valid),
         )
 

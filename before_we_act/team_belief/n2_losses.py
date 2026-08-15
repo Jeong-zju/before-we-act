@@ -23,6 +23,7 @@ class B3N2LossWeights:
     future_latent: float
     teacher_reconstruction: float
     teammate_delta: float
+    teammate_action: float
     exchange_consistency: float
     anti_collapse: float
 
@@ -89,6 +90,8 @@ def compute_b3_n2_losses(
     action_mask: torch.Tensor,
     teammate_delta_target: torch.Tensor,
     teammate_delta_mask: torch.Tensor,
+    teammate_action_target: torch.Tensor,
+    teammate_action_mask: torch.Tensor,
     weights: B3N2LossWeights,
     *,
     swapped_output: B3N2PolicyOutput | None = None,
@@ -144,7 +147,7 @@ def compute_b3_n2_losses(
 
     if teammate_delta_target.shape != output.belief.teammate_state_delta_prediction.shape:
         raise ValueError("teammate delta target shape differs")
-    if teammate_delta_mask.shape != teammate_delta_target.shape[:1]:
+    if teammate_delta_mask.shape != teammate_delta_target.shape[:2]:
         raise ValueError("teammate delta mask shape differs")
     teammate_delta = _masked_mean(
         (
@@ -152,6 +155,20 @@ def compute_b3_n2_losses(
             - teammate_delta_target
         ).square(),
         teammate_delta_mask,
+    )
+    if teammate_action_target.shape != output.belief.teammate_action_mean.shape:
+        raise ValueError("teammate action target shape differs")
+    if teammate_action_mask.shape != teammate_action_target.shape[:2]:
+        raise ValueError("teammate action mask shape differs")
+    teammate_action_logvar = output.belief.teammate_action_logvar
+    teammate_action = _masked_mean(
+        0.5
+        * (
+            teammate_action_logvar
+            + (teammate_action_target - output.belief.teammate_action_mean).square()
+            * torch.exp(-teammate_action_logvar)
+        ),
+        teammate_action_mask,
     )
 
     exchange = action.new_zeros(())
@@ -178,6 +195,7 @@ def compute_b3_n2_losses(
         + weights.future_latent * future_latent
         + weights.teacher_reconstruction * teacher_reconstruction
         + weights.teammate_delta * teammate_delta
+        + weights.teammate_action * teammate_action
         + weights.exchange_consistency * exchange
         + weights.anti_collapse * anti_collapse
     )
@@ -189,6 +207,7 @@ def compute_b3_n2_losses(
         "future_latent": future_latent,
         "teacher_reconstruction": teacher_reconstruction,
         "teammate_delta": teammate_delta,
+        "teammate_action": teammate_action,
         "exchange_consistency": exchange,
         "anti_collapse": anti_collapse,
     }
