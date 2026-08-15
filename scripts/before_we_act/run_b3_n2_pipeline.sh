@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 
 ROOT="${BWA_N2_REPO_ROOT:-/workspace/fe-pc-wam-b-core}"
-RUN_ROOT="${BWA_N2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-r2-action-conditioned-pairing-v2}"
+RUN_ROOT="${BWA_N2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-r3-evidence-gated-persistence-v1}"
+PREVIOUS_R2_ROOT="${BWA_PREVIOUS_N2_R2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-r2-action-conditioned-pairing-v2}"
 FAILED_N2_ROOT="${BWA_FAILED_N2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-predictive-team-belief-v1}"
 STABILIZED_N2_ROOT="${BWA_STABILIZED_N2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-r1-discrete-belief-stabilization-v2}"
 N1_CACHE="${BWA_N1_CACHE_ROOT:-/workspace/bwa_runs/shared/p1-b-core-n1-cache-v1}"
@@ -86,6 +87,7 @@ if [[ ! -f "${CONTRACT}" ]]; then
     --action-context-cache "${ACTION_CACHE}" \
     --failed-n2-run "${FAILED_N2_ROOT}" \
     --stabilized-n2-run "${STABILIZED_N2_ROOT}" \
+    --previous-r2-run "${PREVIOUS_R2_ROOT}" \
     --source-commit "${SOURCE_COMMIT}" \
     --output "${CONTRACT}" \
     >"${RUN_ROOT}/logs/contract.log" 2>&1
@@ -125,7 +127,7 @@ fi
 
 PILOT_ROOT="${RUN_ROOT}/repair_pilot/seed_20260815"
 if [[ ! -f "${RUN_ROOT}/repair_pilot_conclusion.json" ]]; then
-  write_status RUNNING repair_pilot "running one 4000-update causal seed; no formal training is authorized"
+  write_status RUNNING repair_pilot "running one 4000-update horizon-gated/evidential seed; no formal training is authorized"
   CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m before_we_act.train_b3_n2 \
     --cache "${N1_CACHE}" --action-context-cache "${ACTION_CACHE}" \
     --contract "${CONTRACT}" --scenario-split "${SCENARIO_SPLIT}" \

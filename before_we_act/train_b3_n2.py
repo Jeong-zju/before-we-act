@@ -203,7 +203,9 @@ def evaluate(
     sigma_values: list[float] = []
     mu_rows: list[torch.Tensor] = []
     categorical_rows: list[torch.Tensor] = []
-    uncertainty_rows: list[tuple[float, float, float, float]] = []
+    uncertainty_rows: list[
+        tuple[float, float, float, float, float, float, float, float]
+    ] = []
     seen_uncertainty = 0
     for raw in loader:
         batch = device_batch(raw, device)
@@ -369,8 +371,20 @@ def evaluate(
                 (
                     float(output.candidate.belief.sigma.float().mean().cpu()),
                     float(perturbed.sigma.float().mean().cpu()),
+                    float(
+                        output.candidate.belief.epistemic_uncertainty.float()
+                        .mean()
+                        .cpu()
+                    ),
+                    float(perturbed.epistemic_uncertainty.float().mean().cpu()),
                     float(output.candidate.belief.reliability.float().mean().cpu()),
                     float(perturbed.reliability.float().mean().cpu()),
+                    float(
+                        output.candidate.belief.view_evidence_count.float()
+                        .mean()
+                        .cpu()
+                    ),
+                    float(perturbed.view_evidence_count.float().mean().cpu()),
                 )
             )
             seen_uncertainty += len(batch["task_index"])
@@ -434,6 +448,14 @@ def evaluate(
             "shuffle": observable_future["shuffled_action"],
         },
         "future_observable_mse": observable_future,
+        "future_horizon_gain": {
+            f"{seconds:.1f}s": float(value)
+            for seconds, value in zip(
+                FUTURE_OFFSETS_SECONDS,
+                output.candidate.belief.future_horizon_gain.float().cpu().tolist(),
+                strict=True,
+            )
+        },
         "action_pairing": {
             **pairing_means,
             "shuffle_minus_correct_mse": pairing_means["shuffled_mse"]
@@ -462,10 +484,27 @@ def evaluate(
         },
         "uncertainty_occlusion": {
             "rows": seen_uncertainty,
+            # Normalized categorical entropy measures ambiguity.  It is kept
+            # as a diagnostic but is not required to rise when a conflicting
+            # view is removed.
             "sigma_clean": float(np.mean([row[0] for row in uncertainty_rows])),
             "sigma_occluded": float(np.mean([row[1] for row in uncertainty_rows])),
-            "reliability_clean": float(np.mean([row[2] for row in uncertainty_rows])),
-            "reliability_occluded": float(np.mean([row[3] for row in uncertainty_rows])),
+            "epistemic_uncertainty_clean": float(
+                np.mean([row[2] for row in uncertainty_rows])
+            ),
+            "epistemic_uncertainty_occluded": float(
+                np.mean([row[3] for row in uncertainty_rows])
+            ),
+            "reliability_clean": float(np.mean([row[4] for row in uncertainty_rows])),
+            "reliability_occluded": float(
+                np.mean([row[5] for row in uncertainty_rows])
+            ),
+            "view_evidence_count_clean": float(
+                np.mean([row[6] for row in uncertainty_rows])
+            ),
+            "view_evidence_count_occluded": float(
+                np.mean([row[7] for row in uncertainty_rows])
+            ),
         },
         "rows": len(values["b0h"]),
     }

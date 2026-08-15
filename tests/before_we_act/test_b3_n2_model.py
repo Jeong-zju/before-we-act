@@ -227,6 +227,12 @@ def test_future_predictor_starts_at_persistence_and_is_action_conditioned() -> N
     torch.testing.assert_close(
         baseline.future_latent_prediction, persistence, rtol=0, atol=0
     )
+    torch.testing.assert_close(
+        baseline.future_horizon_gain,
+        torch.zeros(4),
+        rtol=0,
+        atol=0,
+    )
     assert torch.equal(
         baseline.current_visual_view_mask,
         torch.tensor([[True, True, False], [True, True, False]]),
@@ -234,6 +240,9 @@ def test_future_predictor_starts_at_persistence_and_is_action_conditioned() -> N
 
     with torch.no_grad():
         model.future_predictor.delta_head.weight.normal_(mean=0.0, std=0.05)
+        model.future_predictor.horizon_gain_raw.copy_(
+            torch.tensor((0.1, 0.2, 0.3, 0.4))
+        )
     changed_action = action.clone()
     changed_action[:, :32] += 2.0
     first = model(
@@ -256,6 +265,25 @@ def test_future_predictor_starts_at_persistence_and_is_action_conditioned() -> N
         rtol=0,
         atol=0,
     )
+
+
+def test_persistence_gate_has_a_gradient_at_zero_initialization() -> None:
+    torch.manual_seed(16)
+    config = tiny_config()
+    model = PredictiveTeamBeliefCore(config, include_teacher=False).train()
+    values = runtime_inputs(config, batch=2)
+    action = torch.randn(2, 32, config.action_dim)
+    output = model(
+        *values,
+        future_action=action,
+        future_action_mask=torch.ones(2, 32, dtype=torch.bool),
+    )
+    target = output.future_latent_prediction.detach() + 0.1
+    (output.future_latent_prediction - target).square().mean().backward()
+    gradient = model.future_predictor.horizon_gain_raw.grad
+    assert gradient is not None
+    assert torch.isfinite(gradient).all()
+    assert gradient.abs().sum() > 0
 
 
 def teacher_inputs(config: B3N2Config) -> TeacherBeliefInputs:
@@ -321,6 +349,23 @@ def test_uncertainty_reduces_reliability() -> None:
     low_reliability = PredictiveTeamBeliefCore.reliability_from_sigma(low)
     high_reliability = PredictiveTeamBeliefCore.reliability_from_sigma(high)
     assert torch.all(low_reliability > high_reliability)
+
+
+def test_removing_a_view_must_increase_epistemic_uncertainty() -> None:
+    clean = torch.tensor([[True, True, False], [True, True, False]])
+    occluded = torch.tensor([[True, False, False], [True, False, False]])
+    clean_reliability, clean_uncertainty, clean_evidence = (
+        PredictiveTeamBeliefCore.uncertainty_from_view_evidence(clean)
+    )
+    occluded_reliability, occluded_uncertainty, occluded_evidence = (
+        PredictiveTeamBeliefCore.uncertainty_from_view_evidence(occluded)
+    )
+    torch.testing.assert_close(clean_evidence, torch.full((2, 1, 1), 2.0))
+    torch.testing.assert_close(occluded_evidence, torch.ones(2, 1, 1))
+    torch.testing.assert_close(clean_uncertainty, torch.full((2, 1, 1), 1 / 3))
+    torch.testing.assert_close(occluded_uncertainty, torch.full((2, 1, 1), 1 / 2))
+    assert torch.all(occluded_uncertainty > clean_uncertainty)
+    assert torch.all(occluded_reliability < clean_reliability)
 
 
 def test_auxiliary_losses_mask_tail_anchors_and_report_each_horizon() -> None:

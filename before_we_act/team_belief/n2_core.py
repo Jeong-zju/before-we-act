@@ -127,6 +127,8 @@ class BeliefCoreOutput:
     mu_sequence: torch.Tensor
     sigma_sequence: torch.Tensor
     reliability: torch.Tensor
+    epistemic_uncertainty: torch.Tensor
+    view_evidence_count: torch.Tensor
     surprise: torch.Tensor
     evidence_conflict: torch.Tensor
     event_memory: torch.Tensor
@@ -135,6 +137,7 @@ class BeliefCoreOutput:
     current_visual_reference: torch.Tensor
     current_visual_view_mask: torch.Tensor
     future_latent_prediction: torch.Tensor
+    future_horizon_gain: torch.Tensor
     teammate_state_delta_prediction: torch.Tensor
     teammate_action_mean: torch.Tensor
     teammate_action_logvar: torch.Tensor
@@ -172,9 +175,12 @@ class ActionConditionedFuturePredictor(nn.Module):
     """Predict action-conditioned DINO deltas above a persistence reference.
 
     This is the small recurrent form of the action-conditioned latent predictor
-    used by V-JEPA 2-AC and DINO-WM. Predicting a delta, with a zero-initialized
-    output layer, makes the untrained model exactly equal to legal-view
-    persistence instead of asking an unconditional MLP to relearn persistence.
+    used by V-JEPA 2-AC and DINO-WM.  The output uses Persistence Initialization:
+    four independent zero-initialized gains multiply non-zero candidate deltas.
+    The untrained model is therefore exactly legal-view persistence, while each
+    registered horizon can independently decide whether leaving that baseline
+    is useful.  This avoids making the short horizons inherit a delta magnitude
+    which is useful only at 0.8/1.6 seconds.
     """
 
     def __init__(self, config: B3N2Config) -> None:
@@ -194,8 +200,20 @@ class ActionConditionedFuturePredictor(nn.Module):
         )
         self.output_norm = nn.LayerNorm(d)
         self.delta_head = nn.Linear(d, config.vision_dim)
-        nn.init.zeros_(self.delta_head.weight)
+        # A zero output head together with a zero persistence gate would have
+        # zero gradient in both factors.  PI instead keeps a small non-zero
+        # candidate forecast and initializes only the multiplicative gate at
+        # zero, so the first update can learn whether each horizon should move.
+        nn.init.normal_(self.delta_head.weight, mean=0.0, std=0.002)
         nn.init.zeros_(self.delta_head.bias)
+        self.horizon_gain_raw = nn.Parameter(
+            torch.zeros(len(FUTURE_OFFSETS_STEPS))
+        )
+
+    def horizon_gain(self) -> torch.Tensor:
+        """Bounded per-horizon Persistence-Initialization gains."""
+
+        return torch.tanh(self.horizon_gain_raw)
 
     def forward(
         self,
@@ -297,6 +315,7 @@ class ActionConditionedFuturePredictor(nn.Module):
             self.config.d_model,
         ).transpose(1, 2)
         delta = self.delta_head(self.output_norm(anchored))
+        delta = delta * self.horizon_gain()[None, :, None, None].to(delta.dtype)
         delta = delta * current_view_mask[:, None, :, None].to(delta.dtype)
         return current_visual[:, None] + delta
 
@@ -720,6 +739,29 @@ class PredictiveTeamBeliefCore(nn.Module):
             raise ValueError("belief sigma must be [batch,token,width]")
         return (1.0 / (1.0 + sigma.mean((1, 2)))).view(-1, 1, 1)
 
+    @staticmethod
+    def uncertainty_from_view_evidence(
+        current_view_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return reliability and epistemic uncertainty from visible evidence.
+
+        Trusted Multi-View Classification represents uncertainty mass as
+        ``u = K / sum(alpha)`` for Dirichlet evidence ``alpha = evidence + 1``.
+        Here every legal observed view contributes one non-negative unit of
+        evidence per categorical class, while the ``+1`` prior remains even
+        with no observation.  Consequently ``u = 1 / (1 + n_views)`` and
+        removing a view *must* increase epistemic uncertainty.  Categorical
+        entropy remains a separate ambiguity diagnostic and is not forced to
+        move monotonically when a conflicting view disappears.
+        """
+
+        if current_view_mask.ndim != 2 or current_view_mask.dtype != torch.bool:
+            raise ValueError("current view mask must be boolean [batch,view]")
+        evidence_count = current_view_mask.sum(-1, keepdim=True).float().unsqueeze(-1)
+        uncertainty = 1.0 / (1.0 + evidence_count)
+        reliability = 1.0 - uncertainty
+        return reliability, uncertainty, evidence_count
+
     def forward(
         self,
         runtime_visual_tokens: torch.Tensor,
@@ -874,13 +916,15 @@ class PredictiveTeamBeliefCore(nn.Module):
         assert final_log_probs is not None
         assert final_probs is not None
         assert final_entropy is not None
-        reliability = self.reliability_from_sigma(final_sigma)
         current_visual = evidence.raw_dino_view_pool[:, -1]
         current_view_mask = evidence.view_valid[:, -1]
         if current_visual.shape[1] < self.config.max_views:
             missing = self.config.max_views - current_visual.shape[1]
             current_visual = F.pad(current_visual, (0, 0, 0, missing))
             current_view_mask = F.pad(current_view_mask, (0, missing))
+        reliability, epistemic_uncertainty, view_evidence_count = (
+            self.uncertainty_from_view_evidence(current_view_mask)
+        )
         future = self.predict_future(
             final_mu,
             current_visual,
@@ -905,6 +949,8 @@ class PredictiveTeamBeliefCore(nn.Module):
             mu_sequence=mu_sequence,
             sigma_sequence=sigma_sequence,
             reliability=reliability,
+            epistemic_uncertainty=epistemic_uncertainty,
+            view_evidence_count=view_evidence_count,
             surprise=surprise_sequence,
             evidence_conflict=evidence.conflict,
             event_memory=events.tokens,
@@ -913,6 +959,7 @@ class PredictiveTeamBeliefCore(nn.Module):
             current_visual_reference=current_visual,
             current_visual_view_mask=current_view_mask,
             future_latent_prediction=future,
+            future_horizon_gain=self.future_predictor.horizon_gain(),
             teammate_state_delta_prediction=teammate_delta,
             teammate_action_mean=teammate_action_parameters[..., 0],
             teammate_action_logvar=teammate_action_parameters[..., 1].clamp(-8.0, 5.0),

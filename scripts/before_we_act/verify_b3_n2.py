@@ -86,6 +86,18 @@ def f0(args) -> None:
             counterfactual_action_mask=batch["action_mask"][negative],
         )
         loss = losses["total"] + (output.direct_prediction - batch["action"]).square().mean()
+        occluded_mask = batch["runtime_visual_mask"].clone()
+        occluded_mask[:, :, 1] = False
+        occluded = model.belief_core(
+            batch["runtime_visual_tokens"],
+            occluded_mask,
+            batch["history_qpos"],
+            batch["history_action"],
+            batch["history_mask"],
+            batch["action_history_mask"],
+            batch["task_token"],
+            batch["episode_reset_mask"],
+        )
     loss.backward()
     torch.cuda.synchronize(device)
     elapsed = time.perf_counter() - started
@@ -108,9 +120,26 @@ def f0(args) -> None:
         "zero_init_future_exact_legal_persistence": torch.equal(
             output.candidate.belief.future_latent_prediction, persistence
         ),
+        "zero_init_future_gate_has_finite_nonzero_gradient": bool(
+            model.belief_core.future_predictor.horizon_gain_raw.grad is not None
+            and torch.isfinite(
+                model.belief_core.future_predictor.horizon_gain_raw.grad
+            ).all()
+            and model.belief_core.future_predictor.horizon_gain_raw.grad.abs().sum()
+            > 0
+        ),
         "runtime_future_has_only_two_legal_views": bool(
             output.candidate.belief.current_visual_view_mask[:, :2].all()
             and not output.candidate.belief.current_visual_view_mask[:, 2].any()
+        ),
+        "one_view_occlusion_increases_epistemic_uncertainty": bool(
+            (
+                occluded.epistemic_uncertainty
+                > output.candidate.belief.epistemic_uncertainty
+            ).all()
+        ),
+        "one_view_occlusion_reduces_reliability": bool(
+            (occluded.reliability < output.candidate.belief.reliability).all()
         ),
         "action_pairing_loss_reported": "action_pairing" in losses,
         "loss_finite": bool(torch.isfinite(loss)),

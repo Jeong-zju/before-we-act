@@ -79,6 +79,19 @@ def main() -> None:
     )
     future_prediction = persistence_wins >= 3 and shuffled_action_worse >= 3
 
+    uncertainty = validation["uncertainty_occlusion"]
+    epistemic_clean = float(uncertainty["epistemic_uncertainty_clean"])
+    epistemic_occluded = float(uncertainty["epistemic_uncertainty_occluded"])
+    reliability_clean = float(uncertainty["reliability_clean"])
+    reliability_occluded = float(uncertainty["reliability_occluded"])
+    evidence_clean = float(uncertainty["view_evidence_count_clean"])
+    evidence_occluded = float(uncertainty["view_evidence_count_occluded"])
+    uncertainty_direction = (
+        epistemic_occluded > epistemic_clean
+        and reliability_occluded < reliability_clean
+        and evidence_occluded < evidence_clean
+    )
+
     if not kl_stable:
         decision = "FAILED_KL_STABILITY"
         summary = "旧的 KL 问题复发，不能继续训练。"
@@ -88,6 +101,9 @@ def main() -> None:
     elif not action_binding:
         decision = "FAILED_ACTION_BELIEF_BINDING"
         summary = "正确 belief 和错配 belief 仍不能让真实动作输出拉开差距，不能靠延长训练解决。"
+    elif not uncertainty_direction:
+        decision = "FAILED_OCCLUSION_UNCERTAINTY"
+        summary = "遮掉一个运行视角后，证据不确定性仍没有上升或可靠度没有下降，不能继续训练。"
     elif not future_prediction:
         decision = "FAILED_ACTION_CONDITIONED_FUTURE"
         summary = "未来头还没有公平地击败 persistence，或打乱动作后没有变差，不能靠延长训练解决。"
@@ -99,7 +115,7 @@ def main() -> None:
         summary = "belief 错配会伤害动作、动作错配会伤害未来预测，而且未来头公平击败 persistence；仍不自动启动长训练。"
 
     payload = {
-        "format_version": "before-we-act.b3-n2-repair-pilot/1",
+        "format_version": "before-we-act.b3-n2-repair-pilot/2",
         "stage": contract["stage_id"],
         "status": decision,
         "completed_at_utc": datetime.now(timezone.utc).isoformat().replace(
@@ -136,6 +152,20 @@ def main() -> None:
                 "shuffled_action_worse_than_oracle_horizons": shuffled_action_worse,
                 "required_each": 3,
                 "mse": future,
+                "learned_horizon_gain": validation["future_horizon_gain"],
+            },
+            "occlusion_uncertainty_direction": {
+                "passed": uncertainty_direction,
+                "categorical_entropy_is_diagnostic_not_gate": {
+                    "clean": uncertainty["sigma_clean"],
+                    "occluded": uncertainty["sigma_occluded"],
+                },
+                "epistemic_uncertainty_clean": epistemic_clean,
+                "epistemic_uncertainty_occluded": epistemic_occluded,
+                "reliability_clean": reliability_clean,
+                "reliability_occluded": reliability_occluded,
+                "view_evidence_count_clean": evidence_clean,
+                "view_evidence_count_occluded": evidence_occluded,
             },
             "action_quality_guard": {
                 "passed": action_quality,

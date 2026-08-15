@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the action-conditioned predictive-pairing 3-N2 contract before F0."""
+"""Freeze the evidence-gated persistence-correction 3-N2 contract before F0."""
 from __future__ import annotations
 
 import argparse
@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--action-context-cache", type=Path, required=True)
     parser.add_argument("--failed-n2-run", type=Path, required=True)
     parser.add_argument("--stabilized-n2-run", type=Path, required=True)
+    parser.add_argument("--previous-r2-run", type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
@@ -82,6 +83,15 @@ def main() -> None:
     ):
         raise RuntimeError("the discrete-belief stabilization pilot did not pass")
     stabilized_validation = stabilized_pilot["selected_validation"]
+    previous_r2_conclusion_path = args.previous_r2_run / "repair_pilot_conclusion.json"
+    previous_r2_status_path = (
+        args.previous_r2_run / "repair_pilot/seed_20260815/status.json"
+    )
+    previous_r2 = json.loads(previous_r2_conclusion_path.read_text(encoding="utf-8"))
+    previous_r2_status = json.loads(previous_r2_status_path.read_text(encoding="utf-8"))
+    if previous_r2.get("status") != "FAILED_ACTION_CONDITIONED_FUTURE":
+        raise RuntimeError("the previous R2 future failure evidence changed")
+    previous_r2_validation = previous_r2_status["selected_validation"]
     failed_seed_evidence = {}
     for seed in SEEDS:
         evaluation_path = args.failed_n2_run / f"training/seed_{seed}/evaluations.jsonl"
@@ -109,11 +119,11 @@ def main() -> None:
         raise RuntimeError("N2 frozen action-context cache is not complete")
     payload = {
         "format_version": "before-we-act.b3-n2-contract/2",
-        "stage_id": "B3-N2-R2-ACTION-CONDITIONED-PREDICTIVE-PAIRING",
+        "stage_id": "B3-N2-R3-EVIDENCE-GATED-PERSISTENCE-CORRECTION",
         "status": "FROZEN_BEFORE_F0_F1",
         "created_at_utc": utc_now(),
         "source_commit": args.source_commit,
-        "question": "Can one action-conditioned predictive-pairing migration make the action residual causally depend on the correctly paired belief and beat a legal-view persistence baseline before any new full-budget training?",
+        "question": "Can horizon-specific persistence gates retain R2 action conditioning while beating legal-view persistence at >=3/4 horizons, and can explicit view-evidence uncertainty make one-view occlusion increase epistemic uncertainty before any new full-budget training?",
         "authorization": {
             "status": authorization,
             "roadmap": str(args.roadmap.resolve()),
@@ -156,6 +166,14 @@ def main() -> None:
             "stabilized_discrete_n2_pilot_status_sha256": sha256_file(
                 stabilized_pilot_path
             ),
+            "previous_r2_conclusion": str(previous_r2_conclusion_path.resolve()),
+            "previous_r2_conclusion_sha256": sha256_file(
+                previous_r2_conclusion_path
+            ),
+            "previous_r2_pilot_status": str(previous_r2_status_path.resolve()),
+            "previous_r2_pilot_status_sha256": sha256_file(
+                previous_r2_status_path
+            ),
         },
         "architecture": {
             "d_model": 384,
@@ -175,7 +193,7 @@ def main() -> None:
             "belief_representation_scale": 0.1,
             "belief_feature_interface": "centered categorical probabilities projected to d_model; teacher reconstruction and runtime prediction must pass through this bottleneck",
             "capacity_rationale": "R1 only established the action signal with all 16 student tokens; retain that measured capacity, use four evidence queries/four bounded events, and match the two-layer legal-history depth. These values are frozen before N2 metrics and will not be searched.",
-            "action_interface": "all 100 B0-H decoded action queries cross-attend all 16 projected categorical belief tokens through a zero-init entropy-reliability-gated residual; raw decoded-action hidden is forbidden from bypassing the belief readout",
+            "action_interface": "all 100 B0-H decoded action queries cross-attend all 16 projected categorical belief tokens through a zero-init view-evidence-reliability-gated residual; raw decoded-action hidden is forbidden from bypassing the belief readout",
             "base": "formal B0-H hidden-residual checkpoint; belief-off is bitwise the same base action",
             "teacher": "training-only synchronized three-view/future/joint-state posterior; physically absent from deployment export",
             "runtime": "legal 16-step global+ego-local pooled DINO, ego qpos, executed ego action, task text, validity/reset masks",
@@ -209,8 +227,18 @@ def main() -> None:
                 "interpretation": "The old absolute future head sees no future action and loses to persistence at every horizon; its persistence comparator also included a training-only teammate view.",
             },
         },
+        "previous_r2_failure_evidence": {
+            "status": previous_r2["status"],
+            "future_observable_mse": previous_r2_validation[
+                "future_observable_mse"
+            ],
+            "uncertainty_occlusion": previous_r2_validation[
+                "uncertainty_occlusion"
+            ],
+            "interpretation": "R2 binds action to belief and action to future, but a shared always-on delta overshoots legal persistence at 0.2/0.4 seconds. Its categorical entropy is also incorrectly reused as missing-view epistemic uncertainty, so removing a runtime view makes the reported reliability rise.",
+        },
         "single_idea_migration": {
-            "name": "action-conditioned predictive pairing",
+            "name": "evidence-gated persistence correction",
             "primary_model": {
                 "paper": "V-JEPA 2",
                 "paper_url": "https://arxiv.org/abs/2506.09985",
@@ -231,9 +259,21 @@ def main() -> None:
                 "official_source": "agents/taco.py",
                 "license": "MIT",
             },
+            "persistence_initialization": {
+                "paper": "Persistence Initialization: a novel adaptation of the Transformer architecture for time series forecasting",
+                "paper_url": "https://doi.org/10.1007/s10489-023-04927-4",
+                "official_repository": "https://github.com/EspenHa/persistence_initialization",
+                "mechanism": "a zero-initialized multiplicative gamma gates a non-zero learned correction over an exact persistence skip connection",
+            },
+            "trusted_multiview_uncertainty": {
+                "paper": "Trusted Multi-View Classification",
+                "paper_url": "https://openreview.net/forum?id=OOsR8BzCnl5",
+                "official_repository": "https://github.com/Han-Zongbo/TMC",
+                "mechanism": "separate Dirichlet evidence uncertainty u=K/sum(alpha) from categorical belief ambiguity; each present runtime view contributes non-negative evidence",
+            },
             "implementation": "PyTorch adaptation of the mechanisms; no upstream source copied",
-            "mechanism": "A shared recurrent predictor rolls legal current DINO features and belief forward under the future ego-action sequence, predicts only a zero-initialized delta over persistence, and trains the real policy output so a correct belief/action pairing outranks a within-task/phase shuffled pairing whenever their residual targets are measurably different.",
-            "one_idea_rationale": "Both repairs enforce the same causal statement: the latent must contain information that is useful only when paired with the correct action-conditioned transition. They are evaluated together by correct-vs-shuffled interventions, not treated as independent score boosters.",
+            "mechanism": "Retain R2 action-conditioned recurrent DINO correction and correct-vs-shuffled pairing. Replace the shared always-on correction with four independently learned zero-initialized persistence gains. Separately expose missing-view epistemic uncertainty as u=1/(1+n_valid_views), while categorical entropy remains only an ambiguity diagnostic.",
+            "one_idea_rationale": "Both changes implement the same conservative update rule: persistence/current belief is the prior and a correction is trusted only to the extent that its registered horizon and currently available evidence support it. No backbone, token width, loss weight, validation row, or future target is searched.",
         },
         "future_contract": {
             "source_frequency_hz": 20,
@@ -249,6 +289,7 @@ def main() -> None:
             ],
             "baseline": "persistence from the same legal current runtime views only",
             "conditioning": "ground-truth ego action during world-model training; policy action at deployment; report both plus shuffled-action and shuffled-belief interventions",
+            "persistence_gate": "one bounded zero-initialized learned gain per pre-registered horizon; all four are optimized only on the training split and reported on validation",
         },
         "training": {
             "seeds": list(SEEDS),
@@ -322,6 +363,7 @@ def main() -> None:
             "action_binding": "validation b_shuffle MSE must be strictly worse than b_core MSE and shuffled-belief residual-output MSE divided by residual energy must be >= 0.01",
             "future_prediction": "oracle-action future MSE must beat same-view persistence at at least 3/4 horizons and shuffled-action MSE must be worse than oracle-action MSE at at least 3/4 horizons",
             "action_quality_guard": "b_core action MSE must not exceed direct-reactive MSE by more than 1%",
+            "occlusion_uncertainty": "after masking one of the two legal runtime views, explicit epistemic uncertainty must strictly increase, reliability must strictly decrease, and view evidence count must decrease; categorical entropy is diagnostic only",
             "resume_rule": "do not start a new 120k three-seed run until every retained and new causal gate passes; owner authorization remains separately required",
         },
         "validation5_gate": "run only if every seed is training-sufficient; use the existing frozen per-task seed files and compare aggregate/task direction with the formal B0-H results",
