@@ -267,17 +267,30 @@ class ActionConditionedFuturePredictor(nn.Module):
             self.config.temporal_layers, -1, -1
         ).contiguous()
 
-        action = self.action_projection(future_action)
-        action = action * future_action_mask.unsqueeze(-1).to(action.dtype)
+        projected_action = self.action_projection(future_action)
+        projected_action = projected_action * future_action_mask.unsqueeze(-1).to(
+            projected_action.dtype
+        )
+        boundaries = (0, *FUTURE_OFFSETS_STEPS)
+        action_segments = []
+        for start, end in zip(boundaries[:-1], boundaries[1:], strict=True):
+            segment_mask = future_action_mask[:, start:end]
+            count = segment_mask.sum(1, keepdim=True).clamp_min(1)
+            summary = projected_action[:, start:end].sum(1) / count
+            summary = summary * segment_mask.any(1, keepdim=True).to(summary.dtype)
+            action_segments.append(summary)
+        # Four fixed 20-Hz intervals preserve the registered prediction times
+        # while avoiding a slow 32-step recurrent rollout in every train batch.
+        action = torch.stack(action_segments, dim=1)
         action = action[:, None].expand(
             -1, self.config.max_views, -1, -1
-        ).reshape(batch * self.config.max_views, horizon, self.config.d_model)
-        rollout, _ = self.recurrent(action, hidden)
-        anchor_indices = torch.tensor(
-            [offset - 1 for offset in FUTURE_OFFSETS_STEPS],
-            device=rollout.device,
+        ).reshape(
+            batch * self.config.max_views,
+            len(FUTURE_OFFSETS_STEPS),
+            self.config.d_model,
         )
-        anchored = rollout.index_select(1, anchor_indices).view(
+        rollout, _ = self.recurrent(action, hidden)
+        anchored = rollout.view(
             batch,
             self.config.max_views,
             len(FUTURE_OFFSETS_STEPS),
