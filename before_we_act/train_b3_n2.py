@@ -423,7 +423,16 @@ def evaluate(
             for name, by_task in tasks.items()
         },
         "auxiliary": {name: float(np.mean(rows)) for name, rows in auxiliary.items()},
-        "future_mse": future,
+        # Keep the old all-teacher-view diagnostic under an explicit name. The
+        # runtime model never observes teammate-local current visual evidence,
+        # so using that third view in its primary persistence comparison is not
+        # a valid model-selection metric.
+        "future_privileged_view_diagnostic_mse": future,
+        "future_mse": {
+            "model": observable_future["oracle_action"],
+            "persistence": observable_future["persistence"],
+            "shuffle": observable_future["shuffled_action"],
+        },
         "future_observable_mse": observable_future,
         "action_pairing": {
             **pairing_means,

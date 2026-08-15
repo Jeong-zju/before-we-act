@@ -2,8 +2,8 @@
 
 > 更新日期：2026-08-15
 > 活动分支：`feat/ssc-v7-b-core`
-> 当前状态：**探索性 3-N2 已执行并按负责人要求停止长训练。旧 Gaussian belief 三 seed 在共同 `30,000` update 已同时出现 KL 爆炸、shuffle 几乎不掉点、输给 direct control、未来预测输给 persistence 和有效秩低于 2；继续烧到 12 万步没有意义。** 随后只迁移了一个思想——DreamerV3 的有界离散状态与 balanced KL——并用独立 2,000-update pilot 验证修复：KL 最大 `1.10025`，runtime-to-teacher 原始 KL 降低 `76.7%`、32 类 top-1 一致率升至 `81.5%`，按 slot 内跨局面计算的有效秩升至 `6.82`，12/12 个离散因子活跃。正式长训练、Validation5、3-N3 和闭环 claim 均未启动。
-> 3-N2 最新证据边界：**可以说“KL 爆炸、belief 无法估计和 belief 近似一维这三个表示层问题已经在单 seed 短测中被修复”；不能说“完整 B-core 已有效”。** 最终 B-core 动作误差虽比 B0-H 低 `16.49%`，但 shuffle 后反而微小变好 `0.0029%`，同容量 direct 又比 B-core 低 `0.247%`；`1.6s` 未来误差仍是 persistence 的 `2.01×`。因此当前路线状态是 `BELIEF_REPRESENTATION_REPAIRED_ACTION_USAGE_NOT_ESTABLISHED`，不继续原训练，也不把短测自动回执的三道表示门通过冒充动作门通过。人话结论见第 6.2.1 节。
+> 当前状态：**探索性 3-N2 长训练仍保持停止；两个短修复把问题进一步拆开。** R1 的 DreamerV3 式离散 belief 修好了 KL、teacher 可估计性和多维性。R2 又迁移 action-conditioned latent dynamics 与正确/错配 pairing：4,000-update pilot 中，打乱 belief 使动作 MSE 从 `0.00267748` 恶化到 `0.00355407`（`+32.74%`），说明动作 residual 终于在用对应的 belief；但未来头只在 `0.8s/1.6s` 胜过同视角 persistence，`0.2s/0.4s` 仍略输，预注册的 `3/4` horizon 门未通过。正式长训练、Validation5、3-N3 和闭环 claim 均未启动。
+> 3-N2 最新证据边界：**可以说“表示问题已修复，正确 belief 与动作输出的绑定也已在单 seed 离线短测中建立，未来预测开始使用动作并在较长 horizon 有效”；不能说“未来头已全面胜过 persistence”或“完整 B-core 已有效”。** R2 的机器状态是 `FAILED_ACTION_CONDITIONED_FUTURE`：action-binding、动作质量保护、KL 与多维 belief 门都通过，future 门只过 `2/4`。当前路线状态记为 `ACTION_BELIEF_BINDING_REPAIRED_FUTURE_DYNAMICS_PARTIAL_FORMAL_TRAINING_FORBIDDEN`。人话结论见第 6.2.2 节。
 > 负责人修订：项目负责人接受“显著改变队友后续动作会明显影响任务成功率”作为后续研究假设，把有效的同状态闭环因果实验延后到论文成文前完成，并授权先做教师/学生离线探索。旧 R1-1 的“未收敛”和旧 R1-3 的“reward 全零、恢复不重复、判题无效”事实原样保留；无效 R1-3 的 reward、物体位移和分叉结果没有进入教师/学生损失或通过门禁。这是调整实验顺序，不是宣布 R1-3 已通过。
 > 3-N1/R1 证据边界：旧机器回执继续保留 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`、密封 test 未打开和 `n2_authorized=false`，因为它们准确记录原合同怎样判；但这些条件超出了负责人刚明确的 3-N1 路线目标，不再否决探索性 N2。现在可以说“真实队友信息对 ego 专家动作预测有很强的离线价值，合法历史也能恢复一部分，并且打乱 belief 后收益消失”，并据此启动 N2；仍不能说“教师/学生已正式收敛”“显式 belief 的独立必要性已证明”或“任务成功率已提高”。完整人话结论见第 6.1.4 节。
 > 证据边界：R4-C 在 72 条全新成功 episode 上相对冻结 HC 改善 `26.05%`，95% CI `[24.15%, 27.90%]`，三个 seed、六个任务全正；但 hidden-only、time-only、row-shuffle 和同阶段 shuffle 仍更强。因此可声称“整套 ARB_hat + residual 栈有稳定纸面收益”，不可声称“ARB 语义独立贡献了这些收益”。
@@ -12,7 +12,7 @@
 
 ## 现在到底卡在哪里（只看这一段就够了）
 
-**一句话：现在已经把 belief 本身修到“稳定、可估计、确实多维”，但动作模型仍没有证明自己在使用这份 belief；所以该停的是长训练，该继续研究的是 belief→action 的落地，而不是继续堆 update。**
+**一句话：belief 已稳定、可估计、多维，动作 residual 也终于会因 belief 错配而明显变差；现在剩下的不是“再多训一点”，而是短时未来 delta 为什么会轻微过冲，以及遮挡不确定性方向为何在 R2 后反转。**
 
 把这轮结果看成三场考试最容易理解：
 
@@ -25,7 +25,7 @@
 - **训练充分性缺口：**教师和学生都跑满 8 万步，但冻结平台条件没有满足，所以密封 test 不能打开；
 - **独立归因缺口：**学生胜过 H 和打乱 belief，但还没有在所有 seed 上胜过同容量直接网络。
 
-探索性 3-N2 已经把问题进一步拆开：旧连续 Gaussian belief 的确坏了，但它不是唯一问题。DreamerV3 式离散迁移修好了数值稳定、teacher 可估计性和多维性；动作 shuffle 仍不掉点、direct 仍略好，则说明剩余缺口在 belief 的动作落地或当前数据里的动作分歧，而不是“belief 还不够多维”。因此当前行动边界是：**不恢复三 seed×120k 长训练，不开 Validation5，不进入 3-N3/N4；保留修复后的 belief core，把下一次实验限定为 belief→action 使用诊断。**
+探索性 3-N2 已把问题拆成三层。第一层，旧 Gaussian belief 的数学形式确实坏了，R1 已修好。第二层，旧动作头存在 raw action-hidden 捷径，且普通 action MSE 从未要求正确 belief 胜过错配；R2 删除捷径并在真实策略输出上加入 pairing 后，shuffle 明显掉点，这一层已修好。第三层，旧未来头既不看动作，又拿只有两个合法视角的 runtime 模型去和含 teammate-local 特权视角的 persistence 比；R2 改成同视角 action-conditioned DINO delta 后，长 horizon 已转正，短 horizon 仍轻微过冲。因此当前行动边界仍是：**不恢复三 seed×120k 长训练，不开 Validation5，不进入 3-N3/N4；保留 R2 的动作绑定结论，把后续结构工作严格限于训练集上可校准、基线安全的 horizon-wise delta shrinkage 和不确定性修复。**
 
 ## 0. 先用一句话说明这条路线
 
@@ -54,7 +54,7 @@
 
 > **“跑满上限”不等于“可以判失败”。预注册规则要求先训练到平台再签发正/负信号，所以本轮最诚实的结论是：方向暂时不利，但证据尚未收口。**
 
-R1 原合同先停在了 R1-3：公平 belief 趋势很强但未收敛，同状态队友扰动的 reward 又全为零。负责人随后另立只读顺序修订，把有效闭环因果测量延后到论文成文前，并授权教师和学生先做离线探索。教师与学生三 seed 都已完成且相对 H 一致改善，达到负责人定义的 3-N1 验证目的并授权了探索性 3-N2。3-N2 随后实际执行：旧长训练因 KL 爆炸、低秩和 shuffle 无效而停止；离散 belief 修复短测解决了表示问题，但动作使用仍未证明。原合同事实见第 6.1.3 节，负责人修订见第 6.1.4 节，N2 最新裁决见第 6.2.1 节。
+R1 原合同先停在了 R1-3：公平 belief 趋势很强但未收敛，同状态队友扰动的 reward 又全为零。负责人随后另立只读顺序修订，把有效闭环因果测量延后到论文成文前，并授权教师和学生先做离线探索。教师与学生三 seed 都已完成且相对 H 一致改善，达到负责人定义的 3-N1 验证目的并授权了探索性 3-N2。3-N2 随后实际执行：旧长训练因 KL 爆炸、低秩和 shuffle 无效而停止；R1 离散修复解决表示问题，R2 predictive pairing 又解决动作不使用 belief 的问题，但未来总门只过 `2/4` horizon。原合同事实见第 6.1.3 节，负责人修订见第 6.1.4 节，N2 最新裁决见第 6.2.2 节。
 
 阅读建议：
 
@@ -74,10 +74,10 @@ R1 原合同先停在了 R1-3：公平 belief 趋势很强但未收敛，同状�
   ↓
 第 2 步：统一 16 步训练样本 + 公平 B0-H（已完成，整体门槛通过）
   ↓
-第 3 步：自动团队信念 B-core（N2 表示修复已执行，停在动作使用和训练充分性门禁）
+第 3 步：自动团队信念 B-core（N2 表示与动作绑定已修复，停在短时未来和训练充分性门禁）
   ├─ 3-N1：无人工标签的原始数据团队表示（已执行，训练未收口）
   ├─ 3-N1-R1：负责人顺序修订后教师/学生已测；强验证信号，但未收敛且直接容量归因未闭合
-  ├─ 3-N2：旧长训练已停止；离散 belief 修复短测完成，动作使用未证明
+  ├─ 3-N2：旧长训练已停止；离散 belief 与动作 pairing 短测完成，future 只过 2/4 horizon
   ├─ 3-N3：整体结构与新信号的机制归因
   └─ 3-N4：冻结唯一方案并正式闭环验收
   ↓
@@ -313,9 +313,11 @@ action = ACT(observation, history)
 |---|---|---|---|
 | 怎样不用人工 B 标签形成动作相关状态 | [Being-H0.7，2026](https://arxiv.org/abs/2605.00078) | 采用结构匹配的运行分支和训练教师分支；未来四锚点只负责塑造潜在团队状态，部署时删除教师分支 | 它验证的是单机器人 latent world-action model，不能直接证明多机器人 team belief 有效 |
 | 怎样让 belief 明确服务动作，而不只预测画面 | [LIAM，2020](https://arxiv.org/abs/2006.09447) 与 [COMA，2017](https://arxiv.org/abs/1705.08926) | R1 先用训练期全知信息预测队友动作、B0-H 动作 residual 和反事实团队价值，再蒸馏只看合法历史的学生 | LIAM/COMA 的环境和训练范式与本项目不同；这里只借“训练时集中、执行时局部”和反事实信用分配原则，不把论文收益外推成本项目结论 |
+| 怎样防止真实动作头把 belief 当摆设 | [TACO，NeurIPS 2023](https://proceedings.neurips.cc/paper_files/paper/2023/file/96d00450ed65531ffe2996daed487536-Paper-Conference.pdf) 与 [EB-JEPA action-conditioned example，2026](https://github.com/facebookresearch/eb_jepa/blob/main/examples/ac_video_jepa/README.md) | 删除 action hidden 到 residual fusion 的直通路；只在 residual 目标确实不同的同任务/同阶段样本上，要求真实策略的正确 belief 配对优于 shuffled belief 配对 | TACO 原式是 state-action/future 的 InfoNCE，EB-JEPA 的 IDM 消融来自简化环境；本项目只迁移“正确配对必须胜过错配、且约束落在控制相关输出”这一原则，仍由本地 action-shuffle 判卷 |
 | 怎样排除场景规律和 episode 指纹 | [Causal Confusion，2019](https://arxiv.org/abs/1905.11979) 与 [Sequential Asymmetric Imitation，2026](https://arxiv.org/abs/2606.16490) | 按场景组切分，并从同一 simulator 状态只改变队友的 delay、时机和 role；要求 ego 动作按正确补救方向变化 | 干预只能说明本项目特定扰动下的因果方向，不能自动推广到所有协作任务 |
 | 怎样让团队状态对遮挡和关键事件敏感 | [MemoryVLA，ICLR 2026](https://arxiv.org/abs/2508.19236) 与 [RoboMemArena/PrediMem，2026](https://arxiv.org/abs/2605.10921) | 保留短期工作状态；用下一时刻潜在预测误差选择关键事件；每个 episode 强制 reset | 两者主要研究单机器人长时记忆，不能替本项目证明预测误差选出的事件会改善双机器人动作 |
 | 为什么预测潜在特征而不是未来像素 | [AHEAD，2026](https://arxiv.org/abs/2606.02486) 与 [ω-0，2026](https://arxiv.org/abs/2608.06375) | 冻结视觉主干，在紧凑特征空间预测场景和队友状态变化；不训练大型未来视频生成器 | 两者任务和数据规模不同，只支撑潜在预测这一训练形式 |
+| 为什么未来头必须看动作、并从 persistence 起步 | [V-JEPA 2-AC](https://github.com/facebookresearch/vjepa2) 与 [DINO-WM](https://github.com/gaoyuezhou/dino_wm) | 用当前合法 DINO 特征、belief 和未来 ego action 预测相对 persistence 的 latent delta；零初始化时精确等于同视角 persistence，训练报 oracle/policy/shuffled action 四组结果 | 两者主要做单机器人预测/规划，不能替本项目证明 team belief 有效；它们只排除了“无动作绝对回归头”这个已观测到的坏建模方式 |
 | 多机器人怎样保持可区分又不绑定固定编号 | [Gamma-World，2026](https://arxiv.org/abs/2605.28816) | 智能体锚点使用共享参数和相对角色编码，自由交互 token 形成共享团队状态；一致交换机器人时结果相应交换 | 它以生成式多智能体 world model 为主，只支撑置换对称和共享状态原则 |
 | P 怎样表示“做到哪了” | [PALM，CVPR 2026](https://openaccess.thecvf.com/content/CVPR2026/html/Liu_PALM_Progress-Aware_Policy_Learning_via_Affordance_Reasoning_for_Long-Horizon_Robotic_CVPR_2026_paper.html)、[ProcVLM，2026](https://procvlm.github.io/) 和 [ProgVLA，2026](https://arxiv.org/abs/2605.28231) | 联合学习 action 与 progress；progress 按任务谓词、程序步骤和剩余动作定义；长历史先压成少量 control-ready tokens | PALM 没有同等完整的官方实现；ProcVLM 是 progress reward/VLM，不是动作策略；ProgVLA 目前只作机制参考 |
 | T 应该学习哪些合作变化 | [Sequential Asymmetric Imitation，2026](https://arxiv.org/abs/2606.16490) | 数据和反事实必须覆盖队友延迟、阶段不一致、让行和错误分工，T 不能只在正常专家轨迹上学“队友总会配合” | 它主要支撑数据与干预设计，不是可直接搬来的 T 模块源码 |
@@ -372,7 +374,7 @@ action = ACT(observation, history)
 | B0-H | `feat/ssc-v7-b0-history` | `b0-history/` |
 | B-core 3-N1 | `feat/ssc-v7-b-core` | `b-core/n1-raw-signal/` |
 | B-core 3-N1-R1 | `feat/ssc-v7-b-core` | `b-core/n1-r1-action-grounded-belief/` |
-| B-core 3-N2 | `feat/ssc-v7-b-core` | `b-core/n2-predictive-team-belief-v1/`（旧失败，只读）与 `b-core/n2-r1-discrete-belief-stabilization-v2/`（表示修复短测） |
+| B-core 3-N2 | `feat/ssc-v7-b-core` | `b-core/n2-predictive-team-belief-v1/`（旧失败，只读）、`b-core/n2-r1-discrete-belief-stabilization-v2/`（表示修复）与 `b-core/n2-r2-action-conditioned-pairing-v2/`（动作绑定/未来诊断） |
 | B-core 3-N3 | `feat/ssc-v7-b-core` | `b-core/n3-attribution/` |
 | B-core 3-N4 | `feat/ssc-v7-b-core` | `b-core/n4-formal/` |
 | BP | `feat/ssc-v7-bp-progress` | `bp-progress/` |
@@ -914,7 +916,7 @@ R1 正式过门前必须有受控队友扰动证据。先做 720 条短 rollout 
 
 ### 6.2 3-N2：对称预测式团队信念模型
 
-3-N1-R1 已按负责人定义的“teacher/student 相对 H 改善”目标签发 `PASSED_OWNER_RELATIVE_IMPROVEMENT_GATE_N2_EXPLORATORY_AUTHORIZED`，因此当时允许建设和训练探索性完整 B-core。这里的授权一直只是“值得开模”，不是 `POSITIVE_ACTION_RELEVANT_BELIEF_SIGNAL`、正式收敛或闭环成功证明；第 6.2.1 节记录了实际执行后为什么再次停止。3-N2 不是手工状态机，而是一个面向部分可观测多机器人协作的潜在状态模型：
+3-N1-R1 已按负责人定义的“teacher/student 相对 H 改善”目标签发 `PASSED_OWNER_RELATIVE_IMPROVEMENT_GATE_N2_EXPLORATORY_AUTHORIZED`，因此当时允许建设和训练探索性完整 B-core。这里的授权一直只是“值得开模”，不是 `POSITIVE_ACTION_RELEVANT_BELIEF_SIGNAL`、正式收敛或闭环成功证明；第 6.2.1 节记录表示修复，第 6.2.2 节记录动作绑定修复与仍失败的 future 门。3-N2 不是手工状态机，而是一个面向部分可观测多机器人协作的潜在状态模型：
 
 ```text
                               仅训练时存在
@@ -1013,7 +1015,48 @@ teacher_target_space               = frozen_DINO_latent
 BELIEF_REPRESENTATION_REPAIRED_ACTION_USAGE_NOT_ESTABLISHED
 ```
 
-这不是失败后继续换 token 数、memory 或最好 seed 追正。正式三 seed×120k、Validation5、3-N3 和 3-N4 都没有启动。下一次若继续，只应围绕“为什么动作 residual 不区分正确 belief 与 shuffled belief、为什么未来头输给 persistence”另立一个可证伪的动作落地诊断；在它通过前，不再增加训练步数。小型机器摘要见 [`discrete_belief_repair_summary.json`](../experiments/n2/20260815/discrete_belief_repair_summary.json)，其中同时记录旧负证据、新 contract/F0/F1/audit 的 SHA256 和 checkpoint hash。
+这不是失败后继续换 token 数、memory 或最好 seed 追正。正式三 seed×120k、Validation5、3-N3 和 3-N4 都没有启动。这个结果只授权了下一节的可证伪 R2 动作落地诊断，没有授权增加正式训练步数。小型机器摘要见 [`discrete_belief_repair_summary.json`](../experiments/n2/20260815/discrete_belief_repair_summary.json)，其中同时记录旧负证据、新 contract/F0/F1/audit 的 SHA256 和 checkpoint hash。
+
+#### 6.2.2 2026-08-15 R2 结论：动作开始用 belief，未来只解决了长时段
+
+先说人话：**动作问题这次是真修到了，不是指标换了名字；未来问题则只修到一半。** 以前把正确 belief 换成同任务、同阶段的别人的 belief，动作几乎不动。现在一换就明显变差。以前未来头四个时点都输给 persistence；现在 `0.8s` 和 `1.6s` 已经赢，而且打乱动作后四个时点都变差，但 `0.2s`、`0.4s` 仍没有过线。所以不恢复长训练，也不把“2/4”写成“未来门通过”。
+
+**先查根因，而不是先换模型。** 对 R1 最终 checkpoint 的 2,304 条未见 episode 样本做只读配对诊断后发现：同任务/同阶段样本的 residual target 平均 MSE 是 `0.005281`，belief pair MSE 是 `0.03067`，说明数据和 belief 都有可辨信号；但正确/错配 belief 造成的 residual-output MSE 只有 `6.68e-7`，相对 residual energy 仅约 `0.18%`。问题不是“数据里没有不同动作”，而是旧 residual 把约 `99.8%` 的 belief 变化吃掉了。代码层也找到两条明确捷径：
+
+1. 动作 fusion 直接拼入 raw `action_hidden`，即使 cross-attention 读不到 belief，也能靠原动作 hidden 完成 residual；普通 action MSE 只奖正确样本，完全没有要求错误 belief 配对必须更差。
+2. 未来头只是 `Linear(mean(B)) → absolute future DINO`，没有未来 action；它还预测三视角目标，而 runtime 只合法拥有 global+ego-local 两个当前视角，旧 persistence 却读取了训练期 teammate-local 当前特征，比较先天不公平。
+
+**迁移的不是大 backbone，而是一条统一的 action-conditioned predictive pairing 原则。** [V-JEPA 2-AC 官方实现](https://github.com/facebookresearch/vjepa2/blob/main/src/models/ac_predictor.py)把 action/state token 与视觉 token 交错后做因果 latent prediction；[DINO-WM](https://github.com/gaoyuezhou/dino_wm)直接在预训练 DINO 特征上学习动作条件 world model；[TACO](https://github.com/FrankZheng2022/TACO)用正确 state-action/future 配对对抗 batch 内错配；[EB-JEPA 的 action-conditioned 示例](https://github.com/facebookresearch/eb_jepa/blob/main/examples/ac_video_jepa/README.md)则公开展示了缺少反捷径目标时 world model 会沿伪相关坍缩。本项目没有复制这些仓库的主干或权重，而是把共同机制缩成两处本地改动：
+
+- 动作 residual 删除 raw action-hidden 直通，只允许 action query 调制真正从 B 读出的 value；训练时在 residual target 确实不同的同任务/同阶段负样本上，直接要求真实策略的正确-belief MSE 比 shuffled-belief MSE 至少低一个按目标差异缩放的 margin。这个 loss 落在最终 action output，不另建一个可以自己表演的辅助 embedding。
+- 未来预测从“绝对回归”改成 `legal current DINO + action-conditioned delta`。当前 global/ego-local 特征是 persistence 基线；未来 32 步 action 按 `0–4/4–8/8–16/16–32` 四个固定区间 masked 汇总，经小型 GRU 递推四个锚点。delta head 零初始化，所以未训练时逐元素等于同视角 persistence。训练用专家 action，部署用策略 action；验证同时报 oracle action、policy action、shuffled action、shuffled belief 和 legal-view persistence。teacher 仍可重建三视角，但第三个特权视角不再进入 runtime 主判卷。
+
+实现 commit 为 `fccede4683a9bcdad9dad3f60a305a27a8098042`。相关测试 `14/14` 通过；F0 的输入隔离、zero-init action/base 回退、future/persistence 精确相等、有限梯度和两个合法 runtime 视角全部通过，batch 4 峰值显存 `0.328 GiB`；F1 连续 4 步与 `2+2` 恢复的参数最大绝对差为 `0`。正式 pilot 位于 `/workspace/bwa_runs/b-core/n2-r2-action-conditioned-pairing-v2`，只跑 seed `20260815 × 4,000` updates，长训练开关保持关闭。
+
+| 判卷 | R1 旧结果 | R2 结果 | 人话结论 |
+|---|---:|---:|---|
+| B-core 动作 MSE | `0.00268224` | `0.00267748` | 动作精度基本保持 |
+| shuffled-belief 动作 MSE | `0.00268216` | `0.00355407` | 错配后恶化 `32.74%`，动作终于依赖正确 belief |
+| 错配输出 MSE / residual energy | 约 `0.00183` | `1.71186` | 从只保留约 `0.18%` 变化升到错配变化大于 residual 自身能量；action-binding 门通过 |
+| direct-reactive 动作 MSE | `0.00267561` | `0.00266900` | direct 仍好 `0.318%`，但小于预注册 `1%` 保护线；不能声称显式 belief 已胜过普通容量 |
+| belief 有效秩 / 活跃因子 | `6.816 / 12` | `6.174 / 12` | 多维状态保留；KL 最大仍仅 `1.10010` |
+
+未来必须看公平的 `future_observable_mse`；R2 回执里的 `future_mse` 旧兼容字段仍混入 runtime 不可见的第三视角，数值不用于结论：
+
+| horizon | oracle-action model | policy-action model | legal persistence | shuffled action | model 相对 persistence |
+|---:|---:|---:|---:|---:|---:|
+| `0.2s` | `0.00034489` | `0.00034490` | `0.00030983` | `0.00034510` | 差 `11.32%` |
+| `0.4s` | `0.00049434` | `0.00049435` | `0.00048009` | `0.00049762` | 差 `2.97%` |
+| `0.8s` | `0.00075447` | `0.00075447` | `0.00079219` | `0.00076509` | 好 `4.76%` |
+| `1.6s` | `0.00115904` | `0.00115896` | `0.00129442` | `0.00118702` | 好 `10.46%` |
+
+这张表说明原来的两个根因判断基本正确：动作条件不是装饰，因为 shuffled action 在 `4/4` horizon 都更差，而且差距随时间从约 `0.06%` 增至 `2.41%`；delta-over-persistence 也把最重要的两个远端锚点从负转正。没有过总门的原因已经缩小为：短时 DINO 变化太小，persistence 极强，共享 delta head 在 `0.2s/0.4s` 有轻微过冲。预注册要求 oracle-action 至少在 `3/4` horizon 胜 persistence，实测只有 `2/4`，因此机器结论保持：
+
+```text
+FAILED_ACTION_CONDITIONED_FUTURE
+```
+
+此外要保留一个新反证：R2 最终遮掉一个运行视角后，entropy 从 `0.71542` 降到 `0.69432`、reliability 反而从 `0.58302` 升到 `0.59032`，方向与应有的不确定性相反。它没有被本次四道预注册 gate 捕获，但足以继续禁止正式训练。若后续再修，只允许在训练 split 上预先校准 horizon-wise delta shrinkage/gate，并单独恢复遮挡不确定性方向；不能根据这张 validation 表手工把前两个 horizon 设成 persistence，也不能靠再加 update 追绿。机器摘要见 [`action_conditioned_predictive_pairing_summary.json`](../experiments/n2/20260815/action_conditioned_predictive_pairing_summary.json)。
 
 ### 6.3 3-N3：整体结构与新信号的机制归因
 
@@ -1295,7 +1338,7 @@ N1/R1～N3 每个 seed 和比较组还必须生成独立的 `training_sufficienc
 
 monitor 至少要显示：当前路线、branch/commit、GPU、PID、stage、update、最低暴露进度、各验证曲线斜率、平台计数、loss、ETA、checkpoint、Validation、因果 gate、显存、温度、OOM/NaN/stale 和 acceptance 状态。
 
-R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1、2 步、旧 3-N1、R1 原合同、负责人顺序修订和 N2 表示修复都已有独立结果；当前收口入口是第 6.2.1 节。旧 Gaussian N2、被提前中止的指标口径 pilot 和最终离散修复 run 都只读保留。3-N3/N4 只有在 belief-specific action usage 和训练充分性另行通过后再按各自合同启动，不能回写或覆盖已有回执。
+R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1、2 步、旧 3-N1、R1 原合同、负责人顺序修订、N2 表示修复和 R2 动作绑定/未来诊断都已有独立结果；当前收口入口是第 6.2.2 节。旧 Gaussian N2、被提前中止的指标口径 pilot、离散修复和 R2 run 都只读保留。3-N3/N4 只有在 future、不确定性和训练充分性另行通过后再按各自合同启动，不能回写或覆盖已有回执。
 
 ## 15. 研究依据、反证和开源采用边界
 
@@ -1313,6 +1356,8 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1�
 |---|---|---|---|
 | [Being-H0.7，2026](https://arxiv.org/abs/2605.00078) | 用可部署 prior 与训练期 future-informed posterior 对齐潜在推理状态，推理时删除 posterior 且不生成未来视频 | 未来原始观测可以只在训练期塑造动作相关 latent，而不成为部署输入 | 3-N1-R1/N2 使用运行学生/全知教师双分支；未来和特权 joint 信息只进教师，B 主路不依赖人工 ARB |
 | [LIAM，2020](https://arxiv.org/abs/2006.09447) 与 [COMA，2017](https://arxiv.org/abs/1705.08926) | 前者从局部执行信息学习其他智能体模型，后者用集中式 critic 的反事实基线做多智能体信用分配 | belief 监督应落到“队友将做什么”和“这会怎样改变 ego 动作/团队价值”，而不是只重建场景 | R1 教师预测队友动作分布、B0-H residual 和反事实团队价值；学生部署时仍只看合法历史。只迁移原则，不迁移算法或论文数字 |
+| [TACO，NeurIPS 2023](https://proceedings.neurips.cc/paper_files/paper/2023/file/96d00450ed65531ffe2996daed487536-Paper-Conference.pdf) 与[官方仓库](https://github.com/FrankZheng2022/TACO) | 用 InfoNCE 让“当前状态+动作序列”匹配自己的未来状态，并把 batch 内其他配对作为负样本 | 只回归正确样本不能阻止 residual 忽略 belief；必须让正确 belief 配对在控制输出上胜过可辨的错配 | 3-N2-R2 把这一配对原则改成真实 action MSE 的 margin ranking；不复制 TACO 的 RL 主干、bilinear head 或论文收益 |
+| [V-JEPA 2-AC](https://github.com/facebookresearch/vjepa2)、[DINO-WM](https://github.com/gaoyuezhou/dino_wm) 与 [EB-JEPA AC example](https://github.com/facebookresearch/eb_jepa/blob/main/examples/ac_video_jepa/README.md) | 前两者都用动作条件的 latent dynamics；EB-JEPA 的公开消融显示仅做预测仍可能走伪相关捷径，IDM 被移除时规划严重坍缩 | 未来预测应显式依赖 action，反捷径约束还要独立判卷；persistence 必须与模型使用完全相同的当前视角 | 3-N2-R2 使用轻量 GRU 预测 DINO delta，并分别报告 oracle/policy/shuffled action、shuffled belief 和 legal-view persistence；不迁移外部 backbone 或权重 |
 | [Causal Confusion，2019](https://arxiv.org/abs/1905.11979) 与 [Sequential Asymmetric Imitation，2026](https://arxiv.org/abs/2606.16490) | 相关性模仿容易依赖伪因果线索；有计划地暴露 delay、phase mismatch、yield/conflict 才能改变这种依赖 | 只在正常 episode 上做随机 holdout 不能排除场景规律和 episode 指纹 | R1 使用场景组 holdout 与同状态队友分叉；只改变队友行为，检查 ego 动作和结果是否随之改变 |
 | [AHEAD，2026](https://arxiv.org/abs/2606.02486)、[ω-0，2026](https://arxiv.org/abs/2608.06375) | 都把未来预测放在紧凑视觉特征而非完整像素空间 | 潜在未来预测可作有用辅助，但旧 N1 已证明“能预测”不等于“能改善动作” | R1/N2 只把未来 DINO latent 保留为低权重辅助，不生成未来像素，也不用它替代动作门禁 |
 | [DLPWM，2025](https://arxiv.org/abs/2511.06136) | 无监督对象中心表示虽能做好重建和预测，但多物体交互中的 latent drift 会让下游策略弱于普通 world model | “看起来可解释的对象槽”不自动等于更好的控制状态 | B-core 只固定智能体锚点，其余使用自由交互 token；不强迫每个 token 对应人工物体类别，N3 检查表示漂移和动作使用 |
@@ -1337,6 +1382,10 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1�
 | 官方仓库 | 核查 HEAD | license / 成熟度 | V7.3 采用边界 |
 |---|---|---|---|
 | [DreamerV3](https://github.com/danijar/dreamerv3) | `e3f02248693a79dc8b0ebd62c93683888ddaccfe` | MIT；作者仓库含完整 RSSM、配置、训练与评测入口 | 3-N2-R1 已迁移 categorical state、`unimix=0.01`、`free_nats=1.0` 和 dynamics/representation balanced KL；只按公式用 PyTorch 重写，不复制 JAX 主干或权重 |
+| [V-JEPA 2](https://github.com/facebookresearch/vjepa2) | `204698b45b3712590f06245fbfba32d3be539812` | MIT；官方 PyTorch 仓库含 action-conditioned predictor、DROID 后训练和评测入口 | 3-N2-R2 只迁移 action-conditioned latent rollout；使用本项目已有 DINO 特征和小型 GRU，不复制 ViT predictor、权重或训练栈 |
+| [DINO-WM](https://github.com/gaoyuezhou/dino_wm) | `0a9492fa12044b852ae9e001cc74604b79c8bb0c` | MIT；官方仓库含 DINO-feature world model、训练、checkpoint 和 CEM planning | 支撑“在预训练视觉特征上预测动作条件未来”这一路径；不复制 planner、数据、checkpoint 或论文数字 |
+| [TACO](https://github.com/FrankZheng2022/TACO) | `84c38e34f4f9dfd2b059fb6d1356757e8d40712e` | MIT；作者仓库含 temporal action-driven contrastive loss 与 DrQ-v2 训练入口 | 只迁移正确/错误 state-action pairing 的原则，并将其落到本项目真实 action residual；不复制 RL agent 或对比 head |
+| [EB-JEPA](https://github.com/facebookresearch/eb_jepa) | `966e61e9285b3a876f49b9774e9720d9a99a7925` | Apache-2.0；Meta FAIR 教程仓库含 action-conditioned RNN world model、planning 与 IDM/variance/covariance 消融 | 只用作反捷径和轻量 recurrent predictor 的实现证据；未复制源码、环境或权重 |
 | [GuidedVLA](https://github.com/GuidedVLA/GuidedVLA) | `04be059e0d6bd448be5cb45fdbafc775f7eb5e38` | Apache-2.0；含训练、评测、checkpoint 与数据入口；第三方模型另受各自条款约束 | 可参考/迁移 zero-init control attention 小机制；不迁移 π0/openpi 主干和权重 |
 | [RoboMME policy learning](https://github.com/RoboMME/robomme_policy_learning) | `ecf086c3be7c2223167d9bb2f6ef1f0a6e24353b` | Apache-2.0；含 symbolic/perceptual/recurrent variants、训练评测和 checkpoint；官方注明 recurrent 仍 underperforming | 参考 memory 表示/融合消融和可恢复评测流程，不迁移 π0.5 主干 |
 | [RoboMME benchmark](https://github.com/RoboMME/robomme_benchmark) | `0bdbb1789c77642f93bcb4100dc4477e2b999f29` | Apache-2.0；16 任务、1,600 demos、固定 train/val/test seeds | 参考 memory 单元测试、固定 seed 和干扰评测组织；不把其任务数字当本项目证据 |
@@ -1362,7 +1411,7 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1�
 
 ## 16. 现在按什么顺序做
 
-一句话：**第 1 步、第 2 步、旧 3-N1、R1 教师/学生和探索性 N2 都已执行；N2 的 belief 表示已修到稳定、可估计、多维，但动作 shuffle/direct 和 persistence 反证仍在，因此现在不继续长训，也不进入 3-N3。** 下一项只能是预先冻结的 belief→action 使用诊断；有效闭环因果测量仍留到论文成文前实验。
+一句话：**第 1 步、第 2 步、旧 3-N1、R1 教师/学生和探索性 N2 都已执行；N2 的 belief 表示与动作绑定已经修复，但 future 只在 `0.8s/1.6s` 胜过 persistence，direct 仍略好且遮挡不确定性方向反了，因此现在不继续长训，也不进入 3-N3。** 下一项若获准，只能是训练 split 上预注册的 horizon-wise delta shrinkage 与不确定性修复；有效闭环因果测量仍留到论文成文前实验。
 
 ### 16.1 最小可行执行清单
 
@@ -1374,7 +1423,7 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1�
 6. **冻结 N1-R1 合同并公平重测（已执行，训练未收敛）。** 真正 B0-H 的 H、完整 B token、cross-attention、shuffle 与 matched-capacity 已按场景组等额跑完三个 seed×80k；H+B 验证误差低 38.5%～40.8%，但七个可训练条件仍未到平台，密封 test 未打开，状态为 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`。
 7. **按 gate 做数据审计和反事实 pilot（已执行，未通过）。** R1-1 没有训练充分后的“失败”结论，所以条件式 R1-2 oracle 未启动；必经的 `6×10×4×3=720` 条同状态短 rollout 已完成，但 reward 全零、成功全零且只有 160/240 组精确重复，状态为 `FAILED_R1_3_COUNTERFACTUAL_PILOT`。
 8. **依次训练全知教师和合法学生（已按负责人顺序修订完成，均未收敛）。** 教师三个 seed 相对 H 改善 34.0%～37.2%，学生改善 7.4%～10.1%，两者均为 6/6 任务方向正；学生胜过 shuffle 且 belief-off 精确回退 H，但只在 2/3 seed 胜过同容量 direct。密封 test 全部未开，结论是强验证趋势，不是正式通过。
-9. **执行 3-N2 探索性完整 B-core（已执行并停止）。** 旧 Gaussian 三 seed 长训练在约 3.4 万步前停止；DreamerV3 式离散修复只跑一颗 seed×2,000 步，解决 KL、teacher 可估计性和多维性。B0-H、direct/reactive、shuffle、belief-off 与 persistence 反证完整保留；正式长训练和 Validation5 未启动，状态不是正式候选通过。
+9. **执行 3-N2 探索性完整 B-core（已执行并停止）。** 旧 Gaussian 三 seed 长训练在约 3.4 万步前停止；R1 离散修复用一颗 seed×2,000 步解决 KL、teacher 可估计性和多维性；R2 action-conditioned predictive pairing 用一颗 seed×4,000 步修复 belief→action 绑定，并让 `0.8s/1.6s` future 胜过公平 persistence，但未来总门只过 `2/4`、direct 仍略好且遮挡不确定性反向。正式长训练和 Validation5 未启动，状态不是正式候选通过。
 10. **执行 3-N3 机制归因。** 比较 B0-H、只有新信号、只有结构、完整 B-core，并做最少必要切边；确认收益不能由普通容量或时间捷径解释。
 11. **执行 3-N4 正式验收。** 冻结唯一 recipe，从共同 base 完整重训，走 Formal、Validation20 和 Confirmation50；只有这里使用第 12 节闭环硬门槛签发 B-core 结论。
 12. **逐级执行 BP、BT、BPT。** 每条路线从共同 base 独立训练，先过前一模块的正式漏斗再开下一模块，禁止正式 checkpoint 串行继承。

@@ -1,0 +1,133 @@
+{
+  "format_version": "before-we-act.b3-n2-action-conditioned-predictive-pairing-summary/1",
+  "date": "2026-08-15",
+  "branch": "feat/ssc-v7-b-core",
+  "implementation_commit": "fccede4683a9bcdad9dad3f60a305a27a8098042",
+  "machine_status": "FAILED_ACTION_CONDITIONED_FUTURE",
+  "route_status": "ACTION_BELIEF_BINDING_REPAIRED_FUTURE_DYNAMICS_PARTIAL_FORMAL_TRAINING_FORBIDDEN",
+  "formal_training_started": false,
+  "validation5_opened": false,
+  "remote_run_root": "/workspace/bwa_runs/b-core/n2-r2-action-conditioned-pairing-v2",
+  "root_cause_diagnostic": {
+    "validation_rows": 2304,
+    "mean_shuffled_residual_target_mse": 0.005281240690442977,
+    "mean_belief_pair_mse": 0.030666,
+    "old_mean_residual_output_mse": 6.68194e-7,
+    "old_mean_residual_energy": 0.000365383,
+    "old_output_to_residual_energy": 0.0018288,
+    "interpretation": "The paired targets and beliefs were distinguishable, but the old action output discarded about 99.8% of belief-conditioned variation. The old future head also predicted absolute DINO features without future actions and was judged against a persistence baseline with one privileged current view."
+  },
+  "migration": {
+    "name": "action-conditioned predictive pairing",
+    "source_copied": false,
+    "repositories": {
+      "vjepa2": {
+        "url": "https://github.com/facebookresearch/vjepa2",
+        "commit": "204698b45b3712590f06245fbfba32d3be539812",
+        "license": "MIT"
+      },
+      "dino_wm": {
+        "url": "https://github.com/gaoyuezhou/dino_wm",
+        "commit": "0a9492fa12044b852ae9e001cc74604b79c8bb0c",
+        "license": "MIT"
+      },
+      "taco": {
+        "url": "https://github.com/FrankZheng2022/TACO",
+        "commit": "84c38e34f4f9dfd2b059fb6d1356757e8d40712e",
+        "license": "MIT"
+      },
+      "eb_jepa": {
+        "url": "https://github.com/facebookresearch/eb_jepa",
+        "commit": "966e61e9285b3a876f49b9774e9720d9a99a7925",
+        "license": "Apache-2.0"
+      }
+    },
+    "action": "Remove the raw decoded-action bypass and apply target-separation-scaled correct-vs-shuffled belief ranking directly to the final policy output.",
+    "future": "Predict a zero-initialized action-conditioned DINO delta over the same legal-view persistence reference used by evaluation; keep privileged teammate-local reconstruction teacher-only."
+  },
+  "verification": {
+    "related_unit_tests": "14 passed",
+    "f0_status": "PASSED",
+    "f0_peak_gpu_memory_gb_batch4": 0.32819604873657227,
+    "f0_forward_backward_seconds_batch4": 1.1843814002349973,
+    "f1_status": "PASSED",
+    "f1_maximum_model_absolute_difference": 0.0
+  },
+  "pilot": {
+    "seed": 20260815,
+    "updates": 4000,
+    "logged_points": 41,
+    "maximum_teacher_alignment": 1.1001012325286865,
+    "final_teacher_alignment": 1.100000023841858,
+    "belief_effective_rank_within_slot": 6.173639297485352,
+    "categorical_mutual_information": 0.030683638527989388,
+    "active_categorical_factors_mi_gt_0_01": 12,
+    "action": {
+      "b0h_mse": 0.0032118058961848484,
+      "b_core_mse": 0.0026774795901888617,
+      "b_shuffle_mse": 0.003554071215265717,
+      "direct_reactive_mse": 0.002668998857091894,
+      "shuffle_minus_correct_mse": 0.0008765916250768552,
+      "shuffle_relative_degradation": 0.327396519,
+      "residual_output_mse": 0.0008847238989440146,
+      "residual_target_mse": 0.005281240690442977,
+      "residual_energy": 0.0005168196881173673,
+      "output_to_target_sensitivity": 0.16752198030758683,
+      "output_to_residual_energy": 1.7118618336054914,
+      "binding_gate_passed": true,
+      "quality_guard_passed": true
+    },
+    "future_observable_mse": {
+      "oracle_action": {
+        "0.2s": 0.0003448903025990283,
+        "0.4s": 0.0004943432674432794,
+        "0.8s": 0.000754470090269054,
+        "1.6s": 0.0011590429332185345
+      },
+      "policy_action": {
+        "0.2s": 0.0003448995520119314,
+        "0.4s": 0.0004943504216939663,
+        "0.8s": 0.0007544693662159479,
+        "1.6s": 0.0011589620337684292
+      },
+      "persistence": {
+        "0.2s": 0.00030983208483200016,
+        "0.4s": 0.0004800854220214968,
+        "0.8s": 0.0007921926887276556,
+        "1.6s": 0.0012944240187380692
+      },
+      "shuffled_action": {
+        "0.2s": 0.000345103476587453,
+        "0.4s": 0.0004976213382876883,
+        "0.8s": 0.0007650902195158684,
+        "1.6s": 0.001187019983839787
+      },
+      "shuffled_belief": {
+        "0.2s": 0.0003451026579434121,
+        "0.4s": 0.0004956148778831567,
+        "0.8s": 0.0007596292515991141,
+        "1.6s": 0.001167493337373092
+      },
+      "oracle_beats_persistence_horizons": 2,
+      "shuffled_action_worse_horizons": 4,
+      "required_each": 3,
+      "gate_passed": false
+    },
+    "uncertainty_occlusion": {
+      "entropy_clean": 0.7154226899147034,
+      "entropy_occluded": 0.6943221688270569,
+      "reliability_clean": 0.5830225646495819,
+      "reliability_occluded": 0.5903173983097076,
+      "direction_correct": false
+    }
+  },
+  "source_receipt_sha256": {
+    "contract": "05bb33889eaed0ac6903d48fffff507a8b6a13ff6e9c930115da78958c2978d1",
+    "f0": "36db9f6fb03802b97fddec3de3db49196dd071d69e24e8e9ff4861770f46a9c8",
+    "f1": "8796e3bbb473e03ed72c0a27cd6b89ed0a5aa677f67351051f7c387a8aa0041f",
+    "repair_pilot_conclusion": "74996a871429522db5ab8156f82848bd6c93f17cf115cddd988051d36ee0ef4f",
+    "pilot_status": "008e3122360abdfd33b9c79762e21bc5e5c7f03e74201a00b05bced845e390bb",
+    "checkpoint_004000": "1c971051fa899154a1e9d83b3b75d3f21abe28237c369439ef24775a64236db4"
+  },
+  "human_conclusion": "The real action output now depends strongly on the correctly paired belief without violating the direct-control quality guard. Action-conditioned delta prediction uses actions and beats legal-view persistence at 0.8 and 1.6 seconds, but still overshoots persistence at 0.2 and 0.4 seconds, so the pre-registered future gate failed. Formal training and Validation5 remain forbidden."
+}
