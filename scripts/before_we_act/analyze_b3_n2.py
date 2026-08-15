@@ -10,6 +10,9 @@ from pathlib import Path
 from statistics import median
 
 from before_we_act.step2_temporal_data import SIX_TASKS, sha256_file
+from scripts.before_we_act.summarize_b3_n2_validation20 import (
+    select_validation20_candidate,
+)
 
 
 def utc_now() -> str:
@@ -233,6 +236,9 @@ def main() -> None:
         "training": training,
         "all_seeds_training_sufficient": all_sufficient,
         "offline_gate": gate,
+        "validation20_candidate": (
+            select_validation20_candidate(training) if all_sufficient else None
+        ),
         "validation5_authorized": validation_authorized,
         "validation5": validation,
         "validation5_gate": validation_result,

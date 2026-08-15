@@ -1101,6 +1101,20 @@ PASSED_CAUSAL_REPAIR_GATES_FORMAL_TRAINING_REQUIRES_OWNER_DECISION
 
 它的准确含义是“R1/R2/R3 针对已知失败原因的单 seed 短修复全部通过，可以把一个冻结 recipe 交给负责人决定是否做正式多 seed 训练”，不是自动授权长训练，也不是授权 3-N3、Validation5 或闭环 claim。本次没有启动这些步骤。机器摘要见 [`evidence_gated_persistence_correction_summary.json`](../experiments/n2/20260815/evidence_gated_persistence_correction_summary.json)。
 
+#### 6.2.4 2026-08-15 负责人决定：启动完整预算训练和同协议闭环诊断
+
+负责人现已明确要求“正式训练 3-N2 并进行闭环评测，将结果和 W10 以及 B0-H 对比”，路线级授权标识为：
+
+```text
+AUTHORIZED_OWNER_N2_FULL_BUDGET_CLOSED_LOOP_DIAGNOSTIC_20260815
+```
+
+这里的“正式训练”指把 R3 唯一冻结 recipe 用三个预注册 seed `20260815/20260816/20260817` 各训练到 `120,000` updates，并严格执行第 6.0 节的训练充分性判卷；它没有把研究阶段名称从 `B3-N2-ARCHITECTURE` 偷换成 `B3-N4-FORMAL`。只有三颗 seed 都训练充分且离线门通过，才打开固定 Validation5。若 Validation5 签发 `POSITIVE_SIGNAL`，再做一次负责人额外授权的 Validation20 诊断；任何门未通过都原地停止，不为得到闭环数字而绕开冻结 gate。
+
+Validation20 在看到任何闭环结果前固定如下：跨 seed 只按每颗部署 checkpoint 的冻结验证集 `B-core action MSE` 选最低者，整数 seed 仅用于完全相等时破 tie；不得用 Validation5 成功数挑 seed。选中 checkpoint 使用 W10/B0-H 相同的六个 seed 文件、每任务前 20 个 seed、相同 max steps、成功条件、temporal ensemble 和 evaluator 环境。历史 W10 `88/120` 与 B0-H `95/120` 只在 checkpoint hash、每任务 20 局和 seed receipt 一致时复用，不重复消耗闭环预算。输出必须逐任务报告 N2、相对 W10 和相对 B0-H 的成功数差值，并保留 paired inactivity、总步数、belief 诊断和全部失败局。
+
+这个追加闭环只回答“冻结 R3 模型在同一六任务协议上实际能做多少”，不能跳过 3-N3 的容量归因，也不能签发 N4、Confirmation50 或论文级“正式 B-core 通过”。即使 N2 在数字上达到第 12 节门槛，机器字段仍必须保持 `formal_pass=false`；反之若输给 B0-H，也必须保留“离线 belief 有用但没有形成额外闭环收益”的负结论。
+
 ### 6.3 3-N3：整体结构与新信号的机制归因
 
 3-N3 不再发明新模型，只使用 3-N2 冻结的训练 recipe 做一个最小四组比较：

@@ -151,6 +151,11 @@ if [[ "${decision}" != PASSED_CAUSAL_REPAIR_GATES_FORMAL_TRAINING_REQUIRES_OWNER
   echo "repair gates forbid formal N2 training: ${decision}" >&2
   exit 1
 fi
+OWNER_AUTHORIZATION="AUTHORIZED_OWNER_N2_FULL_BUDGET_CLOSED_LOOP_DIAGNOSTIC_20260815"
+grep -Fq "${OWNER_AUTHORIZATION}" "${ROADMAP}" || {
+  echo "owner full-budget authorization is not frozen in the roadmap" >&2
+  exit 1
+}
 
 write_status RUNNING training "training three frozen N2 seeds to 120000 updates"
 SEEDS=(20260815 20260816 20260817)
@@ -224,6 +229,17 @@ for pid in "${PIDS[@]}"; do wait "${pid}"; done
   --validation-root "${RUN_ROOT}/validation5" \
   --output "${RUN_ROOT}/conclusion.json" \
   >"${RUN_ROOT}/logs/final_analysis.log" 2>&1
-write_status PASSED complete "$(jq -r '.status' "${RUN_ROOT}/conclusion.json")"
+
+final_status="$(jq -r '.status' "${RUN_ROOT}/conclusion.json")"
+if [[ "${BWA_N2_AUTHORIZE_VALIDATION20_DIAGNOSTIC:-0}" == 1 && "${final_status}" == POSITIVE_SIGNAL ]]; then
+  write_status RUNNING validation20 "running the pre-selected N2 seed on the frozen W10/B0-H Validation20 protocol"
+  bash scripts/before_we_act/run_b3_n2_validation20.sh \
+    >"${RUN_ROOT}/logs/validation20_runner.log" 2>&1
+  write_status PASSED complete "${final_status}; owner-authorized Validation20 diagnostic completed"
+elif [[ "${BWA_N2_AUTHORIZE_VALIDATION20_DIAGNOSTIC:-0}" == 1 ]]; then
+  write_status PASSED complete "${final_status}; Validation20 stopped by the frozen positive-Validation5 gate"
+else
+  write_status PASSED complete "${final_status}; Validation20 diagnostic was not requested"
+fi
 trap - ERR
-printf 'B3_N2_PIPELINE_COMPLETED status=%s\n' "$(jq -r '.status' "${RUN_ROOT}/conclusion.json")"
+printf 'B3_N2_PIPELINE_COMPLETED status=%s\n' "${final_status}"
