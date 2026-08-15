@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ROOT="${BWA_N2_REPO_ROOT:-/workspace/fe-pc-wam-b-core}"
-RUN_ROOT="${BWA_N2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-r1-discrete-belief-stabilization-v1}"
+RUN_ROOT="${BWA_N2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-r1-discrete-belief-stabilization-v2}"
 FAILED_N2_ROOT="${BWA_FAILED_N2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-predictive-team-belief-v1}"
 N1_CACHE="${BWA_N1_CACHE_ROOT:-/workspace/bwa_runs/shared/p1-b-core-n1-cache-v1}"
 ACTION_CACHE="${BWA_N2_ACTION_CACHE_ROOT:-/workspace/bwa_runs/shared/p1-b-core-n2-action-context-v1}"

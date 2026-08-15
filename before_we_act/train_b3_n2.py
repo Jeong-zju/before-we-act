@@ -268,7 +268,11 @@ def evaluate(
                 )
             )
             seen_uncertainty += len(batch["task_index"])
-    belief = torch.cat(mu_rows, dim=0).flatten(0, 1)
+    belief_by_slot = torch.cat(mu_rows, dim=0)
+    # A fixed slot identity is architecture, not estimated situation state.
+    # Center every slot across validation situations before measuring rank so
+    # static agent/free-slot offsets cannot manufacture multidimensionality.
+    belief = (belief_by_slot - belief_by_slot.mean(0, keepdim=True)).flatten(0, 1)
     feature_std = belief.std(0, unbiased=False)
     covariance = torch.cov(belief.T)
     eigenvalues = torch.linalg.eigvalsh(covariance).clamp_min(0)
@@ -276,13 +280,16 @@ def evaluate(
         (eigenvalues.sum().square() / eigenvalues.square().sum().clamp_min(1e-12)).cpu()
     )
     categorical = torch.cat(categorical_rows, dim=0)
-    marginal = categorical.flatten(0, 1).mean(0)
+    # Estimate information independently per slot, then aggregate factors.
+    # Flattening slots first would count a constant slot identity as belief.
+    marginal = categorical.mean(0)
     log_classes = np.log(categorical.shape[-1])
     marginal_entropy = -(marginal * marginal.clamp_min(1e-12).log()).sum(-1) / log_classes
     conditional_entropy = -(
         categorical * categorical.clamp_min(1e-12).log()
-    ).sum(-1).mean((0, 1)) / log_classes
-    factor_information = (marginal_entropy - conditional_entropy).clamp_min(0)
+    ).sum(-1).mean(0) / log_classes
+    slot_factor_information = (marginal_entropy - conditional_entropy).clamp_min(0)
+    factor_information = slot_factor_information.mean(0)
     future = {
         name: {
             f"{seconds:.1f}s": float(future_numerator[name][index] / max(future_denominator[index], 1))
@@ -309,6 +316,7 @@ def evaluate(
             "active_categorical_factors_mi_gt_0_01": int(
                 (factor_information > 0.01).sum()
             ),
+            "mutual_information_scope": "within_slot_across_situations",
             "categorical_factors": int(categorical.shape[-2]),
             "gate_mean": float(np.mean(gate_values)),
             "reliability_mean": float(np.mean(reliability_values)),
