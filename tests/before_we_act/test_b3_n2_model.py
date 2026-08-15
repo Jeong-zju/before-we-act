@@ -233,7 +233,7 @@ def test_future_predictor_starts_at_persistence_and_is_action_conditioned() -> N
     )
 
     with torch.no_grad():
-        model.future_predictor.delta_head.weight.fill_(0.05)
+        model.future_predictor.delta_head.weight.normal_(mean=0.0, std=0.05)
     changed_action = action.clone()
     changed_action[:, :32] += 2.0
     first = model(
@@ -423,7 +423,7 @@ def test_action_pairing_penalizes_an_indistinguishable_wrong_belief() -> None:
         counterfactual_residual_target=torch.zeros_like(prediction),
         counterfactual_action_mask=mask,
     )
-    assert losses["action_pairing"] == pytest.approx(0.1)
+    assert float(losses["action_pairing"].detach()) == pytest.approx(0.1)
     assert losses["action_pairing_active_fraction"] == 1
     losses["total"].backward()
     assert prediction.grad is not None and prediction.grad.abs().sum() > 0
