@@ -50,6 +50,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--save-every", type=int, default=EVAL_EVERY)
     parser.add_argument("--log-every", type=int, default=100)
+    parser.add_argument(
+        "--evaluate-at-end",
+        action="store_true",
+        help="run the frozen validation diagnostic at the end of a short pilot",
+    )
     return parser.parse_args()
 
 
@@ -91,6 +96,13 @@ def config_from_contract(contract: Mapping) -> B3N2Config:
         d_model=int(architecture["d_model"]),
         heads=int(architecture["heads"]),
         dropout=float(architecture["dropout"]),
+        belief_factors=int(architecture["belief_factors"]),
+        belief_classes=int(architecture["belief_classes"]),
+        belief_unimix=float(architecture["belief_unimix"]),
+        belief_free_nats=float(architecture["belief_free_nats"]),
+        belief_representation_scale=float(
+            architecture["belief_representation_scale"]
+        ),
     )
 
 
@@ -164,6 +176,7 @@ def evaluate(
     reliability_values: list[float] = []
     sigma_values: list[float] = []
     mu_rows: list[torch.Tensor] = []
+    categorical_rows: list[torch.Tensor] = []
     uncertainty_rows: list[tuple[float, float, float, float]] = []
     seen_uncertainty = 0
     for raw in loader:
@@ -229,6 +242,7 @@ def evaluate(
         reliability_values.append(float(output.candidate.belief.reliability.float().mean().cpu()))
         sigma_values.append(float(output.candidate.belief.sigma.float().mean().cpu()))
         mu_rows.append(output.candidate.belief.mu.float().cpu())
+        categorical_rows.append(output.candidate.belief.categorical_probs.float().cpu())
         if seen_uncertainty < 192:
             occluded = dict(batch)
             occluded_mask = batch["runtime_visual_mask"].clone()
@@ -261,6 +275,14 @@ def evaluate(
     effective_rank = float(
         (eigenvalues.sum().square() / eigenvalues.square().sum().clamp_min(1e-12)).cpu()
     )
+    categorical = torch.cat(categorical_rows, dim=0)
+    marginal = categorical.flatten(0, 1).mean(0)
+    log_classes = np.log(categorical.shape[-1])
+    marginal_entropy = -(marginal * marginal.clamp_min(1e-12).log()).sum(-1) / log_classes
+    conditional_entropy = -(
+        categorical * categorical.clamp_min(1e-12).log()
+    ).sum(-1).mean((0, 1)) / log_classes
+    factor_information = (marginal_entropy - conditional_entropy).clamp_min(0)
     future = {
         name: {
             f"{seconds:.1f}s": float(future_numerator[name][index] / max(future_denominator[index], 1))
@@ -281,6 +303,13 @@ def evaluate(
             "feature_std_mean": float(feature_std.mean()),
             "feature_std_min": float(feature_std.min()),
             "effective_rank": effective_rank,
+            "categorical_conditional_entropy": float(conditional_entropy.mean()),
+            "categorical_marginal_entropy": float(marginal_entropy.mean()),
+            "categorical_mutual_information": float(factor_information.mean()),
+            "active_categorical_factors_mi_gt_0_01": int(
+                (factor_information > 0.01).sum()
+            ),
+            "categorical_factors": int(categorical.shape[-2]),
             "gate_mean": float(np.mean(gate_values)),
             "reliability_mean": float(np.mean(reliability_values)),
             "sigma_mean": float(np.mean(sigma_values)),
@@ -409,7 +438,7 @@ def main() -> None:
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     contract = json.loads(args.contract.read_text(encoding="utf-8"))
-    if contract.get("format_version") != "before-we-act.b3-n2-contract/1":
+    if contract.get("format_version") != "before-we-act.b3-n2-contract/2":
         raise RuntimeError("unsupported N2 contract")
     if contract.get("status") != "FROZEN_BEFORE_F0_F1":
         raise RuntimeError("N2 contract is not frozen")
@@ -546,7 +575,9 @@ def main() -> None:
             with (args.output / "progress.jsonl").open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(row, sort_keys=True) + "\n")
             atomic_json(args.output / "heartbeat.json", row)
-        should_evaluate = update % EVAL_EVERY == 0 and args.updates == MAX_UPDATES
+        should_evaluate = (
+            update % EVAL_EVERY == 0 and args.updates == MAX_UPDATES
+        ) or (args.evaluate_at_end and update == args.updates)
         if should_evaluate:
             validation_metrics = evaluate(model, validation, device, weights)
             evaluation = {
@@ -575,13 +606,16 @@ def main() -> None:
             atomic_save(checkpoint, latest)
             atomic_save(checkpoint, args.output / f"checkpoint_{update:06d}.pt")
     if args.updates < MAX_UPDATES:
-        atomic_json(args.output / "status.json", {
+        pilot_status = {
             "status": "PASSED_SMOKE",
             "seed": args.seed,
             "update": args.updates,
             "target_updates": args.updates,
             "completed_at_utc": utc_now(),
-        })
+        }
+        if metrics:
+            pilot_status["selected_validation"] = metrics[-1]["validation"]
+        atomic_json(args.output / "status.json", pilot_status)
         return
     status, sufficiency = training_sufficiency(metrics)
     selection_updates = set(contract["training"]["selection_window_updates"])

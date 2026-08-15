@@ -64,6 +64,62 @@ def test_capacity_is_explicit_and_future_contract_is_fail_closed() -> None:
         tiny_config(future_offsets_steps=(4, 8, 16, 24))
     with pytest.raises(ValueError, match="two agents"):
         tiny_config(n_agent_anchors=3)
+    with pytest.raises(ValueError, match="belief_unimix"):
+        tiny_config(belief_unimix=0.0)
+
+
+def test_discrete_belief_is_normalized_bounded_and_uncertainty_aware() -> None:
+    torch.manual_seed(3)
+    config = tiny_config(belief_factors=3, belief_classes=5, belief_unimix=0.01)
+    model = PredictiveTeamBeliefCore(config, include_teacher=False).eval()
+    hidden = torch.randn(2, config.n_belief_tokens, config.d_model)
+    valid = torch.ones(2, dtype=torch.bool)
+    low = model._distribution(hidden, torch.zeros(2), valid)
+    high = model._distribution(hidden, torch.full((2,), 100.0), valid)
+    _, low_sigma, low_log_probs, low_probs, low_entropy = low
+    _, high_sigma, _, high_probs, high_entropy = high
+
+    assert low_probs.shape == (2, 4, 3, 5)
+    torch.testing.assert_close(low_probs.sum(-1), torch.ones_like(low_probs[..., 0]))
+    torch.testing.assert_close(low_log_probs.exp(), low_probs)
+    assert float(low_probs.min()) >= config.belief_unimix / config.belief_classes
+    assert torch.all(high_entropy > low_entropy)
+    assert torch.all(high_sigma > low_sigma)
+    assert torch.max((high_probs - 0.2).abs()) < torch.max((low_probs - 0.2).abs())
+
+
+def test_balanced_categorical_kl_is_bounded_and_splits_gradients() -> None:
+    from before_we_act.team_belief.n2_losses import _balanced_categorical_kl
+
+    def distribution(logits):
+        base = logits.softmax(-1)
+        probs = 0.99 * base + 0.01 / logits.shape[-1]
+        return probs.log(), probs
+
+    student_logits = torch.tensor([[[[40.0, -40.0, -40.0]]]], requires_grad=True)
+    teacher_logits = torch.tensor([[[[-40.0, 40.0, -40.0]]]], requires_grad=True)
+    student_log, student = distribution(student_logits)
+    teacher_log, teacher = distribution(teacher_logits)
+    total, dynamics, representation = _balanced_categorical_kl(
+        student_log,
+        student,
+        teacher_log,
+        teacher,
+        free_nats=0.0,
+        representation_scale=0.1,
+    )
+    theoretical_bound = torch.log(torch.tensor((3 * 0.99 + 0.01) / 0.01))
+    assert dynamics <= theoretical_bound + 1e-5
+    assert representation <= theoretical_bound + 1e-5
+    assert torch.isfinite(total)
+
+    dynamics.backward(retain_graph=True)
+    assert student_logits.grad is not None and student_logits.grad.abs().sum() > 0
+    assert teacher_logits.grad is None
+    student_logits.grad = None
+    representation.backward()
+    assert student_logits.grad is None
+    assert teacher_logits.grad is not None and teacher_logits.grad.abs().sum() > 0
 
 
 def test_runtime_update_is_strictly_causal_and_reset_clears_old_episode() -> None:

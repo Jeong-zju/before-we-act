@@ -75,8 +75,10 @@ class DirectBeliefResidual(nn.Module):
             raise ValueError("action/belief batch differs")
         if reliability.shape != (action_hidden.shape[0], 1, 1):
             raise ValueError("belief reliability must be [batch,1,1]")
-        precision = belief_sigma.clamp_min(1e-4).reciprocal()
-        memory = self.memory_norm(belief_mu * precision.sqrt())
+        # ``belief_sigma`` is now normalized categorical entropy.  It remains
+        # in the interface for diagnostics, but must never rescale memory:
+        # reciprocal uncertainty amplified the old Gaussian collapse.
+        memory = self.memory_norm(belief_mu)
         attended = self.cross_attention(
             self.query_norm(action_hidden), memory, memory, need_weights=False
         )[0]

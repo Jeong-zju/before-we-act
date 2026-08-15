@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 
 ROOT="${BWA_N2_REPO_ROOT:-/workspace/fe-pc-wam-b-core}"
-RUN_ROOT="${BWA_N2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-predictive-team-belief-v1}"
+RUN_ROOT="${BWA_N2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-r1-discrete-belief-stabilization-v1}"
+FAILED_N2_ROOT="${BWA_FAILED_N2_RUN_ROOT:-/workspace/bwa_runs/b-core/n2-predictive-team-belief-v1}"
 N1_CACHE="${BWA_N1_CACHE_ROOT:-/workspace/bwa_runs/shared/p1-b-core-n1-cache-v1}"
 ACTION_CACHE="${BWA_N2_ACTION_CACHE_ROOT:-/workspace/bwa_runs/shared/p1-b-core-n2-action-context-v1}"
 STEP2_ROOT="${BWA_STEP2_RUN_ROOT:-/workspace/bwa_runs/p1-step2-b0h-v7}"
@@ -82,6 +83,7 @@ if [[ ! -f "${CONTRACT}" ]]; then
     --scenario-split "${SCENARIO_SPLIT}" \
     --n1-cache "${N1_CACHE}" \
     --action-context-cache "${ACTION_CACHE}" \
+    --failed-n2-run "${FAILED_N2_ROOT}" \
     --source-commit "${SOURCE_COMMIT}" \
     --output "${CONTRACT}" \
     >"${RUN_ROOT}/logs/contract.log" 2>&1
@@ -117,6 +119,33 @@ if [[ ! -f "${RUN_ROOT}/contract/f1_receipt.json" ]]; then
     --resumed "${F1_RESUMED}/checkpoint_000004.pt" \
     --output "${RUN_ROOT}/contract/f1_receipt.json" \
     >"${RUN_ROOT}/logs/f1_verify.log" 2>&1
+fi
+
+PILOT_ROOT="${RUN_ROOT}/repair_pilot/seed_20260815"
+if [[ ! -f "${RUN_ROOT}/repair_pilot_conclusion.json" ]]; then
+  write_status RUNNING repair_pilot "running one 2000-update seed; no formal training is authorized"
+  CUDA_VISIBLE_DEVICES=0 "${PYTHON}" -m before_we_act.train_b3_n2 \
+    --cache "${N1_CACHE}" --action-context-cache "${ACTION_CACHE}" \
+    --contract "${CONTRACT}" --scenario-split "${SCENARIO_SPLIT}" \
+    --output "${PILOT_ROOT}" --seed 20260815 --updates 2000 --workers 2 \
+    --save-every 500 --log-every 100 --evaluate-at-end \
+    >"${RUN_ROOT}/logs/repair_pilot.log" 2>&1
+  "${PYTHON}" scripts/before_we_act/analyze_b3_n2_repair_pilot.py \
+    --contract "${CONTRACT}" --pilot "${PILOT_ROOT}" \
+    --output "${RUN_ROOT}/repair_pilot_conclusion.json" \
+    >"${RUN_ROOT}/logs/repair_pilot_analysis.log" 2>&1
+fi
+
+decision="$(jq -r '.status' "${RUN_ROOT}/repair_pilot_conclusion.json")"
+if [[ "${BWA_N2_AUTHORIZE_FORMAL:-0}" != 1 ]]; then
+  write_status PASSED repair_pilot_complete "${decision}; formal training was not started"
+  printf 'B3_N2_REPAIR_PILOT_COMPLETED status=%s formal_training_started=false\n' "${decision}"
+  exit 0
+fi
+if [[ "${decision}" != PASSED_REPAIR_GATES_FORMAL_TRAINING_REQUIRES_OWNER_DECISION ]]; then
+  write_status FAILED repair_gate "${decision}; formal training is forbidden"
+  echo "repair gates forbid formal N2 training: ${decision}" >&2
+  exit 1
 fi
 
 write_status RUNNING training "training three frozen N2 seeds to 120000 updates"

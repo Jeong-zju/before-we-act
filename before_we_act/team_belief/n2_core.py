@@ -39,6 +39,11 @@ class B3N2Config:
     max_views: int = 3
     heads: int = 8
     dropout: float = 0.1
+    belief_factors: int = 12
+    belief_classes: int = 32
+    belief_unimix: float = 0.01
+    belief_free_nats: float = 1.0
+    belief_representation_scale: float = 0.1
     source_frequency_hz: int = 20
     future_offsets_steps: tuple[int, ...] = FUTURE_OFFSETS_STEPS
     future_offsets_seconds: tuple[float, ...] = FUTURE_OFFSETS_SECONDS
@@ -55,6 +60,8 @@ class B3N2Config:
             "action_dim": self.action_dim,
             "max_views": self.max_views,
             "heads": self.heads,
+            "belief_factors": self.belief_factors,
+            "belief_classes": self.belief_classes,
         }
         for name, value in positive.items():
             if value < 1:
@@ -67,6 +74,12 @@ class B3N2Config:
             raise ValueError("d_model must be divisible by attention heads")
         if not 0.0 <= self.dropout < 1.0:
             raise ValueError("dropout must be in [0, 1)")
+        if not 0.0 < self.belief_unimix < 1.0:
+            raise ValueError("belief_unimix must be in (0, 1)")
+        if self.belief_free_nats < 0.0:
+            raise ValueError("belief_free_nats must be non-negative")
+        if not 0.0 <= self.belief_representation_scale <= 1.0:
+            raise ValueError("belief_representation_scale must be in [0, 1]")
         if self.source_frequency_hz != 20:
             raise ValueError("3-N2 is frozen to the audited 20 Hz source corpus")
         if tuple(self.future_offsets_steps) != FUTURE_OFFSETS_STEPS:
@@ -106,6 +119,11 @@ class BeliefRuntimeState:
 class BeliefCoreOutput:
     mu: torch.Tensor
     sigma: torch.Tensor
+    categorical_log_probs: torch.Tensor
+    categorical_probs: torch.Tensor
+    categorical_entropy: torch.Tensor
+    free_nats: float
+    representation_scale: float
     mu_sequence: torch.Tensor
     sigma_sequence: torch.Tensor
     reliability: torch.Tensor
@@ -139,6 +157,9 @@ class TeacherBeliefInputs:
 class TeacherBeliefOutput:
     mu: torch.Tensor
     sigma: torch.Tensor
+    categorical_log_probs: torch.Tensor
+    categorical_probs: torch.Tensor
+    categorical_entropy: torch.Tensor
     future_latent_reconstruction: torch.Tensor
     future_latent_target: torch.Tensor
     future_anchor_mask: torch.Tensor
@@ -453,7 +474,7 @@ class TrainingTeacherBranch(nn.Module):
 
 
 class PredictiveTeamBeliefCore(nn.Module):
-    """Causal runtime B=(mu,sigma), event memory and training-only teacher."""
+    """Causal discrete team belief, event memory and training-only teacher."""
 
     def __init__(self, config: B3N2Config, *, include_teacher: bool = True) -> None:
         super().__init__()
@@ -474,8 +495,13 @@ class PredictiveTeamBeliefCore(nn.Module):
         )
         self.event_memory = TopKEventMemory(config)
         self.belief_norm = nn.LayerNorm(d)
-        self.mu_head = nn.Linear(d, d)
-        self.log_scale_head = nn.Linear(d, d)
+        self.categorical_head = nn.Linear(
+            d, config.belief_factors * config.belief_classes
+        )
+        self.categorical_projection = nn.Linear(
+            config.belief_factors * config.belief_classes, d, bias=False
+        )
+        self.belief_feature_norm = nn.LayerNorm(d)
         self.uncertainty_gain_raw = nn.Parameter(torch.tensor(-2.25))
         self.future_latent_head = nn.Linear(
             d,
@@ -499,16 +525,62 @@ class PredictiveTeamBeliefCore(nn.Module):
         hidden: torch.Tensor,
         uncertainty_signal: torch.Tensor,
         valid: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        """Return a bounded factorized categorical belief and its feature view.
+
+        This is the DreamerV3 discrete-state idea in the local tensor contract:
+        every factor mixes in at least ``belief_unimix`` uniform probability.
+        Missing/conflicting evidence may add more uniform mass, but can never
+        remove that floor.  ``sigma`` remains only a backwards-compatible
+        entropy diagnostic; it is not used as a Gaussian scale.
+        """
+
         normalized = self.belief_norm(hidden)
-        mu = self.mu_head(normalized)
+        batch, tokens = hidden.shape[:2]
+        raw_logits = self.categorical_head(normalized).view(
+            batch,
+            tokens,
+            self.config.belief_factors,
+            self.config.belief_classes,
+        )
+        base_probs = raw_logits.float().softmax(-1)
         gain = F.softplus(self.uncertainty_gain_raw)
-        log_scale = self.log_scale_head(normalized) + gain * torch.log1p(
-            uncertainty_signal.clamp_min(0)
-        )[:, None, None]
-        sigma = F.softplus(log_scale.clamp(-8.0, 8.0)) + 1e-4
+        adaptive_mix = 1.0 - torch.exp(
+            -gain * torch.log1p(uncertainty_signal.float().clamp_min(0))
+        )
+        mix = self.config.belief_unimix + (
+            1.0 - self.config.belief_unimix
+        ) * adaptive_mix
+        mix = mix[:, None, None, None]
+        uniform = 1.0 / self.config.belief_classes
+        probs = (1.0 - mix) * base_probs + mix * uniform
+        log_probs = probs.log()
+        entropy = -(probs * log_probs).sum(-1) / torch.log(
+            probs.new_tensor(float(self.config.belief_classes))
+        )
+        centered = (probs - uniform) * self.config.belief_classes**0.5
+        mu = self.belief_feature_norm(
+            self.categorical_projection(centered.flatten(-2)).to(hidden.dtype)
+        )
+        # Keep the public B=(mu,sigma) interface during the revision.  Each
+        # feature receives the token's normalized categorical entropy, so no
+        # reciprocal scale can explode.
+        sigma = entropy.mean(-1, keepdim=True).expand(-1, -1, self.config.d_model)
         weight = valid[:, None, None].to(mu.dtype)
-        return mu * weight, sigma * weight
+        categorical_weight = valid[:, None, None, None].to(probs.dtype)
+        return (
+            mu * weight,
+            sigma.to(mu.dtype) * weight,
+            log_probs * categorical_weight,
+            probs * categorical_weight,
+            entropy * valid[:, None, None].to(entropy.dtype),
+        )
 
     @staticmethod
     def reliability_from_sigma(sigma: torch.Tensor) -> torch.Tensor:
@@ -592,6 +664,7 @@ class PredictiveTeamBeliefCore(nn.Module):
             events = initial_state.events
             previous_valid = initial_state.previous_valid
         mu_rows, sigma_rows, surprise_rows = [], [], []
+        final_log_probs = final_probs = final_entropy = None
         for index in range(steps):
             step_valid = history_mask[:, index]
             reset = episode_reset_mask[:, index] & step_valid
@@ -647,9 +720,14 @@ class PredictiveTeamBeliefCore(nn.Module):
                 + evidence.conflict[:, index]
                 + evidence.missing_fraction[:, index]
             )
-            mu, sigma = self._distribution(hidden, uncertainty, step_valid)
+            mu, sigma, log_probs, probs, entropy = self._distribution(
+                hidden, uncertainty, step_valid
+            )
             mu_rows.append(mu)
             sigma_rows.append(sigma)
+            final_log_probs = log_probs
+            final_probs = probs
+            final_entropy = entropy
             surprise_rows.append(surprise * candidate_valid.to(surprise.dtype))
             previous_valid = step_valid
 
@@ -658,6 +736,9 @@ class PredictiveTeamBeliefCore(nn.Module):
         surprise_sequence = torch.stack(surprise_rows, dim=1)
         final_mu = mu_sequence[:, -1]
         final_sigma = sigma_sequence[:, -1]
+        assert final_log_probs is not None
+        assert final_probs is not None
+        assert final_entropy is not None
         reliability = self.reliability_from_sigma(final_sigma)
         pooled = final_mu.mean(1)
         future = self.future_latent_head(pooled).view(
@@ -675,6 +756,11 @@ class PredictiveTeamBeliefCore(nn.Module):
         return BeliefCoreOutput(
             mu=final_mu,
             sigma=final_sigma,
+            categorical_log_probs=final_log_probs,
+            categorical_probs=final_probs,
+            categorical_entropy=final_entropy,
+            free_nats=self.config.belief_free_nats,
+            representation_scale=self.config.belief_representation_scale,
             mu_sequence=mu_sequence,
             sigma_sequence=sigma_sequence,
             reliability=reliability,
@@ -720,20 +806,27 @@ class PredictiveTeamBeliefCore(nn.Module):
         aggregate_conflict = (
             conflict * teacher_step_mask.to(conflict.dtype)
         ).sum(1) / teacher_step_mask.sum(1).clamp_min(1)
-        mu, sigma = self._distribution(hidden, aggregate_conflict, valid)
-        future_reconstruction = self.future_latent_head(hidden.mean(1)).view(
+        mu, sigma, log_probs, probs, entropy = self._distribution(
+            hidden, aggregate_conflict, valid
+        )
+        # The privileged posterior must reconstruct through the same belief
+        # bottleneck used at runtime; reading raw hidden bypassed estimability.
+        future_reconstruction = self.future_latent_head(mu.mean(1)).view(
             hidden.shape[0],
             len(FUTURE_OFFSETS_STEPS),
             self.config.max_views,
             self.config.vision_dim,
         )
         return TeacherBeliefOutput(
-            mu,
-            sigma,
-            future_reconstruction,
-            future_target,
-            anchor_mask,
-            future_view_mask,
+            mu=mu,
+            sigma=sigma,
+            categorical_log_probs=log_probs,
+            categorical_probs=probs,
+            categorical_entropy=entropy,
+            future_latent_reconstruction=future_reconstruction,
+            future_latent_target=future_target,
+            future_anchor_mask=anchor_mask,
+            future_view_mask=future_view_mask,
         )
 
     def strip_teacher_(self) -> "PredictiveTeamBeliefCore":

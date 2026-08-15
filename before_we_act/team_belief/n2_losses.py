@@ -36,23 +36,45 @@ def _masked_mean(value: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return (value * expanded).sum() / expanded.sum().clamp_min(1)
 
 
-def _gaussian_kl(
-    student_mu: torch.Tensor,
-    student_sigma: torch.Tensor,
-    teacher_mu: torch.Tensor,
-    teacher_sigma: torch.Tensor,
-) -> torch.Tensor:
-    teacher_mu = teacher_mu.detach()
-    teacher_sigma = teacher_sigma.detach().clamp_min(1e-4)
-    student_sigma = student_sigma.clamp_min(1e-4)
-    return (
-        torch.log(teacher_sigma / student_sigma)
-        + (
-            student_sigma.square() + (student_mu - teacher_mu).square()
+def _balanced_categorical_kl(
+    student_log_probs: torch.Tensor,
+    student_probs: torch.Tensor,
+    teacher_log_probs: torch.Tensor,
+    teacher_probs: torch.Tensor,
+    *,
+    free_nats: float,
+    representation_scale: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """DreamerV3-style split-gradient KL for factorized categorical belief.
+
+    The dynamics term updates only the runtime prior, while the representation
+    term updates only the privileged posterior.  Free nats are applied to each
+    categorical factor before averaging, matching the factorized state rather
+    than summing a width-dependent Gaussian penalty.
+    """
+
+    shapes = {
+        tuple(student_log_probs.shape),
+        tuple(student_probs.shape),
+        tuple(teacher_log_probs.shape),
+        tuple(teacher_probs.shape),
+    }
+    if len(shapes) != 1 or student_probs.ndim != 4:
+        raise ValueError(
+            "categorical beliefs must share [batch,token,factor,class] shape"
         )
-        / (2 * teacher_sigma.square())
-        - 0.5
-    ).mean()
+    dynamics = (
+        teacher_probs.detach()
+        * (teacher_log_probs.detach() - student_log_probs)
+    ).sum(-1)
+    representation = (
+        teacher_probs
+        * (teacher_log_probs - student_log_probs.detach())
+    ).sum(-1)
+    dynamics = dynamics.clamp_min(free_nats).mean()
+    representation = representation.clamp_min(free_nats).mean()
+    total = dynamics + representation_scale * representation
+    return total, dynamics, representation
 
 
 def _future_anchor_losses(
@@ -117,11 +139,15 @@ def compute_b3_n2_losses(
             - output.action_posterior_logvar.exp()
         ).mean()
 
-    teacher_alignment = _gaussian_kl(
-        output.belief.mu,
-        output.belief.sigma,
-        output.teacher.mu,
-        output.teacher.sigma,
+    teacher_alignment, belief_dynamics, belief_representation = (
+        _balanced_categorical_kl(
+            output.belief.categorical_log_probs,
+            output.belief.categorical_probs,
+            output.teacher.categorical_log_probs,
+            output.teacher.categorical_probs,
+            free_nats=output.belief.free_nats,
+            representation_scale=output.belief.representation_scale,
+        )
     )
     prediction = output.belief.future_latent_prediction
     target = output.teacher.future_latent_target
@@ -204,6 +230,8 @@ def compute_b3_n2_losses(
         "action": action,
         "action_posterior_kl": posterior_kl,
         "teacher_alignment": teacher_alignment,
+        "belief_dynamics": belief_dynamics,
+        "belief_representation": belief_representation,
         "future_latent": future_latent,
         "teacher_reconstruction": teacher_reconstruction,
         "teammate_delta": teammate_delta,
