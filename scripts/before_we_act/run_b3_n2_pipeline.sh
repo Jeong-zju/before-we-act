@@ -43,6 +43,8 @@ trap 'write_status STOPPED interrupted signal; exit 130' INT TERM
 
 [[ -x "${PYTHON}" && -x "${TORCHRUN}" ]] || { echo "N2 Python/torchrun missing" >&2; exit 1; }
 [[ -z "$(git -c safe.directory="${ROOT}" -C "${ROOT}" status --short)" ]] || { echo "N2 worktree must be clean" >&2; exit 1; }
+SOURCE_COMMIT="$(git -c safe.directory="${ROOT}" -C "${ROOT}" rev-parse HEAD)"
+[[ "${SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "N2 source commit is invalid" >&2; exit 1; }
 [[ "$(git -C "${ROBOFACTORY_ROOT}" rev-parse HEAD)" == 5868242322414a91454e22f1dd9641f613ba1bcf ]] || { echo "RoboFactory commit drift" >&2; exit 1; }
 
 TASKS=(lift_barrier camera_alignment long_pipeline_delivery take_photo pass_shoe place_food)
@@ -80,7 +82,7 @@ if [[ ! -f "${CONTRACT}" ]]; then
     --scenario-split "${SCENARIO_SPLIT}" \
     --n1-cache "${N1_CACHE}" \
     --action-context-cache "${ACTION_CACHE}" \
-    --source-commit "$(git rev-parse HEAD)" \
+    --source-commit "${SOURCE_COMMIT}" \
     --output "${CONTRACT}" \
     >"${RUN_ROOT}/logs/contract.log" 2>&1
 fi
