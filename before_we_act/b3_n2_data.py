@@ -258,10 +258,22 @@ class B3N2PairedBatchSampler(Sampler[list[N1Request]]):
         rng = random.Random(self.data_seed + 1_000_003 * update)
         pairs: list[list[N1Request]] = []
         for task in SIX_TASKS:
+            used_situations: set[tuple[int, int]] = set()
             for _ in range(SAMPLES_PER_TASK // 2):
-                episode_index = self.by_task[task][rng.randrange(len(self.by_task[task]))]
-                episode = self.episodes[episode_index]
-                time_index = rng.randrange(episode.length)
+                # Sampling is with replacement across updates, but the four
+                # situations inside one task/batch must be distinct.  If the
+                # same episode/time is drawn twice, pair_id would occur four
+                # times and the paired exchange target would be ambiguous.
+                while True:
+                    episode_index = self.by_task[task][
+                        rng.randrange(len(self.by_task[task]))
+                    ]
+                    episode = self.episodes[episode_index]
+                    time_index = rng.randrange(episode.length)
+                    situation = (episode_index, time_index)
+                    if situation not in used_situations:
+                        used_situations.add(situation)
+                        break
                 pair = []
                 for arm in (0, 1):
                     identity = f"{episode.episode_key}:{arm}:{time_index}:n2"
