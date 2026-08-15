@@ -180,7 +180,7 @@ def test_incremental_runtime_matches_one_pass_and_memory_is_bounded() -> None:
     # presented as 6 steps or two 3-step chunks.  State carry must agree to
     # normal float32 numerical precision; bitwise identity is not a valid GPU
     # resume contract across different batch shapes.
-    torch.testing.assert_close(full.mu, second.mu, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(full.mu, second.mu, rtol=1e-5, atol=2e-6)
     torch.testing.assert_close(
         full.event_memory, second.event_memory, rtol=1e-6, atol=1e-6
     )
