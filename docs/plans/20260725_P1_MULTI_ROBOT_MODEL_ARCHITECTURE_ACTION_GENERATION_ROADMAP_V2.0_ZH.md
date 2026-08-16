@@ -1,31 +1,23 @@
 # P1 多机器人闭环模型技术路线 V7.3：Measurement 收口后的自动团队信念 PBT 协作模型
 
 > 更新日期：2026-08-16
-> 活动分支：`feat/model-improvements`
-> 当前状态：**探索性 3-N2 的两项剩余因果修复已在一颗 4,000-update pilot 上过门，正式长训练仍未启动。** R3 迁移 Persistence Initialization，把四个未来锚点改成从同视角 persistence 出发、各自学习修正幅度；未来头由 R2 的 `2/4` 提升到 `4/4` horizon 胜过 persistence，打乱未来动作后也在 `4/4` 变差。它同时把“类别分布有多混乱”和“可用视角证据够不够”分开；遮掉一个视角后显式 epistemic uncertainty 从 `0.333` 升到 `0.500`，reliability 从 `0.667` 降到 `0.500`。正式三 seed×120k、Validation5、3-N3 和闭环 claim 均未启动。
-> 3-N2 最新证据边界：**可以说“表示、belief→action 绑定、action-conditioned future 的预注册方向门和缺失视角不确定性方向都已在单 seed 离线短测中通过”；不能说“完整 B-core 已正式有效”或“短时未来改善已经稳健”。** `0.2s` 相对 persistence 只好 `0.085%`，direct control 仍比 B-core 好 `0.613%`，而且目前只有一颗探索 seed。机器状态为 `PASSED_CAUSAL_REPAIR_GATES_FORMAL_TRAINING_REQUIRES_OWNER_DECISION`，路线状态记为 `CAUSAL_REPAIR_GATES_PASSED_SINGLE_SEED_FORMAL_TRAINING_NOT_STARTED`。人话结论见第 6.2.3 节。
+> 活动分支：`main` / `feat/model-improvements`
+> 当前状态：**B-core 已通过 3-N4 负责人正式验收，可以进入后续模型改进。** 冻结候选的三个预注册 seed 均完成 `120,000` updates；按闭环前冻结的 action MSE 选择 seed `20260817` 的 `100,000`-update checkpoint，Validation5 为 `27/30`，相同六任务 Validation20 为 `111/120`（`92.5%`），相对 W10 `88/120` 多 23 局、相对 B0-H `95/120` 多 16 局，且对 B0-H 六项中四项提升、两项持平。
+> 3-N4 负责人修订：负责人认定三 seed 离线方向、belief shuffle/off 干预、future/uncertainty 诊断、Validation5 和 Validation20 已足够支持路线级正式验收，授权标识为 `AUTHORIZED_OWNER_N4_ACCEPT_EXISTING_EVIDENCE_DEFER_N3_TO_PAPER_FINAL_20260816`。3-N3 的四组同预算机制归因与 Confirmation50 后移，不再阻断后续模型修改。
+> 证据边界：本次负责人修订不覆盖旧机器回执；`teammate_delta` 未满足原全曲线平台规则，因此历史 `INCONCLUSIVE_TRAINING_NOT_CONVERGED` 和 N2 `formal_pass=false` 保持原样。当前可以声称“完整 B-core 候选已通过负责人正式验收并具有显著跨任务闭环价值”，但在论文统一消融完成前，不能声称“显式 team belief 单独造成了全部 `111/120` 收益”，也不能声称已有 Confirmation50 统计保证。
 > 负责人修订：项目负责人接受“显著改变队友后续动作会明显影响任务成功率”作为后续研究假设，把有效的同状态闭环因果实验延后到论文成文前完成，并授权先做教师/学生离线探索。旧 R1-1 的“未收敛”和旧 R1-3 的“reward 全零、恢复不重复、判题无效”事实原样保留；无效 R1-3 的 reward、物体位移和分叉结果没有进入教师/学生损失或通过门禁。这是调整实验顺序，不是宣布 R1-3 已通过。
 > 3-N1/R1 证据边界：旧机器回执继续保留 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`、密封 test 未打开和 `n2_authorized=false`，因为它们准确记录原合同怎样判；但这些条件超出了负责人刚明确的 3-N1 路线目标，不再否决探索性 N2。现在可以说“真实队友信息对 ego 专家动作预测有很强的离线价值，合法历史也能恢复一部分，并且打乱 belief 后收益消失”，并据此启动 N2；仍不能说“教师/学生已正式收敛”“显式 belief 的独立必要性已证明”或“任务成功率已提高”。完整人话结论见第 6.1.4 节。
 > 证据边界：R4-C 在 72 条全新成功 episode 上相对冻结 HC 改善 `26.05%`，95% CI `[24.15%, 27.90%]`，三个 seed、六个任务全正；但 hidden-only、time-only、row-shuffle 和同阶段 shuffle 仍更强。因此可声称“整套 ARB_hat + residual 栈有稳定纸面收益”，不可声称“ARB 语义独立贡献了这些收益”。
-> 优先级调整：B-core 的“新信号—整体结构—普通容量”主归因放在 3-N3；M4 partner-change 和 M5 W10 失败归因保留为稳定候选后的补充因果审计，不再阻断现在的模块训练。详细结论和全部原始验收状态见[第 1 步结果文档](../reports/20260814_P1_STEP1_MEASUREMENT_CONCLUSIONS_AND_ACCEPTANCE_ZH.md)。
+> 优先级调整：B-core 的“新信号—整体结构—普通容量”四组归因、M4 partner-change、M5 失败归因和 Confirmation50 统一后移到论文成文前；它们继续约束论文因果 claim，但不再阻断当前模块开发。详细结论和全部原始验收状态见[第 1 步结果文档](../reports/20260814_P1_STEP1_MEASUREMENT_CONCLUSIONS_AND_ACCEPTANCE_ZH.md)与[3-N4 负责人验收修订](../experiments/n4/20260816/owner_formal_acceptance_revision.json)。
 > 活动任务：Lift Barrier、Camera Alignment、Long Pipeline Delivery、Take Photo、Pass Shoe、Place Food；不包含任何 Stack Cube 任务
 
-## 现在到底卡在哪里（只看这一段就够了）
+## 当前结论与下一步（只看这一段就够了）
 
-**一句话：belief 已稳定、可估计、多维，动作 residual 会因 belief 错配而明显变差；R3 又修掉了短时 future 过冲和遮挡不确定性反向。现在真正缺的是多 seed 的训练充分性、相对 direct control 的独立增量和闭环证据，而不是继续给单 seed 叠结构。**
+**一句话：冻结 B-core 已完成三 seed 全预算训练，在相同六任务协议上达到 `111/120`，并由负责人正式验收；当前不再卡在 3-N3/3-N4，可以进入后续模型修改。**
 
-把这轮结果看成三场考试最容易理解：
+这次验收依赖四层相互一致的证据：三颗 seed 的 B-core action MSE 均优于 B0-H 和 direct-reactive control；同阶段打乱 belief 后 action MSE 从约 `0.00269` 恶化到 `0.0349～0.0373`；四个 future horizon 均优于 persistence 与 shuffled-action control，遮挡后的 uncertainty/reliability 方向正确；最后，Validation5 三颗 seed 均优于 B0-H，冻结候选在 Validation20 达到 `111/120`。
 
-1. **公平笔试：belief 有明显信息。** 给基础模型 H 加上完整 belief 后，三个 seed 的动作误差降低约 40%。这推翻了旧 mean-pooling 探针给出的负方向，但曲线没有到平台，所以正式标签仍是“未收敛”。
-2. **开卷教师考试：真实队友信息很有用。** 教师在训练时可以看到真实队友状态和动作，然后预测同一时刻 ego 专家的动作。三个 seed 的误差降低约 34%～37%，六个任务全部同向；把队友信息打乱后成绩大幅变差。这说明队友信息与 ego 应该怎样动作确实有很强的离线关系。它还不是闭环因果证明，因为教师没有训练到平台，密封 test 没开，而且这里比较的是记录中的专家动作，不是让 ego 在扰动后现场重新决策。
-3. **闭卷学生考试：合法历史能学回一部分。** 学生部署时只看合法的 16 步历史，不看 simulator truth、未来队友动作或教师 token。它把三个 seed 的动作误差降低约 7%～10%，三颗都是六个任务全正；打乱 belief 后收益消失，关闭 belief 又精确回到 H。问题是三颗曲线仍未到平台，并且同容量直接网络在一颗 seed 上比学生更好，所以不能把全部收益归因给显式 belief。
-
-负责人已经决定：旧 R1-3 那张全零且不稳定的“实操试卷”不再挡住教师/学生探索，有效闭环因果实验放到论文成文前再做。这个决定解决了“现在能不能继续测”的问题，没有解决下面两项证据缺口：
-
-- **训练充分性缺口：**教师和学生都跑满 8 万步，但冻结平台条件没有满足，所以密封 test 不能打开；
-- **独立归因缺口：**学生胜过 H 和打乱 belief，但还没有在所有 seed 上胜过同容量直接网络。
-
-探索性 3-N2 已把问题拆成三层。第一层，旧 Gaussian belief 的数学形式确实坏了，R1 已修好。第二层，旧动作头存在 raw action-hidden 捷径，且普通 action MSE 从未要求正确 belief 胜过错配；R2 删除捷径并在真实策略输出上加入 pairing 后，shuffle 明显掉点，这一层已修好。第三层，旧未来头既不看动作，又拿只有两个合法视角的 runtime 模型去和含 teammate-local 特权视角的 persistence 比；R2 先把长 horizon 转正，R3 再用逐 horizon 的基线安全修正把四个锚点全部转正，并把缺失证据不确定性从类别 entropy 中拆出。当前行动边界因此变成：**不自动恢复三 seed×120k 长训练，不开 Validation5，不越级进入 3-N3/N4；先由负责人决定是否用冻结的 R3 recipe 做多 seed 训练充分性验证。**
+负责人同时改变了证据安排，而不是改写旧事实：原 N2 `formal_pass=false`、辅助项未平台化和未执行 Confirmation50 的记录继续保留；3-N3 的“只有新信号 / 只有结构 / 完整 B-core”四组归因后移到论文统一消融。这个后移只限制机制归因强度，不再限制 B-core 作为后续工程基础。下一步可以在保持当前 signal flow 和 residual 合同的前提下继续模型改进，同时把四组归因、partner-change、失败根因与 Confirmation50 留在论文最终实验清单中。
 
 ## 0. 先用一句话说明这条路线
 
@@ -54,7 +46,7 @@
 
 > **“跑满上限”不等于“可以判失败”。预注册规则要求先训练到平台再签发正/负信号，所以本轮最诚实的结论是：方向暂时不利，但证据尚未收口。**
 
-R1 原合同先停在了 R1-3：公平 belief 趋势很强但未收敛，同状态队友扰动的 reward 又全为零。负责人随后另立只读顺序修订，把有效闭环因果测量延后到论文成文前，并授权教师和学生先做离线探索。教师与学生三 seed 都已完成且相对 H 一致改善，达到负责人定义的 3-N1 验证目的并授权了探索性 3-N2。3-N2 随后实际执行：旧长训练因 KL 爆炸、低秩和 shuffle 无效而停止；R1 离散修复解决表示问题，R2 predictive pairing 解决动作不使用 belief 的问题，R3 又让 future 和缺失视角不确定性在单 seed 短测中通过预注册方向门。原合同事实见第 6.1.3 节，负责人修订见第 6.1.4 节，N2 最新裁决见第 6.2.3 节。
+R1 原合同先停在了 R1-3：公平 belief 趋势很强但未收敛，同状态队友扰动的 reward 又全为零。负责人随后另立只读顺序修订，把有效闭环因果测量延后到论文成文前，并授权教师和学生先做离线探索。3-N2 随后完成离散 belief、predictive pairing、persistence correction 与 evidence availability 修复，并用三颗 seed 跑满 `120,000` updates。Validation5 和 Validation20 均给出一致正方向，最终冻结候选达到 `111/120`。负责人据此正式验收 3-N4，并把 3-N3 四组机制消融后移到论文最终实验。原合同事实见第 6.1.3 节，N2 完整结果见第 6.2.6 节，最新验收修订见第 6.4 节。
 
 阅读建议：
 
@@ -74,12 +66,12 @@ R1 原合同先停在了 R1-3：公平 belief 趋势很强但未收敛，同状�
   ↓
 第 2 步：统一 16 步训练样本 + 公平 B0-H（已完成，整体门槛通过）
   ↓
-第 3 步：自动团队信念 B-core（N2 单 seed 因果修复门已通过，停在正式多 seed 训练决策）
+第 3 步：自动团队信念 B-core（3-N4 已通过负责人正式验收）
   ├─ 3-N1：无人工标签的原始数据团队表示（已执行，训练未收口）
   ├─ 3-N1-R1：负责人顺序修订后教师/学生已测；强验证信号，但未收敛且直接容量归因未闭合
-  ├─ 3-N2：旧长训练已停止；R1/R2/R3 短修复依次解决表示、动作绑定、future/缺失证据方向
-  ├─ 3-N3：整体结构与新信号的机制归因
-  └─ 3-N4：冻结唯一方案并正式闭环验收
+  ├─ 3-N2：三 seed×120k、Validation5 和 Validation20 已完成；冻结候选 111/120
+  ├─ 3-N3：四组机制归因后移到论文最终统一消融
+  └─ 3-N4：现有证据经负责人修订后正式验收
   ↓
 第 4/5 步：BP / BT
   ↓
@@ -90,7 +82,7 @@ R1 原合同先停在了 R1-3：公平 belief 趋势很强但未收敛，同状�
 稳定候选后的 M4 / M5 补充因果审计
 ```
 
-第 2 步以后的模块仍逐级走漏斗；3-N3 负责 B-core 的主机制归因，后置 M4/M5 不阻断开模，但在它们完成前不得提出更强的 partner-change 或失败根因因果结论。
+第 2 步以后的模块仍逐级保留输入、训练和证据边界。3-N3、M4/M5 与 Confirmation50 已统一后移到论文最终实验；它们不阻断后续开模，但在完成前不得提出“显式 belief 的独立贡献已完全隔离”、partner-change 或失败根因等更强因果结论。
 
 文档里的几个常用词可以这样理解：
 
@@ -287,7 +279,7 @@ action = ACT(observation, history)
        + reliability(C_t) × ZeroInit(CoordinationAdapter(action_hidden, C_t))
 ```
 
-`ZeroInit` 保证新增旁路初始不破坏基础动作；强制关闭 B 或 C 时必须结构上回到同一候选的无社会信息路径。B 的不确定性直接控制 residual 强度，不再旁挂一套与 belief 无关的可靠度分类器。本项目已有的 [ARCADecoderLayer](../../vendor/stereo-core/stereo_core/stereo_decoder_variants.py) 可继续提供低秩残差骨架，但具体融合形式在 3-N2 前一次冻结，3-N2 内不同时搜索多种 adapter。
+`ZeroInit` 保证新增旁路初始不破坏基础动作；强制关闭 B 或 C 时必须结构上回到同一候选的无社会信息路径。B 的不确定性直接控制 residual 强度，不再旁挂一套与 belief 无关的可靠度分类器。N2 冻结的多视角融合、query 路由和低秩角色条件 cross-attention 现由项目内的 [`TemporalActionBackboneOps`](../../before_we_act/temporal_action_backbone.py) 独立实现；它保持既有张量运算、参数名和 residual 公式，不再由运行时 import Stereo-CoRE/ACT/ARCA/PAIR 类，但这一来源解耦不改变论文中的历史归属和对 Stereo-CoRE 的引用义务。
 
 ### 2.6 训练和部署时如何避免偷看答案
 
@@ -375,16 +367,16 @@ action = ACT(observation, history)
 | B-core 3-N1 | `feat/model-improvements` | `b-core/n1-raw-signal/` |
 | B-core 3-N1-R1 | `feat/model-improvements` | `b-core/n1-r1-action-grounded-belief/` |
 | B-core 3-N2 | `feat/model-improvements` | `b-core/n2-predictive-team-belief-v1/`（旧失败，只读）、`b-core/n2-r1-discrete-belief-stabilization-v2/`（表示修复）与 `b-core/n2-r2-action-conditioned-pairing-v2/`（动作绑定/未来诊断） |
-| B-core 3-N3 | `feat/model-improvements` | `b-core/n3-attribution/` |
-| B-core 3-N4 | `feat/model-improvements` | `b-core/n4-formal/` |
+| B-core 3-N3 | `feat/model-improvements` | `b-core/n3-attribution/`（论文最终统一消融，待执行） |
+| B-core 3-N4 | `feat/model-improvements` | `docs/experiments/n4/20260816/`（负责人验收修订） |
 | BP | `feat/ssc-v7-bp-progress` | `bp-progress/` |
 | BT | `feat/ssc-v7-bt-teammate` | `bt-teammate/` |
 | BPT | `feat/ssc-v7-bpt-directed` | `bpt-directed/` |
 | 汇总 | `feat/ssc-v7-integration` | `integration/` |
 
-3-N1-R1 是 3-N1 之后的独立 gate revision：旧合同、checkpoint 和机器结论全部只读保留，新结果不得覆盖旧 receipt。3-N1-R1 的“公平重测”可以只读复用旧表示 checkpoint；训练教师和合法学生必须在新合同中重新冻结输入边界、数据分组、sample cursor、seed、预算和停止规则。3-N1/R1～3-N3 是同一条 B-core 研究路线内部的递进实验，可以在只读 receipt 完整的前提下继承上一小步的表示权重和代码产物，但这些继承结果只能用于 Discovery，不具备正式候选资格。3-N4、B0-H、BP、BT、BPT 等正式模型仍从同一个冻结 base 按各自完整 recipe 重新训练，不能把诊断 checkpoint 冒充正式初始化。
+3-N1-R1 是 3-N1 之后的独立 gate revision：旧合同、checkpoint 和机器结论全部只读保留，新结果不得覆盖旧 receipt。原合同要求 3-N3 完成归因、3-N4 再从共同 base 重训并执行 Confirmation50；负责人于 2026-08-16 另立只读修订，接受现有 N2 三 seed 全预算训练、冻结选择、Validation5/20 和干预诊断作为本轮 3-N4 路线级正式证据，并将 3-N3/Confirmation50 后移。该例外只适用于当前 B-core 验收，不自动改变 BP、BT、BPT 的未来合同。
 
-2026-08-16 工程收口：第 3 步已有实现已从 `feat/ssc-v7-b-core` 汇入 `feat/model-improvements`，后续不再以实验阶段号命名运行时文件、class、变量、CLI 或 supervisor program；统一使用 `temporal_history`、`raw_team_signal`、`action_grounded_belief`、`belief_distillation` 和 `predictive_team_belief` 等领域语义名。已经签发的 stage ID、run root、checkpoint schema、JSON key 和 receipt 目录保持原样，只用于历史兼容与证据追溯。此工程合并不改变 3-N3/3-N4 的实验授权状态。
+2026-08-16 工程收口：第 3 步已有实现已从 `feat/ssc-v7-b-core` 汇入 `feat/model-improvements`，后续不再以实验阶段号命名运行时文件、class、变量、CLI 或 supervisor program；统一使用 `temporal_history`、`raw_team_signal`、`action_grounded_belief`、`belief_distillation` 和 `predictive_team_belief` 等领域语义名。已经签发的 stage ID、run root、checkpoint schema、JSON key 和 receipt 目录保持原样，只用于历史兼容与证据追溯。工程合并本身不产生实验授权；3-N4 的路线资格来自随后独立签发的负责人验收修订。
 
 ### 3.4 已经冻结的实验规矩
 
@@ -393,10 +385,10 @@ action = ACT(observation, history)
 - Measurement 已按 signal-first 路线级决策完成；原始 M1/M2/M3/R4 回执继续保留，M4/M5 改为稳定候选后的机制审计；
 - 运行分支只能看合法图像、自己的 qpos、固定任务文本和 16 步合法历史；训练教师和辅助目标只能按第 2.6 节读取预先冻结的原始数据字段，并在部署时删除，任何分支都不能使用最终成功、remaining goals 或虚构通信；
 - Measurement 每个任务先用 4 个 seed 调试，再准备 60 个成功专家 episode。W10 先跑 20 个新 seed；如果样本仍不足，只能六个任务一起每次增加 5 个，最多增加到每任务 40 个。每个 W10 episode 最多选 24 个时刻做反事实分叉；
-- B0-H、3-N4、BP、BT、BPT 等正式候选统一走 F0、4-update F1、Discovery、Validation5、120,000-update Formal 和 Validation20；3-N1/R1～3-N3 是前置探索，不分别重复 Validation20/Confirmation50，但训练本身必须达到第 6.0 节的最低暴露和收敛平台，不能把 4-update F1 或 5,000-step smoke test 当成信号实验；
+- 原合同要求 B0-H、3-N4、BP、BT、BPT 等正式候选统一走 F0、4-update F1、Discovery、Validation5、120,000-update Formal、Validation20 和 Confirmation50；当前 B-core 由负责人修订接受已有三 seed 全预算训练与 Validation5/20，并把 N3/Confirmation50 后移，旧运行回执原样保留；
 - B0-H、3-N4 正式 B-core、BP、BT、BPT 使用完全相同的统一 16 步样本、seed、48 effective batch、100 action horizon、evaluator 和正式预算；3-N1/R1～3-N3 在各自训练充分性合同内做数据、sample cursor 和 matched-compute 比较。B0-H 同时保留 history-only 和 hidden-residual 两种读法，后者是主要强基线；
 - 自动执行时不准看到结果后重抽 seed、加预算、换 evaluator 或降低门槛。用户因固定 benchmark 的已知限制明确改变研究口径时，必须建立新的只读 gate revision、保留旧结论并原样重跑，不能覆盖旧 receipt；
-- BP 必须等 3-N4 正式验收 B-core 并冻结 P 合同；BT 必须等 3-N4 正式验收 B-core 并冻结 T 合同；BPT 必须等 BP、BT 均通过各自漏斗，不能同时开工后挑最好结果。
+- BP/BT 的前置条件“3-N4 正式验收 B-core”现已满足；开始其中任一路线前仍必须分别冻结 P/T 合同。BPT 必须等 BP、BT 均通过各自漏斗，不能同时开工后挑最好结果。
 
 历史数字和停止码见 [阶段合同](../experiments/ssc_v7/stage_contract.json)、[seed 合同](../experiments/ssc_v7/seed_contract.json)、[Measurement gate](../experiments/ssc_v7/measurement_gate.json)、[M1 benchmark 放宽修订](../experiments/ssc_v7/m1_relaxed_gate.json) 和[第 1 步详细结果](../reports/20260814_P1_STEP1_MEASUREMENT_CONCLUSIONS_AND_ACCEPTANCE_ZH.md)。旧合同中的 P/T/B/PT/PTB 训练顺序已被本路线替代；模块训练前必须生成 V7.3 新 schema 的合同，不能修改已经产生过 receipt 的旧文件。
 
@@ -611,7 +603,7 @@ hidden-residual 使用 4 GPU、effective batch 48、seed `20260814` 完成全部
 1. 可以说“B0-H 总体闭环能力通过，且总成功数超过 W10”；
 2. 不可以说“B0-H 在所有任务上都优于 W10”或“Camera 回退不存在”；
 3. 各任务分数继续作为 B-core 的诊断剖面，但不再单项否决本次 B0-H；
-4. 这是本次结果后的负责人决策。后续 3-N4、BP、BT、BPT 若也采用整体优先，必须在各自正式运行前冻结新的 aggregate-first gate，不能继续靠看完结果后临时解释。
+4. 这是本次结果后的负责人决策。后续路线若再采用结果后负责人裁决，必须像当前 3-N4 一样建立独立、不可变的 owner revision，保留原判卷并明确 claim boundary；不得静默改写旧 gate 或 receipt。
 
 本次只在每 5,000 updates 保存 checkpoint，没有对每个 checkpoint 逐一做未见 episode 的闭环评测，因此无法诚实声称 B0-H 首次在某个更早 update 已形成平台。为避免下游利用这个缺口缩短训练，当前把 `U_B0H` 保守冻结为 `120,000`；它表示 N2/N3 的 matched-compute 下限，不表示平台一定直到 120,000 才出现。
 
@@ -647,6 +639,8 @@ hidden-residual 使用 4 GPU、effective batch 48、seed `20260814` 完成全部
 6. **先过门禁，再做闭环。** N2/N3 的 Validation5 只能在训练充分 checkpoint 上执行。任何 F1、5,000-step smoke test 或尚未到平台的中间 checkpoint 只检查实现和趋势，不能签发 `POSITIVE_SIGNAL`、`WEAK_SIGNAL` 或 `NO_SIGNAL`。
 
 每个 seed 都必须独立通过训练充分性门禁，不能用一个已收敛 seed 带着两个仍在学习的 seed 投票。N1 的表示模型与动作探针分别判断平台，不能用表示损失收敛代替探针收敛。N3 则同时报告两种比较：一是每组各自训练充分后的结果，防止复杂模型因学得慢而吃亏；二是在相同 update 的 matched-compute 截面，防止把更多训练写成结构收益。两种比较方向冲突时，归因结论必须是 `INCONCLUSIVE_ATTRIBUTION`。
+
+以上仍是历史机器判卷和论文最终 N3 归因的有效合同。当前 3-N4 的负责人修订没有把 `teammate_delta` 重新判成已平台，也没有伪造 N3 结果；它只认定部署主要曲线、跨 seed 离线干预与闭环证据的组合足以支持路线级验收。
 
 ### 6.1 3-N1：无人工标签的原始数据团队表示（已执行，动作探针未收敛）
 
@@ -1017,7 +1011,7 @@ teacher_target_space               = frozen_DINO_latent
 BELIEF_REPRESENTATION_REPAIRED_ACTION_USAGE_NOT_ESTABLISHED
 ```
 
-这不是失败后继续换 token 数、memory 或最好 seed 追正。正式三 seed×120k、Validation5、3-N3 和 3-N4 都没有启动。这个结果只授权了下一节的可证伪 R2 动作落地诊断，没有授权增加正式训练步数。小型机器摘要见 [`discrete_belief_repair_summary.json`](../experiments/n2/20260815/discrete_belief_repair_summary.json)，其中同时记录旧负证据、新 contract/F0/F1/audit 的 SHA256 和 checkpoint hash。
+这不是失败后继续换 token 数、memory 或最好 seed 追正。在这份 R1 结果签发时，正式三 seed×120k、Validation5、3-N3 和 3-N4 都没有启动；当时它只授权了下一节的可证伪 R2 动作落地诊断，没有授权增加正式训练步数。小型机器摘要见 [`discrete_belief_repair_summary.json`](../experiments/n2/20260815/discrete_belief_repair_summary.json)，其中同时记录旧负证据、新 contract/F0/F1/audit 的 SHA256 和 checkpoint hash。
 
 #### 6.2.2 2026-08-15 R2 结论：动作开始用 belief，未来只解决了长时段
 
@@ -1115,7 +1109,7 @@ AUTHORIZED_OWNER_N2_FULL_BUDGET_CLOSED_LOOP_DIAGNOSTIC_20260815
 
 Validation20 在看到任何闭环结果前固定如下：跨 seed 只按每颗部署 checkpoint 的冻结验证集 `B-core action MSE` 选最低者，整数 seed 仅用于完全相等时破 tie；不得用 Validation5 成功数挑 seed。选中 checkpoint 使用 W10/B0-H 相同的六个 seed 文件、每任务前 20 个 seed、相同 max steps、成功条件、temporal ensemble 和 evaluator 环境。历史 W10 `88/120` 与 B0-H `95/120` 只在 checkpoint hash、每任务 20 局和 seed receipt 一致时复用，不重复消耗闭环预算。输出必须逐任务报告 N2、相对 W10 和相对 B0-H 的成功数差值，并保留 paired inactivity、总步数、belief 诊断和全部失败局。
 
-这个追加闭环只回答“冻结 R3 模型在同一六任务协议上实际能做多少”，不能跳过 3-N3 的容量归因，也不能签发 N4、Confirmation50 或论文级“正式 B-core 通过”。即使 N2 在数字上达到第 12 节门槛，机器字段仍必须保持 `formal_pass=false`；反之若输给 B0-H，也必须保留“离线 belief 有用但没有形成额外闭环收益”的负结论。
+按这次追加闭环签发时的合同，它只回答“冻结 R3 模型在同一六任务协议上实际能做多少”，不能自行跳过 3-N3 的容量归因，也不能由 N2 runner 签发 N4、Confirmation50 或论文级“正式 B-core 通过”。即使 N2 在数字上达到第 12 节门槛，原机器字段仍必须保持 `formal_pass=false`；后来的路线级负责人修订另立回执，不回写这一字段。
 
 #### 6.2.5 2026-08-16 负责人决定：保留旧未收敛回执，继续完成诊断闭环
 
@@ -1127,7 +1121,7 @@ AUTHORIZED_OWNER_N2_CLOSED_LOOP_AFTER_PRIMARY_PLATEAU_20260816
 
 这不是倒改旧规则：原 `conclusion.json`、`offline_conclusion.json`、三颗 `status.json` 和训练充分性回执必须原样保留，N2 的训练充分性结论仍是“不确定”。新增授权只允许对已经训练好的三个 checkpoint 跑固定 Validation5，并对闭环前已经按离线 `B-core action MSE` 选出的唯一候选继续跑 Validation20。三颗 seed 的冻结验证 MSE 分别为 `0.00269563/0.00269382/0.00269309`，因此候选固定为 seed `20260817` 的 `100,000`-update 部署 checkpoint；不得根据 Validation5 的成功数换 seed。
 
-为完整回答负责人要求的 W10/B0-H 同协议比较，本次即使 Validation5 没通过旧方向门，也继续完成上述固定候选的 Validation20。这个例外只把“闭环数字还未知”变成“闭环数字已测量”，不把辅助项尚未平台化解释成已经收敛，不自动授权 N3，也不能签发 N4、Confirmation50 或 `formal_pass=true`。最终结论必须同时报告：旧门禁为什么挡住、Validation5 的方向、Validation20 六任务逐项成功数，以及 3-N2 相对 W10 `88/120` 和 B0-H `95/120` 的差值。
+为完整回答负责人要求的 W10/B0-H 同协议比较，本次即使 Validation5 没通过旧方向门，也继续完成上述固定候选的 Validation20。按当时授权，这个例外只把“闭环数字还未知”变成“闭环数字已测量”，不把辅助项尚未平台化解释成已经收敛，不自动授权 N3，也不能由 N2 机器判卷签发 N4、Confirmation50 或 `formal_pass=true`。后来的 N4 负责人修订使用独立状态和回执，不改变这里记录的旧判卷。
 
 #### 6.2.6 2026-08-16 完整预算闭环结果：模型确实更会做事，但还不能把功劳全算给 belief
 
@@ -1149,13 +1143,15 @@ AUTHORIZED_OWNER_N2_CLOSED_LOOP_AFTER_PRIMARY_PLATEAU_20260816
 
 离线证据与闭环结果现在也接上了：三颗 seed 的动作 MSE 都比 B0-H 好约 `16%`，并且首次都略好于 direct-reactive（约 `0.43%～0.78%`）；把 belief 在同阶段打乱后，动作 MSE 从约 `0.00269` 恶化到 `0.0349～0.0373`，不再是“正确 belief 和 shuffled belief 没区别”。四个未来 horizon 在三颗 seed 上都胜过 persistence 和 shuffled action，遮挡后 uncertainty 上升、reliability 下降，belief 有效秩为 `4.74～6.14` 且 `12/12` 因子活跃。换句话说，前面针对 KL、belief 坍缩、未来头和遮挡方向的修复并没有只改善离线表格，它最终对应到了明显的闭环收益。
 
-但边界必须说清楚。旧训练充分性规则要求所有曲线同时平台化，辅助项 `teammate_delta` 在三颗 seed 上都仍有超过 `1%` 的近期变化，所以原 `INCONCLUSIVE_TRAINING_NOT_CONVERGED` 回执及其哈希保持不变。更重要的是，N2 只比较了完整 R3 与历史 W10/B0-H；它还没有用“只有新信号 / 只有结构 / 完整 B-core”的同预算实验拆开容量、结构和显式团队 belief 各自的贡献。因此现在可以用人话下的结论是：**这个冻结模型已经被证明在闭环里非常有用，值得进入 3-N3 做归因；但还不能声称是 team belief 单独造成了 `111/120`，更不能跳过 N3/N4 宣布正式 B-core 通过。**
+但边界必须说清楚。旧训练充分性规则要求所有曲线同时平台化，辅助项 `teammate_delta` 在三颗 seed 上都仍有超过 `1%` 的近期变化，所以原 `INCONCLUSIVE_TRAINING_NOT_CONVERGED` 回执及其哈希保持不变。更重要的是，N2 只比较了完整 R3 与历史 W10/B0-H；它还没有用“只有新信号 / 只有结构 / 完整 B-core”的同预算实验拆开容量、结构和显式团队 belief 各自的贡献。因此在这份 N2 结果签发当时，准确结论是：**冻结模型已经被证明在闭环里非常有用，但还不能把 `111/120` 全部归因给 team belief，也不能由 N2 机器回执直接宣布 N4 通过。** 后续负责人修订改变了路线验收状态，但没有改变这条机制归因边界。
 
-不可变回执仍保存在远端运行目录；旧结论、负责人例外、Validation5 和 Validation20 汇总的 SHA-256 分别为 `a715fcbb…7932`、`94a84869…876`、`78d59643…921`、`3928ade8…6f90`。可审阅的紧凑机器摘要见 [`full_budget_owner_closed_loop_summary.json`](../experiments/n2/20260816/full_budget_owner_closed_loop_summary.json)。下一步如获负责人授权，应严格进入 3-N3 的四组同预算归因，不再继续扩大 N2 训练或根据这 120 局调参。
+不可变回执仍保存在远端运行目录；旧结论、负责人例外、Validation5 和 Validation20 汇总的 SHA-256 分别为 `a715fcbb…7932`、`94a84869…876`、`78d59643…921`、`3928ade8…6f90`。可审阅的紧凑机器摘要见 [`full_budget_owner_closed_loop_summary.json`](../experiments/n2/20260816/full_budget_owner_closed_loop_summary.json)。该摘要继续作为 N2 原始证据；路线是否前进由第 6.4 节后来签发的独立负责人修订决定。
 
-### 6.3 3-N3：整体结构与新信号的机制归因
+**2026-08-16 代码来源解耦（不改变模型）。** `PredictiveTeamBeliefPolicy` 与 `TemporalHistoryPolicy` 已分别改为只直接继承 `nn.Module`，项目内重新实现冻结的 multi-view/history encoder、query 路由和 role-conditioned action decoder；predictive 路径不再 import `stereo_core`、`NoWristPAIRRoute`、ACT、ARCA 或 PAIR router。同配置旧实现与新实现的 checkpoint state-dict key 集合与顺序保持不变，加载旧实现权重后的 observation/history/memory/decoded/routing/belief/base action/final prediction 均通过逐元素 bit-exact 对照，belief residual 公式没有改动。此项只证明实现依赖已经解耦，不生成新的结构 novelty，也不抹去历史代码与思想来源。
 
-3-N3 不再发明新模型，只使用 3-N2 冻结的训练 recipe 做一个最小四组比较：
+### 6.3 3-N3：整体结构与新信号的机制归因（后移到论文最终实验）
+
+负责人于 2026-08-16 决定：现有证据已足以推进和验收 B-core，3-N3 不再作为 3-N4 的前置 gate，而是作为论文最终统一消融的必做项。它不再发明新模型，只使用 3-N2 冻结的训练 recipe 做一个最小四组比较：
 
 | 方案 | 3-N1 新团队信号 | B-core 时序/不确定性/事件结构 | 回答的问题 |
 |---|---:|---:|---|
@@ -1176,19 +1172,35 @@ AUTHORIZED_OWNER_N2_CLOSED_LOOP_AFTER_PRIMARY_PLATEAU_20260816
 - 切断 B 或在同阶段打乱 B 后，动作/合作收益按预期减弱，而不是基本不变；
 - 机器人一致换位后，belief 和动作影响也对应换位。
 
-探索样本较小时，不以一次置信区间是否刚好跨零作为唯一裁决；更重要的是四组排序、多个 seed/任务的方向和干预结果是否形成同一解释。若“只有新信号≈完整 B-core”，保留新信号结论并简化结构；若“只有结构≈完整 B-core”，不得声称 team belief 有效；若完整模型没有稳定优于 B0-H，第三步停止且没有正式 B-core 候选。
+探索样本较小时，不以一次置信区间是否刚好跨零作为唯一裁决；更重要的是四组排序、多个 seed/任务的方向和干预结果是否形成同一解释。若“只有新信号≈完整 B-core”，论文应把贡献收缩为更简单的新信号 residual；若“只有结构≈完整 B-core”，不得声称 team belief 具有独立贡献；若完整模型没有稳定优于 B0-H，则必须收缩论文机制 claim。由于 3-N4 已按负责人修订完成路线验收，这些结果不再倒退工程阶段，但会直接决定最终论文能写多强。
 
-### 6.4 3-N4：冻结方案并正式验收
+### 6.4 3-N4：负责人修订后正式验收（已完成）
 
-只有 3-N3 支持一个可解释的唯一方案后，才进入 3-N4。3-N4 不再改 token 数、记忆形式、融合器、loss 组合或训练数据，只负责：
+原合同要求只有 3-N3 支持一个可解释的唯一方案后，才进入 3-N4，并要求共同 base 重训、Formal、Validation20、Selection 和 Confirmation50。这个合同在 N2 结果产生时仍然有效，所以历史机器摘要正确写入了 `formal_pass=false`，不得回写或删除。
 
-1. 把 N1 的原始信号学习、N2 的完整架构和 N3 选定的简化/保留项冻结成一份不可变 recipe；
-2. 从与 B0-H 相同的共同 base 重新执行完整 recipe，不加载 N1/R1～N3 的诊断 checkpoint；
-3. 对 B0-H 和必要 capacity control 匹配正式数据、sample cursor、训练更新数和总计算预算；
-4. 走 Formal、Validation20、Selection 和 Confirmation50；
-5. 按第 12 节以闭环成功率、合作指标、安全退化、因果切边和最终配对结果签发正式结论。
+在完整证据审阅后，负责人明确授权修改阶段顺序与验收合同，签发：
 
-因此，N1/R1～N3 的“通过”只表示值得继续研究，不能写成 B-core 已正式有效；只有 N4 达到闭环门槛，才能把 B-core 作为后续 BP、BT 的合格基础。
+```text
+AUTHORIZED_OWNER_N4_ACCEPT_EXISTING_EVIDENCE_DEFER_N3_TO_PAPER_FINAL_20260816
+```
+
+新合同接受以下证据组合直接完成 3-N4 路线级正式验收：
+
+1. 冻结 recipe 的三个预注册 seed `20260815/20260816/20260817` 均完成 `120,000` updates；
+2. 候选在读取任何闭环结果前按验证 action MSE 选择，固定为 seed `20260817` 的 `100,000`-update checkpoint；
+3. 三颗 seed 的 B-core action MSE 均优于 B0-H 和 direct-reactive，同阶段 belief shuffle 均显著恶化；
+4. 四个 future horizon 均胜过 persistence 和 shuffled action，遮挡 uncertainty/reliability 方向正确；
+5. Validation5 三颗 seed 为 `26/30、26/30、27/30`，均高于 B0-H 的 `24/30`，paired inactivity 也均降低；
+6. Validation20 为 `111/120`，相对 W10 `88/120` 多 23 局，相对 B0-H `95/120` 多 16 局；六任务相对 B0-H 四项提升、两项持平，并满足第 12.1 节原数字门槛；
+7. 模块重命名和来源解耦保持 checkpoint key、forward 张量与 residual 公式不变，不改变已经测量的模型。
+
+路线状态据此签发为：
+
+```text
+PASSED_OWNER_FORMAL_ACCEPTANCE_WITH_PAPER_FINAL_ATTRIBUTION_DEFERRED
+```
+
+该结论意味着 B-core 已可作为 BP、BT 及后续模型改进的合格基础。它不意味着旧机器判卷被改写，也不意味着显式 belief 的独立机制贡献已经完全隔离：3-N3 四组归因、M4/M5 和 Confirmation50 统一列入论文最终实验；完成前不得把 `111/120` 全部归因给 team belief，或声称已经取得 Confirmation50 的统计保证。不可变修订见 [`owner_formal_acceptance_revision.json`](../experiments/n4/20260816/owner_formal_acceptance_revision.json)，其 SHA-256 为 `baab9e1272583a8161ef7febf7e8c2408f49fcbca3b152d3deb0012d06575660`。
 
 ### 6.5 第 3 步始终不做什么
 
@@ -1202,7 +1214,7 @@ AUTHORIZED_OWNER_N2_CLOSED_LOOP_AFTER_PRIMARY_PLATEAU_20260816
 
 ## 7. 第 4 步：BP——让进度读取 belief
 
-BP 只有在 3-N4 正式验收 B-core 后才启动。它从共同 base 按冻结的 B-core recipe 重新训练 B 和 P，不从 3-N4 checkpoint 续训。
+BP 的前置条件“3-N4 正式验收 B-core”已经满足，可以在单独冻结 P 合同后启动。它从共同 base 按冻结的 B-core recipe 重新训练 B 和 P，不从当前 B-core checkpoint 续训。
 
 **研究锚点：**PALM 支撑 action-progress 联合学习，ProcVLM 支撑按程序步骤和剩余动作定义进度，ProgVLA 支撑把长历史压成少量控制 token。三者都不直接证明本项目的 `B→P→C→action` 有效，因此 BP 仍要用 time-only、切断 `B→P` 和切断 `P→C` 三组对照验证。
 
@@ -1226,7 +1238,7 @@ BP 必须通过：
 
 ## 8. 第 5 步：BT——让队友未来读取 belief
 
-BT 也只有在 3-N4 正式验收 B-core 后才启动，并从共同 base 按冻结 recipe 重新训练。在这条受控路线中没有真实 P，T 只读取 B；这条路线用来回答：“知道当前团队状态以后，继续预测队友未来是否还有新增价值？”
+BT 的同一前置条件也已经满足，可以在单独冻结 T 合同后启动，并从共同 base 按冻结 recipe 重新训练。在这条受控路线中没有真实 P，T 只读取 B；这条路线用来回答：“知道当前团队状态以后，继续预测队友未来是否还有新增价值？”
 
 **研究锚点：**Sequential Asymmetric Imitation 主要支撑 delay、phase mismatch、yield 和 targeted intervention 这些合作数据；Gamma-World 只支撑 teammate slot 的共享参数和置换对称。当前没有一套近期开放代码能直接证明“视觉双机器人操作中的 T future-mode tokens”有效，这正是 BT 必须单独做、也允许被实验否决的研究空白。
 
@@ -1302,7 +1314,7 @@ BPT 只有同时满足以下条件才有 winner 资格：
 
 ## 11. 探索小步与正式候选使用不同强度的漏斗
 
-完整漏斗仍保留，但不再要求 3-N1/R1～3-N3 各自重复 Validation20 和 Confirmation50。这里节省的是大规模闭环判卷和正式候选流程，不是把训练截断在尚未学会的位置：N1/R1～N3 必须先通过第 6.0 节的训练充分性门禁，探索阶段才有资格发现和解释积极信号，正式阶段再给最终结论。
+以下完整漏斗仍是后续正式候选的默认合同。当前 B-core 是一次明确记录的负责人例外：它复用了已完成的 N2 三 seed 全预算训练、Validation5/20 和干预证据完成 N4 路线验收，把 N3/Confirmation50 后移到论文最终实验；该例外不自动放宽 BP、BT 或 BPT。
 
 ```text
 F0 静态检查
@@ -1343,11 +1355,11 @@ F1 真实数据集成检查
 |---|---|---|
 | 3-N1 | F0/F1 + 表示模型与动作探针分别训练到平台 | 原始数据中是否存在动作相关团队新信号 |
 | 3-N2 | F0/F1 + 完整 B-core 训练到平台 + Validation5 | 完整 B-core 是否出现值得继续的动作/闭环趋势 |
-| 3-N3 | 四组分别训练到平台 + matched-compute 截面 + 必要的 Validation5 | 新信号、整体结构和容量解释的相对方向 |
-| 3-N4 | 完整正式漏斗 | B-core 是否正式合格 |
+| 3-N3 | 后移到论文最终实验：四组分别训练到平台 + matched-compute 截面 + 必要的 Validation5 | 限定新信号、整体结构和容量解释的论文 claim |
+| 3-N4 | 负责人修订接受 N2 三 seed 全预算 + Validation5/20 + 干预诊断；已完成 | B-core 路线已正式合格，Confirmation50 保留为论文最终义务 |
 | B0-H、BP、BT、BPT 正式候选 | 完整正式漏斗 | 对应模块是否具备正式候选资格 |
 
-N1/R1～N3 的 execution prompt 必须预注册比较对象、预期方向、禁止项、训练充分性和停止条件，但不要求在没有先验测量依据时编造“必须提升 X%”一类效果数字。探索验收先看曲线是否已经训练充分，再看方向是否跨 seed/任务较一致、是否胜过关键对照、干预后是否按解释退化、是否存在明显安全或强任务副作用。只有 N4 和后续正式候选按第 12 节的闭环数字签发最终结论。
+N1/R1～N3 的 execution prompt 必须预注册比较对象、预期方向、禁止项、训练充分性和停止条件，但不要求在没有先验测量依据时编造“必须提升 X%”一类效果数字。探索验收先看曲线是否已经训练充分，再看方向是否跨 seed/任务较一致、是否胜过关键对照、干预后是否按解释退化、是否存在明显安全或强任务副作用。当前 N4 的正式结论来自第 6.4 节负责人修订；后续正式候选仍按各自预先冻结的第 12 节闭环合同签发结论。
 
 ## 12. 最终怎么判断模型合不合格
 
@@ -1389,6 +1401,8 @@ N1/R1～N3 的 execution prompt 必须预注册比较对象、预期方向、禁
 
 如果没有候选同时满足动作能力、合作收益和后置因果 gate，最终结论就是“V7.3 无 winner”。不能为了必须产出模型而继续放宽标准。
 
+当前 B-core 的负责人修订明确把 Confirmation50 后移到论文最终实验，因此它不是本次 3-N4 路线验收的阻断项。这一例外不等于 Confirmation50 已通过：在实际完成前，不得报告其置信区间、非劣保证或“最终统计 winner”结论。
+
 ## 13. 所有路线必须共享的公平条件
 
 B0-H、B-core、BP、BT、BPT 必须共享：
@@ -1427,13 +1441,13 @@ B0-H、B-core、BP、BT、BPT 必须共享：
 5. F0/F1、launcher、monitor、graceful stop、resume 和 acceptance 脚本；
 6. 每个阶段的结构化 JSON、日志、checkpoint hash 和最终结论。
 
-B-core 至少使用 `B3-N1-RAW-SIGNAL`、`B3-N1-R1-ACTION-GROUNDED-BELIEF`、`B3-N2-ARCHITECTURE`、`B3-N3-ATTRIBUTION`、`B3-N4-FORMAL` 五个互不覆盖的 stage ID。实际 N2 表示修复另用 `B3-N2-R1-DISCRETE-BELIEF-STABILIZATION`，没有覆盖旧 `B3-N2-ARCHITECTURE`。R1 内部还要给公平探针、oracle 审计、反事实 pilot、全知教师和合法学生独立子 stage/receipt，不能把不同问题塞进一个最终 JSON。N1/R1～N3 只有通过训练充分性门禁后才能写积极或负向信号；未收敛必须写 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`，归因冲突写 `INCONCLUSIVE_ATTRIBUTION`，不能复用 `PASSED_FORMAL`。只有 N4 可以签发正式通过/失败。
+B-core 使用互不覆盖的 `B3-N1-RAW-SIGNAL`、`B3-N1-R1-ACTION-GROUNDED-BELIEF`、`B3-N2-ARCHITECTURE`、`B3-N3-ATTRIBUTION` 和 `B3-N4-FORMAL` stage ID；尚未执行的 N3 不得伪造运行 receipt。实际 N2 表示修复另用 `B3-N2-R1-DISCRETE-BELIEF-STABILIZATION`，没有覆盖旧 `B3-N2-ARCHITECTURE`。R1 内部的公平探针、oracle 审计、反事实 pilot、全知教师和合法学生继续使用独立子 stage/receipt。历史未收敛必须保留 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`，归因冲突写 `INCONCLUSIVE_ATTRIBUTION`；本次正式通过只由新的 `B3-N4-FORMAL` 负责人修订签发，不能把旧 N1/N2 JSON 改写成 `PASSED_FORMAL`。
 
 N1/R1～N3 每个 seed 和比较组还必须生成独立的 `training_sufficiency.json`，至少记录最低暴露是否满足、全部评测点、平滑方法、最近三个相对改善量、学习率下降前后曲线、平台 checkpoint、训练上限、`U_B0H` 和最终训练充分性状态。acceptance 脚本缺少这份 receipt 时必须拒绝签发任何信号结论。
 
 monitor 至少要显示：当前路线、branch/commit、GPU、PID、stage、update、最低暴露进度、各验证曲线斜率、平台计数、loss、ETA、checkpoint、Validation、因果 gate、显存、温度、OOM/NaN/stale 和 acceptance 状态。
 
-R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1、2 步、旧 3-N1、R1 原合同、负责人顺序修订、N2 表示修复、R2 动作绑定/未来诊断和 R3 保守修正都有独立结果；当前收口入口是第 6.2.3 节。旧 Gaussian N2、被提前中止的指标口径 pilot、离散修复、R2 和 R3 run 都只读保留。3-N3/N4 只有在负责人另行授权并完成正式多 seed 训练充分性验证后，才能按各自合同启动，不能回写或覆盖已有回执。
+R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1、2 步、旧 3-N1、R1 原合同、负责人顺序修订、N2 表示修复、R2 动作绑定/未来诊断、R3 保守修正、N2 三 seed 全预算闭环和 N4 负责人验收均有独立结果。当前收口入口是第 6.4 节及 [`owner_formal_acceptance_revision.json`](../experiments/n4/20260816/owner_formal_acceptance_revision.json)。旧 Gaussian N2、被提前中止的 pilot、离散修复、R2/R3 run 与旧 `formal_pass=false` 全部只读保留；N3 以后按论文最终实验合同另开产物，不回写已有回执。
 
 ## 15. 研究依据、反证和开源采用边界
 
@@ -1472,7 +1486,7 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1�
 | [Embodied Interpretability，ICML 2026](https://arxiv.org/abs/2605.00321) 与[作者代码](https://github.com/robot-future/vla-explain) | ISS 用干预式 masking 估计视觉区域对动作的因果影响，NMR 衡量 nuisance 依赖 | 只看 attention 或标签准确率不能证明动作在用正确原因 | N3 把 B-off/shuffle/stale 作为主归因；ISS/NMR 只作诊断，不替代 paired action/闭环指标 |
 | [VLA-ATTC，2026](https://arxiv.org/abs/2605.01194) 与 [VLAConf，2026](https://arxiv.org/abs/2605.29605) | 前者用不确定性 clutch 切换额外推理，后者以轻量 head 做单次前向 confidence | 不确定性有用的前提是被校准，并且有明确的 fallback 行为 | N2 用 B 的不确定性衰减 direct belief residual；主动观察/候选动作 critic 属于以后独立路线，不能用来挽救 B-core 负结果 |
 
-上表故意同时保留支持和反对证据。最强的反对意见有四个：本项目旧 N1 已证明“原始目标可预测”不等于动作增量；RoboMME 说明 memory design 是 task-dependent；无监督对象中心状态可能发生 latent drift；CHORUS 说明无需显式 B 也可能合作。因此 V7.3 的判断不是“自动 team belief 一定成功”，而是“先用 R1 的公平比较、反事实数据和动作落地监督证明必要性；通过后再按 N2/N3/N4 建模、归因和闭环裁决”。
+上表故意同时保留支持和反对证据。最强的反对意见有四个：本项目旧 N1 已证明“原始目标可预测”不等于动作增量；RoboMME 说明 memory design 是 task-dependent；无监督对象中心状态可能发生 latent drift；CHORUS 说明无需显式 B 也可能合作。因此 V7.3 当前判断是“完整 B-core 已有足够工程与闭环证据通过路线验收，但显式 belief 的独立必要性仍由论文最终 N3/M4/M5 消融裁决”，而不是把路线级验收误写成机制已经完全证明。
 
 ### 15.3 2026-08-13/15 官方仓库只读核查
 
@@ -1510,7 +1524,7 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1�
 
 ## 16. 现在按什么顺序做
 
-一句话：**第 1 步、第 2 步、旧 3-N1、R1 教师/学生和探索性 N2 都已执行；N2 的表示、动作绑定、四个 future horizon 和缺失视角不确定性方向已在一颗短测 seed 上依次修复，但 direct 仍略好、训练充分性和闭环证据仍缺。** 当前不自动继续长训，也不进入 3-N3；下一项只能由负责人决定是否冻结 R3 recipe，做正式多 seed 训练充分性验证。有效闭环因果测量仍留到论文成文前实验。
+一句话：**第 1、2 步和 B-core 第 3 步均已收口；N2 已完成三 seed×120k、Validation5 与 Validation20，冻结候选达到 `111/120`，并通过 3-N4 负责人正式验收。** 当前可以在保持 B-core signal flow、residual 与输入合同的前提下继续 BP、BT 或其他模型改进；3-N3 四组归因、M4/M5、有效闭环因果测量与 Confirmation50 统一留到论文最终实验。
 
 ### 16.1 最小可行执行清单
 
@@ -1522,11 +1536,11 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1�
 6. **冻结 N1-R1 合同并公平重测（已执行，训练未收敛）。** 真正 B0-H 的 H、完整 B token、cross-attention、shuffle 与 matched-capacity 已按场景组等额跑完三个 seed×80k；H+B 验证误差低 38.5%～40.8%，但七个可训练条件仍未到平台，密封 test 未打开，状态为 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`。
 7. **按 gate 做数据审计和反事实 pilot（已执行，未通过）。** R1-1 没有训练充分后的“失败”结论，所以条件式 R1-2 oracle 未启动；必经的 `6×10×4×3=720` 条同状态短 rollout 已完成，但 reward 全零、成功全零且只有 160/240 组精确重复，状态为 `FAILED_R1_3_COUNTERFACTUAL_PILOT`。
 8. **依次训练全知教师和合法学生（已按负责人顺序修订完成，均未收敛）。** 教师三个 seed 相对 H 改善 34.0%～37.2%，学生改善 7.4%～10.1%，两者均为 6/6 任务方向正；学生胜过 shuffle 且 belief-off 精确回退 H，但只在 2/3 seed 胜过同容量 direct。密封 test 全部未开，结论是强验证趋势，不是正式通过。
-9. **执行 3-N2 探索性完整 B-core（短修复已完成，正式训练未启动）。** 旧 Gaussian 三 seed 长训练在约 3.4 万步前停止；R1 离散修复用一颗 seed×2,000 步解决 KL、teacher 可估计性和多维性；R2 action-conditioned predictive pairing 用一颗 seed×4,000 步修复 belief→action 绑定；R3 再用一颗 seed×4,000 步让 future 在 `4/4` horizon 胜过公平 persistence，并恢复缺失视角不确定性方向。`0.2s` 胜幅仅 `0.085%`，direct 仍好 `0.613%`，所以机器只签发“因果修复门通过、正式训练等待负责人决定”，Validation5 未打开，状态不是正式候选通过。
-10. **执行 3-N3 机制归因。** 比较 B0-H、只有新信号、只有结构、完整 B-core，并做最少必要切边；确认收益不能由普通容量或时间捷径解释。
-11. **执行 3-N4 正式验收。** 冻结唯一 recipe，从共同 base 完整重训，走 Formal、Validation20 和 Confirmation50；只有这里使用第 12 节闭环硬门槛签发 B-core 结论。
-12. **逐级执行 BP、BT、BPT。** 每条路线从共同 base 独立训练，先过前一模块的正式漏斗再开下一模块，禁止正式 checkpoint 串行继承。
-13. **在论文成文前完成有效闭环因果审计。** 旧 R1 短分叉没有证明动作相关因果信号；需要先修复 snapshot 重复性和非退化评分，再做 partner-change、ego 补救方向及失败根因审计，限定最终合作因果 claim。
+9. **执行 3-N2 完整 B-core（已完成）。** 旧 Gaussian 路线停止后，R1/R2/R3 依次修复 categorical belief、belief→action 绑定、action-conditioned future 和 evidence availability；冻结 recipe 的三颗 seed 均完成 `120,000` updates。Validation5 为 `26/30、26/30、27/30`，冻结候选 Validation20 为 `111/120`，相对 W10/B0-H 分别多 23/16 局；旧辅助项未平台回执继续保留。
+10. **后移 3-N3 机制归因（论文最终必做）。** 比较 B0-H、只有新信号、只有结构、完整 B-core，并做最少必要切边；该结果决定论文能否把收益独立归因给 team belief，但不再阻断当前模型开发。
+11. **完成 3-N4 正式验收（已完成）。** 负责人以独立不可变修订接受现有三 seed 离线/干预证据、Validation5 和 Validation20，签发 `PASSED_OWNER_FORMAL_ACCEPTANCE_WITH_PAPER_FINAL_ATTRIBUTION_DEFERRED`；旧 N2 `formal_pass=false` 不回写。
+12. **逐级执行 BP、BT、BPT（下一阶段）。** BP/BT 的 B-core 前置条件已经满足；每条路线仍从共同 base 独立训练并冻结自己的合同，禁止正式 checkpoint 串行继承。
+13. **在论文成文前完成统一机制与闭环因果审计。** 完成 3-N3 四组归因、修复 snapshot 重复性和非退化评分，再做 partner-change、ego 补救方向、失败根因与 Confirmation50，限定最终合作因果 claim 和统计 claim。
 
 ### 16.2 当前仍然禁止什么
 
@@ -1540,12 +1554,12 @@ R11/R12 的 runbook 只能参考工程结构，不能作为活动入口。第 1�
 - 不能在 N1/R1～N3 看到结果后反复搜索 token 数、memory 类型、fusion、目标集合、历史长度或最好 seed；N4 及后续正式训练更不得修改冻结 recipe；
 - 不能让 B0-H、B-core、BP、BT、BPT 从彼此 checkpoint 续训后再冒充公平兄弟比较；
 - 不能用外部论文收益替代本项目闭环结果，也不能在 license 未明确时复制外部源码；
-- 不能把 N1/R1～N3 的 `POSITIVE_SIGNAL` 写成正式 B-core 通过；
-- 不能把“3-N1 已跑到预算上限”写成“3-N1 已判负”，也不能在动作探针未收敛且未出现积极信号时越级启动 3-N2；
+- 不能把旧 N1/R1～N3 的 `POSITIVE_SIGNAL` 或 N2 机器 JSON 回写成正式通过；当前正式状态只来自独立的 N4 负责人验收修订；
+- 不能把“3-N1 已跑到预算上限”写成“3-N1 已判负”；后续 N2/N4 的负责人授权是独立路线决定，不改变 3-N1 的历史判卷；
 - 不能继续把旧 N1 的 token mean pooling 或受未来目标训练过的 `history_summary` 冒充 R1 的公平主比较；
 - 不能把 R1-1 验证集上 38.5%～40.8% 的未收敛改善写成正式通过，也不能在密封 test 未打开时推测 test 结果；
 - 不能看完 R1-3 的 reward 全零后，临时把物体位移或某个接触量升格为主门槛追正；下一版必须先修复恢复重复性并重新冻结判题；
-- 不能把负责人“延后有效 R1-3”的顺序决定写成旧 R1-3 已通过；teacher/student 的相对改善已经足以授权探索性 3-N2，但不能单独授权 3-N3、3-N4 或闭环因果 claim；
+- 不能把负责人“延后有效 R1-3”的顺序决定写成旧 R1-3 已通过；teacher/student 的相对改善只曾授权探索性 3-N2，当前 N4 验收来自后来完整 N2 证据与新的负责人修订；
 - M4/M5 虽然后置，但完成前不能提出严格 partner-change 或合作根因因果 claim。
 
-当前 R1 原合同总机器结论、教师结论和学生结论都为 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`，同时保留子结论 `FAILED_R1_3_COUNTERFACTUAL_PILOT`；学生趋势诊断为 `STRONG_POSITIVE_VALIDATION_TREND_BUT_NOT_CONVERGED_AND_DIRECT_CONTROL_UNRESOLVED`。这些旧机器记录中的 `n2_authorized=false` 不回写、不删除。负责人根据刚明确的 3-N1 目标另行签发路线级 `PASSED_OWNER_RELATIVE_IMPROVEMENT_GATE_N2_EXPLORATORY_AUTHORIZED`：前者说明原严格合同怎样判，后者说明项目根据实际阶段目的下一步怎样走。它们回答不同问题，各自有效，均不能冒充 N4 正式通过。
+当前 R1 原合同总机器结论、教师结论和学生结论都为 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`，同时保留子结论 `FAILED_R1_3_COUNTERFACTUAL_PILOT`；学生趋势诊断为 `STRONG_POSITIVE_VALIDATION_TREND_BUT_NOT_CONVERGED_AND_DIRECT_CONTROL_UNRESOLVED`。这些旧机器记录中的 `n2_authorized=false` 不回写、不删除。它们不能冒充 N4 正式通过；N4 的正式状态由 [`owner_formal_acceptance_revision.json`](../experiments/n4/20260816/owner_formal_acceptance_revision.json) 独立签发，两个层级的记录各自有效。

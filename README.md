@@ -4,6 +4,36 @@
 
 Before We Act 是一个研究如何把动作条件化的未来预测转化为多机器人协作策略的研究仓库。仓库从 legacy proprioceptive Joint WAM 逐步扩展到多模态 world-action modeling 与去中心化多机器人协作；`FE-PC WAM`、`Joint WAM` 和 `IG-DeWAM` 等旧名称继续作为历史实验阶段与兼容命名保留，不再作为项目标题。
 
+## Predictive Team Belief（B-core，已通过负责人正式验收）
+
+当前 B-core 候选是一个面向多机器人协作动作生成的预测式团队信念模型。部署路径只读取当前 global/local RGB、机器人自身 qpos、任务文本以及 episode 内 16 步合法观测/动作历史；训练期的未来观测、队友状态和教师目标被限制在可移除的 privileged teacher 分支中，不进入部署接口。模型首先用冻结 DINOv3 特征和项目内 multi-view/history encoder 得到时序证据，再以因果分解的 categorical state 表示团队信念，并结合 episode 内关键事件记忆、action-conditioned latent future prediction 与显式 evidence availability 估计 belief 的可靠度。动作生成保持基础时序策略不变，只通过 zero-initialized direct residual 注入 belief：
+
+```text
+action = base_action
+       + reliability(B_t) × learned_gate(action_query, B_t)
+       × belief_residual(action_query, B_t)
+```
+
+关闭 belief 时，模型在结构上精确回退到同一候选的 B0-H 基础动作路径。`PredictiveTeamBeliefPolicy` 和 `TemporalHistoryPolicy` 均直接继承 `torch.nn.Module`；multi-view/history encoder、query routing 与 role-conditioned action decoder 由本项目独立持有，运行路径不再 import Stereo-CoRE、ACT、ARCA 或 PAIR router。该工程解耦保持既有 checkpoint key、张量运算顺序、基础动作路径和 belief residual 公式不变；它不改变历史代码与思想来源的引用义务，也不被作为单独的结构 novelty。
+
+截至 2026-08-16，已归档的 3-N2 候选使用三个预注册 seed 各训练 120,000 updates，并在任何闭环结果产生前，按冻结验证集 action MSE 选择 seed `20260817` 的 100,000-update checkpoint。相同六任务 Validation20 协议的结果如下：
+
+| 任务（每项 20 局） | W10 | B0-H | 3-N2 |
+|---|---:|---:|---:|
+| Lift Barrier | 20 | 20 | 20 |
+| Camera Alignment | 8 | 5 | 14 |
+| Long Pipeline Delivery | 20 | 18 | 19 |
+| Take Photo | 20 | 19 | 19 |
+| Pass Shoe | 20 | 17 | 19 |
+| Place Food | 0 | 16 | 20 |
+| **合计** | **88/120（73.3%）** | **95/120（79.2%）** | **111/120（92.5%）** |
+
+3-N2 相对 W10 多成功 23 局（+19.17 个百分点），相对 B0-H 多成功 16 局（+13.33 个百分点）；相对 B0-H 的六个任务中四项提升、两项持平。三颗 seed 的 Validation5 分别为 `26/30、26/30、27/30`，均高于 B0-H 的 `24/30`。离线诊断中，三颗 seed 的 action MSE 均优于 B0-H 和同容量 direct-reactive control；同阶段打乱 belief 后，action MSE 从约 `0.00269` 恶化至 `0.0349～0.0373`，四个 future horizon 均同时优于 persistence 与 shuffled-action control，遮挡后 uncertainty 上升且 reliability 下降。
+
+项目负责人于 2026-08-16 修订验收合同，认定上述三 seed 离线证据、冻结选择、Validation5、Validation20 与干预诊断已经足以完成 3-N4 路线级正式验收，并将 3-N3 四组机制归因统一后移到论文成文前。B-core 当前路线状态为 `PASSED_OWNER_FORMAL_ACCEPTANCE_WITH_PAPER_FINAL_ATTRIBUTION_DEFERRED`，可以作为后续模型改进的合格基础。
+
+该修订不覆盖历史机器回执：辅助目标 `teammate_delta` 未满足旧全曲线平台规则，原 3-N2 摘要中的 `INCONCLUSIVE_TRAINING_NOT_CONVERGED` 与 `formal_pass=false` 保持不变；3-N3 四组消融和 Confirmation50 也尚未执行。因此可以声称“当前完整 B-core 候选已通过负责人验收，并在既有六任务协议上具有显著闭环价值”，但在论文消融完成前，不能声称“显式 team belief 单独造成了全部 `111/120` 收益”，也不能声称已经获得 Confirmation50 的统计保证。历史机器摘要见 [`full_budget_owner_closed_loop_summary.json`](docs/experiments/n2/20260816/full_budget_owner_closed_loop_summary.json)，本次不可变负责人修订见 [`owner_formal_acceptance_revision.json`](docs/experiments/n4/20260816/owner_formal_acceptance_revision.json)，完整阶段合同见 [P1 技术路线](docs/plans/20260725_P1_MULTI_ROBOT_MODEL_ARCHITECTURE_ACTION_GENERATION_ROADMAP_V2.0_ZH.md)。
+
 当前正式结果已经通过：关闭 fallback 的 prior-anchored Joint WAM direct 与 action prior 在 standard 和 challenge 各 500 个未见 seeds 上均为 100%，`policy_acceptable=true`。现有任务已饱和，因此该结果不用于声称 joint training 带来了额外控制收益。完整判断见 [Benchmark 与 Baseline 计划](docs/plans/20260718_FE_PC_WAM_BENCHMARK_AND_BASELINE_PLAN_V1.0_ZH.md)。
 
 从当前多模态模型逐步研究按机器人组织表示、本地动作生成、协作信息接入和联合未来决策的实施顺序，见 [P1 多机器人协作模型结构与动作生成技术路线](docs/plans/20260725_P1_MULTI_ROBOT_MODEL_ARCHITECTURE_ACTION_GENERATION_ROADMAP_V2.0_ZH.md)。

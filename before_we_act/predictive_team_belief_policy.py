@@ -1,11 +1,10 @@
 """Integrated predictive team-belief action policy.
 
 This module is intentionally dormant until the raw-signal receipt supplies the four
-required capacity choices in :class:`TeamBeliefConfig`.  It reuses the exact temporal
-history/action backbone, replaces the generic hidden residual with a
-belief-conditioned direct residual, and keeps privileged teacher processing
-behind an explicit removable branch.  The core runtime forward never accepts
-teacher tensors.
+required capacity choices in :class:`TeamBeliefConfig`. It owns the complete
+temporal history/action path directly, replaces the generic hidden residual with a
+belief-conditioned direct residual, and keeps privileged teacher processing behind
+an explicit removable branch. The core runtime forward never accepts teacher tensors.
 """
 from __future__ import annotations
 
@@ -15,7 +14,7 @@ from typing import Mapping
 import torch
 from torch import nn
 
-from before_we_act.temporal_history_policy import TemporalHistoryPolicy
+from before_we_act.temporal_action_backbone import TemporalActionBackboneOps
 from before_we_act.team_belief.predictive_core import (
     TeamBeliefConfig,
     BeliefCoreOutput,
@@ -90,8 +89,10 @@ class DirectBeliefResidual(nn.Module):
         return residual, learned_gate
 
 
-class PredictiveTeamBeliefPolicy(TemporalHistoryPolicy):
-    """B0-H action backbone plus the full symmetric predictive B-core."""
+class PredictiveTeamBeliefPolicy(nn.Module):
+    """Standalone temporal action model plus the predictive team-belief core."""
+
+    VARIANTS = TemporalActionBackboneOps.VARIANTS
 
     def __init__(
         self,
@@ -117,7 +118,9 @@ class PredictiveTeamBeliefPolicy(TemporalHistoryPolicy):
             raise ValueError("B-core and action-backbone tensor widths must match")
         if team_belief_config.vision_dim != 768:
             raise ValueError("the frozen DINOv3 ViT-B evidence width is 768")
-        super().__init__(
+        nn.Module.__init__(self)
+        TemporalActionBackboneOps._initialize_temporal_action_backbone(
+            self,
             state_dim,
             action_dim,
             variant="hidden_residual",
@@ -135,6 +138,14 @@ class PredictiveTeamBeliefPolicy(TemporalHistoryPolicy):
             team_belief_config, include_teacher=include_teacher
         )
         self.direct_belief_residual = DirectBeliefResidual(d_model, action_dim)
+
+    train = TemporalActionBackboneOps.train
+    _raw_vision_tokens = TemporalActionBackboneOps._raw_vision_tokens
+    _paired_tokens_and_raw_pool = TemporalActionBackboneOps._paired_tokens_and_raw_pool
+    _task_token = TemporalActionBackboneOps._task_token
+    _encode_history = TemporalActionBackboneOps._encode_history
+    _route_action_queries = TemporalActionBackboneOps._route_action_queries
+    _decode_action_context = TemporalActionBackboneOps._decode_action_context
 
     @staticmethod
     def _window_reset_mask(history_mask: torch.Tensor) -> torch.Tensor:

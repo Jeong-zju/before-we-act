@@ -1,0 +1,76 @@
+{
+  "format_version": "before-we-act.b3-n4-owner-formal-acceptance-revision/1",
+  "date": "2026-08-16",
+  "stage": "B3-N4-FORMAL",
+  "decision_source": "project owner instruction after review of the completed N2 evidence",
+  "authorization_token": "AUTHORIZED_OWNER_N4_ACCEPT_EXISTING_EVIDENCE_DEFER_N3_TO_PAPER_FINAL_20260816",
+  "status": "PASSED_OWNER_FORMAL_ACCEPTANCE_WITH_PAPER_FINAL_ATTRIBUTION_DEFERRED",
+  "formal_pass": true,
+  "route_unlocked": true,
+  "supersedes_route_progression_requirements": true,
+  "overwrites_historical_receipts": false,
+  "historical_receipts_preserved": {
+    "n2_machine_formal_pass": false,
+    "n2_training_sufficiency": "INCONCLUSIVE_TRAINING_NOT_CONVERGED",
+    "reason": "The auxiliary teammate_delta series did not satisfy the original all-series plateau rule."
+  },
+  "contract_revision": {
+    "n3_four_group_attribution": "deferred to paper-final unified ablation",
+    "n4_common_base_retraining": "waived for this route-level acceptance",
+    "n4_confirmation50": "deferred; not required for this route-level acceptance",
+    "accepted_formal_evidence": "completed N2 three-seed full-budget training, frozen offline selection, Validation5, Validation20, intervention diagnostics, and source-decoupling equivalence tests"
+  },
+  "evidence": {
+    "summary": "docs/experiments/n2/20260816/full_budget_owner_closed_loop_summary.json",
+    "summary_sha256": "f71e0ab2eb795ea3d4631503676ad5e7754528265e64376f1cd1aa16176db63c",
+    "training_seeds": [
+      20260815,
+      20260816,
+      20260817
+    ],
+    "updates_per_seed": 120000,
+    "selected_seed": 20260817,
+    "selected_update": 100000,
+    "selection_used_closed_loop_results": false,
+    "validation5": {
+      "b0h_successes": 24,
+      "episodes": 30,
+      "n2_successes_by_seed": {
+        "20260815": 26,
+        "20260816": 26,
+        "20260817": 27
+      },
+      "all_seeds_lower_paired_inactivity_than_b0h": true
+    },
+    "validation20": {
+      "episodes": 120,
+      "w10_successes": 88,
+      "b0h_successes": 95,
+      "accepted_b_core_successes": 111,
+      "accepted_b_core_success_rate": 0.925,
+      "delta_successes_vs_w10": 23,
+      "delta_successes_vs_b0h": 16,
+      "meets_original_numeric_n4_gate": true,
+      "matches_or_improves_b0h_on_all_six_tasks": true
+    },
+    "offline_diagnostics": {
+      "all_seeds_beat_b0h_action_mse": true,
+      "all_seeds_beat_direct_reactive_action_mse": true,
+      "all_seeds_correct_belief_beat_shuffled_belief": true,
+      "all_seeds_all_future_horizons_beat_persistence_and_shuffled_action": true,
+      "all_seeds_occlusion_uncertainty_direction_correct": true
+    }
+  },
+  "accepted_claims": [
+    "The frozen predictive team-belief candidate is formally accepted as the B-core route for subsequent model development.",
+    "The accepted candidate has strong and broad closed-loop value under the completed six-task Validation20 protocol.",
+    "The runtime belief path is action-relevant under the completed shuffled-belief and belief-off interventions."
+  ],
+  "claim_limits": [
+    "This owner revision does not retroactively change the N2 machine receipt or its formal_pass=false field.",
+    "The independent contribution of explicit team belief versus signal, temporal structure, and generic capacity remains a paper-final attribution question.",
+    "Do not claim that team belief alone caused the full 111/120 result before the deferred N3 ablations are completed.",
+    "Do not claim Confirmation50 statistical guarantees because Confirmation50 has not been run."
+  ],
+  "next_step": "Continue model development from the accepted B-core recipe while preserving the paper-final N3 attribution obligation."
+}

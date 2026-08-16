@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import sys
 import types
 
@@ -520,9 +521,113 @@ def fake_policy_dependencies(monkeypatch):
     monkeypatch.setitem(sys.modules, "torchvision.models", models)
 
 
+def test_policy_owns_its_backbone_without_legacy_runtime_dependencies(
+    fake_policy_dependencies,
+) -> None:
+    from before_we_act.predictive_team_belief_policy import (
+        PredictiveTeamBeliefPolicy,
+    )
+    from before_we_act.temporal_history_policy import TemporalHistoryPolicy
+
+    assert PredictiveTeamBeliefPolicy.__bases__ == (torch.nn.Module,)
+    assert TemporalHistoryPolicy.__bases__ == (torch.nn.Module,)
+    assert not issubclass(PredictiveTeamBeliefPolicy, TemporalHistoryPolicy)
+
+    source_root = Path(__file__).resolve().parents[2] / "before_we_act"
+    sources = "\n".join(
+        (source_root / name).read_text()
+        for name in (
+            "temporal_action_backbone.py",
+            "temporal_history_policy.py",
+            "predictive_team_belief_policy.py",
+        )
+    )
+    for forbidden in (
+        "stereo_core",
+        "NoWristPAIRRoute",
+        "ARCADecoder",
+        "PAIR router",
+        "from no_wrist_pair_model",
+    ):
+        assert forbidden not in sources
+
+
+def test_predictive_policy_preserves_the_standalone_b0h_signal_path(
+    fake_policy_dependencies,
+) -> None:
+    from before_we_act.predictive_team_belief_policy import (
+        PredictiveTeamBeliefPolicy,
+    )
+    from before_we_act.temporal_history_policy import TemporalHistoryPolicy
+
+    config = tiny_config(vision_dim=768, state_dim=9, action_dim=8)
+    torch.manual_seed(221)
+    base = TemporalHistoryPolicy(
+        state_dim=9,
+        action_dim=8,
+        variant="hidden_residual",
+        horizon=3,
+        d_model=8,
+        enc_layers=1,
+        dec_layers=1,
+        roles=4,
+        role_rank=4,
+        history_layers=1,
+        dino_model="offline/fake",
+    ).eval()
+    torch.manual_seed(223)
+    policy = PredictiveTeamBeliefPolicy(
+        config,
+        state_dim=9,
+        action_dim=8,
+        horizon=3,
+        d_model=8,
+        enc_layers=1,
+        dec_layers=1,
+        roles=4,
+        role_rank=4,
+        history_layers=1,
+        dino_model="offline/fake",
+        include_teacher=False,
+    ).eval()
+    incompatible = policy.load_state_dict(base.state_dict(), strict=False)
+    expected_missing = {
+        key
+        for key in policy.state_dict()
+        if key.startswith(("belief_core.", "direct_belief_residual."))
+    }
+    assert set(incompatible.missing_keys) == expected_missing
+    assert not incompatible.unexpected_keys
+    assert set(base.state_dict()) == set(policy.state_dict()) - expected_missing
+    assert not any(key.startswith("action_backbone.") for key in policy.state_dict())
+
+    history_mask = torch.zeros(1, 16, dtype=torch.bool)
+    history_mask[:, -1] = True
+    kwargs = {
+        "global_rgb": torch.zeros(1, 3, 480, 640),
+        "local_rgb": torch.ones(1, 3, 480, 640),
+        "history_visual_raw": torch.zeros(1, 16, 2, 768),
+        "history_qpos": torch.zeros(1, 16, 9),
+        "history_action": torch.zeros(1, 16, 8),
+        "history_mask": history_mask,
+        "action_history_mask": torch.zeros_like(history_mask),
+        "task_bytes": torch.tensor([[65] + [256] * 63]),
+        "task_text_mask": torch.tensor([[True] + [False] * 63]),
+        "episode_reset": torch.tensor([True]),
+    }
+    with torch.no_grad():
+        base_prediction = base(**kwargs)[0]
+        belief_off = policy(**kwargs, belief_enabled=False)
+    torch.testing.assert_close(
+        belief_off.base_prediction, base_prediction, rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        belief_off.prediction, base_prediction, rtol=0, atol=0
+    )
+
+
 def test_policy_zero_init_and_b_off_are_exact(fake_policy_dependencies) -> None:
-    # Import only after dependency stubs are installed; train_act binds these
-    # classes at module-import time.
+    # Import only after the frozen DINO dependency stubs are installed.
     for name in tuple(sys.modules):
         if name == "before_we_act.temporal_history_policy" or name == "before_we_act.predictive_team_belief_policy":
             sys.modules.pop(name)

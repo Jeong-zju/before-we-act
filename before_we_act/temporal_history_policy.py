@@ -1,44 +1,24 @@
-"""Fair temporal-history policies with legal history and no social-state input."""
+"""Standalone temporal-history policies with legal, non-social inputs."""
 from __future__ import annotations
-
-from dataclasses import dataclass
 
 import torch
 from torch import nn
 
-try:
-    from stereo_core.no_wrist_pair_model import NoWristPAIRRoute
-except ImportError:  # Training-server launchers also support the legacy path.
-    from no_wrist_pair_model import NoWristPAIRRoute
-
-from before_we_act.temporal_history_data import HISTORY_STEPS, PAD_BYTE
+from before_we_act.temporal_action_backbone import (
+    TemporalActionBackboneOps,
+    TemporalActionContext,
+)
 
 
-@dataclass(frozen=True)
-class TemporalActionContext:
-    """Internal action context shared by B0-H and later social residuals."""
+class TemporalHistoryPolicy(nn.Module):
+    """Project-owned B0-H action model with a shared 16-step encoder.
 
-    observation: torch.Tensor
-    current_visual_raw: torch.Tensor
-    history: torch.Tensor
-    history_summary: torch.Tensor
-    task_token: torch.Tensor
-    query: torch.Tensor
-    memory: torch.Tensor
-    decoded: torch.Tensor
-    mu: torch.Tensor | None
-    logvar: torch.Tensor | None
-
-
-class TemporalHistoryPolicy(NoWristPAIRRoute):
-    """W10 action backbone plus a shared 16-step temporal encoder.
-
-    ``history_only`` exposes history to the ordinary action backbone.
-    ``hidden_residual`` adds a zero-initialized direct residual that reads only
-    ordinary decoded/history hidden states.  Neither variant accepts B/P/T.
+    ``history_only`` exposes legal history to the ordinary action path.
+    ``hidden_residual`` adds the frozen zero-initialized residual that reads
+    decoded action and history hidden states. Neither variant accepts B/P/T.
     """
 
-    VARIANTS = ("history_only", "hidden_residual")
+    VARIANTS = TemporalActionBackboneOps.VARIANTS
 
     def __init__(
         self,
@@ -55,237 +35,29 @@ class TemporalHistoryPolicy(NoWristPAIRRoute):
         history_layers: int = 2,
         dino_model: str,
     ) -> None:
-        if variant not in self.VARIANTS:
-            raise ValueError(f"unsupported B0-H variant: {variant}")
-        super().__init__(
+        nn.Module.__init__(self)
+        TemporalActionBackboneOps._initialize_temporal_action_backbone(
+            self,
             state_dim,
             action_dim,
+            variant=variant,
             horizon=horizon,
             d_model=d_model,
             enc_layers=enc_layers,
             dec_layers=dec_layers,
             roles=roles,
             role_rank=role_rank,
+            history_layers=history_layers,
             dino_model=dino_model,
         )
-        # PAIR's compatibility matrix is consumed only by its separately
-        # supervised relation objective.  B0-H deliberately has no B/P/T
-        # labels or social-state loss, and the matrix is not on the action
-        # inference path.  Keep the inherited checkpoint field for state-dict
-        # compatibility, but do not advertise a dead trainable parameter to
-        # DDP (which correctly treats that as a protocol error).
-        self.compatibility.requires_grad_(False)
-        self.variant = variant
-        self.history_layers_n = int(history_layers)
-        self.history_pair = nn.Sequential(
-            nn.LayerNorm(2 * d_model),
-            nn.Linear(2 * d_model, d_model),
-            nn.GELU(),
-        )
-        self.history_action = nn.Linear(action_dim, d_model, bias=False)
-        self.task_byte_embedding = nn.Embedding(
-            PAD_BYTE + 1, d_model, padding_idx=PAD_BYTE
-        )
-        self.history_position = nn.Parameter(
-            torch.randn(1, HISTORY_STEPS, d_model) * 0.02
-        )
-        self.history_reset = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
-        history_layer = nn.TransformerEncoderLayer(
-            d_model,
-            8,
-            d_model * 4,
-            dropout=0.1,
-            batch_first=True,
-            norm_first=True,
-            activation="gelu",
-        )
-        self.history_encoder = nn.TransformerEncoder(
-            history_layer, num_layers=history_layers
-        )
-        self.history_norm = nn.LayerNorm(d_model)
-        self.task_token_norm = nn.LayerNorm(d_model)
-        if variant == "hidden_residual":
-            self.hidden_residual = nn.Sequential(
-                nn.LayerNorm(2 * d_model),
-                nn.Linear(2 * d_model, d_model),
-                nn.GELU(),
-                nn.Linear(d_model, action_dim),
-            )
-            nn.init.zeros_(self.hidden_residual[-1].weight)
-            nn.init.zeros_(self.hidden_residual[-1].bias)
-        else:
-            self.hidden_residual = None
 
-    def _raw_vision_tokens(self, image: torch.Tensor) -> torch.Tensor:
-        if tuple(image.shape[-2:]) != (480, 640):
-            raise ValueError(
-                f"B0-H requires original 640x480 RGB, got {tuple(image.shape[-2:])}"
-            )
-        normalized = (image - self.dino_mean) / self.dino_std
-        self.vision.eval()
-        with torch.no_grad():
-            all_tokens = self.vision(pixel_values=normalized).last_hidden_state
-            first_patch = 1 + int(
-                getattr(self.vision.config, "num_register_tokens", 0)
-            )
-            tokens = all_tokens[:, first_patch:]
-        if tokens.shape[1:] != (30 * 40, 768):
-            raise ValueError(f"unexpected frozen DINO token grid: {tokens.shape}")
-        return tokens
-
-    def _paired_tokens_and_raw_pool(
-        self, global_rgb: torch.Tensor, local_rgb: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        local_raw = self._raw_vision_tokens(local_rgb)
-        global_raw = self._raw_vision_tokens(global_rgb)
-        local = self.vision_proj(local_raw) + self.local_view
-        global_context = self.vision_proj(global_raw) + self.global_view
-        observation = self.fusion(
-            local,
-            global_context,
-            self.fusion_pos.to(dtype=local.dtype),
-        )
-        raw_pool = torch.stack((global_raw.mean(1), local_raw.mean(1)), dim=1)
-        return observation, raw_pool
-
-    def _task_token(
-        self, task_bytes: torch.Tensor, task_text_mask: torch.Tensor
-    ) -> torch.Tensor:
-        if task_bytes.shape != task_text_mask.shape:
-            raise ValueError("task byte/mask shape mismatch")
-        embedded = self.task_byte_embedding(task_bytes)
-        weights = task_text_mask.unsqueeze(-1).to(embedded.dtype)
-        pooled = (embedded * weights).sum(1) / weights.sum(1).clamp_min(1)
-        return self.task_token_norm(pooled)
-
-    def _encode_history(
-        self,
-        history_visual_raw: torch.Tensor,
-        current_visual_raw: torch.Tensor,
-        history_qpos: torch.Tensor,
-        history_action: torch.Tensor,
-        history_mask: torch.Tensor,
-        action_history_mask: torch.Tensor,
-        task_bytes: torch.Tensor,
-        task_text_mask: torch.Tensor,
-        episode_reset: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        expected_visual = (history_qpos.shape[0], HISTORY_STEPS, 2, 768)
-        if tuple(history_visual_raw.shape) != expected_visual:
-            raise ValueError(
-                f"history visual contract differs: {history_visual_raw.shape}"
-            )
-        if tuple(history_qpos.shape[1:]) != (HISTORY_STEPS, 9):
-            raise ValueError("history qpos contract differs")
-        if tuple(history_action.shape[1:]) != (HISTORY_STEPS, 8):
-            raise ValueError("history action contract differs")
-        # The last cached feature is replaced by the exact raw feature computed
-        # during this forward.  This prevents cache precision from changing the
-        # current observation and makes deployment use the identical path.
-        visual = torch.cat(
-            (history_visual_raw[:, :-1].to(current_visual_raw.dtype),
-             current_visual_raw.unsqueeze(1)),
-            dim=1,
-        )
-        projected = self.vision_proj(visual)
-        visual_token = self.history_pair(
-            torch.cat((projected[:, :, 0], projected[:, :, 1]), dim=-1)
-        )
-        observation_weight = history_mask.unsqueeze(-1).to(visual_token.dtype)
-        action_weight = action_history_mask.unsqueeze(-1).to(visual_token.dtype)
-        task_token = self._task_token(task_bytes, task_text_mask)
-        token = (
-            visual_token * observation_weight
-            + self.state(history_qpos) * observation_weight
-            + self.history_action(history_action) * action_weight
-            + self.history_position.to(dtype=visual_token.dtype)
-            + task_token.unsqueeze(1)
-        )
-        token[:, -1:] = token[:, -1:] + (
-            episode_reset[:, None, None].to(token.dtype) * self.history_reset
-        )
-        valid = history_mask | action_history_mask
-        if not torch.all(valid[:, -1]):
-            raise ValueError("current history slot must always be valid")
-        encoded = self.history_encoder(token, src_key_padding_mask=~valid)
-        encoded = self.history_norm(encoded)
-        encoded = encoded * valid.unsqueeze(-1).to(encoded.dtype)
-        summary = encoded.sum(1) / valid.sum(1, keepdim=True).clamp_min(1)
-        return encoded, summary, task_token
-
-    def _decode_action_context(
-        self,
-        global_rgb: torch.Tensor,
-        local_rgb: torch.Tensor,
-        history_visual_raw: torch.Tensor,
-        history_qpos: torch.Tensor,
-        history_action: torch.Tensor,
-        history_mask: torch.Tensor,
-        action_history_mask: torch.Tensor,
-        task_bytes: torch.Tensor,
-        task_text_mask: torch.Tensor,
-        episode_reset: torch.Tensor,
-        actions: torch.Tensor | None,
-    ) -> TemporalActionContext:
-        """Build the unchanged B0-H action hidden state once.
-
-        Keeping this path factored lets B-core consume the same action hidden
-        without a forward hook or a second visual-backbone pass.  The operation
-        and random-number order are identical to the original B0-H forward.
-        """
-
-        observation, current_visual_raw = self._paired_tokens_and_raw_pool(
-            global_rgb, local_rgb
-        )
-        state_vec = self.state(history_qpos[:, -1])
-        history, history_summary, task_token = self._encode_history(
-            history_visual_raw,
-            current_visual_raw,
-            history_qpos,
-            history_action,
-            history_mask,
-            action_history_mask,
-            task_bytes,
-            task_text_mask,
-            episode_reset,
-        )
-        gates = self._pair_route(state_vec, observation)
-        if actions is not None:
-            encoded = self.posterior(self.action(actions) + self.pos)
-            mu, logvar = self.latent(encoded.mean(1)).chunk(2, -1)
-            logvar = logvar.clamp(-10.0, 5.0)
-            latent = mu + torch.randn_like(mu) * torch.exp(0.5 * logvar)
-        else:
-            mu = logvar = None
-            latent = torch.zeros(
-                (global_rgb.shape[0], self.z_proj.in_features),
-                device=global_rgb.device,
-                dtype=state_vec.dtype,
-            )
-        memory = torch.cat(
-            (
-                state_vec.unsqueeze(1),
-                self.z_proj(latent).unsqueeze(1),
-                task_token.unsqueeze(1),
-                history,
-                observation,
-            ),
-            dim=1,
-        )
-        query = self.query.expand(global_rgb.shape[0], -1, -1)
-        decoded = self.decoder(query, memory, observation, gates)
-        return TemporalActionContext(
-            observation=observation,
-            current_visual_raw=current_visual_raw,
-            history=history,
-            history_summary=history_summary,
-            task_token=task_token,
-            query=query,
-            memory=memory,
-            decoded=decoded,
-            mu=mu,
-            logvar=logvar,
-        )
+    train = TemporalActionBackboneOps.train
+    _raw_vision_tokens = TemporalActionBackboneOps._raw_vision_tokens
+    _paired_tokens_and_raw_pool = TemporalActionBackboneOps._paired_tokens_and_raw_pool
+    _task_token = TemporalActionBackboneOps._task_token
+    _encode_history = TemporalActionBackboneOps._encode_history
+    _route_action_queries = TemporalActionBackboneOps._route_action_queries
+    _decode_action_context = TemporalActionBackboneOps._decode_action_context
 
     def forward(
         self,
