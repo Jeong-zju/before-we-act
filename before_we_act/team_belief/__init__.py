@@ -1,7 +1,7 @@
-"""Automatic team-belief models for the staged SSC-V7 B-core route."""
+"""Automatic team-belief models."""
 
-from .n2_core import (
-    B3N2Config,
+from .predictive_core import (
+    TeamBeliefConfig,
     BeliefCoreOutput,
     BeliefRuntimeState,
     TeacherBeliefInputs,
@@ -10,7 +10,7 @@ from .n2_core import (
 )
 
 __all__ = [
-    "B3N2Config",
+    "TeamBeliefConfig",
     "BeliefCoreOutput",
     "BeliefRuntimeState",
     "PredictiveTeamBeliefCore",

@@ -1,7 +1,7 @@
 # P1 多机器人闭环模型技术路线 V7.3：Measurement 收口后的自动团队信念 PBT 协作模型
 
-> 更新日期：2026-08-15
-> 活动分支：`feat/ssc-v7-b-core`
+> 更新日期：2026-08-16
+> 活动分支：`feat/model-improvements`
 > 当前状态：**探索性 3-N2 的两项剩余因果修复已在一颗 4,000-update pilot 上过门，正式长训练仍未启动。** R3 迁移 Persistence Initialization，把四个未来锚点改成从同视角 persistence 出发、各自学习修正幅度；未来头由 R2 的 `2/4` 提升到 `4/4` horizon 胜过 persistence，打乱未来动作后也在 `4/4` 变差。它同时把“类别分布有多混乱”和“可用视角证据够不够”分开；遮掉一个视角后显式 epistemic uncertainty 从 `0.333` 升到 `0.500`，reliability 从 `0.667` 降到 `0.500`。正式三 seed×120k、Validation5、3-N3 和闭环 claim 均未启动。
 > 3-N2 最新证据边界：**可以说“表示、belief→action 绑定、action-conditioned future 的预注册方向门和缺失视角不确定性方向都已在单 seed 离线短测中通过”；不能说“完整 B-core 已正式有效”或“短时未来改善已经稳健”。** `0.2s` 相对 persistence 只好 `0.085%`，direct control 仍比 B-core 好 `0.613%`，而且目前只有一颗探索 seed。机器状态为 `PASSED_CAUSAL_REPAIR_GATES_FORMAL_TRAINING_REQUIRES_OWNER_DECISION`，路线状态记为 `CAUSAL_REPAIR_GATES_PASSED_SINGLE_SEED_FORMAL_TRAINING_NOT_STARTED`。人话结论见第 6.2.3 节。
 > 负责人修订：项目负责人接受“显著改变队友后续动作会明显影响任务成功率”作为后续研究假设，把有效的同状态闭环因果实验延后到论文成文前完成，并授权先做教师/学生离线探索。旧 R1-1 的“未收敛”和旧 R1-3 的“reward 全零、恢复不重复、判题无效”事实原样保留；无效 R1-3 的 reward、物体位移和分叉结果没有进入教师/学生损失或通过门禁。这是调整实验顺序，不是宣布 R1-3 已通过。
@@ -372,17 +372,19 @@ action = ACT(observation, history)
 | Measurement | `feat/ssc-v7-measurement` | `measurement/` |
 | M3-R4/ARB（历史只读） | `feat/ssc-v7-m3-r4-arb` | `measurement/m3_r4_arb/` |
 | B0-H | `feat/ssc-v7-b0-history` | `b0-history/` |
-| B-core 3-N1 | `feat/ssc-v7-b-core` | `b-core/n1-raw-signal/` |
-| B-core 3-N1-R1 | `feat/ssc-v7-b-core` | `b-core/n1-r1-action-grounded-belief/` |
-| B-core 3-N2 | `feat/ssc-v7-b-core` | `b-core/n2-predictive-team-belief-v1/`（旧失败，只读）、`b-core/n2-r1-discrete-belief-stabilization-v2/`（表示修复）与 `b-core/n2-r2-action-conditioned-pairing-v2/`（动作绑定/未来诊断） |
-| B-core 3-N3 | `feat/ssc-v7-b-core` | `b-core/n3-attribution/` |
-| B-core 3-N4 | `feat/ssc-v7-b-core` | `b-core/n4-formal/` |
+| B-core 3-N1 | `feat/model-improvements` | `b-core/n1-raw-signal/` |
+| B-core 3-N1-R1 | `feat/model-improvements` | `b-core/n1-r1-action-grounded-belief/` |
+| B-core 3-N2 | `feat/model-improvements` | `b-core/n2-predictive-team-belief-v1/`（旧失败，只读）、`b-core/n2-r1-discrete-belief-stabilization-v2/`（表示修复）与 `b-core/n2-r2-action-conditioned-pairing-v2/`（动作绑定/未来诊断） |
+| B-core 3-N3 | `feat/model-improvements` | `b-core/n3-attribution/` |
+| B-core 3-N4 | `feat/model-improvements` | `b-core/n4-formal/` |
 | BP | `feat/ssc-v7-bp-progress` | `bp-progress/` |
 | BT | `feat/ssc-v7-bt-teammate` | `bt-teammate/` |
 | BPT | `feat/ssc-v7-bpt-directed` | `bpt-directed/` |
 | 汇总 | `feat/ssc-v7-integration` | `integration/` |
 
 3-N1-R1 是 3-N1 之后的独立 gate revision：旧合同、checkpoint 和机器结论全部只读保留，新结果不得覆盖旧 receipt。3-N1-R1 的“公平重测”可以只读复用旧表示 checkpoint；训练教师和合法学生必须在新合同中重新冻结输入边界、数据分组、sample cursor、seed、预算和停止规则。3-N1/R1～3-N3 是同一条 B-core 研究路线内部的递进实验，可以在只读 receipt 完整的前提下继承上一小步的表示权重和代码产物，但这些继承结果只能用于 Discovery，不具备正式候选资格。3-N4、B0-H、BP、BT、BPT 等正式模型仍从同一个冻结 base 按各自完整 recipe 重新训练，不能把诊断 checkpoint 冒充正式初始化。
+
+2026-08-16 工程收口：第 3 步已有实现已从 `feat/ssc-v7-b-core` 汇入 `feat/model-improvements`，后续不再以实验阶段号命名运行时文件、class、变量、CLI 或 supervisor program；统一使用 `temporal_history`、`raw_team_signal`、`action_grounded_belief`、`belief_distillation` 和 `predictive_team_belief` 等领域语义名。已经签发的 stage ID、run root、checkpoint schema、JSON key 和 receipt 目录保持原样，只用于历史兼容与证据追溯。此工程合并不改变 3-N3/3-N4 的实验授权状态。
 
 ### 3.4 已经冻结的实验规矩
 
@@ -713,7 +715,7 @@ hidden-residual 使用 4 GPU、effective batch 48、seed `20260814` 完成全部
 
 为什么要先修尺子：
 
-- **[事实]** 当前动作探针在 `train_b3_n1_probe.py` 中把全部 belief token 直接 `mean(1)` 成一个向量。这样做很省事，却可能把“谁在做什么、两个机器人之间是什么关系”平均掉。
+- **[事实]** 当前动作探针在 `train_team_action_probe.py` 中把全部 belief token 直接 `mean(1)` 成一个向量。这样做很省事，却可能把“谁在做什么、两个机器人之间是什么关系”平均掉。
 - **[事实]** 当前所谓 hidden-only 使用的是同一个 N1 表示网络的 `history_summary`；这个 history encoder 和未来图像/队友状态目标一起训练过，不是第 2 步真正冻结的 B0-H hidden。
 - **[推断]** 因此现有九格负方向同时混入了“belief 是否有用”“平均池化是否抹掉信息”和“对照是否公平”三个问题。即使把旧探针继续跑到平台，也未必能回答 H+B 相对真实 B0-H 的增量价值。
 - **[判断]** 最省研究成本的第一步是只读复用旧表示 checkpoint，重做公平探针；只有公平探针仍不行，才把主要资源转向数据和监督改造。
