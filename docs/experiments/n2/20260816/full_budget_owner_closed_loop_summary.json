@@ -1,0 +1,149 @@
+{
+  "format_version": "before-we-act.b3-n2-full-budget-owner-closed-loop-summary/1",
+  "date": "2026-08-16",
+  "branch": "feat/ssc-v7-b-core",
+  "model_recipe_commit": "52debbe8a2a7052fc05ad2178b4382dc6f52b908",
+  "closed_loop_runner_commit": "aef05ecf8a1f4e357f9360c909cdaba3b2cc782a",
+  "remote_run_root": "/workspace/bwa_runs/b-core/n2-r3-evidence-gated-persistence-v1",
+  "machine_status": "COMPLETED_OWNER_AUTHORIZED_VALIDATION20_DIAGNOSTIC",
+  "route_status": "STRONG_POSITIVE_CLOSED_LOOP_DIAGNOSTIC_N3_REQUIRES_OWNER_DECISION",
+  "old_training_conclusion": {
+    "status": "INCONCLUSIVE_TRAINING_NOT_CONVERGED",
+    "preserved": true,
+    "sha256": "a715fcbb2fcd71183a54c73596a71872f7a0fd23502b3ccc51712d6517197932",
+    "all_seeds_ran_to_update": 120000,
+    "only_blocking_series_every_seed": "teammate_delta",
+    "deployment_primary_series_plateaued_every_seed": [
+      "b_core_action",
+      "future_1.6s",
+      "teacher_alignment",
+      "teammate_action"
+    ],
+    "overfit_triggered": false
+  },
+  "owner_revision": {
+    "authorization_token": "AUTHORIZED_OWNER_N2_CLOSED_LOOP_AFTER_PRIMARY_PLATEAU_20260816",
+    "status": "OWNER_AUTHORIZED_CLOSED_LOOP_AFTER_PRIMARY_PLATEAU",
+    "sha256": "94a84869091bd82c7c3c6074e5ccafe3f6d8512ce7b6392bb61915553a958876",
+    "overwrites_old_conclusion": false
+  },
+  "offline_selected_checkpoints": {
+    "selection_update": 100000,
+    "seeds": {
+      "20260815": {
+        "b_core_action_mse": 0.0026956267815729795,
+        "b0h_action_mse": 0.0032118058961848484,
+        "shuffled_belief_action_mse": 0.034880403738604765,
+        "direct_reactive_action_mse": 0.002707214288202506,
+        "belief_effective_rank": 6.060375690460205
+      },
+      "20260816": {
+        "b_core_action_mse": 0.0026938247658502648,
+        "b0h_action_mse": 0.0032118058961848484,
+        "shuffled_belief_action_mse": 0.03563518468841358,
+        "direct_reactive_action_mse": 0.0027148862827799133,
+        "belief_effective_rank": 6.136990070343018
+      },
+      "20260817": {
+        "b_core_action_mse": 0.002693085546094931,
+        "b0h_action_mse": 0.0032118058961848484,
+        "shuffled_belief_action_mse": 0.037280201635373905,
+        "direct_reactive_action_mse": 0.002711371856222142,
+        "belief_effective_rank": 4.743533134460449
+      }
+    },
+    "all_seeds_b_core_beat_b0h": true,
+    "all_seeds_b_core_beat_direct_reactive": true,
+    "all_seeds_correct_belief_beat_shuffled_belief": true,
+    "all_seeds_all_four_future_horizons_beat_persistence_and_shuffled_action": true,
+    "all_seeds_occlusion_uncertainty_direction_correct": true,
+    "validation20_candidate_seed": 20260817,
+    "candidate_deployment_checkpoint_sha256": "deb628b9cdee68a3243f91158e2b0165dd2e2fe03196c138c3a669904bc6792e",
+    "closed_loop_results_used_for_selection": false
+  },
+  "validation5": {
+    "completed_at_utc": "2026-08-16T01:56:15.577736Z",
+    "summary_sha256": "78d5964354c043abd311a5a5932fac126277389349190bc4d59d06575e882921",
+    "episodes_per_model": 30,
+    "b0h_successes": 24,
+    "n2_successes_by_seed": {
+      "20260815": 26,
+      "20260816": 26,
+      "20260817": 27
+    },
+    "b0h_paired_inactivity_rate": 0.5622623245523058,
+    "n2_paired_inactivity_rate_by_seed": {
+      "20260815": 0.5231788079470199,
+      "20260816": 0.5095062984117049,
+      "20260817": 0.49613083366573596
+    },
+    "frozen_direction_gate_passed": true,
+    "all_three_seeds_nonnegative_vs_b0h": true,
+    "all_three_seeds_lower_paired_inactivity": true
+  },
+  "validation20": {
+    "completed_at_utc": "2026-08-16T02:37:46.600776Z",
+    "comparison_sha256": "3928ade8341c6a4fcd9337da7f5ed6eb7921245a5d696cc71e6b5b318fcb6f90",
+    "episodes": 120,
+    "successes": {
+      "w10": 88,
+      "b0h": 95,
+      "n2": 111
+    },
+    "success_rate": {
+      "w10": 0.7333333333333333,
+      "b0h": 0.7916666666666666,
+      "n2": 0.925
+    },
+    "task_successes": {
+      "lift_barrier": {
+        "w10": 20,
+        "b0h": 20,
+        "n2": 20
+      },
+      "camera_alignment": {
+        "w10": 8,
+        "b0h": 5,
+        "n2": 14
+      },
+      "long_pipeline_delivery": {
+        "w10": 20,
+        "b0h": 18,
+        "n2": 19
+      },
+      "take_photo": {
+        "w10": 20,
+        "b0h": 19,
+        "n2": 19
+      },
+      "pass_shoe": {
+        "w10": 20,
+        "b0h": 17,
+        "n2": 19
+      },
+      "place_food": {
+        "w10": 0,
+        "b0h": 16,
+        "n2": 20
+      }
+    },
+    "success_delta_vs_w10": 23,
+    "success_delta_vs_b0h": 16,
+    "success_rate_delta_pp_vs_w10": 19.166666666666675,
+    "success_rate_delta_pp_vs_b0h": 13.333333333333341,
+    "n2_steps": 44002,
+    "n2_paired_inactivity_steps": 20442,
+    "n2_paired_inactivity_rate": 0.464569792282169,
+    "matches_or_beats_w10": true,
+    "matches_or_beats_b0h": true,
+    "passes_numeric_n4_gate_if_it_were_formal": true,
+    "formal_pass": false
+  },
+  "claim_limits": [
+    "The old training-sufficiency conclusion remains inconclusive because teammate_delta did not satisfy the frozen plateau rule.",
+    "The selected N2 checkpoint was chosen by frozen offline action MSE before any closed-loop result was read.",
+    "The result establishes strong closed-loop value for the frozen R3 candidate but does not attribute the gain specifically to team belief rather than capacity or structure.",
+    "N3 attribution, N4 retraining, and Confirmation50 remain unperformed; formal_pass must remain false."
+  ],
+  "human_conclusion": "The frozen R3 N2 candidate produced a large and broad closed-loop gain: 111/120 versus W10 88/120 and B0-H 95/120. It matched or improved B0-H on every task, with the largest gains on camera alignment and place food, and all three seeds had already improved the paired Validation5. This is strong evidence that the candidate is useful in closed loop. It is not yet proof that explicit team belief caused the gain, and it does not erase the old auxiliary plateau failure or replace N3/N4."
+}
