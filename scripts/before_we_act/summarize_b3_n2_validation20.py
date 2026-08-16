@@ -237,8 +237,14 @@ def summarize(
     b0h: Mapping,
 ) -> dict:
     selected = conclusion.get("validation20_candidate")
-    if conclusion.get("status") != "POSITIVE_SIGNAL":
-        raise RuntimeError("N2 Validation20 requires a positive frozen Validation5")
+    allowed_statuses = {
+        "POSITIVE_SIGNAL",
+        "OWNER_AUTHORIZED_CLOSED_LOOP_AFTER_PRIMARY_PLATEAU",
+    }
+    if conclusion.get("status") not in allowed_statuses:
+        raise RuntimeError(
+            "N2 Validation20 requires a positive frozen Validation5 or owner exception"
+        )
     if not isinstance(selected, dict):
         raise RuntimeError("N2 conclusion lacks the pre-closed-loop seed selection")
     if selected.get("closed_loop_results_used_for_selection") is not False:
@@ -277,6 +283,7 @@ def summarize(
         "formal_pass": False,
         "claim_limits": [
             "This is an owner-authorized N2 diagnostic, not the N4 formal stage.",
+            "If the owner exception was used, the immutable training-sufficiency conclusion remains inconclusive.",
             "The N2 seed was selected only by frozen offline action MSE before closed-loop results were read.",
             "Validation20 may compare closed-loop success with W10 and B0-H, but cannot replace N3 attribution, N4 retraining, or Confirmation50.",
             "Paired inactivity is reported for N2 only because the historical W10/B0-H summaries did not freeze the same proxy.",

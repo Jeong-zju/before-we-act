@@ -8,7 +8,7 @@ W10_SUMMARY="${BWA_N2_W10_SUMMARY:-/workspace/bwa_runs/w10-six-task-v1/evaluatio
 B0H_SUMMARY="${BWA_N2_B0H_SUMMARY:-/workspace/bwa_runs/p1-step2-b0h-v7/hidden_residual/evaluation/validation20/summary.json}"
 PYTHON="${BWA_N2_PYTHON:-/venv/robofactory-act/bin/python}"
 ROBOFACTORY_ROOT="${BWA_ROBOFACTORY_ROOT:-/workspace/RoboFactory}"
-CONCLUSION="${RUN_ROOT}/conclusion.json"
+CONCLUSION="${BWA_N2_CONCLUSION:-${RUN_ROOT}/conclusion.json}"
 OUTPUT_ROOT="${RUN_ROOT}/validation20"
 LOG_ROOT="${RUN_ROOT}/logs"
 SUMMARY="${OUTPUT_ROOT}/comparison.json"
@@ -22,8 +22,10 @@ fail() {
 
 [[ -x "${PYTHON}" ]] || fail "Python is missing: ${PYTHON}"
 [[ -f "${CONCLUSION}" ]] || fail "N2 conclusion is missing"
-[[ "$(jq -r '.status' "${CONCLUSION}")" == POSITIVE_SIGNAL ]] || \
-  fail "Validation20 requires POSITIVE_SIGNAL after frozen Validation5"
+CONCLUSION_STATUS="$(jq -r '.status' "${CONCLUSION}")"
+[[ "${CONCLUSION_STATUS}" == POSITIVE_SIGNAL || \
+   "${CONCLUSION_STATUS}" == OWNER_AUTHORIZED_CLOSED_LOOP_AFTER_PRIMARY_PLATEAU ]] || \
+  fail "Validation20 requires a positive Validation5 or the frozen owner exception"
 [[ "$(jq -r '.validation20_candidate.closed_loop_results_used_for_selection' "${CONCLUSION}")" == false ]] || \
   fail "candidate selection must not use closed-loop results"
 [[ -f "${W10_SUMMARY}" && -f "${B0H_SUMMARY}" ]] || \

@@ -151,7 +151,7 @@ def test_baseline_loader_verifies_per_task_seed_receipts(tmp_path, monkeypatch) 
 
 
 def test_validation20_requires_positive_validation5(tmp_path) -> None:
-    with pytest.raises(RuntimeError, match="positive frozen Validation5"):
+    with pytest.raises(RuntimeError, match="positive frozen Validation5 or owner exception"):
         summarize(
             {"status": "WEAK_SIGNAL", "validation20_candidate": {}},
             tmp_path,
@@ -159,3 +159,39 @@ def test_validation20_requires_positive_validation5(tmp_path) -> None:
             w10={},
             b0h={},
         )
+
+
+def test_validation20_accepts_frozen_owner_exception(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "scripts.before_we_act.summarize_b3_n2_validation20.load_candidate",
+        lambda *_args, **_kwargs: {
+            "episodes": 120,
+            "successes": 90,
+            "tasks": {
+                task: {"episodes": 20, "successes": 15}
+                for task in SIX_TASKS
+            },
+        },
+    )
+    baseline = {
+        "checkpoint_sha256": "baseline",
+        "successes": 90,
+        "tasks": {
+            task: {"episodes": 20, "successes": 15}
+            for task in SIX_TASKS
+        },
+    }
+    conclusion = {
+        "status": "OWNER_AUTHORIZED_CLOSED_LOOP_AFTER_PRIMARY_PLATEAU",
+        "validation20_candidate": {
+            "deployment_checkpoint_sha256": "candidate",
+            "closed_loop_results_used_for_selection": False,
+        },
+    }
+
+    result = summarize(
+        conclusion, tmp_path, tmp_path, w10=baseline, b0h=baseline
+    )
+
+    assert result["status"] == "COMPLETED_OWNER_AUTHORIZED_VALIDATION20_DIAGNOSTIC"
+    assert result["formal_pass"] is False

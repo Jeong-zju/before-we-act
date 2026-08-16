@@ -1115,6 +1115,18 @@ Validation20 在看到任何闭环结果前固定如下：跨 seed 只按每颗�
 
 这个追加闭环只回答“冻结 R3 模型在同一六任务协议上实际能做多少”，不能跳过 3-N3 的容量归因，也不能签发 N4、Confirmation50 或论文级“正式 B-core 通过”。即使 N2 在数字上达到第 12 节门槛，机器字段仍必须保持 `formal_pass=false`；反之若输给 B0-H，也必须保留“离线 belief 有用但没有形成额外闭环收益”的负结论。
 
+#### 6.2.5 2026-08-16 负责人决定：保留旧未收敛回执，继续完成诊断闭环
+
+三颗正式 seed 均已跑满 `120,000` updates，旧判卷都返回 `INCONCLUSIVE_TRAINING_NOT_CONVERGED`。逐项复核后，动作 MSE、`1.6s` 未来、teacher alignment 和 teammate action 四条与部署直接相关的曲线在三颗 seed 上都已满足平台条件，且没有触发过拟合；唯一没有满足“最近三段变化都小于 1%”的是辅助目标 `teammate_delta`。负责人在看到这一事实、且 Validation5/20 尚未运行时明确要求“继续完成闭环”，新增路线级授权标识为：
+
+```text
+AUTHORIZED_OWNER_N2_CLOSED_LOOP_AFTER_PRIMARY_PLATEAU_20260816
+```
+
+这不是倒改旧规则：原 `conclusion.json`、`offline_conclusion.json`、三颗 `status.json` 和训练充分性回执必须原样保留，N2 的训练充分性结论仍是“不确定”。新增授权只允许对已经训练好的三个 checkpoint 跑固定 Validation5，并对闭环前已经按离线 `B-core action MSE` 选出的唯一候选继续跑 Validation20。三颗 seed 的冻结验证 MSE 分别为 `0.00269563/0.00269382/0.00269309`，因此候选固定为 seed `20260817` 的 `100,000`-update 部署 checkpoint；不得根据 Validation5 的成功数换 seed。
+
+为完整回答负责人要求的 W10/B0-H 同协议比较，本次即使 Validation5 没通过旧方向门，也继续完成上述固定候选的 Validation20。这个例外只把“闭环数字还未知”变成“闭环数字已测量”，不把辅助项尚未平台化解释成已经收敛，不自动授权 N3，也不能签发 N4、Confirmation50 或 `formal_pass=true`。最终结论必须同时报告：旧门禁为什么挡住、Validation5 的方向、Validation20 六任务逐项成功数，以及 3-N2 相对 W10 `88/120` 和 B0-H `95/120` 的差值。
+
 ### 6.3 3-N3：整体结构与新信号的机制归因
 
 3-N3 不再发明新模型，只使用 3-N2 冻结的训练 recipe 做一个最小四组比较：
