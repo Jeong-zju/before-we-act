@@ -38,3 +38,16 @@ backups/
 refs/
 
 docs/experiments/
+
+# Local CARE branch/pilot evidence is archived outside the tracked workflow.
+docs/archive/contracts/care-history/**
+!docs/archive/contracts/care-history/
+!docs/archive/contracts/care-history/README.md
+
+# Superseded CARE contract generations; A6R1 remains the active contract.
+docs/plans/contracts/care/a4*/
+docs/plans/contracts/care/a5*/
+
+# Generated CARE collection logs and branch arrays are not source artifacts.
+docs/plans/contracts/care/**/*.log
+docs/plans/contracts/care/**/*.npz
