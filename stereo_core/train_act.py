@@ -149,11 +149,32 @@ def _stats_from_manifests(paths, arms, stats_root=None):
             for key in ("q_mean", "q_std", "a_mean", "a_std")}
 
 
+def _action_codecs(paths, arms, stats_root):
+    codecs = {}
+    if stats_root is None:
+        return codecs
+    for path in paths:
+        task = task_from_path(path)
+        if task in codecs:
+            continue
+        manifest_path = Path(stats_root) / task / "training_manifest.json"
+        payload = json.loads(manifest_path.read_text())
+        config = payload["action"]["codec"]["config"]
+        low, high = np.asarray(config["low"], np.float32), np.asarray(config["high"], np.float32)
+        codecs[task] = {
+            arm: (low[arm * 8:(arm + 1) * 8], high[arm * 8:(arm + 1) * 8])
+            for arm in arms if (arm + 1) * 8 <= low.size
+        }
+    return codecs
+
+
 class RoboFactoryACTDataset(Dataset):
-    def __init__(self, trajectories, arms, horizon, stats, train, *, preload=True, cache_limit=0, windowed_io=False):
+    def __init__(self, trajectories, arms, horizon, stats, train, *, preload=True, cache_limit=0,
+                 windowed_io=False, action_codecs=None):
         self.arms, self.horizon, self.stats = tuple(arms), horizon, stats
         self.cache_limit = int(cache_limit)
         self.windowed_io = bool(windowed_io)
+        self.action_codecs = action_codecs or {}
         # Keep entire episodes together: predictable held-out demonstrations.
         kept = [x for i, x in enumerate(trajectories) if (i % 10 != 0) == train]
         # A/B views of one joint episode always share a split: no paired leakage.
@@ -204,7 +225,7 @@ class RoboFactoryACTDataset(Dataset):
         return self.cache[tag]
 
     def __getitem__(self, idx):
-        path, key, t, arm, _ = self.items[idx]
+        path, key, t, arm, task = self.items[idx]
         if self.windowed_io:
             with h5py.File(path, "r") as f:
                 tr = f[key]
@@ -225,6 +246,10 @@ class RoboFactoryACTDataset(Dataset):
         im = torch.from_numpy(frame).permute(2, 0, 1).contiguous()
         q = ((qpos if self.windowed_io else qpos[t]) - self.stats["q_mean"]) / self.stats["q_std"]
         future = actions if self.windowed_io else actions[t:t + self.horizon]
+        if task in self.action_codecs and arm in self.action_codecs[task]:
+            low, high = self.action_codecs[task][arm]
+            future = 2.0 * (future - low) / (high - low) - 1.0
+            future = np.clip(future, -1.0, 1.0)
         valid = len(future)
         padded = np.empty((self.horizon, actions.shape[1]), np.float32)
         padded[:valid] = future
@@ -396,8 +421,10 @@ def epoch(model, loader, opt, device, beta, max_updates=None, scheduler=None, re
     total = {"loss": 0., "mse": 0., "kl": 0., "n": 0}
     ctx = torch.enable_grad if training else torch.no_grad
     updates = 0
+    batches = 0
     with ctx():
         for image, qpos, actions, mask in loader:
+            batches += 1
             # A second replica receives the other half of the *global* batch.
             # This is manual synchronous data parallelism, needed because this
             # Vast host cannot bootstrap NCCL even though both CUDA devices work.
@@ -442,7 +469,7 @@ def epoch(model, loader, opt, device, beta, max_updates=None, scheduler=None, re
             for k, v in (("loss", loss), ("mse", mse), ("kl", kl)):
                 total[k] += float(v.detach()) * n
             total["n"] += n
-            if max_updates is not None and updates >= max_updates:
+            if max_updates is not None and (updates if training else batches) >= max_updates:
                 break
     return ({k: v / total["n"] for k, v in total.items() if k != "n"}, updates)
 
@@ -494,15 +521,16 @@ def main():
     assert paths, f"no HDF5 files match {a.data}"
     tr = _trajectories(paths, arms); assert len(tr) >= 10, "need at least 10 successful demonstrations"
     stats = (_stats_from_manifests(paths, arms, a.stats_root) if a.stats_root is not None else _stats(tr, arms))
+    action_codecs = _action_codecs(paths, arms, a.stats_root)
     lazy_cache = a.lazy_cache_episodes > 0
     if lazy_cache and a.workers:
         raise ValueError("lazy RGB cache requires --workers 0")
     train = RoboFactoryACTDataset(tr, arms, a.horizon, stats, True,
                                   preload=not lazy_cache, cache_limit=a.lazy_cache_episodes,
-                                  windowed_io=a.windowed_io)
+                                  windowed_io=a.windowed_io, action_codecs=action_codecs)
     valid = RoboFactoryACTDataset(tr, arms, a.horizon, stats, False,
                                   preload=not lazy_cache, cache_limit=a.lazy_cache_episodes,
-                                  windowed_io=a.windowed_io)
+                                  windowed_io=a.windowed_io, action_codecs=action_codecs)
     kwargs = dict(batch_size=a.batch_size, num_workers=a.workers, pin_memory=True,
                   persistent_workers=a.workers > 0)
     # Forking workers after CUDA is initialized can deadlock (and h5py is not
