@@ -62,6 +62,32 @@ outputs/                       # 本地可再生产物，全部由 Git 忽略
 
 完整文档导航见 [`docs/README.md`](docs/README.md)；历史阶段方案已移入 `docs/archive`，不再作为现行入口说明。
 
+## RoboFactory Baseline Harness
+
+七个指定 baseline 的统一协议、六任务数据检查、训练 smoke 和 Validation20
+聚合入口位于 `benchmarks/robofactory_baselines.py` 与
+`scripts/run_baseline_suite.py`。协议固定六个任务、每任务 20 局闭环验证、
+seed-disjoint 训练划分、RGB+proprioception 可见输入和原始 `pd_joint_pos`
+动作语义：
+
+```bash
+uv run python scripts/run_baseline_suite.py validate \
+  --data-root /workspace/datasets/robofactory_multitask \
+  --output-root /workspace/bwa-baselines-runs
+uv run python scripts/run_baseline_suite.py smoke \
+  --data-root /workspace/datasets/robofactory_multitask \
+  --output-root /workspace/bwa-baselines-runs --steps 8
+uv run python scripts/run_baseline_suite.py aggregate \
+  --data-root /workspace/datasets/robofactory_multitask \
+  --output-root /workspace/bwa-baselines-runs
+```
+
+smoke 会真实执行 CUDA forward/backward、保存可重载 checkpoint 和状态 JSON，
+但不会把 adapter 模型冒充上游复现；只有存在对应闭环 `summary.json` 时才会
+计入成功率。当前 ACT/DP 标记为本地原生入口，其余方法在未固定上游 commit、
+权重和图像/语言预处理前标记为 `adapter-required`。远程状态面板见
+[`web_service/README.md`](web_service/README.md)。
+
 远程服务器可使用 [`scripts/wam_automation.sh`](scripts/wam_automation.sh)
 把代码/RoboFactory 下载、双 uv 环境、Hugging Face 数据、DINOv3、训练和
 真实闭环验证按顺序组合执行；`full` 可从零运行完整链路，`full-smoke`
