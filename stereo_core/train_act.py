@@ -33,7 +33,35 @@ def seed_everything(seed):
     torch.cuda.manual_seed_all(seed)
 
 
-def _trajectories(paths, arms):
+def _trajectories_from_manifests(paths, arms, stats_root):
+    """Build WAM trajectory metadata from audited manifests without opening RGB files."""
+    if stats_root is None:
+        return None
+    requested = {str(Path(path).resolve()) for path in paths}
+    result = []
+    for task_dir in sorted(Path(stats_root).iterdir()):
+        manifest_path = task_dir / "training_manifest.json"
+        if not manifest_path.is_file():
+            continue
+        payload = json.loads(manifest_path.read_text())
+        action_dim = int(payload.get("action", {}).get("codec", {}).get("config", {}).get("action_dim", 0))
+        present = tuple(arm for arm in arms if (arm + 1) * 8 <= action_dim)
+        if not present:
+            continue
+        for episode in payload.get("episodes", []):
+            path = str((task_dir / episode["hdf5_path"]).resolve())
+            if path not in requested:
+                continue
+            steps = int(episode.get("recorded_steps", episode.get("steps", 0)))
+            if steps > 0:
+                result.append((path, "data", steps, present, task_dir.name))
+    return result if len(result) == len(requested) else None
+
+
+def _trajectories(paths, arms, stats_root=None):
+    manifest_result = _trajectories_from_manifests(paths, arms, stats_root)
+    if manifest_result is not None:
+        return manifest_result
     result = []
     for path in paths:
         with h5py.File(path, "r") as f:
@@ -519,7 +547,7 @@ def main():
     device = torch.device(f"cuda:{device_ids[0]}")
     paths = sorted({p for item in a.data.split(",") for p in glob.glob(item)})
     assert paths, f"no HDF5 files match {a.data}"
-    tr = _trajectories(paths, arms); assert len(tr) >= 10, "need at least 10 successful demonstrations"
+    tr = _trajectories(paths, arms, a.stats_root); assert len(tr) >= 10, "need at least 10 successful demonstrations"
     stats = (_stats_from_manifests(paths, arms, a.stats_root) if a.stats_root is not None else _stats(tr, arms))
     action_codecs = _action_codecs(paths, arms, a.stats_root)
     lazy_cache = a.lazy_cache_episodes > 0
