@@ -14,6 +14,10 @@ import torch
 import robofactory  # noqa: F401
 from two_three_task_manifest import TASKS, get_task
 
+from before_we_act.deployment_safety import (
+    DeploymentProgressWatchdog,
+    ResidualSafetyConfig,
+)
 from before_we_act.predictive_team_belief_policy import PredictiveTeamBeliefPolicy
 from before_we_act.evaluate_temporal_history_policy import (
     EpisodeHistory,
@@ -48,6 +52,7 @@ def load_team_belief(checkpoint: str, device: torch.device):
         history_layers=int(config.get("history_layers", 2)),
         dino_model=str(config["dino_model"]),
         include_teacher=False,
+        residual_safety=config.get("residual_safety"),
     ).to(device)
     model.load_state_dict(saved["model"], strict=True)
     model.eval()
@@ -66,13 +71,24 @@ def predict_team_belief(model, stats, observation, arms, history, task, device):
         output = model(global_rgb, local_rgb, **temporal)
     history.append_observation(output.current_visual_raw, qpos)
     denormalized = output.prediction * stats["a_std"] + stats["a_mean"]
+    denormalized_base = (
+        output.base_prediction * stats["a_std"] + stats["a_mean"]
+    )
     diagnostics = {
         "gate": float(output.residual_gate.float().mean().cpu()),
+        "residual_norm": float(
+            output.belief_residual.float().norm(dim=-1).mean().cpu()
+        ),
         "reliability": float(output.belief.reliability.float().mean().cpu()),
         "sigma": float(output.belief.sigma.float().mean().cpu()),
         "events": int(output.belief.event_mask.sum().cpu()),
     }
-    return denormalized.float().cpu().numpy(), qpos, diagnostics
+    return (
+        denormalized.float().cpu().numpy(),
+        denormalized_base.float().cpu().numpy(),
+        qpos,
+        diagnostics,
+    )
 
 
 @torch.no_grad()
@@ -88,7 +104,21 @@ def predict_temporal_history(model, stats, observation, arms, history, task, dev
         )
     history.append_observation(current_visual, qpos)
     denormalized = chunks * stats["a_std"] + stats["a_mean"]
-    return denormalized.float().cpu().numpy(), qpos, {}
+    chunks = denormalized.float().cpu().numpy()
+    return chunks, chunks, qpos, {}
+
+
+def action_inactive(action, current_qpos, arms, threshold):
+    changes = [
+        float(
+            np.linalg.norm(
+                np.asarray(action[f"panda-{arm}"])[:7]
+                - current_qpos[index, :7].float().cpu().numpy()
+            )
+        )
+        for index, arm in enumerate(arms)
+    ]
+    return all(value < threshold for value in changes), changes
 
 
 def evaluate(checkpoint, task_name, seeds, device_name, max_steps, mode):
@@ -117,27 +147,54 @@ def evaluate(checkpoint, task_name, seeds, device_name, max_steps, mode):
     rows = []
     for seed in seeds:
         observation, _ = reset_reproducibly(env, seed)
-        ensembler = TemporalChunkEnsembler(arms)
+        candidate_ensembler = TemporalChunkEnsembler(arms)
+        base_ensembler = TemporalChunkEnsembler(arms)
         history = EpisodeHistory(arms)
+        safety = ResidualSafetyConfig.from_mapping(
+            config.get("residual_safety") if mode == "n2" else None
+        )
+        watchdog = DeploymentProgressWatchdog(safety)
         success = False
         inactivity = 0
         diagnostic_rows = []
+        fallback_steps = 0
+        fallback_reasons: dict[str, int] = {}
         for step in range(max_steps):
-            chunks, normalized_qpos, diagnostics = predictor(
+            chunks, base_chunks, normalized_qpos, diagnostics = predictor(
                 model, stats, observation, arms, history, task_name, device
             )
-            action = ensembler.append_and_select(step, chunks)
+            candidate_action = candidate_ensembler.append_and_select(
+                step, chunks
+            )
+            base_action = base_ensembler.append_and_select(step, base_chunks)
             current_qpos = normalized_qpos * stats["q_std"] + stats["q_mean"]
-            joint_changes = [
-                float(
-                    np.linalg.norm(
-                        np.asarray(action[f"panda-{arm}"])[:7]
-                        - current_qpos[index, :7].float().cpu().numpy()
-                    )
-                )
-                for index, arm in enumerate(arms)
-            ]
-            inactivity += int(all(value < 0.02 for value in joint_changes))
+            candidate_inactive, _ = action_inactive(
+                candidate_action,
+                current_qpos,
+                arms,
+                safety.progress_inactivity_l2,
+            )
+            base_inactive, _ = action_inactive(
+                base_action,
+                current_qpos,
+                arms,
+                safety.progress_inactivity_l2,
+            )
+            use_base, reason = watchdog.choose_base(
+                candidate_inactive=candidate_inactive,
+                base_inactive=base_inactive,
+            )
+            action = base_action if use_base else candidate_action
+            chosen_inactive, _ = action_inactive(
+                action,
+                current_qpos,
+                arms,
+                safety.progress_inactivity_l2,
+            )
+            inactivity += int(chosen_inactive)
+            if use_base:
+                fallback_steps += 1
+                fallback_reasons[reason] = fallback_reasons.get(reason, 0) + 1
             if diagnostics:
                 diagnostic_rows.append(diagnostics)
             normalized = {
@@ -158,6 +215,8 @@ def evaluate(checkpoint, task_name, seeds, device_name, max_steps, mode):
             "success": success,
             "steps": step + 1,
             "paired_inactivity_steps": inactivity,
+            "residual_safety_fallback_steps": fallback_steps,
+            "residual_safety_fallback_reasons": fallback_reasons,
         }
         if diagnostic_rows:
             row["belief_diagnostics"] = {
@@ -195,7 +254,14 @@ def main() -> None:
             if row.get("task") == args.task and row.get("mode") == args.mode and row.get("seed") in requested:
                 recovered.append({
                     key: row[key]
-                    for key in ("seed", "success", "steps", "paired_inactivity_steps")
+                    for key in (
+                        "seed",
+                        "success",
+                        "steps",
+                        "paired_inactivity_steps",
+                        "residual_safety_fallback_steps",
+                        "residual_safety_fallback_reasons",
+                    )
                     if key in row
                 } | ({"belief_diagnostics": row["belief_diagnostics"]} if "belief_diagnostics" in row else {}))
     recovered = list({row["seed"]: row for row in recovered}.values())
@@ -217,6 +283,9 @@ def main() -> None:
         "episodes": len(rows),
         "successes": sum(bool(row["success"]) for row in rows),
         "paired_inactivity_steps": sum(int(row["paired_inactivity_steps"]) for row in rows),
+        "residual_safety_fallback_steps": sum(
+            int(row.get("residual_safety_fallback_steps", 0)) for row in rows
+        ),
         "steps": sum(int(row["steps"]) for row in rows),
         "rows": rows,
         "policy_variant": config.get("policy_variant"),
