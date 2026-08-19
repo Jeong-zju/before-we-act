@@ -221,9 +221,10 @@ class RoboFactoryACTDataset(Dataset):
         # RGB observations are local to this arm only; no ID or global view.
         # Keep the camera frame as uint8 until it reaches the GPU. Per-sample
         # CPU resizing starves two 5090s; batched resize is done in _loss.
-        im = torch.from_numpy(image[t]).permute(2, 0, 1).contiguous()
-        q = (qpos[t] - self.stats["q_mean"]) / self.stats["q_std"]
-        future = actions[t:t + self.horizon]
+        frame = image if self.windowed_io else image[t]
+        im = torch.from_numpy(frame).permute(2, 0, 1).contiguous()
+        q = ((qpos if self.windowed_io else qpos[t]) - self.stats["q_mean"]) / self.stats["q_std"]
+        future = actions if self.windowed_io else actions[t:t + self.horizon]
         valid = len(future)
         padded = np.empty((self.horizon, actions.shape[1]), np.float32)
         padded[:valid] = future
