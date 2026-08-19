@@ -12,6 +12,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 import yaml
+import robofactory.tasks  # noqa: F401 - registers the six Gym environments
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
