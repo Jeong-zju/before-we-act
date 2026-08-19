@@ -1,0 +1,91 @@
+{
+  "format_version": "before-we-act.care-robofactory-reproduction/1",
+  "repository": "before-we-act",
+  "python": "3.11",
+  "dependency_lock": "uv.lock",
+  "robofactory": {
+    "repository": "https://github.com/MARS-EAI/RoboFactory.git",
+    "commit": "5868242322414a91454e22f1dd9641f613ba1bcf",
+    "obs_mode": "rgb",
+    "control_mode": "pd_joint_pos",
+    "render_mode": "sensors",
+    "reward_mode": "dense",
+    "sim_backend": "cpu",
+    "sensor": {
+      "shader_pack": "default",
+      "width": 640,
+      "height": 480
+    }
+  },
+  "tasks": {
+    "lift_barrier": {
+      "env_id": "LiftBarrier-rf",
+      "config": "robofactory/configs/table/lift_barrier.yaml",
+      "agents": [0, 1],
+      "max_steps": 500
+    },
+    "camera_alignment": {
+      "env_id": "CameraAlignment-rf",
+      "config": "robofactory/configs/table/camera_alignment.yaml",
+      "agents": [0, 1, 2],
+      "max_steps": 1500
+    },
+    "long_pipeline_delivery": {
+      "env_id": "LongPipelineDelivery-rf",
+      "config": "robofactory/configs/table/long_pipeline_delivery.yaml",
+      "agents": [0, 1, 2, 3],
+      "max_steps": 1500
+    },
+    "take_photo": {
+      "env_id": "TakePhoto-rf",
+      "config": "robofactory/configs/table/take_photo.yaml",
+      "agents": [0, 1, 2, 3],
+      "max_steps": 1500
+    },
+    "pass_shoe": {
+      "env_id": "PassShoe-rf",
+      "config": "robofactory/configs/table/pass_shoe.yaml",
+      "agents": [0, 1],
+      "max_steps": 500
+    },
+    "place_food": {
+      "env_id": "PlaceFood-rf",
+      "config": "robofactory/configs/table/place_food.yaml",
+      "agents": [0, 1],
+      "max_steps": 500
+    }
+  },
+  "dataset": {
+    "episodes_per_task": 120,
+    "action_dim_per_robot": 8,
+    "image_width": 640,
+    "image_height": 480,
+    "history_steps": 16,
+    "action_horizon": 100
+  },
+  "care": {
+    "candidates": 6,
+    "candidate_ids": [0, 1, 2, 3, 4, 5],
+    "quantiles": [0.05, 0.25, 0.5, 0.75, 0.95],
+    "horizons": [8, 16, 32, 64],
+    "primary_horizon": 16,
+    "variants": ["care", "reactive_only", "replay_only", "capacity"],
+    "seeds": [20260818, 20260819, 20260820],
+    "updates": 4000,
+    "batch_size": 48,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "evaluation_every_updates": 200,
+    "calibration_nominal_coverage": 0.9,
+    "one_focal_override_per_control_step": true,
+    "candidate_zero_is_reference": true,
+    "fallback_is_reference": true
+  },
+  "closed_loop": {
+    "episodes_per_task": 20,
+    "modes": ["selector_off", "care"],
+    "paired": true,
+    "seed_selection": "exclude_previous_validation_and_confirmation_seeds",
+    "selection_after_closed_loop": false
+  }
+}

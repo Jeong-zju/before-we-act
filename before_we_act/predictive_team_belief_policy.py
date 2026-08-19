@@ -14,6 +14,7 @@ from typing import Mapping
 import torch
 from torch import nn
 
+from before_we_act.deployment_safety import ResidualSafetyConfig
 from before_we_act.temporal_action_backbone import TemporalActionBackboneOps
 from before_we_act.team_belief.predictive_core import (
     TeamBeliefConfig,
@@ -42,8 +43,15 @@ class TeamBeliefPolicyOutput:
 class DirectBeliefResidual(nn.Module):
     """Zero-init direct residual whose action queries read every B token."""
 
-    def __init__(self, d_model: int, action_dim: int) -> None:
+    def __init__(
+        self,
+        d_model: int,
+        action_dim: int,
+        *,
+        safety: ResidualSafetyConfig | None = None,
+    ) -> None:
         super().__init__()
+        self.safety = safety or ResidualSafetyConfig()
         self.query_norm = nn.LayerNorm(d_model)
         self.memory_norm = nn.LayerNorm(d_model)
         self.cross_attention = nn.MultiheadAttention(
@@ -59,12 +67,30 @@ class DirectBeliefResidual(nn.Module):
         nn.init.zeros_(self.output.weight)
         nn.init.zeros_(self.output.bias)
 
+    def _candidate(
+        self,
+        action_hidden: torch.Tensor,
+        belief_mu: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        memory = self.memory_norm(belief_mu)
+        query = self.query_norm(action_hidden)
+        attended = self.cross_attention(query, memory, memory, need_weights=False)[0]
+        # There is intentionally no raw action-hidden bypass. Both halves of
+        # the fusion vanish when belief memory vanishes; action queries can
+        # only modulate a value actually read from B.
+        state = self.fusion(torch.cat((attended, query * attended), dim=-1))
+        learned_gate = torch.sigmoid(self.gate(state))
+        return self.output(state), learned_gate
+
     def forward(
         self,
         action_hidden: torch.Tensor,
         belief_mu: torch.Tensor,
         belief_sigma: torch.Tensor,
         reliability: torch.Tensor,
+        *,
+        previous_belief_mu: torch.Tensor | None = None,
+        temporal_safety_active: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if action_hidden.ndim != 3 or belief_mu.ndim != 3:
             raise ValueError("action hidden and belief must be rank-three tensors")
@@ -74,19 +100,48 @@ class DirectBeliefResidual(nn.Module):
             raise ValueError("action/belief batch differs")
         if reliability.shape != (action_hidden.shape[0], 1, 1):
             raise ValueError("belief reliability must be [batch,1,1]")
-        # ``belief_sigma`` is now normalized categorical entropy.  It remains
-        # in the interface for diagnostics, but must never rescale memory:
-        # reciprocal uncertainty amplified the old Gaussian collapse.
-        memory = self.memory_norm(belief_mu)
-        query = self.query_norm(action_hidden)
-        attended = self.cross_attention(query, memory, memory, need_weights=False)[0]
-        # There is intentionally no raw action-hidden bypass. Both halves of
-        # the fusion vanish when belief memory vanishes; action queries can
-        # only modulate a value actually read from B.
-        state = self.fusion(torch.cat((attended, query * attended), dim=-1))
-        learned_gate = torch.sigmoid(self.gate(state))
-        residual = reliability.to(state.dtype) * learned_gate * self.output(state)
-        return residual, learned_gate
+        # ``belief_sigma`` is normalized categorical entropy. It is a
+        # fail-closed deployment test, never a reciprocal memory scale.
+        raw_residual, learned_gate = self._candidate(action_hidden, belief_mu)
+        residual = reliability.to(raw_residual.dtype) * learned_gate * raw_residual
+        if not self.safety.enabled:
+            return residual, learned_gate
+
+        entropy = belief_sigma.float().mean((1, 2), keepdim=True)
+        entropy_safe = entropy <= self.safety.max_belief_entropy
+        temporal_safe = torch.ones_like(entropy_safe)
+        if previous_belief_mu is not None:
+            if previous_belief_mu.shape != belief_mu.shape:
+                raise ValueError("previous belief shape differs")
+            previous_raw, _ = self._candidate(action_hidden, previous_belief_mu)
+            temporal_delta = (
+                raw_residual.float() - previous_raw.float()
+            ).norm(dim=-1).mean(1, keepdim=True).unsqueeze(-1)
+            temporal_safe = (
+                temporal_delta
+                <= self.safety.max_temporal_residual_delta_l2
+            )
+            if temporal_safety_active is not None:
+                if temporal_safety_active.shape != (belief_mu.shape[0],):
+                    raise ValueError("temporal safety mask must be [batch]")
+                temporal_safe = temporal_safe | ~temporal_safety_active.view(
+                    -1, 1, 1
+                )
+        elif temporal_safety_active is not None and temporal_safety_active.any():
+            raise ValueError("active temporal safety requires previous belief")
+        safety_gate = entropy_safe & temporal_safe
+        residual = residual * safety_gate.to(residual.dtype)
+        norm = residual.float().norm(dim=-1, keepdim=True)
+        clip = (self.safety.max_residual_l2 / norm.clamp_min(1e-12)).clamp(
+            max=1.0
+        )
+        residual = residual * clip.to(residual.dtype)
+        effective_gate = (
+            learned_gate
+            * safety_gate.to(learned_gate.dtype)
+            * clip.to(learned_gate.dtype)
+        )
+        return residual, effective_gate
 
 
 class PredictiveTeamBeliefPolicy(nn.Module):
@@ -109,6 +164,7 @@ class PredictiveTeamBeliefPolicy(nn.Module):
         history_layers: int = 2,
         dino_model: str,
         include_teacher: bool = True,
+        residual_safety: Mapping[str, object] | ResidualSafetyConfig | None = None,
     ) -> None:
         if (
             team_belief_config.d_model != d_model
@@ -137,7 +193,14 @@ class PredictiveTeamBeliefPolicy(nn.Module):
         self.belief_core = PredictiveTeamBeliefCore(
             team_belief_config, include_teacher=include_teacher
         )
-        self.direct_belief_residual = DirectBeliefResidual(d_model, action_dim)
+        safety = (
+            residual_safety
+            if isinstance(residual_safety, ResidualSafetyConfig)
+            else ResidualSafetyConfig.from_mapping(residual_safety)
+        )
+        self.direct_belief_residual = DirectBeliefResidual(
+            d_model, action_dim, safety=safety
+        )
 
     train = TemporalActionBackboneOps.train
     _raw_vision_tokens = TemporalActionBackboneOps._raw_vision_tokens
@@ -245,7 +308,12 @@ class PredictiveTeamBeliefPolicy(nn.Module):
             torch.cat((context.decoded, history_context), dim=-1)
         )
         residual, residual_gate = self.direct_belief_residual(
-            context.decoded, belief.mu, belief.sigma, belief.reliability
+            context.decoded,
+            belief.mu,
+            belief.sigma,
+            belief.reliability,
+            previous_belief_mu=belief.mu_sequence[:, -2],
+            temporal_safety_active=history_mask.sum(1) >= 2,
         )
         if belief_enabled:
             prediction = base_prediction + residual

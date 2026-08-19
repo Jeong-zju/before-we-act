@@ -201,6 +201,10 @@ def evaluate(
     gate_values: list[float] = []
     reliability_values: list[float] = []
     sigma_values: list[float] = []
+    safety_entropy_rows: list[float] = []
+    safety_target_norm_rows: list[float] = []
+    safety_residual_norm_rows: list[float] = []
+    safety_temporal_delta_rows: list[float] = []
     mu_rows: list[torch.Tensor] = []
     categorical_rows: list[torch.Tensor] = []
     uncertainty_rows: list[
@@ -272,6 +276,39 @@ def evaluate(
             batch["action_mask"],
         )
         residual_target = batch["action"] - batch["base_action"]
+        active_actions = batch["action_mask"]
+        safety_target_norm_rows.extend(
+            residual_target.float().norm(dim=-1)[active_actions].cpu().tolist()
+        )
+        safety_residual_norm_rows.extend(
+            output.candidate.belief_residual.float()
+            .norm(dim=-1)[active_actions]
+            .cpu()
+            .tolist()
+        )
+        safety_entropy_rows.extend(
+            output.candidate.belief.sigma.float()
+            .mean((1, 2))
+            .cpu()
+            .tolist()
+        )
+        previous_valid = batch["history_mask"][:, -2]
+        if previous_valid.any():
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                current_raw_residual, _ = model.belief_residual._candidate(
+                    batch["decoded_action_hidden"],
+                    output.candidate.belief.mu,
+                )
+                previous_raw_residual, _ = model.belief_residual._candidate(
+                    batch["decoded_action_hidden"],
+                    output.candidate.belief.mu_sequence[:, -2],
+                )
+            temporal_delta = (
+                current_raw_residual.float() - previous_raw_residual.float()
+            ).norm(dim=-1).mean(1)
+            safety_temporal_delta_rows.extend(
+                temporal_delta[previous_valid].cpu().tolist()
+            )
         common_action_mask = batch["action_mask"] & batch["action_mask"][permutation]
         residual_target_mse = row_action_mse(
             residual_target,
@@ -430,6 +467,17 @@ def evaluate(
     pairing_means = {
         name: float(np.mean(rows)) for name, rows in pairing_rows.items()
     }
+
+    def quantiles(rows: list[float]) -> dict[str, float]:
+        if not rows:
+            return {"p95": 0.0, "p99": 0.0, "maximum": 0.0}
+        values = np.asarray(rows, dtype=np.float64)
+        return {
+            "p95": float(np.quantile(values, 0.95)),
+            "p99": float(np.quantile(values, 0.99)),
+            "maximum": float(values.max()),
+        }
+
     return {
         "macro": {name: float(np.mean(rows)) for name, rows in values.items()},
         "per_task": {
@@ -506,6 +554,15 @@ def evaluate(
                 np.mean([row[7] for row in uncertainty_rows])
             ),
         },
+        "deployment_safety_calibration": {
+            "scope": "held-out one-step validation; no closed-loop outcomes",
+            "belief_entropy": quantiles(safety_entropy_rows),
+            "target_residual_l2": quantiles(safety_target_norm_rows),
+            "candidate_residual_l2": quantiles(safety_residual_norm_rows),
+            "temporal_residual_delta_l2": quantiles(
+                safety_temporal_delta_rows
+            ),
+        },
         "rows": len(values["b0h"]),
     }
 
@@ -558,6 +615,8 @@ def export_deployment(
     output: Path,
     contract: Mapping,
     config: TeamBeliefConfig,
+    *,
+    residual_safety: Mapping[str, object] | None = None,
 ) -> None:
     selected = torch.load(selected_checkpoint, map_location="cpu", weights_only=False)
     base_path = Path(contract["inputs"]["b0h_checkpoint"])
@@ -605,6 +664,7 @@ def export_deployment(
             "policy_variant": "b3_n2_predictive_team_belief",
             "n2_config": config.__dict__,
             "teacher_present": False,
+            "residual_safety": dict(residual_safety or {"enabled": False}),
             "source_b0h_checkpoint": str(base_path.resolve()),
             "source_b0h_checkpoint_sha256": sha256_file(base_path),
             "source_training_checkpoint": str(selected_checkpoint.resolve()),
