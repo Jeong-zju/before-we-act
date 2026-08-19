@@ -37,6 +37,29 @@ def _trajectories(paths, arms):
     result = []
     for path in paths:
         with h5py.File(path, "r") as f:
+            # The shared six-task WAM export stores one episode per HDF5 file
+            # under data/{observation,action}.  Normalize it to the historical
+            # trajectory tuple so ACT can use the same sampler and loss.
+            if "data" in f and "observation" in f["data"]:
+                data = f["data"]
+                present = tuple(
+                    arm for arm in arms
+                    if f"agents/panda_{arm}/qpos" in data["observation"]
+                    and f"images/agent_{arm}" in data["observation"]
+                    and f"agents/panda_{arm}/commanded" in data["action"]
+                )
+                if present:
+                    n = min(
+                        len(data["observation"][f"agents/panda_{arm}"]["qpos"])
+                        for arm in present
+                    )
+                    n = min(
+                        n,
+                        *(len(data["action"][f"agents/panda_{arm}"]["commanded"])
+                          for arm in present),
+                    )
+                    result.append((path, "data", n, present, task_from_path(path)))
+                continue
             for key in sorted(f.keys()):
                 if key.startswith("traj_"):
                     tr = f[key]
@@ -117,9 +140,14 @@ class RoboFactoryACTDataset(Dataset):
         if tag not in self.cache:
             with h5py.File(path, "r") as f:
                 tr = f[key]
-                cam = tr["obs"]["sensor_data"][f"head_camera_agent{arm}"]["rgb"][:]
-                qpos = tr["obs"]["agent"][f"panda-{arm}"]["qpos"][:]
-                actions = tr["actions"][f"panda-{arm}"][:].astype(np.float32)
+                if key == "data":
+                    cam = tr["observation"]["images"][f"agent_{arm}"][:]
+                    qpos = tr["observation"]["agents"][f"panda_{arm}"]["qpos"][:]
+                    actions = tr["action"]["agents"][f"panda_{arm}"]["commanded"][:].astype(np.float32)
+                else:
+                    cam = tr["obs"]["sensor_data"][f"head_camera_agent{arm}"]["rgb"][:]
+                    qpos = tr["obs"]["agent"][f"panda-{arm}"]["qpos"][:]
+                    actions = tr["actions"][f"panda-{arm}"][:].astype(np.float32)
             self.cache[tag] = (cam, qpos.astype(np.float32), actions)
             if self.cache_limit > 0:
                 while len(self.cache) > self.cache_limit:

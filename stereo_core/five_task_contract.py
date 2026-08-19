@@ -15,9 +15,10 @@ from pathlib import Path
 CANONICAL_TASKS = (
     "lift_barrier",
     "camera_alignment",
-    "three_robots_stack_cube",
     "long_pipeline_delivery",
     "take_photo",
+    "pass_shoe",
+    "place_food",
 )
 
 
@@ -30,6 +31,8 @@ def task_from_path(path: str) -> str:
         "three_robots_stack_cube": "three_robots_stack_cube",
         "long_pipeline_delivery": "long_pipeline_delivery",
         "take_photo": "take_photo",
+        "pass_shoe": "pass_shoe",
+        "place_food": "place_food",
     }
     for marker, task in aliases.items():
         if marker in normal:
