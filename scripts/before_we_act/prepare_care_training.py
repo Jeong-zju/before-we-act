@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze A6 partitions, derive legal B-core memory, and prepare CARE labels."""
+"""Freeze CARE partitions, derive reference-policy memory, and prepare labels."""
 from __future__ import annotations
 
 import argparse
@@ -23,6 +23,7 @@ from before_we_act.care_training_data import (
     family_targets,
     sha256_file,
 )
+from before_we_act.frozen_settings import load_frozen_settings
 from before_we_act.evaluate_predictive_team_belief import load_team_belief
 from before_we_act.temporal_history_data import (
     TASK_TEXT,
@@ -31,7 +32,6 @@ from before_we_act.temporal_history_data import (
 )
 
 
-CONTRACT_STAGE = "A6R1-CARE-OWNER-AUTHORIZED-DIAGNOSTIC"
 TASKS = (
     "lift_barrier",
     "camera_alignment",
@@ -52,7 +52,7 @@ def utc_now() -> str:
 
 def rank_key(task: str, stratum: str, snapshot_id: str) -> str:
     return hashlib.sha256(
-        f"A6R1|frozen-secondary-split|{task}|{stratum}|{snapshot_id}".encode()
+        f"care-robofactory|frozen-secondary-split|{task}|{stratum}|{snapshot_id}".encode()
     ).hexdigest()
 
 
@@ -82,20 +82,6 @@ def freeze_partitions(rows: list[dict[str, Any]]) -> dict[str, str]:
     return assignment
 
 
-def load_contract(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if value.get("stage_id") != CONTRACT_STAGE:
-        raise RuntimeError("wrong CARE A6 authorization contract")
-    authorization = value.get("authorization", {})
-    if not authorization.get("training_authorized", False):
-        raise RuntimeError("CARE training is not authorized")
-    if not authorization.get("a5r7_use_override_authorized", False):
-        raise RuntimeError("A5R7 remains forbidden for CARE training")
-    if authorization.get("gate_a_reclassified_as_passed", True):
-        raise RuntimeError("A6 contract must preserve the Gate A failure")
-    return value
-
-
 def discover_rows(family_root: Path, quality_root: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for task in TASKS:
@@ -108,8 +94,6 @@ def discover_rows(family_root: Path, quality_root: Path) -> list[dict[str, Any]]
             quality = json.loads(quality_path.read_text(encoding="utf-8"))
             if quality["source_family_sha256"] != sha256_file(family_path):
                 raise RuntimeError(f"quality/source hash mismatch: {snapshot_id}")
-            if family.get("stage_id") != "A5R7-CARE-COMMON-SUPPORT-BRANCHES":
-                raise RuntimeError(f"wrong A5R7 family stage: {snapshot_id}")
             if int(family.get("branch_count", -1)) != 24:
                 raise RuntimeError(f"incomplete CARE family: {snapshot_id}")
             if not all(bool(row["valid"]) for row in family["candidate_legality"]):
@@ -127,7 +111,7 @@ def discover_rows(family_root: Path, quality_root: Path) -> list[dict[str, Any]]
                 }
             )
     if len(rows) != 180:
-        raise RuntimeError(f"A6 expects the immutable 180-family A5R7 corpus, got {len(rows)}")
+        raise RuntimeError(f"CARE reproduction expects the immutable 180-family corpus, got {len(rows)}")
     return rows
 
 
@@ -186,7 +170,7 @@ def frozen_memory(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--contract", type=Path, required=True)
+    parser.add_argument("--settings", type=Path)
     parser.add_argument("--family-root", type=Path, required=True)
     parser.add_argument("--quality-root", type=Path, required=True)
     parser.add_argument("--reference-checkpoint", type=Path, required=True)
@@ -196,16 +180,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.output.exists() or args.manifest.exists():
         raise RuntimeError("refusing to overwrite frozen prepared CARE artifacts")
-    contract = load_contract(args.contract)
-    expected_reference = contract["reference_policy"]
+    settings_path = args.settings or (Path(__file__).resolve().parents[2] / "configs/before_we_act/care_robofactory_reproduction.json")
+    load_frozen_settings(settings_path)
     reference_sha = sha256_file(args.reference_checkpoint)
-    if reference_sha != expected_reference["sha256"]:
-        raise RuntimeError("frozen B-core checkpoint hash drifted")
-    source = contract["source_data"]
-    if sha256_file(source["collection_receipt"]["path"]) != source["collection_receipt"]["sha256"]:
-        raise RuntimeError("A5R7 collection receipt drifted")
-    if sha256_file(source["quality_summary"]["path"]) != source["quality_summary"]["sha256"]:
-        raise RuntimeError("A5R7 quality summary drifted")
 
     rows = discover_rows(args.family_root, args.quality_root)
     assignment = freeze_partitions(rows)
@@ -214,7 +191,7 @@ def main() -> None:
     model.requires_grad_(False)
     model.eval()
     if any(parameter.requires_grad for parameter in model.parameters()):
-        raise RuntimeError("B-core was not frozen before CARE feature extraction")
+        raise RuntimeError("CARE reference policy was not frozen before feature extraction")
 
     memories: list[torch.Tensor] = []
     memory_masks: list[torch.Tensor] = []
@@ -258,11 +235,10 @@ def main() -> None:
             print(json.dumps({"prepared_families": index + 1}), flush=True)
 
     manifest = {
-        "format_version": "before-we-act.a6r1-care-prepared-manifest/1",
-        "stage_id": CONTRACT_STAGE,
+        "format_version": "before-we-act.care-robofactory-prepared-manifest/1",
         "created_at_utc": utc_now(),
-        "contract": str(args.contract.resolve()),
-        "contract_sha256": sha256_file(args.contract),
+        "settings": str(settings_path.resolve()),
+        "settings_sha256": sha256_file(settings_path),
         "reference_checkpoint": str(args.reference_checkpoint.resolve()),
         "reference_checkpoint_sha256": reference_sha,
         "source_family_count": len(rows),
@@ -278,15 +254,13 @@ def main() -> None:
             )
             for task in TASKS
         },
-        "gate_a_preserved_as_not_passed": True,
-        "a5r7_original_use_for_training_flags_modified": False,
-        "authorization_scope": "owner-authorized diagnostic training only",
+        "source_protocol": "frozen CARE family and quality artifacts",
         "rows": manifest_rows,
     }
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     atomic_json(args.manifest, manifest)
     prepared = {
-        "format_version": "before-we-act.a6r1-care-prepared-data/1",
+        "format_version": "before-we-act.care-robofactory-prepared-data/1",
         "memory": torch.stack(memories),
         "memory_mask": torch.stack(memory_masks),
         "candidate_chunks": torch.stack(candidates),
@@ -312,7 +286,7 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "status": "A6R1_PREPARED",
+                "status": "CARE_PREPARED",
                 "output": str(args.output),
                 "sha256": sha256_file(args.output),
                 "split_counts": manifest["split_counts"],

@@ -140,7 +140,7 @@ class PreparedCAREData:
 
 def load_prepared_care(path: str | Path) -> PreparedCAREData:
     value = torch.load(path, map_location="cpu", weights_only=False)
-    if value.get("format_version") != "before-we-act.a6r1-care-prepared-data/1":
+    if value.get("format_version") != "before-we-act.care-robofactory-prepared-data/1":
         raise ValueError("wrong prepared CARE data format")
     return PreparedCAREData(
         memory=value["memory"].float(),

@@ -44,9 +44,11 @@ docs/archive/contracts/care-history/**
 !docs/archive/contracts/care-history/
 !docs/archive/contracts/care-history/README.md
 
-# Superseded CARE contract generations; A6R1 remains the active contract.
+# Superseded CARE contract generations are archived outside the active workflow.
 docs/plans/contracts/care/a4*/
 docs/plans/contracts/care/a5*/
+docs/plans/contracts/care/a6r1/
+docs/plans/contracts/b_core/
 
 # Generated CARE collection logs and branch arrays are not source artifacts.
 docs/plans/contracts/care/**/*.log

@@ -1,7 +1,7 @@
 """Distributional CARE action--response belief head and conservative selector.
 
-The frozen B-core remains the only action generator.  This module scores the
-six fixed CARE candidates from legal B-core belief/event tokens and candidate
+The frozen CARE reference policy remains the only action generator. This module scores the
+six fixed CARE candidates from legal reference belief/event tokens and candidate
 chunks; it never emits a continuous action residual.
 """
 from __future__ import annotations

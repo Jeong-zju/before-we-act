@@ -59,7 +59,7 @@ def test_care_loss_updates_head_but_not_external_memory() -> None:
     assert set(pieces) == {"pinball", "did_consistency", "ranking", "hard_safety"}
     assert any(parameter.grad is not None for parameter in model.parameters())
     # The tensor receives a gradient for normal end-to-end tests, but the
-    # actual A6 pipeline supplies detached, checkpointed frozen B-core memory.
+    # The CARE workflow supplies detached, checkpointed frozen reference memory.
     assert memory.grad is not None
 
 

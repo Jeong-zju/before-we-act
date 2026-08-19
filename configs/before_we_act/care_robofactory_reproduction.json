@@ -77,6 +77,8 @@
     "weight_decay": 0.0001,
     "evaluation_every_updates": 200,
     "calibration_nominal_coverage": 0.9,
+    "selector_delta": 0.0,
+    "hard_safety_probability_max": 0.25,
     "one_focal_override_per_control_step": true,
     "candidate_zero_is_reference": true,
     "fallback_is_reference": true
@@ -85,7 +87,7 @@
     "episodes_per_task": 20,
     "modes": ["selector_off", "care"],
     "paired": true,
-    "seed_selection": "exclude_previous_validation_and_confirmation_seeds",
+    "test_seed_namespace": "before-we-act/care-robofactory-test/v1",
     "selection_after_closed_loop": false
   }
 }

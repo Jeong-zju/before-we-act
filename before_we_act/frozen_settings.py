@@ -95,6 +95,8 @@ def validate_frozen_settings(settings: Mapping[str, Any]) -> None:
         "weight_decay": 0.0001,
         "evaluation_every_updates": 200,
         "calibration_nominal_coverage": 0.9,
+        "selector_delta": 0.0,
+        "hard_safety_probability_max": 0.25,
         "one_focal_override_per_control_step": True,
         "candidate_zero_is_reference": True,
         "fallback_is_reference": True,
@@ -110,6 +112,8 @@ def validate_frozen_settings(settings: Mapping[str, Any]) -> None:
         raise ValueError("closed-loop modes drift")
     if closed_loop.get("paired") is not True:
         raise ValueError("closed-loop pairing must remain enabled")
+    if closed_loop.get("test_seed_namespace") != "before-we-act/care-robofactory-test/v1":
+        raise ValueError("closed-loop test seed namespace drift")
 
 
 def sha256_file(path: str | Path) -> str:

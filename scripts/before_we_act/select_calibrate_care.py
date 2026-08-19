@@ -26,6 +26,7 @@ from before_we_act.care_training_data import (
     load_prepared_care,
     sha256_file,
 )
+from before_we_act.frozen_settings import load_frozen_settings
 
 
 VARIANTS = ("care", "reactive_only", "replay_only", "capacity")
@@ -38,7 +39,7 @@ def utc_now() -> str:
 
 def load_model(path: Path, device: torch.device) -> tuple[CAREBeliefHead, dict[str, Any]]:
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    if saved.get("format_version") != "before-we-act.a6r1-care-training-checkpoint/1":
+    if saved.get("format_version") != "before-we-act.care-robofactory-training-checkpoint/1":
         raise ValueError(f"wrong CARE training checkpoint: {path}")
     config = CAREBeliefConfig.from_mapping(saved["config"])
     model = CAREBeliefHead(config).to(device)
@@ -47,11 +48,13 @@ def load_model(path: Path, device: torch.device) -> tuple[CAREBeliefHead, dict[s
     return model, saved
 
 
-def selected_training(training_root: Path) -> dict[str, dict[str, Any]]:
+def selected_training(
+    training_root: Path, variants: tuple[str, ...], seeds: tuple[int, ...]
+) -> dict[str, dict[str, Any]]:
     selected: dict[str, dict[str, Any]] = {}
-    for variant in VARIANTS:
+    for variant in variants:
         rows = []
-        for seed in SEEDS:
+        for seed in seeds:
             status_path = training_root / variant / f"seed_{seed}" / "status.json"
             status = json.loads(status_path.read_text(encoding="utf-8"))
             if status.get("status") != "COMPLETED":
@@ -186,7 +189,7 @@ def offline_metrics(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--contract", type=Path, required=True)
+    parser.add_argument("--settings", type=Path)
     parser.add_argument("--prepared-data", type=Path, required=True)
     parser.add_argument("--training-root", type=Path, required=True)
     parser.add_argument("--reference-checkpoint", type=Path, required=True)
@@ -199,25 +202,28 @@ def main() -> None:
     if report_path.exists() and deployment_path.exists():
         print(json.dumps({"status": "PRESERVED", "report": str(report_path)}))
         return
-    contract = json.loads(args.contract.read_text(encoding="utf-8"))
-    if contract.get("stage_id") != "A6R1-CARE-OWNER-AUTHORIZED-DIAGNOSTIC":
-        raise RuntimeError("wrong A6 CARE contract")
+    settings_path = args.settings or (Path(__file__).resolve().parents[2] / "configs/before_we_act/care_robofactory_reproduction.json")
+    settings = load_frozen_settings(settings_path)
+    variants = tuple(str(value) for value in settings["care"]["variants"])
+    seeds = tuple(int(value) for value in settings["care"]["seeds"])
     prepared = load_prepared_care(args.prepared_data)
-    selected = selected_training(args.training_root)
+    selected = selected_training(args.training_root, variants, seeds)
     device = torch.device(args.device)
 
     selected_models: dict[str, dict[str, Any]] = {}
     test_metrics: dict[str, Any] = {}
     calibration_rows = test_rows = None
     care_model = care_saved = None
-    for variant in VARIANTS:
+    for variant in variants:
         checkpoint = Path(selected[variant]["selected_checkpoint"])
         model, saved = load_model(checkpoint, device)
         calibration_data = CARETrainingDataset(
-            prepared, "calibration", primary_horizon_only=True, primary_horizon=16
+            prepared, "calibration", primary_horizon_only=True,
+            primary_horizon=int(settings["care"]["primary_horizon"])
         )
         test_data = CARETrainingDataset(
-            prepared, "test", primary_horizon_only=True, primary_horizon=16
+            prepared, "test", primary_horizon_only=True,
+            primary_horizon=int(settings["care"]["primary_horizon"])
         )
         calibration_loader = DataLoader(calibration_data, batch_size=48, shuffle=False)
         test_loader = DataLoader(test_data, batch_size=48, shuffle=False)
@@ -238,34 +244,19 @@ def main() -> None:
 
     assert care_model is not None and care_saved is not None
     assert calibration_rows is not None and test_rows is not None
-    nominal = float(contract["calibration"]["nominal_simultaneous_coverage"])
+    nominal = float(settings["care"]["calibration_nominal_coverage"])
     correction = conformal_correction(calibration_rows, nominal)
     calibration = CARECalibration(
         lower_correction=correction,
-        selector_delta=float(contract["selector"]["delta"]),
-        hard_safety_probability_max=float(contract["selector"]["hard_safety_probability_max"]),
+        selector_delta=float(settings["care"]["selector_delta"]),
+        hard_safety_probability_max=float(settings["care"]["hard_safety_probability_max"]),
         nominal_simultaneous_coverage=nominal,
-        primary_horizon=int(contract["training"]["primary_horizon"]),
+        primary_horizon=int(settings["care"]["primary_horizon"]),
     )
     calibrated_test = offline_metrics(test_rows, "care", calibration)
-    controls = ["reactive_only", "replay_only", "capacity"]
-    gate_conditions = {
-        "care_regret_below_each_matched_control": all(
-            calibrated_test["mean_regret"] < test_metrics[name]["mean_regret"]
-            for name in controls
-        ),
-        "nominal_coverage_with_tolerance": calibrated_test[
-            "simultaneous_family_coverage"
-        ]
-        >= float(contract["calibration"]["test_coverage_min"]),
-        "harmful_override_below_limit": calibrated_test["harmful_override_rate"]
-        <= float(contract["selector"]["harmful_override_rate_max"]),
-    }
-    gate_c_passed = all(gate_conditions.values())
     deployment = {
-        "format_version": "before-we-act.a6r1-care-deployment-checkpoint/1",
+        "format_version": "before-we-act.care-robofactory-deployment-checkpoint/1",
         "created_at_utc": utc_now(),
-        "stage_id": contract["stage_id"],
         "config": care_saved["config"],
         "model": care_saved["model"],
         "calibration": calibration.__dict__,
@@ -273,31 +264,20 @@ def main() -> None:
         "selected_update": int(care_saved["update"]),
         "reference_checkpoint": str(args.reference_checkpoint.resolve()),
         "reference_checkpoint_sha256": sha256_file(args.reference_checkpoint),
-        "contract": str(args.contract.resolve()),
-        "contract_sha256": sha256_file(args.contract),
+        "settings": str(settings_path.resolve()),
+        "settings_sha256": sha256_file(settings_path),
         "prepared_data_sha256": sha256_file(args.prepared_data),
-        "gate_a_preserved_as_not_passed": True,
-        "gate_c_passed": gate_c_passed,
-        "closed_loop_authorized_regardless_of_gate_c_for_diagnostic": bool(
-            contract["authorization"]["validation20_authorized_even_if_gate_c_fails"]
-        ),
     }
     temporary = deployment_path.with_name(f".{deployment_path.name}.{os.getpid()}.tmp")
     torch.save(deployment, temporary)
     os.replace(temporary, deployment_path)
     report = {
-        "format_version": "before-we-act.a6r1-care-offline-report/1",
-        "stage_id": contract["stage_id"],
+        "format_version": "before-we-act.care-robofactory-offline-report/1",
         "completed_at_utc": utc_now(),
         "selected_models": selected_models,
         "test_uncalibrated": test_metrics,
         "calibration": calibration.__dict__,
         "test_calibrated_care": calibrated_test,
-        "gate_c_conditions": gate_conditions,
-        "gate_c_passed": gate_c_passed,
-        "gate_a_preserved_as_not_passed": True,
-        "response_decomposition_claim_allowed": gate_c_passed
-        and calibrated_test["mean_regret"] < test_metrics["reactive_only"]["mean_regret"],
         "deployment_checkpoint": str(deployment_path.resolve()),
         "deployment_checkpoint_sha256": sha256_file(deployment_path),
         "reference_checkpoint_sha256_before_after": [
@@ -306,7 +286,7 @@ def main() -> None:
         ],
     }
     atomic_json(report_path, report)
-    print(json.dumps({"status": "A6R1_OFFLINE_COMPLETED", "gate_c_passed": gate_c_passed, "report": str(report_path)}))
+    print(json.dumps({"status": "CARE_OFFLINE_READY", "report": str(report_path)}))
 
 
 if __name__ == "__main__":

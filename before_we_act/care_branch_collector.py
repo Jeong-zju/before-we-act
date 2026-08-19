@@ -1,7 +1,7 @@
 """同状态 CARE 分叉采集器。
 
-本模块只实现 A4-CARE-CONTRACT 已冻结的动作候选、状态恢复和
-reactive/replay 双分叉。资源试跑产生的数据不得用于 CARE 训练或 Gate A/B。
+本模块实现 CARE 的动作候选、状态恢复和 reactive/replay 双分叉。
+资源试跑产生的数据不得用于 CARE 训练。
 """
 from __future__ import annotations
 
@@ -40,20 +40,20 @@ from scripts.before_we_act.audit_ssc_v7_m2 import (
 )
 
 
-FORMAT_VERSION = "before-we-act.a5r2-care-branch-family/3"
-CONTRACT_STAGE = "A4R2-CARE-CONTRACT"
-FORMAL_FORMAT_VERSION = "before-we-act.a5r4-care-formal-branch-family/1"
-FORMAL_CONTRACT_STAGE = "A4R4-CARE-FORMAL-COLLECTION"
-FORMAL_MANIFEST_STAGE = "A5R4-CARE-BRANCHES-FORMAL"
-GATE_FIRST_FORMAT_VERSION = "before-we-act.a5r5-care-gate-first-branch-family/1"
-GATE_FIRST_CONTRACT_STAGE = "A4R5-CARE-GATE-FIRST-COLLECTION"
-GATE_FIRST_MANIFEST_STAGE = "A5R5-CARE-GATE-FIRST-BRANCHES"
-COMPACT_FORMAT_VERSION = "before-we-act.a5r6-care-compact-branch-family/1"
-COMPACT_CONTRACT_STAGE = "A4R6-CARE-COMPACT-COLLECTION"
-COMPACT_MANIFEST_STAGE = "A5R6-CARE-COMPACT-BRANCHES"
-COMMON_SUPPORT_FORMAT_VERSION = "before-we-act.a5r7-care-common-support-branch-family/1"
-COMMON_SUPPORT_CONTRACT_STAGE = "A4R7-CARE-COMMON-SUPPORT-COLLECTION"
-COMMON_SUPPORT_MANIFEST_STAGE = "A5R7-CARE-COMMON-SUPPORT-BRANCHES"
+FORMAT_VERSION = "before-we-act.care-branch-family/1"
+CONTRACT_STAGE = "CARE-BRANCH-COLLECTION"
+FORMAL_FORMAT_VERSION = "before-we-act.care-formal-branch-family/1"
+FORMAL_CONTRACT_STAGE = "CARE-FORMAL-COLLECTION"
+FORMAL_MANIFEST_STAGE = "CARE-BRANCHES-FORMAL"
+GATE_FIRST_FORMAT_VERSION = "before-we-act.care-gate-first-branch-family/1"
+GATE_FIRST_CONTRACT_STAGE = "CARE-GATE-FIRST-COLLECTION"
+GATE_FIRST_MANIFEST_STAGE = "CARE-GATE-FIRST-BRANCHES"
+COMPACT_FORMAT_VERSION = "before-we-act.care-compact-branch-family/1"
+COMPACT_CONTRACT_STAGE = "CARE-COMPACT-COLLECTION"
+COMPACT_MANIFEST_STAGE = "CARE-COMPACT-BRANCHES"
+COMMON_SUPPORT_FORMAT_VERSION = "before-we-act.care-common-support-branch-family/1"
+COMMON_SUPPORT_CONTRACT_STAGE = "CARE-COMMON-SUPPORT-COLLECTION"
+COMMON_SUPPORT_MANIFEST_STAGE = "CARE-COMMON-SUPPORT-BRANCHES"
 OUTCOME_HORIZONS = (8, 16, 32, 64)
 MAIN_WEIGHTS = np.asarray((0.30, 0.30, 0.12, 0.08, 0.06, 0.06, 0.03, 0.05))
 
@@ -1027,7 +1027,7 @@ def run_branch(
             "intervention_steps_requested": int(intervention_steps),
             "intervention_steps_applied": int(intervention_steps_applied),
             "intervention_protocol": (
-                "recompute B-core from current observation and reapply the frozen "
+                "recompute the CARE reference policy from the current observation and reapply the frozen "
                 "candidate transform at every active control step"
             ),
             "wall_seconds": time.perf_counter() - started,
@@ -1237,7 +1237,7 @@ def collect_family(
     device: torch.device,
     output_root: Path,
     format_version: str = FORMAT_VERSION,
-    stage_id: str = "A5R2-CARE-BRANCHES-PILOT",
+    stage_id: str = "CARE-BRANCHES-PILOT",
     resource_only: bool = True,
     common_replay_support: bool = False,
 ) -> dict[str, Any]:
@@ -1519,7 +1519,7 @@ def main() -> None:
     contract = json.loads(args.contract.read_text(encoding="utf-8"))
     manifest_stage = str(manifest.get("stage_id"))
     common_replay_support = False
-    if manifest_stage == "A5R2-CARE-BRANCHES-PILOT":
+    if manifest_stage == "CARE-BRANCHES-PILOT":
         expected_status = "FROZEN_BEFORE_OUTCOME"
         expected_contract_stage = CONTRACT_STAGE
         output_format = FORMAT_VERSION
@@ -1573,7 +1573,7 @@ def main() -> None:
     if contract_sha != manifest["contract_sha256"]:
         raise RuntimeError("CARE contract hash drifted")
     if checkpoint_sha != contract["reference_policy"]["checkpoint_sha256"]:
-        raise RuntimeError("B-core deployment checkpoint hash drifted")
+        raise RuntimeError("CARE reference deployment checkpoint hash drifted")
     if not 0 <= args.shard_index < args.shard_count:
         raise ValueError("invalid shard index/count")
     task_families = [

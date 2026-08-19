@@ -1,4 +1,4 @@
-"""Closed-loop CARE evaluator with exact B-core fallback and one focal override."""
+"""Closed-loop CARE evaluator with exact reference fallback and one focal override."""
 from __future__ import annotations
 
 import argparse
@@ -48,10 +48,10 @@ def load_care(
     path: str | Path, device: torch.device, reference_checkpoint: str | Path
 ) -> tuple[CAREBeliefHead, CARECalibration, dict[str, Any]]:
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    if saved.get("format_version") != "before-we-act.a6r1-care-deployment-checkpoint/1":
+    if saved.get("format_version") != "before-we-act.care-robofactory-deployment-checkpoint/1":
         raise ValueError("wrong CARE deployment checkpoint")
     if saved["reference_checkpoint_sha256"] != sha256_file(reference_checkpoint):
-        raise ValueError("CARE/B-core checkpoint hash mismatch")
+        raise ValueError("CARE/reference checkpoint hash mismatch")
     config = CAREBeliefConfig.from_mapping(saved["config"])
     model = CAREBeliefHead(config).to(device)
     model.load_state_dict(saved["model"], strict=True)
@@ -331,6 +331,7 @@ def main() -> None:
     parser.add_argument("--mode", choices=("care", "selector_off"), default="care")
     parser.add_argument("--task", choices=sorted(TASKS), required=True)
     parser.add_argument("--seed-file", type=Path, required=True)
+    parser.add_argument("--settings", type=Path)
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--device", default="cuda:0")
@@ -338,7 +339,7 @@ def main() -> None:
     parser.add_argument("--resume-log", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    settings = load_frozen_settings()
+    settings = load_frozen_settings(args.settings) if args.settings else load_frozen_settings()
     if args.task not in settings["tasks"]:
         raise ValueError(f"task is not in frozen settings: {args.task}")
     max_steps = int(settings["tasks"][args.task]["max_steps"])
@@ -348,6 +349,12 @@ def main() -> None:
         )
     seed_raw = args.seed_file.read_bytes()
     seed_manifest = json.loads(seed_raw)
+    if seed_manifest.get("task") != args.task:
+        raise ValueError("test seed task does not match requested task")
+    if int(seed_manifest.get("count", 0)) != int(settings["closed_loop"]["episodes_per_task"]):
+        raise ValueError("test seed count drifts from frozen settings")
+    if args.episodes != int(settings["closed_loop"]["episodes_per_task"]):
+        raise ValueError("requested episodes drift from frozen settings")
     requested = [int(value) for value in seed_manifest["seeds"][: args.episodes]]
     recovered: dict[int, dict[str, Any]] = {}
     if args.resume_log and args.resume_log.is_file():
@@ -378,7 +385,7 @@ def main() -> None:
         )
     rows.sort(key=lambda row: requested.index(int(row["seed"])))
     result = {
-        "format_version": "before-we-act.a7r1-care-validation20-task/1",
+        "format_version": "before-we-act.care-robofactory-test-task/1",
         "task": args.task,
         "mode": args.mode,
         "episodes": len(rows),

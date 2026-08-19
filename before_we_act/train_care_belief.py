@@ -1,4 +1,4 @@
-"""Three-seed/matched-scorer trainer for the A6 CARE diagnostic."""
+"""Three-seed/matched-scorer trainer for CARE/RoboFactory reproduction."""
 from __future__ import annotations
 
 import argparse
@@ -27,7 +27,7 @@ from before_we_act.care_training_data import (
 )
 
 
-FORMAT_VERSION = "before-we-act.a6r1-care-training-checkpoint/1"
+FORMAT_VERSION = "before-we-act.care-robofactory-training-checkpoint/1"
 
 
 def utc_now() -> str:
@@ -246,7 +246,7 @@ def main() -> None:
 
     selected = torch.load(best_path, map_location="cpu", weights_only=False)
     result = {
-        "format_version": "before-we-act.a6r1-care-training-status/1",
+        "format_version": "before-we-act.care-robofactory-training-status/1",
         "status": "COMPLETED",
         "completed_at_utc": utc_now(),
         "variant": args.variant,
