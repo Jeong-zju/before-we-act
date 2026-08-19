@@ -98,8 +98,12 @@ def _stats(trajectories, arms):
         with h5py.File(path, "r") as f:
             tr = f[key]
             for arm in present:
-                qs.append(np.asarray(tr["obs"]["agent"][f"panda-{arm}"]["qpos"], np.float32))
-                acts.append(np.asarray(tr["actions"][f"panda-{arm}"], np.float32))
+                if key == "data":
+                    qs.append(np.asarray(tr["observation"]["agents"][f"panda_{arm}"]["qpos"], np.float32))
+                    acts.append(np.asarray(tr["action"]["agents"][f"panda_{arm}"]["commanded"], np.float32))
+                else:
+                    qs.append(np.asarray(tr["obs"]["agent"][f"panda-{arm}"]["qpos"], np.float32))
+                    acts.append(np.asarray(tr["actions"][f"panda-{arm}"], np.float32))
     q, a = np.concatenate(qs), np.concatenate(acts)
     return {"q_mean": q.mean(0), "q_std": q.std(0).clip(1e-4),
             "a_mean": a.mean(0), "a_std": a.std(0).clip(1e-4)}
