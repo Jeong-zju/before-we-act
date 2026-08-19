@@ -442,7 +442,7 @@ def epoch(model, loader, opt, device, beta, max_updates=None, scheduler=None, re
             for k, v in (("loss", loss), ("mse", mse), ("kl", kl)):
                 total[k] += float(v.detach()) * n
             total["n"] += n
-            if training and max_updates is not None and updates >= max_updates:
+            if max_updates is not None and updates >= max_updates:
                 break
     return ({k: v / total["n"] for k, v in total.items() if k != "n"}, updates)
 
@@ -481,6 +481,8 @@ def main():
                    help="Root containing audited per-task normalization.npz files")
     p.add_argument("--windowed-io", action="store_true",
                    help="Read only sampled RGB frames instead of caching whole episodes")
+    p.add_argument("--validation-updates", type=int, default=-1,
+                   help="Bound validation batches per epoch; useful for remote smoke tests")
     a = p.parse_args()
     assert a.shared != (a.arm is not None), "set exactly one of --shared or --arm"
     arms = tuple(int(x) for x in a.shared_arms.split(",")) if a.shared else (a.arm,)
@@ -547,7 +549,9 @@ def main():
         next_stop = min([a.updates] + [m for m in milestones if m > updates])
         train_metrics, ran = epoch(model, train_loader, opt, device, a.beta, next_stop - updates, sched, replica, replica_device)
         updates += ran
-        val_metrics, _ = epoch(model, val_loader, None, device, a.beta, replica=replica, replica_device=replica_device)
+        val_metrics, _ = epoch(model, val_loader, None, device, a.beta,
+                               max_updates=(a.validation_updates if a.validation_updates > 0 else None),
+                               replica=replica, replica_device=replica_device)
         report = {"epoch": e, "updates": updates, "lr": sched.get_last_lr()[0], "train": train_metrics, "val": val_metrics}
         print(json.dumps(report), flush=True)
         state = {"model": model.state_dict(), "optimizer": opt.state_dict(), "epoch": e,
