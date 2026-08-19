@@ -56,7 +56,9 @@ def main() -> int:
             action = np.clip(2.0 * (action - low) / (high - low) - 1.0, -1.0, 1.0)
             start = total
             end = start + len(image)
-            images.resize(end, axis=0); states.resize(end, axis=0); actions.resize(end, axis=0)
+            images.resize((end, args.height, args.width, 3))
+            states.resize((end, 9))
+            actions.resize((end, 8))
             images[start:end] = image
             states[start:end] = state
             actions[start:end] = action
