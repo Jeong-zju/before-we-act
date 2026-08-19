@@ -75,7 +75,7 @@ def _predict(model, obs, arm: int, stats, codec, device):
 
 
 def evaluate(args) -> dict:
-    checkpoint = torch.load(args.checkpoint, map_location="cpu")
+    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = checkpoint["config"]
     model = ACT(
         int(config["state_dim"]), int(config["action_dim"]), int(config["horizon"]),
