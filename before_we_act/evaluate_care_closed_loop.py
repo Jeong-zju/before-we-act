@@ -332,16 +332,20 @@ def main() -> None:
     parser.add_argument("--task", choices=sorted(TASKS), required=True)
     parser.add_argument("--seed-file", type=Path, required=True)
     parser.add_argument("--episodes", type=int, default=20)
-    parser.add_argument("--max-steps", type=int, default=1500)
+    parser.add_argument("--max-steps", type=int)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--robofactory-root", type=Path, default=Path("/workspace/RoboFactory"))
     parser.add_argument("--resume-log", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     settings = load_frozen_settings()
-    max_steps = int(settings["tasks"][args.task]["max_steps"])
     if args.task not in settings["tasks"]:
         raise ValueError(f"task is not in frozen settings: {args.task}")
+    max_steps = int(settings["tasks"][args.task]["max_steps"])
+    if args.max_steps is not None and args.max_steps != max_steps:
+        raise ValueError(
+            f"--max-steps drifts from frozen {args.task} setting: {args.max_steps} != {max_steps}"
+        )
     seed_raw = args.seed_file.read_bytes()
     seed_manifest = json.loads(seed_raw)
     requested = [int(value) for value in seed_manifest["seeds"][: args.episodes]]
