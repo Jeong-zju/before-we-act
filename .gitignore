@@ -37,6 +37,9 @@ backups/
 # refs
 refs/
 
+# Documentation remains local to the paper-writing workspace.
+/docs/
+
 docs/experiments/
 
 # Local CARE branch/pilot evidence is archived outside the tracked workflow.
