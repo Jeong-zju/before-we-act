@@ -109,6 +109,46 @@ def _stats(trajectories, arms):
             "a_mean": a.mean(0), "a_std": a.std(0).clip(1e-4)}
 
 
+def _stats_from_manifests(paths, arms, stats_root=None):
+    """Load the audited task moments without rescanning RGB-heavy HDF5 files."""
+    task_stats = {}
+    for path in paths:
+        task = task_from_path(path)
+        if stats_root is not None:
+            norm_path = Path(stats_root) / task / "normalization.npz"
+        else:
+            root = Path(path)
+            while root != root.parent and not (root / "normalization.npz").is_file():
+                root = root.parent
+            norm_path = root / "normalization.npz"
+        if task in task_stats or not norm_path.is_file():
+            continue
+        payload = np.load(norm_path)
+        state_mean = np.asarray(payload["state_mean"], np.float32)
+        state_std = np.asarray(payload["state_std"], np.float32)
+        action_mean = np.asarray(payload["action_mean"], np.float32)
+        action_std = np.asarray(payload["action_std"], np.float32)
+        q_means, q_stds, a_means, a_stds = [], [], [], []
+        for arm in arms:
+            state_offset = arm * 18
+            action_offset = arm * 8
+            if state_offset + 9 > state_mean.size or action_offset + 8 > action_mean.size:
+                continue
+            q_means.append(state_mean[state_offset:state_offset + 9])
+            q_stds.append(state_std[state_offset:state_offset + 9])
+            a_means.append(action_mean[action_offset:action_offset + 8])
+            a_stds.append(action_std[action_offset:action_offset + 8])
+        if q_means and a_means:
+            task_stats[task] = {
+                "q_mean": np.mean(q_means, axis=0), "q_std": np.maximum(np.mean(q_stds, axis=0), 1e-4),
+                "a_mean": np.mean(a_means, axis=0), "a_std": np.maximum(np.mean(a_stds, axis=0), 1e-4),
+            }
+    if not task_stats:
+        raise ValueError("no compatible normalization.npz found for ACT data")
+    return {key: np.mean([value[key] for value in task_stats.values()], axis=0).astype(np.float32)
+            for key in ("q_mean", "q_std", "a_mean", "a_std")}
+
+
 class RoboFactoryACTDataset(Dataset):
     def __init__(self, trajectories, arms, horizon, stats, train, *, preload=True, cache_limit=0):
         self.arms, self.horizon, self.stats = tuple(arms), horizon, stats
@@ -421,6 +461,8 @@ def main():
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--beta", type=float, default=1e-3)
     p.add_argument("--seed", type=int, default=2026)
+    p.add_argument("--stats-root", default=None,
+                   help="Root containing audited per-task normalization.npz files")
     a = p.parse_args()
     assert a.shared != (a.arm is not None), "set exactly one of --shared or --arm"
     arms = tuple(int(x) for x in a.shared_arms.split(",")) if a.shared else (a.arm,)
@@ -431,7 +473,7 @@ def main():
     paths = sorted({p for item in a.data.split(",") for p in glob.glob(item)})
     assert paths, f"no HDF5 files match {a.data}"
     tr = _trajectories(paths, arms); assert len(tr) >= 10, "need at least 10 successful demonstrations"
-    stats = _stats(tr, arms)
+    stats = (_stats_from_manifests(paths, arms, a.stats_root) if a.stats_root is not None else _stats(tr, arms))
     lazy_cache = a.lazy_cache_episodes > 0
     if lazy_cache and a.workers:
         raise ValueError("lazy RGB cache requires --workers 0")
