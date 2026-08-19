@@ -150,9 +150,10 @@ def _stats_from_manifests(paths, arms, stats_root=None):
 
 
 class RoboFactoryACTDataset(Dataset):
-    def __init__(self, trajectories, arms, horizon, stats, train, *, preload=True, cache_limit=0):
+    def __init__(self, trajectories, arms, horizon, stats, train, *, preload=True, cache_limit=0, windowed_io=False):
         self.arms, self.horizon, self.stats = tuple(arms), horizon, stats
         self.cache_limit = int(cache_limit)
+        self.windowed_io = bool(windowed_io)
         # Keep entire episodes together: predictable held-out demonstrations.
         kept = [x for i, x in enumerate(trajectories) if (i % 10 != 0) == train]
         # A/B views of one joint episode always share a split: no paired leakage.
@@ -181,6 +182,8 @@ class RoboFactoryACTDataset(Dataset):
 
     def _episode(self, path, key, arm):
         tag = (path, key, arm)
+        if self.windowed_io:
+            return None, None, None
         if tag not in self.cache:
             with h5py.File(path, "r") as f:
                 tr = f[key]
@@ -202,7 +205,19 @@ class RoboFactoryACTDataset(Dataset):
 
     def __getitem__(self, idx):
         path, key, t, arm, _ = self.items[idx]
-        image, qpos, actions = self._episode(path, key, arm)
+        if self.windowed_io:
+            with h5py.File(path, "r") as f:
+                tr = f[key]
+                if key == "data":
+                    image = tr["observation"]["images"][f"agent_{arm}"][t]
+                    qpos = tr["observation"]["agents"][f"panda_{arm}"]["qpos"][t]
+                    actions = tr["action"]["agents"][f"panda_{arm}"]["commanded"][t:t + self.horizon].astype(np.float32)
+                else:
+                    image = tr["obs"]["sensor_data"][f"head_camera_agent{arm}"]["rgb"][t]
+                    qpos = tr["obs"]["agent"][f"panda-{arm}"]["qpos"][t]
+                    actions = tr["actions"][f"panda-{arm}"][t:t + self.horizon].astype(np.float32)
+        else:
+            image, qpos, actions = self._episode(path, key, arm)
         # RGB observations are local to this arm only; no ID or global view.
         # Keep the camera frame as uint8 until it reaches the GPU. Per-sample
         # CPU resizing starves two 5090s; batched resize is done in _loss.
@@ -463,6 +478,8 @@ def main():
     p.add_argument("--seed", type=int, default=2026)
     p.add_argument("--stats-root", default=None,
                    help="Root containing audited per-task normalization.npz files")
+    p.add_argument("--windowed-io", action="store_true",
+                   help="Read only sampled RGB frames instead of caching whole episodes")
     a = p.parse_args()
     assert a.shared != (a.arm is not None), "set exactly one of --shared or --arm"
     arms = tuple(int(x) for x in a.shared_arms.split(",")) if a.shared else (a.arm,)
@@ -478,9 +495,11 @@ def main():
     if lazy_cache and a.workers:
         raise ValueError("lazy RGB cache requires --workers 0")
     train = RoboFactoryACTDataset(tr, arms, a.horizon, stats, True,
-                                  preload=not lazy_cache, cache_limit=a.lazy_cache_episodes)
+                                  preload=not lazy_cache, cache_limit=a.lazy_cache_episodes,
+                                  windowed_io=a.windowed_io)
     valid = RoboFactoryACTDataset(tr, arms, a.horizon, stats, False,
-                                  preload=not lazy_cache, cache_limit=a.lazy_cache_episodes)
+                                  preload=not lazy_cache, cache_limit=a.lazy_cache_episodes,
+                                  windowed_io=a.windowed_io)
     kwargs = dict(batch_size=a.batch_size, num_workers=a.workers, pin_memory=True,
                   persistent_workers=a.workers > 0)
     # Forking workers after CUDA is initialized can deadlock (and h5py is not
