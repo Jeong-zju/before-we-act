@@ -20,8 +20,17 @@ HTML = """<!doctype html><meta charset='utf-8'><meta name='viewport' content='wi
 def status() -> dict:
     try:
         source = (
-            "import json,pathlib,sys; root=pathlib.Path(sys.argv[1]); "
-            "print(json.dumps([json.loads(p.read_text()) for p in root.rglob('status.json')]))"
+            "import json,pathlib,sys; root=pathlib.Path(sys.argv[1]); out=[]; "
+            "for p in root.rglob('status.json'): "
+            "\n try: item=json.loads(p.read_text()); "
+            "\n except Exception: continue; "
+            "\n log=p.with_name('train.log'); lines=log.read_text(errors='replace').splitlines()[-80:] if log.is_file() else []; "
+            "\n reports=[]; "
+            "\n for line in lines:\n  "
+            "\n  try: reports.append(json.loads(line))\n  except Exception: pass; "
+            "\n if reports: item['latest_report']=reports[-1]; item['step']=reports[-1].get('updates', reports[-1].get('step', item.get('step'))); item['total_steps']=item.get('target_updates', item.get('total_steps')); "
+            "\n item['log_tail']=lines[-12:]; item['errors']=[line for line in lines if 'error' in line.lower() or 'traceback' in line.lower()]; out.append(item); "
+            "print(json.dumps(out))"
         )
         command = shlex.join(["python3", "-c", source, REMOTE_ROOT])
         raw = subprocess.run([*SSH, command], text=True, capture_output=True, timeout=15, check=True).stdout
