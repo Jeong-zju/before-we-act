@@ -17,6 +17,8 @@ def main() -> int:
     p.add_argument("--data-root", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--agent", type=int, default=0)
+    p.add_argument("--allow-missing", action="store_true",
+                   help="Emit zero placeholders and a valid mask for tasks without this agent")
     p.add_argument("--width", type=int, default=320)
     p.add_argument("--height", type=int, default=240)
     args = p.parse_args()
@@ -32,6 +34,7 @@ def main() -> int:
     actions = data.create_dataset("action", shape=(0, 8), chunks=(256, 8), dtype="f4", compressor=compressor)
     episode_ends: list[int] = []
     task_names: list[str] = []
+    valid_agents: list[bool] = []
     total = 0
     for task_root in sorted(args.data_root.iterdir()):
         manifest_path = task_root / "training_manifest.json"
@@ -46,14 +49,28 @@ def main() -> int:
             path = task_root / record["hdf5_path"]
             with h5py.File(path, "r") as file:
                 group = file["data"]
-                steps = min(int(record["steps"]), len(group["observation"]["images"][f"agent_{args.agent}"]))
-                image = group["observation"]["images"][f"agent_{args.agent}"][:steps]
-                state = group["observation"]["agents"][f"panda_{args.agent}"]["qpos"][:steps].astype(np.float32)
-                action = group["action"]["agents"][f"panda_{args.agent}"]["commanded"][:steps].astype(np.float32)
+                image_key = f"agent_{args.agent}"
+                panda_key = f"panda_{args.agent}"
+                available = (image_key in group["observation"]["images"]
+                             and panda_key in group["observation"]["agents"]
+                             and panda_key in group["action"]["agents"])
+                steps = int(record.get("recorded_steps", record["steps"]))
+                if not available:
+                    if not args.allow_missing:
+                        continue
+                    image = np.zeros((steps, args.height, args.width, 3), dtype=np.uint8)
+                    state = np.zeros((steps, 9), dtype=np.float32)
+                    action = np.zeros((steps, 8), dtype=np.float32)
+                else:
+                    steps = min(steps, len(group["observation"]["images"][image_key]))
+                    image = group["observation"]["images"][image_key][:steps]
+                    state = group["observation"]["agents"][panda_key]["qpos"][:steps].astype(np.float32)
+                    action = group["action"]["agents"][panda_key]["commanded"][:steps].astype(np.float32)
             if (image.shape[1], image.shape[2]) != (args.height, args.width):
                 image = image[:, :: max(image.shape[1] // args.height, 1), :: max(image.shape[2] // args.width, 1)]
                 image = image[:, :args.height, :args.width]
-            action = np.clip(2.0 * (action - low) / (high - low) - 1.0, -1.0, 1.0)
+            if available:
+                action = np.clip(2.0 * (action - low) / (high - low) - 1.0, -1.0, 1.0)
             start = total
             end = start + len(image)
             images.resize((end, args.height, args.width, 3))
@@ -65,10 +82,12 @@ def main() -> int:
             total = end
             episode_ends.append(total)
             task_names.append(task_root.name)
+            valid_agents.append(bool(available))
             if len(episode_ends) % 10 == 0:
                 print(f"episodes={len(episode_ends)} frames={total}", flush=True)
     meta.create_dataset("episode_ends", data=np.asarray(episode_ends, dtype=np.int64), compressor=compressor)
     meta.attrs["tasks"] = task_names
+    meta.attrs["valid_agent"] = valid_agents
     meta.attrs["format"] = "before-we-act.dp.robofactory/1"
     print(json.dumps({"episodes": len(episode_ends), "frames": total, "output": str(args.output)}))
     return 0

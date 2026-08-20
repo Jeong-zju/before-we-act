@@ -10,6 +10,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import zarr
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -287,6 +288,80 @@ class RoboFactoryACTDataset(Dataset):
         return im, torch.from_numpy(q), torch.from_numpy(padded), torch.from_numpy(mask)
 
 
+class RoboFactoryACTZarrDataset(Dataset):
+    """Chunked multi-agent dataset used for long formal runs.
+
+    Each agent zarr has the same episode order. Missing agents are represented
+    by zero placeholders plus a valid-agent attribute and are excluded from the
+    sampler, preserving the six-task mixed-agent contract.
+    """
+    def __init__(self, zarr_paths, arms, horizon, stats, train):
+        self.groups = {int(arm): zarr.open_group(str(path), mode="r")
+                       for arm, path in zarr_paths.items()}
+        first = next(iter(self.groups.values()))
+        self.ends = np.asarray(first["meta/episode_ends"][:], dtype=np.int64)
+        self.tasks = list(first["meta"].attrs.get("tasks", ["unknown"] * len(self.ends)))
+        self.arms = tuple(arms)
+        self.horizon = int(horizon)
+        self.stats = stats
+        self.items = []
+        self.item_tasks = []
+        self.stream_indices = defaultdict(list)
+        for episode, end in enumerate(self.ends):
+            keep = (episode % 10 != 0) == bool(train)
+            if not keep:
+                continue
+            start = 0 if episode == 0 else int(self.ends[episode - 1])
+            task = self.tasks[episode]
+            for arm in self.arms:
+                group = self.groups[arm]
+                valid = list(group["meta"].attrs.get("valid_agent", [True] * len(self.ends)))[episode]
+                if not valid:
+                    continue
+                for t in range(start, int(end)):
+                    idx = len(self.items)
+                    item = (str(episode), "zarr", t, arm, task, int(end))
+                    self.items.append(item)
+                    self.item_tasks.append(task)
+                    self.stream_indices[(str(episode), "zarr", arm, task)].append(idx)
+        self.item_weights = np.ones(len(self.items), dtype=np.float64)
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, idx):
+        episode, _, t, arm, _, end = self.items[idx]
+        group = self.groups[arm]
+        image = np.asarray(group["data/head_camera"][t])
+        qpos = np.asarray(group["data/state"][t], dtype=np.float32)
+        actions = np.asarray(group["data/action"][t:min(t + self.horizon, end)], dtype=np.float32)
+        im = torch.from_numpy(image).permute(2, 0, 1).contiguous()
+        q = (qpos - self.stats["q_mean"]) / self.stats["q_std"]
+        valid = len(actions)
+        padded = np.empty((self.horizon, actions.shape[1]), np.float32)
+        padded[:valid] = actions
+        padded[valid:] = actions[-1]
+        padded = (padded - self.stats["a_mean"]) / self.stats["a_std"]
+        mask = np.zeros(self.horizon, np.bool_); mask[:valid] = True
+        return im, torch.from_numpy(q), torch.from_numpy(padded), torch.from_numpy(mask)
+
+
+def _stats_from_zarr(zarr_paths, arms):
+    qs, acts = [], []
+    for arm in arms:
+        group = zarr.open_group(str(zarr_paths[arm]), mode="r")
+        valid = list(group["meta"].attrs.get("valid_agent", [True] * len(group["meta/episode_ends"])))
+        ends = np.asarray(group["meta/episode_ends"][:], dtype=np.int64)
+        starts = np.concatenate(([0], ends[:-1]))
+        for ok, start, end in zip(valid, starts, ends):
+            if ok:
+                qs.append(np.asarray(group["data/state"][int(start):int(end)], dtype=np.float32))
+                acts.append(np.asarray(group["data/action"][int(start):int(end)], dtype=np.float32))
+    q, a = np.concatenate(qs), np.concatenate(acts)
+    return {"q_mean": q.mean(0), "q_std": q.std(0).clip(1e-4),
+            "a_mean": a.mean(0), "a_std": a.std(0).clip(1e-4)}
+
+
 class EpisodeBlockBatchSampler(Sampler):
     """Task-balanced local episode blocks for bounded RGB caching."""
     def __init__(self, dataset, batch_size, updates, block_updates, seed, task_balanced):
@@ -538,6 +613,10 @@ def main():
                    help="Read only sampled RGB frames instead of caching whole episodes")
     p.add_argument("--validation-updates", type=int, default=-1,
                    help="Bound validation batches per epoch; useful for remote smoke tests")
+    p.add_argument("--resume", action="store_true",
+                   help="Resume model, optimizer, scheduler, and update count from output/last.pt")
+    p.add_argument("--zarr-agent", action="append", default=[], metavar="ARM=PATH",
+                   help="Use chunked zarr inputs, one per shared arm")
     a = p.parse_args()
     assert a.shared != (a.arm is not None), "set exactly one of --shared or --arm"
     arms = tuple(int(x) for x in a.shared_arms.split(",")) if a.shared else (a.arm,)
@@ -545,20 +624,36 @@ def main():
     seed_everything(a.seed); torch.backends.cudnn.benchmark = True
     device_ids = [int(x) for x in a.devices.split(",")]
     device = torch.device(f"cuda:{device_ids[0]}")
-    paths = sorted({p for item in a.data.split(",") for p in glob.glob(item)})
-    assert paths, f"no HDF5 files match {a.data}"
-    tr = _trajectories(paths, arms, a.stats_root); assert len(tr) >= 10, "need at least 10 successful demonstrations"
-    stats = (_stats_from_manifests(paths, arms, a.stats_root) if a.stats_root is not None else _stats(tr, arms))
-    action_codecs = _action_codecs(paths, arms, a.stats_root)
+    zarr_paths = {}
+    for spec in a.zarr_agent:
+        arm_text, path = spec.split("=", 1)
+        zarr_paths[int(arm_text)] = path
+    if zarr_paths:
+        if set(zarr_paths) != set(arms):
+            raise ValueError(f"zarr agents {sorted(zarr_paths)} must match shared arms {sorted(arms)}")
+        paths, tr = [], None
+        stats = _stats_from_zarr(zarr_paths, arms)
+        action_codecs = {}
+    else:
+        paths = sorted({p for item in a.data.split(",") for p in glob.glob(item)})
+        assert paths, f"no HDF5 files match {a.data}"
+        tr = _trajectories(paths, arms, a.stats_root); assert len(tr) >= 10, "need at least 10 successful demonstrations"
+        stats = (_stats_from_manifests(paths, arms, a.stats_root) if a.stats_root is not None else _stats(tr, arms))
+        action_codecs = _action_codecs(paths, arms, a.stats_root)
     lazy_cache = a.lazy_cache_episodes > 0
     if lazy_cache and a.workers:
         raise ValueError("lazy RGB cache requires --workers 0")
-    train = RoboFactoryACTDataset(tr, arms, a.horizon, stats, True,
-                                  preload=not lazy_cache, cache_limit=a.lazy_cache_episodes,
-                                  windowed_io=a.windowed_io, action_codecs=action_codecs)
-    valid = RoboFactoryACTDataset(tr, arms, a.horizon, stats, False,
-                                  preload=not lazy_cache, cache_limit=a.lazy_cache_episodes,
-                                  windowed_io=a.windowed_io, action_codecs=action_codecs)
+    dataset_cls = RoboFactoryACTZarrDataset if zarr_paths else RoboFactoryACTDataset
+    if zarr_paths:
+        train = dataset_cls(zarr_paths, arms, a.horizon, stats, True)
+        valid = dataset_cls(zarr_paths, arms, a.horizon, stats, False)
+    else:
+        train = dataset_cls(tr, arms, a.horizon, stats, True,
+                            preload=not lazy_cache, cache_limit=a.lazy_cache_episodes,
+                            windowed_io=a.windowed_io, action_codecs=action_codecs)
+        valid = dataset_cls(tr, arms, a.horizon, stats, False,
+                            preload=not lazy_cache, cache_limit=a.lazy_cache_episodes,
+                            windowed_io=a.windowed_io, action_codecs=action_codecs)
     kwargs = dict(batch_size=a.batch_size, num_workers=a.workers, pin_memory=True,
                   persistent_workers=a.workers > 0)
     # Forking workers after CUDA is initialized can deadlock (and h5py is not
@@ -594,12 +689,27 @@ def main():
     out = Path(a.output); out.mkdir(parents=True, exist_ok=True)
     np.savez(out / "normalization.npz", **stats)
     best = float("inf")
-    info = vars(a) | {"arms": arms, "files": paths, "episodes": len(tr), "train_steps": len(train), "val_steps": len(valid),
+    info = vars(a) | {"arms": arms, "files": paths, "zarr_agents": zarr_paths,
+                      "episodes": (len(tr) if tr is not None else len(train.ends)), "train_steps": len(train), "val_steps": len(valid),
                       "train_task_item_counts": dict(Counter(train.item_tasks)),
                       "state_dim": len(sample[1]), "action_dim": len(sample[2][0])}
     (out / "config.json").write_text(json.dumps(info, indent=2))
     milestones = {int(x) for x in a.save_updates.split(",") if x}
     updates = 0; e = 0
+    if a.resume and (out / "last.pt").is_file():
+        state = torch.load(out / "last.pt", map_location=device, weights_only=False)
+        model.load_state_dict(state["model"])
+        opt.load_state_dict(state["optimizer"])
+        sched.load_state_dict(state.get("scheduler", sched.state_dict()))
+        updates = int(state.get("updates", 0))
+        e = int(state.get("epoch", 0))
+        if "scheduler" not in state:
+            sched.last_epoch = updates
+            sched._step_count = updates + 1
+            sched._last_lr = [group["lr"] for group in opt.param_groups]
+        if replica is not None:
+            _sync_to_replica(model, replica, replica_device)
+        print(json.dumps({"resume": str(out / "last.pt"), "updates": updates, "epoch": e}), flush=True)
     while updates < a.updates:
         e += 1
         next_stop = min([a.updates] + [m for m in milestones if m > updates])
@@ -610,7 +720,7 @@ def main():
                                replica=replica, replica_device=replica_device)
         report = {"epoch": e, "updates": updates, "lr": sched.get_last_lr()[0], "train": train_metrics, "val": val_metrics}
         print(json.dumps(report), flush=True)
-        state = {"model": model.state_dict(), "optimizer": opt.state_dict(), "epoch": e,
+        state = {"model": model.state_dict(), "optimizer": opt.state_dict(), "scheduler": sched.state_dict(), "epoch": e,
                  "updates": updates, "stats": stats, "config": info}
         torch.save(state, out / "last.pt")
         if val_metrics["loss"] < best:

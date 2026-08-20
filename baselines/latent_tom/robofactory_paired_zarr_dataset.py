@@ -69,7 +69,7 @@ class RoboFactoryPairedZarrDataset(BaseImageDataset):
         for key in ("arm2_robot_eef_pos", "arm2_eef_quat"):
             sl = slice(0, 3) if key.endswith("pos") else slice(3, 7)
             normalizer[key] = SingleFieldLinearNormalizer.create_fit(self.rb1["state"][:, sl])
-        for key in ("camera_1", "camera_3", "camera_4"):
+        for key in ("camera_1", "camera_2", "camera_3", "camera_4"):
             normalizer[key] = get_image_range_normalizer()
         return normalizer
 
@@ -90,6 +90,7 @@ class RoboFactoryPairedZarrDataset(BaseImageDataset):
         s1 = b["state"][:self.n_obs_steps].astype(np.float32)
         obs = {
             "camera_1": torch.from_numpy(im0),
+            "camera_2": torch.from_numpy(shared),
             "camera_3": torch.from_numpy(shared),
             "camera_4": torch.from_numpy(im1),
             "arm1_robot_eef_pos": torch.from_numpy(s0[:, :3]),
