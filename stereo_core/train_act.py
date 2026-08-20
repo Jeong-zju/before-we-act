@@ -3,6 +3,7 @@ import argparse
 import copy
 import glob
 import json
+import math
 import os
 import random
 from collections import Counter, OrderedDict, defaultdict
@@ -700,10 +701,15 @@ def main():
         state = torch.load(out / "last.pt", map_location=device, weights_only=False)
         model.load_state_dict(state["model"])
         opt.load_state_dict(state["optimizer"])
-        sched.load_state_dict(state.get("scheduler", sched.state_dict()))
         updates = int(state.get("updates", 0))
         e = int(state.get("epoch", 0))
-        if "scheduler" not in state:
+        saved_scheduler = state.get("scheduler")
+        if saved_scheduler is not None and int(saved_scheduler.get("T_max", a.updates)) == a.updates:
+            sched.load_state_dict(saved_scheduler)
+        else:
+            lr_scale = 0.5 * (1.0 + math.cos(math.pi * min(updates, a.updates) / a.updates))
+            for group, base_lr in zip(opt.param_groups, sched.base_lrs):
+                group["lr"] = base_lr * lr_scale
             sched.last_epoch = updates
             sched._step_count = updates + 1
             sched._last_lr = [group["lr"] for group in opt.param_groups]
