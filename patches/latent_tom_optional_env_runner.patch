@@ -1,0 +1,18 @@
+diff --git a/diffusion_policy/workspace/train_diffusion_individual_camera_workspace.py b/diffusion_policy/workspace/train_diffusion_individual_camera_workspace.py
+--- a/diffusion_policy/workspace/train_diffusion_individual_camera_workspace.py
++++ b/diffusion_policy/workspace/train_diffusion_individual_camera_workspace.py
+@@ -177,5 +177,7 @@
+-        env_runner: BaseImageRunner
+-        env_runner = hydra.utils.instantiate(
+-            cfg.task.env_runner,
+-            output_dir=self.output_dir)
+-        assert isinstance(env_runner, BaseImageRunner)
++        env_runner = None
++        if cfg.task.get("env_runner") is not None:
++            env_runner = hydra.utils.instantiate(
++                cfg.task.env_runner,
++                output_dir=self.output_dir)
++            assert isinstance(env_runner, BaseImageRunner)
+@@ -358 +360 @@
+-                if (self.epoch % cfg.training.rollout_every) == 0:
++                if env_runner is not None and (self.epoch % cfg.training.rollout_every) == 0:
