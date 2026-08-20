@@ -1,0 +1,16 @@
+diff --git a/robofactory/policy/Diffusion-Policy/diffusion_policy/dataset/robot_image_dataset.py b/robofactory/policy/Diffusion-Policy/diffusion_policy/dataset/robot_image_dataset.py
+--- a/robofactory/policy/Diffusion-Policy/diffusion_policy/dataset/robot_image_dataset.py
++++ b/robofactory/policy/Diffusion-Policy/diffusion_policy/dataset/robot_image_dataset.py
+@@ -191,7 +191,11 @@ class RobotImageDataset(BaseImageDataset):
+         :return: 经过标准化后的数据字典
+         """
+         agent_pos = samples['state'].to(device, non_blocking=True)
+-        head_cam = samples['head_camera'].to(device, non_blocking=True) / 255.0
++        # ReplayBuffer stores RGB frames as [..., H, W, C].  The policy
++        # encoder contract is [..., C, H, W]; keep the conversion here for
++        # both the normal DataLoader path and the pinned batch fast path.
++        head_cam = samples['head_camera'].to(device, non_blocking=True)
++        head_cam = head_cam.moveaxis(-1, -3).contiguous() / 255.0
+         # front_cam = samples['front_camera'].to(device, non_blocking=True) / 255.0
+         # left_cam = samples['left_camera'].to(device, non_blocking=True) / 255.0
+         # right_cam = samples['right_camera'].to(device, non_blocking=True) / 255.0
