@@ -18,5 +18,5 @@ export CUDA_VISIBLE_DEVICES=0
   --workers 0 --lazy-cache-episodes 4 --episode-block-updates 64 \
   --task-balanced --camera-width 320 --camera-height 240 \
   --stats-root /workspace/datasets/robofactory_multitask \
-  --validation-updates 64 --resume --seed 20260819 > "$ROOT/train.log" 2>&1
+  --validation-updates 64 --resume --seed 20260819 --formal-six-task > "$ROOT/train.log" 2>&1
 printf '%s\n' '{"baseline":"act","status":"complete","updates":120000,"target_updates":120000,"device":"cuda:0"}' > "$ROOT/status.json"

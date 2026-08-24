@@ -1,0 +1,75 @@
+{
+  "protocol": "robofactory_act_six_task_v1",
+  "tasks": [
+    "lift_barrier",
+    "camera_alignment",
+    "long_pipeline_delivery",
+    "take_photo",
+    "pass_shoe",
+    "place_food"
+  ],
+  "data": {
+    "source": "each task training_manifest.json, split=train",
+    "episodes_per_task": 120,
+    "indexed_episodes": 720,
+    "episode_split": "episode_index % 10 == 0 is offline validation",
+    "train_episodes": 648,
+    "validation_episodes": 72,
+    "adapter": "scripts/adapt_wam_to_dp_zarr.py",
+    "zarr_format": "before-we-act.dp.robofactory/1"
+  },
+  "model": {
+    "class": "stereo_core.train_act.ACT",
+    "vision_backbone": "resnet18",
+    "state_dim": 9,
+    "action_dim": 8,
+    "horizon": 100,
+    "d_model": 384,
+    "enc_layers": 4,
+    "dec_layers": 7,
+    "shared_arms": [0, 1, 2, 3],
+    "inputs": "local RGB camera and own qpos"
+  },
+  "training": {
+    "batch_size": 40,
+    "updates": 120000,
+    "optimizer": "AdamW",
+    "learning_rate": 0.0002,
+    "kl_weight": 0.001,
+    "episode_block_updates": 64,
+    "lazy_cache_episodes": 4,
+    "task_balanced": true,
+    "validation_updates": 64,
+    "seed": 20260819,
+    "camera_size": [320, 240]
+  },
+  "closed_loop": {
+    "checkpoint": "last.pt",
+    "episodes_per_task": 20,
+    "seed_start": 20260820,
+    "max_steps_profile": "care",
+    "max_steps_by_task": {
+      "lift_barrier": 500,
+      "camera_alignment": 1500,
+      "long_pipeline_delivery": 1500,
+      "take_photo": 1500,
+      "pass_shoe": 500,
+      "place_food": 500
+    },
+    "sim_backend": "cpu",
+    "temporal_ensemble_decay": 0.01,
+    "protocol": "act_temporal_chunk_ensemble_v3_affine_codec"
+  },
+  "legacy_uniform_500_result": {
+    "successes": 49,
+    "episodes": 120,
+    "macro_success_rate": 0.4083333333333333,
+    "status": "superseded_by_care_horizon_validation20"
+  },
+  "reported_result": {
+    "successes": 65,
+    "episodes": 120,
+    "macro_success_rate": 0.5416666666666666,
+    "summary_sha256": "893a6321248118c34337c1b3efe5944288b170a9b9884bb72f89bd190d6e5e7f"
+  }
+}

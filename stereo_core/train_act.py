@@ -29,6 +29,15 @@ except ImportError:
 # training has exactly the same semantics as before.
 EPISODE_CACHE = OrderedDict()
 
+FORMAL_SIX_TASKS = (
+    "lift_barrier",
+    "camera_alignment",
+    "long_pipeline_delivery",
+    "take_photo",
+    "pass_shoe",
+    "place_food",
+)
+
 
 def seed_everything(seed):
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
@@ -410,6 +419,38 @@ class EpisodeBlockBatchSampler(Sampler):
                 produced += 1
 
 
+def _validate_formal_six_task_contract(args, arms, zarr_paths, dataset):
+    if not args.formal_six_task:
+        return
+    required = {
+        "shared arms": tuple(arms) == (0, 1, 2, 3),
+        "batch size": args.batch_size == 40,
+        "updates": args.updates == 120000,
+        "horizon": args.horizon == 100,
+        "camera width": args.camera_width == 320,
+        "camera height": args.camera_height == 240,
+        "lazy cache": args.lazy_cache_episodes == 4,
+        "episode block": args.episode_block_updates == 64,
+        "task balanced": args.task_balanced,
+        "validation updates": args.validation_updates == 64,
+        "seed": args.seed == 20260819,
+    }
+    invalid = [name for name, valid in required.items() if not valid]
+    if invalid:
+        raise ValueError(f"formal six-task ACT contract mismatch: {', '.join(invalid)}")
+    if not zarr_paths or dataset is None:
+        raise ValueError("formal six-task ACT requires the reproducible zarr adapter inputs")
+    if set(zarr_paths) != set(arms):
+        raise ValueError("formal six-task ACT requires one zarr input for each arm 0,1,2,3")
+    task_counts = Counter(dataset.tasks)
+    if tuple(sorted(task_counts)) != tuple(sorted(FORMAL_SIX_TASKS)) or any(
+        task_counts[task] != 120 for task in FORMAL_SIX_TASKS
+    ):
+        raise ValueError(f"formal six-task ACT requires 120 episodes per task, got {dict(task_counts)}")
+    if len(dataset.ends) != 720 or len(dataset) == 0:
+        raise ValueError(f"formal six-task ACT requires 720 indexed episodes, got {len(dataset.ends)}")
+
+
 class ACT(nn.Module):
     """ACT-style CVAE with independently configurable action encoder/decoder."""
     def __init__(self, state_dim, action_dim, horizon=100, d_model=384, enc_layers=4, dec_layers=7,
@@ -618,6 +659,8 @@ def main():
                    help="Resume model, optimizer, scheduler, and update count from output/last.pt")
     p.add_argument("--zarr-agent", action="append", default=[], metavar="ARM=PATH",
                    help="Use chunked zarr inputs, one per shared arm")
+    p.add_argument("--formal-six-task", action="store_true",
+                   help="Enforce the released six-task ACT training contract")
     a = p.parse_args()
     assert a.shared != (a.arm is not None), "set exactly one of --shared or --arm"
     arms = tuple(int(x) for x in a.shared_arms.split(",")) if a.shared else (a.arm,)
@@ -655,6 +698,7 @@ def main():
         valid = dataset_cls(tr, arms, a.horizon, stats, False,
                             preload=not lazy_cache, cache_limit=a.lazy_cache_episodes,
                             windowed_io=a.windowed_io, action_codecs=action_codecs)
+    _validate_formal_six_task_contract(a, arms, zarr_paths, train if zarr_paths else None)
     kwargs = dict(batch_size=a.batch_size, num_workers=a.workers, pin_memory=True,
                   persistent_workers=a.workers > 0)
     # Forking workers after CUDA is initialized can deadlock (and h5py is not

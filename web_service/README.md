@@ -1,7 +1,6 @@
-# Remote dashboard
+# Dashboard compatibility entrypoint
 
-```bash
-BWA_REMOTE_ROOT=/workspace/bwa-baselines python3 web_service/server.py
-```
+`python3 before-we-act/web_service/server.py` 仍可使用，但现在会启动工作区根目录下的
+`web_service/server.py`，从而避免维护两套不同且可能过时的监测页面。
 
-默认监听 `http://127.0.0.1:8088`。通过 `ssh -p 10328 -L 8080:127.0.0.1:8088 root@69.176.92.104` 后访问本机 `http://localhost:8080`。
+完整说明见 [`../../web_service/README.md`](../../web_service/README.md)。
