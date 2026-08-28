@@ -75,6 +75,12 @@ class RDTBackend:
 
         repo = "/workspace/repos/rdt-1b"
         sys.path.insert(0, repo)
+        # before-we-act also has a top-level ``models`` package.  PYTHONPATH is
+        # inherited by this worker, so evict any earlier generic-package import
+        # before resolving the official RDT modules from the newly prepended repo.
+        for module_name in list(sys.modules):
+            if module_name in {"models", "configs"} or module_name.startswith(("models.", "configs.")):
+                del sys.modules[module_name]
         os.chdir(repo)
         from configs.state_vec import STATE_VEC_IDX_MAPPING
         from models.multimodal_encoder.siglip_encoder import SiglipVisionTower

@@ -362,6 +362,8 @@ class TemporalActionBackboneOps:
         role_rank: int,
         history_layers: int,
         dino_model: str,
+        image_height: int = 480,
+        image_width: int = 640,
     ) -> None:
         if not isinstance(self, nn.Module):
             raise TypeError("temporal action backbone requires nn.Module ownership")
@@ -432,16 +434,24 @@ class TemporalActionBackboneOps:
         self.decoder = _RoleConditionedActionDecoder(
             d_model, layers=dec_layers, roles=roles, rank=role_rank
         )
+        if image_height <= 0 or image_width <= 0:
+            raise ValueError("DINO input dimensions must be positive")
+        if image_height % 16 or image_width % 16:
+            raise ValueError("DINOv3 ViT-B/16 input dimensions must be divisible by 16")
+        self.image_height = int(image_height)
+        self.image_width = int(image_width)
+        self.grid_h = self.image_height // 16
+        self.grid_w = self.image_width // 16
         self.fusion = _AlignedMultiViewFusion(
             d_model=d_model,
             heads=8,
-            grid_h=30,
-            grid_w=40,
+            grid_h=self.grid_h,
+            grid_w=self.grid_w,
             layers=2,
             ffn_dim=d_model * 4,
         )
         self.fusion_pos = nn.Parameter(
-            torch.randn(1, 30 * 40, d_model) * 0.02
+            torch.randn(1, self.grid_h * self.grid_w, d_model) * 0.02
         )
         self.local_view = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
         self.global_view = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
@@ -509,9 +519,10 @@ class TemporalActionBackboneOps:
         return self
 
     def _raw_vision_tokens(self, image: torch.Tensor) -> torch.Tensor:
-        if tuple(image.shape[-2:]) != (480, 640):
+        if tuple(image.shape[-2:]) != (self.image_height, self.image_width):
             raise ValueError(
-                f"B0-H requires original 640x480 RGB, got {tuple(image.shape[-2:])}"
+                "B0-H image contract differs: expected "
+                f"{self.image_width}x{self.image_height} RGB, got {tuple(image.shape[-2:])}"
             )
         normalized = (image - self.dino_mean) / self.dino_std
         self.vision.eval()
@@ -521,7 +532,7 @@ class TemporalActionBackboneOps:
                 getattr(self.vision.config, "num_register_tokens", 0)
             )
             tokens = all_tokens[:, first_patch:]
-        if tokens.shape[1:] != (30 * 40, 768):
+        if tokens.shape[1:] != (self.grid_h * self.grid_w, 768):
             raise ValueError(f"unexpected frozen DINO token grid: {tokens.shape}")
         return tokens
 

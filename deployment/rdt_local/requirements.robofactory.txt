@@ -1,0 +1,15 @@
+# Python 3.9. Torch/torchvision are installed from the PyTorch cu128 index.
+torch==2.7.1
+torchvision==0.22.1
+mani-skill==3.0.0b12
+sapien==3.0.0b1
+setuptools==80.9.0
+zarr==2.18.2
+numcodecs<0.16
+hydra-core==1.3.2
+dill==0.3.9
+einops==0.8.1
+diffusers==0.32.2
+huggingface-hub==0.35.3
+pandas==2.2.3
+numba==0.60.0

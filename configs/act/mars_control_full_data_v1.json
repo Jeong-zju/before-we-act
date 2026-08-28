@@ -1,0 +1,218 @@
+{
+  "schema": "before-we-act.act.mars-control.full-data/1",
+  "status": "frozen_reported_run",
+  "policy": "ACT",
+  "benchmark": "MARS-Control",
+  "policy_contract": {
+    "execution": "decentralized",
+    "weight_sharing": "one checkpoint shared by every arm",
+    "independent_arm_batching": true,
+    "inputs_per_arm": [
+      "own head-camera RGB at the current control step",
+      "own 9-dimensional qpos at the current control step"
+    ],
+    "output_per_arm": "own 8-dimensional pd_joint_pos action chunk",
+    "forbidden_inputs": [
+      "other-arm RGB",
+      "other-arm qpos",
+      "global RGB",
+      "joint action",
+      "arm identity",
+      "task identity",
+      "language"
+    ]
+  },
+  "data": {
+    "tasks": {
+      "place_cube_in_cup": {
+        "arms": 2,
+        "episodes": 150,
+        "joint_steps": 51302,
+        "local_streams": 300,
+        "indexed_local_timesteps": 102604
+      },
+      "strike_cube_hard": {
+        "arms": 2,
+        "episodes": 150,
+        "joint_steps": 73569,
+        "local_streams": 300,
+        "indexed_local_timesteps": 147138
+      },
+      "three_robots_place_shoes": {
+        "arms": 3,
+        "episodes": 150,
+        "joint_steps": 78452,
+        "local_streams": 450,
+        "indexed_local_timesteps": 235356
+      },
+      "four_robots_stack_cube": {
+        "arms": 4,
+        "episodes": 150,
+        "joint_steps": 137555,
+        "local_streams": 600,
+        "indexed_local_timesteps": 550220
+      }
+    },
+    "total_episodes": 600,
+    "successful_demonstrations": 600,
+    "total_local_streams": 1650,
+    "total_indexed_local_timesteps": 1035318,
+    "shards_per_task": 10,
+    "split": "none; all demonstrations are used for training",
+    "trajectory_length_rule": "minimum action length across arms in an episode",
+    "sample_index": "every valid local arm/time pair",
+    "image_field": "obs/sensor_data/head_camera_agent{i}/rgb",
+    "qpos_field": "obs/agent/panda-{i}/qpos",
+    "action_field": "actions/panda-{i}",
+    "source_image_shape_hwc": [240, 320, 3],
+    "source_image_dtype": "uint8",
+    "source_action_dtype": "float64; converted to float32 in the loader",
+    "qpos_dimension": 9,
+    "action_dimension": 8,
+    "chunk_horizon": 100,
+    "short_chunk_padding": "repeat final action",
+    "padded_loss_mask": true,
+    "normalization": {
+      "qpos": "global per-dimension mean and standard deviation over all local training samples",
+      "action": "global per-dimension mean and standard deviation over all local training samples",
+      "standard_deviation_floor": 0.0001
+    },
+    "augmentation": "none"
+  },
+  "sampling_and_loader": {
+    "sampler": "torch.utils.data.WeightedRandomSampler",
+    "task_weight": "inverse number of indexed local timesteps in that task",
+    "replacement": true,
+    "samples_per_sampler_pass": 1035318,
+    "global_batch_size": 40,
+    "gradient_accumulation_steps": 1,
+    "drop_last": true,
+    "workers": 16,
+    "pin_memory": true,
+    "persistent_workers": true,
+    "multiprocessing_context": "spawn",
+    "prefetch_factor": 2,
+    "shuffle": false,
+    "timeout_seconds": 0,
+    "worker_init_fn": null,
+    "sampler_generator": null,
+    "in_order": true
+  },
+  "image_preprocessing": {
+    "uint8_conversion": "divide by 255 to [0,1]",
+    "model_resize_hw": [256, 256],
+    "resize_mode": "bilinear",
+    "align_corners": false,
+    "imagenet_normalization": false
+  },
+  "model": {
+    "class": "stereo_core.train_act.ACT",
+    "family": "ACT-style conditional VAE",
+    "trainable_parameters": 35309832,
+    "state_elements_including_buffers": 35319452,
+    "state_dimension": 9,
+    "action_dimension": 8,
+    "action_chunk_horizon": 100,
+    "hidden_dimension": 384,
+    "latent_dimension": 32,
+    "posterior_encoder_layers": 4,
+    "action_decoder_layers": 7,
+    "attention_heads": 8,
+    "feedforward_dimension": 1536,
+    "dropout": 0.1,
+    "activation": "GELU",
+    "pre_norm": true,
+    "batch_first": true,
+    "vision_backbone": "resnet18",
+    "vision_backbone_display_name": "ResNet-18",
+    "vision_pretrained_weights": "none",
+    "vision_output_channels": 512,
+    "vision_projection_dimension": 384,
+    "learned_action_position_embeddings": true,
+    "learned_decoder_queries": true,
+    "posterior_pooling": "mean over the 100 encoded action tokens",
+    "inference_latent": "zero vector"
+  },
+  "objective": {
+    "total": "masked action MSE + beta * KL",
+    "action_loss": "mean over 8 action dimensions, masked sum over chunk time, divided by valid-time mask sum",
+    "kl": "sum over 32 latent dimensions, mean over batch",
+    "kl_weight_beta": 0.001
+  },
+  "optimization": {
+    "updates": 120000,
+    "smoke_updates": 100,
+    "optimizer": "AdamW",
+    "learning_rate": 0.0002,
+    "betas": [0.9, 0.999],
+    "epsilon": 1e-08,
+    "weight_decay": 0.0001,
+    "amsgrad": false,
+    "maximum_gradient_norm": 1.0,
+    "zero_grad_set_to_none": true,
+    "scheduler": "CosineAnnealingLR",
+    "scheduler_t_max_updates": 120000,
+    "scheduler_minimum_learning_rate": 0.0,
+    "warmup_updates": 0,
+    "autocast": "CUDA bfloat16",
+    "trainable_vision_backbone": true
+  },
+  "runtime": {
+    "seed_python": 20260827,
+    "seed_numpy": 20260827,
+    "seed_torch": 20260827,
+    "deterministic_algorithms": false,
+    "torch_cpu_threads": 8,
+    "device": "cuda:0",
+    "visible_gpu_count": 1,
+    "training_gpu": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+    "training_gpu_memory_mib": 97887,
+    "python": "3.12.13",
+    "pytorch": "2.11.0+cu128",
+    "torchvision": "0.26.0+cu128",
+    "numpy": "1.26.4",
+    "h5py": "3.16.0"
+  },
+  "logging_and_checkpointing": {
+    "progress_interval_updates": 20,
+    "checkpoint_interval_updates": 5000,
+    "save_optimizer": true,
+    "save_scheduler": true,
+    "save_normalization_statistics": true,
+    "resume_checkpoint": "last.pt",
+    "reported_checkpoint": "final.pt"
+  },
+  "closed_loop": {
+    "episodes_per_task": 20,
+    "seed_ranges": {
+      "place_cube_in_cup": [20260820, 20260839],
+      "strike_cube_hard": [20261820, 20261839],
+      "three_robots_place_shoes": [20262820, 20262839],
+      "four_robots_stack_cube": [20263820, 20263839]
+    },
+    "maximum_steps": {
+      "place_cube_in_cup": 500,
+      "strike_cube_hard": 500,
+      "three_robots_place_shoes": 1200,
+      "four_robots_stack_cube": 800
+    },
+    "observation_mode": "rgb",
+    "control_mode": "pd_joint_pos",
+    "render_mode": "sensors",
+    "reward_mode": "dense",
+    "simulation_backend": "cpu",
+    "sensor_shader_pack": "default",
+    "temporal_chunk_ensemble_decay": 0.01,
+    "action_decoding": "multiply by training action std and add training action mean exactly once",
+    "action_bounds": "clip to each arm environment action-space bounds",
+    "evaluator_revision": "rgb-uint8-to-unit-float-v2"
+  },
+  "reported_artifacts": {
+    "checkpoint_sha256": "5bc5d61a5bdd9a84abd2e076b1316a06b626ec7de0053fab2d8533a71ca2db2e",
+    "reported_training_script_sha256": "85a74580fc5c6a7404f2625c57e8679b5dfbfdb7dd7cefaefa830678747c98a1",
+    "act_implementation_sha256": "73112e1dfdba1ab19db33e6b79ab601a309da7b1882b88d960041019549211ec",
+    "successes": 28,
+    "episodes": 80,
+    "macro_success_rate_percent": 35.0
+  }
+}

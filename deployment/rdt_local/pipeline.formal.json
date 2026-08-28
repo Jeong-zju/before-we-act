@@ -1,0 +1,118 @@
+{
+  "schema": "bwa.rdt.pipeline.v1",
+  "stages": [
+    {
+      "name": "download_six_datasets",
+      "argv": ["/workspace/repos/before-we-act/deployment/vla_baselines/download_six_parallel.sh"],
+      "cwd": "/workspace/repos/before-we-act",
+      "env": {"HF_HOME": "/workspace/.hf_home", "HF_XET_HIGH_PERFORMANCE": "1", "BWA_HF_WORKERS": "8"},
+      "gpus": [],
+      "artifacts": [
+        {"path": "/workspace/datasets/robofactory_multitask/lift_barrier/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}},
+        {"path": "/workspace/datasets/robofactory_multitask/camera_alignment/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}},
+        {"path": "/workspace/datasets/robofactory_multitask/long_pipeline_delivery/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}},
+        {"path": "/workspace/datasets/robofactory_multitask/take_photo/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}},
+        {"path": "/workspace/datasets/robofactory_multitask/pass_shoe/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}},
+        {"path": "/workspace/datasets/robofactory_multitask/place_food/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}}
+      ]
+    },
+    {
+      "name": "configure_official_rdt_adapter",
+      "argv": ["/workspace/repos/before-we-act/deployment/rdt_local/run_configure_rdt.sh"],
+      "cwd": "/workspace/repos/rdt-1b", "gpus": [],
+      "artifacts": [
+        {"path": "/workspace/repos/rdt-1b/configs/finetune_datasets.json", "kind": "json", "equals": {"0": "robofactory"}},
+        {"path": "/workspace/repos/rdt-1b/configs/dataset_control_freq.json", "kind": "json", "equals": {"robofactory": 20}}
+      ]
+    },
+    {
+      "name": "audit_decentralized_training_contract",
+      "argv": ["/workspace/venvs/robofactory/bin/python", "/workspace/repos/before-we-act/deployment/vla_baselines/audit_training_contract.py"],
+      "cwd": "/workspace/repos/before-we-act", "gpus": [],
+      "artifacts": [{"path": "/workspace/bwa_vla_runs/audit/training_contract.json", "kind": "json", "equals": {"status": "complete", "episodes": 900, "training_split": "all_episodes_ignore_manifest_split"}}]
+    },
+    {
+      "name": "audit_rdt_full_parameter_contract",
+      "argv": ["/workspace/venvs/rdt/bin/python", "/workspace/repos/before-we-act/deployment/rdt_local/audit_rdt_contract.py"],
+      "cwd": "/workspace/repos/rdt-1b", "gpus": [],
+      "artifacts": [{"path": "/workspace/bwa_rdt_runs/audit/rdt_contract.json", "kind": "json", "equals": {"status": "complete", "episodes": 900, "optimizer_scope": "all_rdt_parameters"}}]
+    },
+    {
+      "name": "compute_rdt_dataset_statistics",
+      "argv": ["/workspace/repos/before-we-act/deployment/rdt_local/run_compute_stats.sh"],
+      "cwd": "/workspace/repos/rdt-1b", "gpus": [],
+      "artifacts": [{"path": "/workspace/repos/rdt-1b/configs/dataset_stat.json", "kind": "json", "equals": {"robofactory.dataset_name": "robofactory"}}]
+    },
+    {
+      "name": "prepare_six_task_t5_embeddings",
+      "argv": ["/workspace/repos/before-we-act/deployment/rdt_local/run_prepare_lang.sh"],
+      "cwd": "/workspace/repos/rdt-1b", "gpus": [0],
+      "artifacts": [
+        {"path": "/workspace/datasets/robofactory_multitask/lift_barrier/lang_embed.pt", "kind": "file"},
+        {"path": "/workspace/datasets/robofactory_multitask/camera_alignment/lang_embed.pt", "kind": "file"},
+        {"path": "/workspace/datasets/robofactory_multitask/long_pipeline_delivery/lang_embed.pt", "kind": "file"},
+        {"path": "/workspace/datasets/robofactory_multitask/take_photo/lang_embed.pt", "kind": "file"},
+        {"path": "/workspace/datasets/robofactory_multitask/pass_shoe/lang_embed.pt", "kind": "file"},
+        {"path": "/workspace/datasets/robofactory_multitask/place_food/lang_embed.pt", "kind": "file"}
+      ]
+    },
+    {
+      "name": "cache_rdt_and_siglip_assets",
+      "argv": ["/workspace/venvs/rdt/bin/python", "/workspace/repos/before-we-act/deployment/rdt_local/cache_model_assets.py"],
+      "cwd": "/workspace/repos/rdt-1b",
+      "env": {"HF_HOME": "/workspace/.hf_home"}, "gpus": [],
+      "artifacts": [{"path": "/workspace/bwa_rdt_runs/audit/model_assets.json", "kind": "json", "equals": {"status": "complete"}}]
+    },
+    {
+      "name": "rdt_four_gpu_training_smoke",
+      "argv": ["/workspace/repos/before-we-act/deployment/rdt_local/run_train.sh"],
+      "cwd": "/workspace/repos/rdt-1b",
+      "env": {"RDT_RUN_NAME": "smoke", "RDT_MAX_TRAIN_STEPS": "2", "RDT_MICRO_BATCH": "4", "RDT_NUM_WORKERS": "4", "RDT_CHECKPOINT_PERIOD": "1"},
+      "gpus": [0, 1, 2, 3],
+      "artifacts": [
+        {"path": "/workspace/bwa_rdt_runs/smoke/rdt_1b/status.json", "kind": "json", "equals": {"status": "complete", "target_steps": 2, "optimizer_scope": "all_rdt_parameters"}},
+        {"path": "/workspace/bwa_rdt_runs/smoke/rdt_1b/checkpoints/pytorch_model.bin", "kind": "file"}
+      ]
+    },
+    {
+      "name": "rdt_checkpoint_reload_smoke",
+      "argv": ["/workspace/repos/before-we-act/deployment/rdt_local/run_checkpoint_audit.sh"],
+      "cwd": "/workspace/repos/rdt-1b",
+      "env": {"RDT_AUDIT_CHECKPOINT": "/workspace/bwa_rdt_runs/smoke/rdt_1b/checkpoints", "RDT_AUDIT_OUTPUT": "/workspace/bwa_rdt_runs/smoke/checkpoint_audit.json"},
+      "gpus": [0],
+      "artifacts": [{"path": "/workspace/bwa_rdt_runs/smoke/checkpoint_audit.json", "kind": "json", "equals": {"status": "complete"}}]
+    },
+    {
+      "name": "rdt_six_task_closed_loop_smoke",
+      "argv": ["/workspace/repos/before-we-act/deployment/rdt_local/run_closed_loop_smoke.sh", "/workspace/bwa_rdt_runs/smoke/rdt_1b/checkpoints"],
+      "cwd": "/workspace/repos/before-we-act", "gpus": [0, 1, 2, 3],
+      "artifacts": [{"path": "/workspace/bwa_rdt_runs/smoke/rdt/closed_loop/summary.json", "kind": "json", "equals": {"status": "complete", "total_episodes": 6, "policy_contract": "shared_weights_decentralized_local_rgb_qpos_to_local_action8"}}]
+    },
+    {
+      "name": "train_rdt_1b_full",
+      "argv": ["/workspace/repos/before-we-act/deployment/rdt_local/run_train.sh"],
+      "cwd": "/workspace/repos/rdt-1b",
+      "env": {"RDT_RUN_NAME": "formal", "RDT_MAX_TRAIN_STEPS": "300000", "RDT_MICRO_BATCH": "4", "RDT_NUM_WORKERS": "4", "RDT_CHECKPOINT_PERIOD": "2500"},
+      "gpus": [0, 1, 2, 3],
+      "artifacts": [
+        {"path": "/workspace/bwa_rdt_runs/formal/rdt_1b/status.json", "kind": "json", "equals": {"status": "complete", "target_steps": 300000, "optimizer_scope": "all_rdt_parameters", "protocol": "decentralized_local_rgb_qpos_action"}},
+        {"path": "/workspace/bwa_rdt_runs/formal/rdt_1b/checkpoints/pytorch_model.bin", "kind": "file"}
+      ]
+    },
+    {
+      "name": "rdt_formal_checkpoint_reload",
+      "argv": ["/workspace/repos/before-we-act/deployment/rdt_local/run_checkpoint_audit.sh"],
+      "cwd": "/workspace/repos/rdt-1b",
+      "env": {"RDT_AUDIT_CHECKPOINT": "/workspace/bwa_rdt_runs/formal/rdt_1b/checkpoints", "RDT_AUDIT_OUTPUT": "/workspace/bwa_rdt_runs/formal/checkpoint_audit.json"},
+      "gpus": [0],
+      "artifacts": [{"path": "/workspace/bwa_rdt_runs/formal/checkpoint_audit.json", "kind": "json", "equals": {"status": "complete"}}]
+    },
+    {
+      "name": "validation20_rdt_six_tasks",
+      "argv": ["/workspace/repos/before-we-act/deployment/vla_baselines/run_validation20.sh", "rdt", "/workspace/bwa_rdt_runs/formal/rdt_1b/checkpoints"],
+      "cwd": "/workspace/repos/before-we-act",
+      "env": {"BWA_RUN_ROOT": "/workspace/bwa_rdt_runs", "BWA_GPU_COUNT": "4", "BWA_VALIDATION_PARALLEL": "1"}, "gpus": [0, 1, 2, 3],
+      "artifacts": [{"path": "/workspace/bwa_rdt_runs/formal/rdt/validation20/summary.json", "kind": "json", "equals": {"status": "complete", "episodes_per_task": 20, "total_episodes": 120, "policy_contract": "shared_weights_decentralized_local_rgb_qpos_to_local_action8"}}]
+    }
+  ]
+}

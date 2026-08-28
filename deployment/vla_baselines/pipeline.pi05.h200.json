@@ -1,0 +1,102 @@
+{
+  "schema": "bwa.pi05.h200.pipeline.v1",
+  "stages": [
+    {
+      "name": "preflight_pi05_h200",
+      "argv": ["/venv/main/bin/python", "/workspace/repos/before-we-act/deployment/vla_baselines/preflight_pi05_h200.py"],
+      "cwd": "/workspace/repos/before-we-act",
+      "gpus": [],
+      "artifacts": [
+        {"path": "/workspace/bwa_pi05_runs/audit/preflight.json", "kind": "json", "equals": {"status": "complete", "openpi_commit": "15a9616a00943ada6c20a0f158e3adb39df2ccac", "robofactory_commit": "5868242322414a91454e22f1dd9641f613ba1bcf"}}
+      ]
+    },
+    {
+      "name": "download_six_datasets",
+      "argv": ["/workspace/repos/before-we-act/deployment/vla_baselines/download_six_parallel.sh"],
+      "cwd": "/workspace/repos/before-we-act",
+      "env": {"HF_HOME": "/workspace/.hf_home", "HF_HUB_ENABLE_HF_TRANSFER": "0", "HF_XET_HIGH_PERFORMANCE": "1", "BWA_HF_WORKERS": "8"},
+      "gpus": [],
+      "artifacts": [
+        {"path": "/workspace/datasets/robofactory_multitask/lift_barrier/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}},
+        {"path": "/workspace/datasets/robofactory_multitask/camera_alignment/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}},
+        {"path": "/workspace/datasets/robofactory_multitask/long_pipeline_delivery/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}},
+        {"path": "/workspace/datasets/robofactory_multitask/take_photo/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}},
+        {"path": "/workspace/datasets/robofactory_multitask/pass_shoe/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}},
+        {"path": "/workspace/datasets/robofactory_multitask/place_food/download_receipt.json", "kind": "json", "equals": {"status": "complete", "episodes_total": 150}}
+      ]
+    },
+    {
+      "name": "audit_decentralized_training_contract",
+      "argv": ["/workspace/venvs/robofactory/bin/python", "/workspace/repos/before-we-act/deployment/vla_baselines/audit_training_contract.py"],
+      "cwd": "/workspace/repos/before-we-act",
+      "env": {"BWA_DATASET_ROOT": "/workspace/datasets/robofactory_multitask"},
+      "gpus": [],
+      "artifacts": [
+        {"path": "/workspace/bwa_vla_runs/audit/training_contract.json", "kind": "json", "equals": {"status": "complete", "episodes": 900, "training_split": "all_episodes_ignore_manifest_split"}}
+      ]
+    },
+    {
+      "name": "compute_pi05_normalization_all_episodes",
+      "argv": ["/workspace/venvs/robofactory/bin/python", "/workspace/repos/before-we-act/deployment/vla_baselines/compute_openpi_norm_stats.py"],
+      "cwd": "/workspace/repos/before-we-act",
+      "gpus": [],
+      "artifacts": [
+        {"path": "/workspace/bwa_vla_runs/openpi/assets/pi05_robofactory_lora/robofactory/norm_stats.json", "kind": "json"}
+      ]
+    },
+    {
+      "name": "pi05_train_smoke",
+      "argv": ["/workspace/repos/before-we-act/deployment/vla_baselines/run_pi05_train_smoke.sh"],
+      "cwd": "/workspace/repos/openpi",
+      "env": {"BWA_RUN_ROOT": "/workspace/bwa_pi05_runs", "OPENPI_SMOKE_BATCH_SIZE": "32"},
+      "gpus": [0],
+      "artifacts": [
+        {"path": "/workspace/bwa_pi05_runs/smoke/pi05/status.json", "kind": "json", "equals": {"status": "complete", "protocol": "decentralized_local_rgb_qpos_action"}},
+        {"path": "/workspace/bwa_pi05_runs/smoke/pi05/final", "kind": "dir"},
+        {"path": "/workspace/bwa_pi05_runs/smoke/pi05/final/params", "kind": "dir"}
+      ]
+    },
+    {
+      "name": "pi05_six_task_closed_loop_smoke",
+      "argv": ["/workspace/repos/before-we-act/deployment/vla_baselines/run_pi05_closed_loop_smoke.sh", "/workspace/bwa_pi05_runs/smoke/pi05/final"],
+      "cwd": "/workspace/repos/before-we-act",
+      "env": {"BWA_RUN_ROOT": "/workspace/bwa_pi05_runs", "BWA_GPU_COUNT": "1", "BWA_SIM_PYTHON": "/workspace/venvs/robofactory-modern311/bin/python", "BWA_RENDER_ICD": "cpu"},
+      "gpus": [0],
+      "artifacts": [
+        {"path": "/workspace/bwa_pi05_runs/smoke/pi05/closed_loop/summary.json", "kind": "json", "equals": {"status": "complete", "total_episodes": 6, "policy_contract": "shared_weights_decentralized_local_rgb_qpos_to_local_action8"}}
+      ]
+    },
+    {
+      "name": "pi05_lora_formal_all_episodes_120k",
+      "argv": ["/workspace/repos/before-we-act/deployment/vla_baselines/run_pi05.sh"],
+      "cwd": "/workspace/repos/openpi",
+      "env": {"BWA_RUN_ROOT": "/workspace/bwa_pi05_runs", "OPENPI_RUN_STAGE": "formal", "OPENPI_EXP_NAME": "h200_all900", "OPENPI_MAX_STEPS": "120000", "OPENPI_BATCH_SIZE": "32", "OPENPI_NUM_WORKERS": "0", "OPENPI_SAVE_INTERVAL": "1000", "OPENPI_KEEP_PERIOD": "10000", "OPENPI_FSDP_DEVICES": "1"},
+      "gpus": [0],
+      "artifacts": [
+        {"path": "/workspace/bwa_pi05_runs/formal/pi05/status.json", "kind": "json", "equals": {"status": "complete", "protocol": "decentralized_local_rgb_qpos_action"}},
+        {"path": "/workspace/bwa_pi05_runs/formal/pi05/final", "kind": "dir"},
+        {"path": "/workspace/bwa_pi05_runs/formal/pi05/final/params", "kind": "dir"}
+      ]
+    },
+    {
+      "name": "pi05_validation20_six_tasks",
+      "argv": ["/workspace/repos/before-we-act/deployment/vla_baselines/run_validation20.sh", "pi05", "/workspace/bwa_pi05_runs/formal/pi05/final"],
+      "cwd": "/workspace/repos/before-we-act",
+      "env": {"BWA_RUN_ROOT": "/workspace/bwa_pi05_runs", "BWA_GPU_COUNT": "1", "BWA_SIM_PYTHON": "/workspace/venvs/robofactory-modern311/bin/python", "BWA_RENDER_ICD": "cpu"},
+      "gpus": [0],
+      "artifacts": [
+        {"path": "/workspace/bwa_pi05_runs/formal/pi05/validation20/summary.json", "kind": "json", "equals": {"status": "complete", "total_episodes": 120, "policy_contract": "shared_weights_decentralized_local_rgb_qpos_to_local_action8"}}
+      ]
+    },
+    {
+      "name": "pi05_final_report",
+      "argv": ["/venv/main/bin/python", "/workspace/repos/before-we-act/deployment/vla_baselines/final_report_pi05.py"],
+      "cwd": "/workspace/repos/before-we-act",
+      "gpus": [],
+      "artifacts": [
+        {"path": "/workspace/bwa_pi05_runs/final_report.json", "kind": "json", "equals": {"status": "complete", "policy": "pi0.5_lora", "training.episodes": 900, "validation20.total_episodes": 120}},
+        {"path": "/workspace/bwa_pi05_runs/final_report.sha256", "kind": "file"}
+      ]
+    }
+  ]
+}

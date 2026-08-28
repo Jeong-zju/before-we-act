@@ -30,6 +30,10 @@ WAVES = tuple(((task, gpu),) for task, gpu in (
     ("pass_shoe", 0),
     ("place_food", 1),
 ))
+PARALLEL_WAVES = (
+    (("lift_barrier", 0), ("camera_alignment", 1), ("long_pipeline_delivery", 2), ("take_photo", 3)),
+    (("pass_shoe", 0), ("place_food", 1)),
+)
 PYTHONS = {
     "rdt": "/workspace/venvs/rdt/bin/python",
     "openvla": "/workspace/venvs/openvla/bin/python",
@@ -76,6 +80,11 @@ def stop(child: tuple[subprocess.Popen, int], timeout: int = 45) -> None:
             pass
     deadline = time.monotonic() + timeout
     while same_process(child) and time.monotonic() < deadline:
+        # An exited-but-unreaped child remains in /proc with the same start
+        # ticks.  Poll/reap it so shutdown does not spend the full timeout on
+        # every failed worker.
+        if process.poll() is not None:
+            break
         time.sleep(0.2)
     if same_process(child):
         try:
@@ -129,9 +138,10 @@ def render_preflight(env: dict[str, str]) -> None:
     """Fail before loading a policy when the SAPIEN Vulkan device is unusable."""
     probe_env = env.copy()
     probe_env["CUDA_VISIBLE_DEVICES"] = "0"
+    render_device = "cpu" if env.get("BWA_RENDER_ICD") == "cpu" else "cuda:0"
     code = (
         "import sapien\n"
-        "device = sapien.Device('cuda:0')\n"
+        f"device = sapien.Device({render_device!r})\n"
         "render_system = sapien.render.RenderSystem(device)\n"
         "print('bwa-sapien-render-preflight-ok', flush=True)\n"
     )
@@ -163,6 +173,13 @@ def run_wave(
     base_env = os.environ.copy()
     driver_lib = "/opt/nvidia-drivers/lib64"
     inherited_ld_path = base_env.get("LD_LIBRARY_PATH", "")
+    use_cpu_vulkan = base_env.get("BWA_RENDER_ICD") == "cpu"
+    nvidia_icd = Path("/etc/vulkan/icd.d/nvidia_icd.json")
+    lavapipe_icd = Path("/usr/share/vulkan/icd.d/lvp_icd.json")
+    selected_icd = lavapipe_icd if use_cpu_vulkan else nvidia_icd
+    if not selected_icd.is_file():
+        raise RuntimeError(f"requested Vulkan ICD is missing: {selected_icd}")
+    Path("/tmp/bwa-xdg-runtime").mkdir(mode=0o700, exist_ok=True)
     base_env.update(
         HF_HOME="/workspace/.hf_home",
         OPENVLA_ROBOFACTORY_ROOT="/workspace/datasets/robofactory_multitask",
@@ -172,26 +189,28 @@ def run_wave(
         TOKENIZERS_PARALLELISM="false",
         WANDB_MODE="disabled",
         TF_CPP_MIN_LOG_LEVEL="2",
+        # JAX otherwise preallocates ~75% of HBM when the policy worker starts.
+        # On a one-GPU host SAPIEN's NVIDIA Vulkan renderer shares that H200;
+        # preallocation starves Vulkan and surfaces as vk::DeviceLost before
+        # the first observation.  Inference uses demand allocation instead.
+        XLA_PYTHON_CLIENT_PREALLOCATE="false",
+        XLA_PYTHON_CLIENT_ALLOCATOR="platform",
         # Prefer the instance's hardware Vulkan ICD when available.  Some
         # headless GPU images expose NVIDIA Vulkan but do not ship Mesa's
         # lavapipe JSON; other images have only lavapipe.  Select an ICD that
         # exists instead of forcing a nonexistent path (which makes SAPIEN
         # fail before an environment can be created).
-        VK_DRIVER_FILES=(
-            "/etc/vulkan/icd.d/nvidia_icd.json"
-            if Path("/etc/vulkan/icd.d/nvidia_icd.json").is_file()
-            else "/usr/share/vulkan/icd.d/lvp_icd.json"
-        ),
-        VK_ICD_FILENAMES=(
-            "/etc/vulkan/icd.d/nvidia_icd.json"
-            if Path("/etc/vulkan/icd.d/nvidia_icd.json").is_file()
-            else "/usr/share/vulkan/icd.d/lvp_icd.json"
-        ),
-        XDG_RUNTIME_DIR="/tmp",
+        VK_DRIVER_FILES=str(selected_icd),
+        VK_ICD_FILENAMES=str(selected_icd),
+        XDG_RUNTIME_DIR="/tmp/bwa-xdg-runtime",
         # Vast mounts the matching NVIDIA userspace driver here.  It must
         # precede the image's stale GL/Vulkan libraries or the ICD exports no
         # usable vkCreateInstance even though CUDA continues to work.
-        LD_LIBRARY_PATH=(driver_lib + (":" + inherited_ld_path if inherited_ld_path else "")),
+        LD_LIBRARY_PATH=(
+            driver_lib + (":" + inherited_ld_path if inherited_ld_path else "")
+            if Path(driver_lib).is_dir()
+            else inherited_ld_path
+        ),
     )
     render_preflight(base_env)
     active = []
@@ -284,18 +303,42 @@ def main() -> None:
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
     try:
-        waves = tuple(((task, 0),) for task in TASKS) if args.policy == "gaudp" else WAVES
-        for wave in waves:
-            run_wave(
-                args.policy,
-                args.checkpoint,
-                root,
-                wave,
-                episodes=args.episodes,
-                seed=args.seed,
-                formal=not args.smoke,
-                max_steps_override=args.max_steps_override,
-            )
+        visible_gpu_count = len(os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(","))
+        single_gpu = visible_gpu_count == 1 or int(os.environ.get("BWA_GPU_COUNT", "1")) == 1
+        waves = tuple(((task, 0),) for task in TASKS) if args.policy == "gaudp" or single_gpu else (
+            PARALLEL_WAVES if os.environ.get("BWA_VALIDATION_PARALLEL") == "1" else WAVES
+        )
+        try:
+            for wave in waves:
+                run_wave(
+                    args.policy,
+                    args.checkpoint,
+                    root,
+                    wave,
+                    episodes=args.episodes,
+                    seed=args.seed,
+                    formal=not args.smoke,
+                    max_steps_override=args.max_steps_override,
+                )
+        except Exception:
+            if waves is not PARALLEL_WAVES:
+                raise
+            # Some Vulkan hosts cannot sustain concurrent renderer instances.
+            # Preserve completed task receipts and automatically retry only the
+            # unfinished tasks with isolated renderer/policy workers.
+            stop_all()
+            children.clear()
+            for wave in WAVES:
+                run_wave(
+                    args.policy,
+                    args.checkpoint,
+                    root,
+                    wave,
+                    episodes=args.episodes,
+                    seed=args.seed,
+                    formal=not args.smoke,
+                    max_steps_override=args.max_steps_override,
+                )
         rows = {task: json.loads((root / f"{task}.json").read_text()) for task in TASKS}
         if any(row.get("status") != "complete" or row.get("episodes") != args.episodes for row in rows.values()):
             raise RuntimeError("closed-loop task artifact incomplete")

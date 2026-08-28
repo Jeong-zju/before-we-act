@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PYTHON=/workspace/venvs/robofactory/bin/python
+PYTHON=${BWA_DOWNLOAD_PYTHON:-/venv/main/bin/python}
 SCRIPT=/workspace/repos/before-we-act/deployment/vla_baselines/download_datasets.py
 LOG_ROOT=/workspace/bwa_vla_runs/download_logs
 mkdir -p "$LOG_ROOT"

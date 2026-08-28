@@ -88,6 +88,15 @@ smoke 会真实执行 CUDA forward/backward、保存可重载 checkpoint 和状�
 权重和图像/语言预处理前标记为 `adapter-required`。远程状态面板见
 [`web_service/README.md`](web_service/README.md)。
 
+MARS-Control 的 ACT 诊断使用单独的、可审计的全数据配置
+[`configs/act/mars_control_full_data_v1.json`](configs/act/mars_control_full_data_v1.json)。
+该文件冻结 600 条演示、1,650 条本地轨迹、局部 RGB/qpos 输入契约、100 步
+action chunk、ACT-CVAE 结构、AdamW/cosine 优化器、120,000 次更新、随机
+种子、GPU/精度、checkpoint 保存规则和 Validation20 运行参数；训练入口对
+这些值拒绝未记录的命令行覆盖。论文 Appendix 的
+`tab:act-mars-data-opt` 和 `tab:act-mars-model-runtime` 与
+该机器可读配置逐项对应。
+
 远程服务器可使用 [`scripts/wam_automation.sh`](scripts/wam_automation.sh)
 把代码/RoboFactory 下载、双 uv 环境、Hugging Face 数据、DINOv3、训练和
 真实闭环验证按顺序组合执行；`full` 可从零运行完整链路，`full-smoke`

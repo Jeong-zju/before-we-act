@@ -163,6 +163,8 @@ class PredictiveTeamBeliefPolicy(nn.Module):
         role_rank: int = 32,
         history_layers: int = 2,
         dino_model: str,
+        image_height: int = 480,
+        image_width: int = 640,
         include_teacher: bool = True,
         residual_safety: Mapping[str, object] | ResidualSafetyConfig | None = None,
     ) -> None:
@@ -188,6 +190,8 @@ class PredictiveTeamBeliefPolicy(nn.Module):
             role_rank=role_rank,
             history_layers=history_layers,
             dino_model=dino_model,
+            image_height=image_height,
+            image_width=image_width,
         )
         self.team_belief_config = team_belief_config
         self.belief_core = PredictiveTeamBeliefCore(

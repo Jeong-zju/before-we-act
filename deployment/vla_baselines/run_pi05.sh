@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT=${BWA_RUN_ROOT:-/workspace/bwa_vla_runs}/formal/pi05
+STAGE=${OPENPI_RUN_STAGE:-formal}
+ROOT=${BWA_RUN_ROOT:-/workspace/bwa_vla_runs}/$STAGE/pi05
 REPO=${OPENPI_REPO:-/workspace/repos/openpi}
 PYTHON=${OPENPI_PYTHON:-$REPO/.venv/bin/python}
 DATA=${OPENPI_ROBOFACTORY_ROOT:-/workspace/datasets/robofactory_multitask}
@@ -23,11 +24,12 @@ cd "$REPO"
 printf '%s\n' '{"baseline":"pi05","status":"training","protocol":"decentralized_local_rgb_qpos_action"}' > "$ROOT/status.json"
 RESUME_ARGS=()
 LATEST=$(find "$CHECKPOINT_DIR" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | awk '/^[0-9]+$/' | sort -n | tail -1 || true)
-if [[ -n "$LATEST" && -d "$CHECKPOINT_DIR/$LATEST/params" && "$LATEST" -lt "$TARGET_STEPS" ]]; then
+FINAL_STEP=$((TARGET_STEPS - 1))
+if [[ -d "$CHECKPOINT_DIR" && ( -z "$LATEST" || "$LATEST" -lt "$FINAL_STEP" ) ]]; then
   RESUME_ARGS=(--resume)
 fi
 
-if [[ -z "$LATEST" || "$LATEST" -lt "$TARGET_STEPS" ]]; then
+if [[ -z "$LATEST" || "$LATEST" -lt "$FINAL_STEP" ]]; then
   "$PYTHON" scripts/train.py pi05_robofactory_lora \
     --checkpoint-base-dir="$ROOT/checkpoints" \
     --exp-name="$EXP" \
@@ -36,16 +38,17 @@ if [[ -z "$LATEST" || "$LATEST" -lt "$TARGET_STEPS" ]]; then
     --num-train-steps="$TARGET_STEPS" \
     --save-interval=${OPENPI_SAVE_INTERVAL:-1000} \
     --keep-period=${OPENPI_KEEP_PERIOD:-10000} \
-    --fsdp-devices=4 \
+    --fsdp-devices=${OPENPI_FSDP_DEVICES:-1} \
     --no-wandb-enabled \
     "${RESUME_ARGS[@]}" \
     2>&1 | tee -a "$ROOT/train.log"
 else
-  printf 'Checkpoint already reached target: step=%s target=%s\n' "$LATEST" "$TARGET_STEPS" | tee -a "$ROOT/train.log"
+  printf 'Checkpoint already reached target: checkpoint_step=%s updates=%s\n' "$LATEST" "$TARGET_STEPS" | tee -a "$ROOT/train.log"
 fi
 
 LATEST=$(find "$CHECKPOINT_DIR" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | sort -n | tail -1 || true)
 [[ -n "$LATEST" && -d "$CHECKPOINT_DIR/$LATEST/params" ]] || { echo "π0.5 checkpoint missing" >&2; exit 1; }
+[[ "$LATEST" -ge "$FINAL_STEP" ]] || { echo "π0.5 checkpoint is incomplete: $LATEST < $FINAL_STEP" >&2; exit 1; }
 rm -f "$ROOT/final"
 ln -s "$CHECKPOINT_DIR/$LATEST" "$ROOT/final"
 printf '%s\n' '{"baseline":"pi05","status":"complete","protocol":"decentralized_local_rgb_qpos_action"}' > "$ROOT/status.json"
