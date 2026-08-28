@@ -12,7 +12,7 @@ def done(name):
  try:return json.loads((RUN/'receipts'/f'{name}.json').read_text()).get('status')=='complete'
  except:return False
 def run(name,cmd):
- global active; log=RUN/'logs'/f'{name}.log'; log.parent.mkdir(parents=True,exist_ok=True); env=os.environ.copy(); env.update({'PYTHONPATH':f'{ROOT}:{RF}:/workspace/repos/ManiFlow_Policy/ManiFlow','CUDA_VISIBLE_DEVICES':'0','HF_HOME':'/workspace/.hf_home','TOKENIZERS_PARALLELISM':'false','OMP_NUM_THREADS':'8'}); state(name,command=cmd,log=str(log))
+ global active; log=RUN/'logs'/f'{name}.log'; log.parent.mkdir(parents=True,exist_ok=True); env=os.environ.copy(); env.update({'PYTHONPATH':f'{ROOT}:{RF}:/workspace/repos/ManiFlow_Policy/ManiFlow','CUDA_VISIBLE_DEVICES':'0','HF_HOME':'/workspace/.hf_home','TOKENIZERS_PARALLELISM':'false','OMP_NUM_THREADS':'8','VK_DRIVER_FILES':'/usr/share/vulkan/icd.d/lvp_icd.json','VK_ICD_FILENAMES':'/usr/share/vulkan/icd.d/lvp_icd.json','XDG_RUNTIME_DIR':'/tmp/bwa-xdg-runtime','LIBGL_ALWAYS_SOFTWARE':'1'}); Path('/tmp/bwa-xdg-runtime').mkdir(mode=0o700,exist_ok=True); state(name,command=cmd,log=str(log))
  with log.open('ab',buffering=0) as f: active=subprocess.Popen(cmd,cwd=ROOT,env=env,stdout=f,stderr=subprocess.STDOUT,start_new_session=True); code=active.wait()
  active=None
  if code: raise RuntimeError(f'{name} exited {code}; see {log}')

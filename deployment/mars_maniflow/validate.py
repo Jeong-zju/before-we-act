@@ -12,7 +12,7 @@ from .modeling import load_policy
 def scalar(x): return bool(x.detach().cpu().reshape(-1)[0]) if torch.is_tensor(x) else bool(np.asarray(x).reshape(-1)[0])
 def env_for(root, spec):
     cfg=Path(root)/'configs/table'/spec.config; name=yaml.safe_load(cfg.read_text())['task_name']
-    return gym.make(name+'-rf',config=str(cfg),obs_mode='rgb',control_mode='pd_joint_pos',render_mode='sensors',reward_mode='dense',sim_backend='cpu',sensor_configs={'shader_pack':'default'},human_render_camera_configs={'shader_pack':'default'},viewer_camera_configs={'shader_pack':'default'})
+    return gym.make(name+'-rf',config=str(cfg),obs_mode='rgb',control_mode='pd_joint_pos',render_mode='sensors',reward_mode='dense',sim_backend='cpu',render_backend='cpu',sensor_configs={'shader_pack':'default'},human_render_camera_configs={'shader_pack':'default'},viewer_camera_configs={'shader_pack':'default'})
 def main():
     p=argparse.ArgumentParser(); p.add_argument('--checkpoint',required=True); p.add_argument('--robofactory-root',default=os.getenv('ROBOFACTORY_ROOT','/workspace/repos/RoboFactory')); p.add_argument('--output',required=True); p.add_argument('--episodes',type=int,default=20); p.add_argument('--device',default='cuda:0'); p.add_argument('--replan-interval',type=int,default=8); p.add_argument('--smoke',action='store_true'); a=p.parse_args()
     policy,payload=load_policy(a.checkpoint,a.device)
