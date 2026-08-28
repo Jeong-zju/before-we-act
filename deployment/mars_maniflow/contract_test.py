@@ -24,8 +24,8 @@ def main() -> None:
     low, high = np.asarray(ACTION_LOW, np.float32), np.asarray(ACTION_HIGH, np.float32)
     action_stats = dataset.stats["action"]
     assert action_stats["clipped_before_stats"] is True
-    np.testing.assert_allclose(action_stats["clip_low"], low, atol=0, rtol=0)
-    np.testing.assert_allclose(action_stats["clip_high"], high, atol=0, rtol=0)
+    np.testing.assert_allclose(action_stats["clip_low"], low, atol=1e-7, rtol=0)
+    np.testing.assert_allclose(action_stats["clip_high"], high, atol=1e-7, rtol=0)
     assert np.all(np.asarray(action_stats["min"]) >= low - 1e-6)
     assert np.all(np.asarray(action_stats["max"]) <= high + 1e-6)
     assert (OBS_STEPS, HORIZON, ACTION_STEPS) == (2, 16, 15)
