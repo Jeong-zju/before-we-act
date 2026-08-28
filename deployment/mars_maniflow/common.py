@@ -26,6 +26,11 @@ TASKS = (
 )
 TASK_BY_NAME = {task.name: task for task in TASKS}
 
+# RoboFactory's pd_joint_pos action space is shared by all MARS-Control Panda
+# arms. Actions are clipped to this contract before statistics and targets.
+ACTION_LOW = (-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973, -1.0)
+ACTION_HIGH = (2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973, 1.0)
+
 DATASET_REPOS = {
     "place_cube_in_cup": ("Jeong-zju/mars-control-place-cube-in-cup-rf", "3878150bec8f4830e1a57a01a13762a10abc8d52"),
     "strike_cube_hard": ("Jeong-zju/mars-control-strike-cube-hard-rf", "bc7051cb0560058bf426e792871faa1ca8a4f78f"),
@@ -48,14 +53,14 @@ FROZEN_CONFIG = Path(__file__).with_name("mars_control_maniflow_v1.json")
 def load_frozen_config(path: str | Path = FROZEN_CONFIG) -> dict:
     config_path = Path(path)
     value = json.loads(config_path.read_text())
-    if value.get("schema") != "mars-control.latent-tom.frozen-config.v1":
-        raise ValueError(f"unexpected LatentToM config schema: {config_path}")
+    if value.get("schema") != "mars-control.maniflow.frozen-config.v2":
+        raise ValueError(f"unexpected ManiFlow config schema: {config_path}")
     if value.get("status") != "frozen":
-        raise ValueError(f"LatentToM config is not frozen: {config_path}")
+        raise ValueError(f"ManiFlow config is not frozen: {config_path}")
     if value["upstream"]["commit"] != UPSTREAM_COMMIT:
-        raise ValueError("LatentToM upstream commit drift")
+        raise ValueError("ManiFlow upstream commit drift")
     if value["policy_contract"]["name"] != POLICY_CONTRACT:
-        raise ValueError("LatentToM policy contract drift")
+        raise ValueError("ManiFlow policy contract drift")
     expected_tasks = [task.name for task in TASKS]
     if value["data"]["tasks"] != expected_tasks:
         raise ValueError("MARS-Control task order drift")

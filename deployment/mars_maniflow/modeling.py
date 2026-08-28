@@ -25,6 +25,8 @@ def model_config():
         "encoder": "resnet34.a1_in1k", "n_layer": 12, "n_head": 8, "n_emb": 768,
         "flow_batch_ratio": 0.75, "consistency_batch_ratio": 0.25,
         "normalization": "global_all-data_qpos/action_limits_to_minus1_plus1",
+        "temporal_contract": "obs_tminus1_t_action_tminus1_through_tplus14_execute_from_index1",
+        "action_clip": "robofactory_pd_joint_pos_before_stats_and_targets",
         "rgb_preprocessing": "uint8_div_255_then_bilinear_resize_224",
         "policy_contract": POLICY_CONTRACT,
     }
