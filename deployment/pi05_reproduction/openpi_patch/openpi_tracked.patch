@@ -1,0 +1,44 @@
+diff --git a/src/openpi/training/config.py b/src/openpi/training/config.py
+index 4ca47e1..e761765 100644
+--- a/src/openpi/training/config.py
++++ b/src/openpi/training/config.py
+@@ -556,6 +556,10 @@ class TrainConfig:
+             raise ValueError("Cannot resume and overwrite at the same time.")
+ 
+ 
++# Import after the config base classes are defined.  The RoboFactory extension
++# subclasses DataConfigFactory and builds a TrainConfig from this module.
++import openpi.training.robofactory_config as robofactory_config  # noqa: E402
++
+ # Use `get_config` if you need to get a config by name in your code.
+ _CONFIGS = [
+     #
+@@ -944,6 +948,7 @@ _CONFIGS = [
+         num_train_steps=10,
+         wandb_enabled=False,
+     ),
++    robofactory_config.make_config(),
+     TrainConfig(
+         name="debug_restore",
+         data=FakeDataConfig(),
+diff --git a/src/openpi/training/data_loader.py b/src/openpi/training/data_loader.py
+index e2ee7dd..2f34c50 100644
+--- a/src/openpi/training/data_loader.py
++++ b/src/openpi/training/data_loader.py
+@@ -14,6 +14,7 @@ import torch
+ import openpi.models.model as _model
+ import openpi.training.config as _config
+ from openpi.training.droid_rlds_dataset import DroidRldsDataset
++from openpi.training.robofactory_dataset import RoboFactoryDataset
+ import openpi.transforms as _transforms
+ 
+ T_co = TypeVar("T_co", covariant=True)
+@@ -136,6 +137,8 @@ def create_torch_dataset(
+         raise ValueError("Repo ID is not set. Cannot create dataset.")
+     if repo_id == "fake":
+         return FakeDataset(model_config, num_samples=1024)
++    if repo_id == "robofactory":
++        return RoboFactoryDataset(action_horizon=action_horizon)
+ 
+     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+     dataset = lerobot_dataset.LeRobotDataset(
