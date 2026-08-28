@@ -4,7 +4,7 @@ from pathlib import Path
 import h5py, numpy as np
 from .common import TASKS, ARMS, atomic_json
 def main():
-    root=Path(os.environ.get("MARS_DP_DATA_ROOT","/workspace/datasets/mars_control")); report={"schema":"mars-control.dp.audit.v1","status":"complete","tasks":{},"episodes":0,"local_streams":0,"policy_contract":"shared_weights_decentralized_local_rgb_qpos_to_absolute_action8","forbidden_inputs":["peer_rgb","peer_qpos","global_rgb","joint_action","task_id","arm_id"]}
+    root=Path(os.environ.get("MARS_DP_DATA_ROOT","/workspace/datasets/mars_control")); report={"schema":"mars-control.dp.audit.v1","status":"complete","tasks":{},"episodes":0,"local_streams":0,"policy_contract":"shared_weights_decentralized_local_rgb_own_command_state_to_absolute_action8","forbidden_inputs":["peer_rgb","peer_qpos","global_rgb","joint_action","task_id","arm_id"]}
     for task in TASKS:
         eps=streams=steps=0; paths=sorted(glob.glob(str(root/task/"motionplanning"/"*.shard*.h5")))
         if len(paths)!=10: raise RuntimeError(f"{task}: expected 10 formal shards, got {len(paths)}")

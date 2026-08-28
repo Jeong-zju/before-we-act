@@ -1,0 +1,35 @@
+{
+  "checkpoint": "/workspace/runs/mars_dp_v3/formal/last.pt",
+  "checkpoint_sha256": "e8c65a0e434b4c36c749b8393320524098e24c13c456cd85d25c4a311f9bfe9a",
+  "episodes_per_task": 20,
+  "evaluator_revision": "dp-official-obs3-horizon8-exec6-command-state-topp-v6",
+  "policy_contract": "shared_weights_decentralized_local_rgb_own_command_state_to_absolute_action8",
+  "rgb_preprocessing": "uint8_div_255_to_unit_float",
+  "schema": "mars-control.dp.validation20.summary.v1",
+  "state_contract": "official own commanded action8 feedback",
+  "status": "complete",
+  "successes": 0,
+  "tasks": {
+    "four_robots_stack_cube": {
+      "episodes": 20,
+      "success_rate": 0.0,
+      "successes": 0
+    },
+    "place_cube_in_cup": {
+      "episodes": 20,
+      "success_rate": 0.0,
+      "successes": 0
+    },
+    "strike_cube_hard": {
+      "episodes": 20,
+      "success_rate": 0.0,
+      "successes": 0
+    },
+    "three_robots_place_shoes": {
+      "episodes": 20,
+      "success_rate": 0.0,
+      "successes": 0
+    }
+  },
+  "total_episodes": 80
+}

@@ -97,6 +97,15 @@ action chunk、ACT-CVAE 结构、AdamW/cosine 优化器、120,000 次更新、�
 `tab:act-mars-data-opt` 和 `tab:act-mars-model-runtime` 与
 该机器可读配置逐项对应。
 
+MARS-Control Diffusion Policy 的正式 v3 复现入口位于
+[`deployment/mars_dp/README.md`](deployment/mars_dp/README.md)，完整机器可读
+配置为
+[`configs/dp/mars_control_full_data_v3.json`](configs/dp/mars_control_full_data_v3.json)。
+该版本固定官方 3/8/8 temporal contract、command-state8、action clipping 与
+归一化顺序、activity-aware 全数据采样、60k 训练及四任务 Validation20，并附带
+一键 supervisor、source/config/checkpoint SHA 校验和参考运行回执。旧 v1
+配置保留作历史记录，不能用于复现论文中的 v3 结果。
+
 远程服务器可使用 [`scripts/wam_automation.sh`](scripts/wam_automation.sh)
 把代码/RoboFactory 下载、双 uv 环境、Hugging Face 数据、DINOv3、训练和
 真实闭环验证按顺序组合执行；`full` 可从零运行完整链路，`full-smoke`

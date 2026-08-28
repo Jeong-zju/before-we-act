@@ -1,0 +1,37 @@
+{
+  "episodes": 600,
+  "forbidden_inputs": [
+    "peer_rgb",
+    "peer_qpos",
+    "global_rgb",
+    "joint_action",
+    "task_id",
+    "arm_id"
+  ],
+  "local_streams": 1650,
+  "policy_contract": "shared_weights_decentralized_local_rgb_own_command_state_to_absolute_action8",
+  "schema": "mars-control.dp.audit.v1",
+  "status": "complete",
+  "tasks": {
+    "four_robots_stack_cube": {
+      "episodes": 150,
+      "joint_steps": 137555,
+      "local_streams": 600
+    },
+    "place_cube_in_cup": {
+      "episodes": 150,
+      "joint_steps": 51302,
+      "local_streams": 300
+    },
+    "strike_cube_hard": {
+      "episodes": 150,
+      "joint_steps": 73569,
+      "local_streams": 300
+    },
+    "three_robots_place_shoes": {
+      "episodes": 150,
+      "joint_steps": 78452,
+      "local_streams": 450
+    }
+  }
+}

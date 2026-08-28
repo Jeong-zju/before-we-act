@@ -1,0 +1,201 @@
+{
+  "schema": "before-we-act.dp.mars-control.full-data/3",
+  "policy": "Diffusion Policy",
+  "benchmark": "MARS-Control",
+  "protocol_status": "frozen; used for mars_dp_v3 formal run",
+  "runtime": {
+    "device": "cuda:0",
+    "cuda_visible_devices": "0",
+    "data_root": "/workspace/datasets/mars_control",
+    "run_root": "/workspace/runs/mars_dp_v3",
+    "resume": false,
+    "run_until": null
+  },
+  "data": {
+    "tasks": [
+      "place_cube_in_cup",
+      "strike_cube_hard",
+      "three_robots_place_shoes",
+      "four_robots_stack_cube"
+    ],
+    "episodes_per_task": 150,
+    "total_episodes": 600,
+    "total_local_streams": 1650,
+    "formal_shards_per_task": 10,
+    "split": "none; all successful demonstrations are used for training",
+    "trajectory_requirement": "every source trajectory must end in success",
+    "sources": {
+      "place_cube_in_cup": {
+        "repo_id": "Jeong-zju/mars-control-place-cube-in-cup-rf",
+        "revision": "3878150bec8f4830e1a57a01a13762a10abc8d52",
+        "formal_shards": 10
+      },
+      "strike_cube_hard": {
+        "repo_id": "Jeong-zju/mars-control-strike-cube-hard-rf",
+        "revision": "bc7051cb0560058bf426e792871faa1ca8a4f78f",
+        "formal_shards": 10
+      },
+      "three_robots_place_shoes": {
+        "repo_id": "Jeong-zju/mars-control-three-robots-place-shoes-rf",
+        "revision": "ad231c7eff530f71f0c5302b6c03c7164bbcc896",
+        "formal_shards": 10
+      },
+      "four_robots_stack_cube": {
+        "repo_id": "Jeong-zju/mars-control-four-robots-stack-cube-rf",
+        "revision": "3fa4833f5e34c3565da04af99c62d516e048fcfc",
+        "formal_shards": 10
+      }
+    },
+    "task_sampling": "equal probability per task; 16 samples per task in every batch",
+    "sampling_replacement": true,
+    "anchor_sampling": "within each task, 75% activity-weighted and 25% uniform; every anchor remains eligible",
+    "activity_score": "0.05 + clip(max normalized six-step seven-arm-joint displacement / 0.03, 0, 1)",
+    "image": {
+      "source": "own head-camera RGB",
+      "shape_hwc": [240, 320, 3],
+      "dtype": "uint8",
+      "training_conversion": "uint8 / 255 -> float32 [0,1]",
+      "encoder_normalization": "ImageNet mean [0.485,0.456,0.406], std [0.229,0.224,0.225]"
+    }
+  },
+  "decentralized_contract": {
+    "execution": "decentralized",
+    "weight_sharing": "one checkpoint shared by every arm and task",
+    "inputs_per_arm": ["own RGB history", "own commanded action history"],
+    "state": "official own commanded action8: seven arm-joint targets plus gripper command",
+    "initial_state": "measured own seven joint positions concatenated with OPEN gripper command 1.0",
+    "output_per_arm": "own absolute pd_joint_pos action8",
+    "forbidden_inputs": ["peer RGB", "peer qpos", "global RGB", "joint action", "arm identity", "task identity", "language"]
+  },
+  "temporal_contract": {
+    "observation_steps": 3,
+    "observation_window": "[t-2,t-1,t]",
+    "prediction_horizon": 8,
+    "prediction_window": "[t-2,...,t+5]",
+    "action_steps": 8,
+    "executable_steps": 6,
+    "replan_interval": 6,
+    "execution": "prediction.action == action_pred[:,2:]"
+  },
+  "state_action_codec": {
+    "action_space": "RoboFactory pd_joint_pos",
+    "action_low": [-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973, -1.0],
+    "action_high": [2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973, 1.0],
+    "target_clipping": "clip to environment bounds before computing min/max statistics and training targets",
+    "normalization": "per-dimension corpus min/max mapped to [-1,1]",
+    "denormalization": "inverse corpus min/max exactly once, then environment-bound clipping",
+    "state_statistics": "same clipped action codec as action; q_min/q_max == a_min/a_max"
+  },
+  "model": {
+    "implementation": "RoboFactory Diffusion-Policy DiffusionUnetImagePolicy",
+    "vision_encoder": "ResNet-18, weights=None, BatchNorm replaced by GroupNorm",
+    "observation_encoder": "MultiImageObsEncoder, use_group_norm=true, imagenet_norm=true",
+    "resize_shape": null,
+    "crop_shape": null,
+    "image_augmentation": "none; crop_shape=null makes random_crop inert",
+    "random_crop": true,
+    "share_rgb_model": false,
+    "denoiser": "ConditionalUnet1D",
+    "down_dims": [256, 512, 1024],
+    "kernel_size": 5,
+    "n_groups": 8,
+    "cond_predict_scale": true,
+    "diffusion_step_embed_dim": 128,
+    "obs_as_global_cond": true,
+    "action_dim": 8,
+    "state_dim": 8,
+    "diffusion_train_steps": 100,
+    "diffusion_inference_steps": 20,
+    "prediction_type": "epsilon",
+    "beta_schedule": "squaredcos_cap_v2",
+    "beta_start": 0.0001,
+    "beta_end": 0.02,
+    "variance_type": "fixed_small",
+    "clip_sample": true,
+    "thresholding": false,
+    "timestep_spacing": "leading",
+    "steps_offset": 0,
+    "ema": {
+      "enabled": true,
+      "update_after_step": 0,
+      "inv_gamma": 1.0,
+      "power": 0.75,
+      "min_value": 0.0,
+      "max_value": 0.9999,
+      "validation_weights": "ema_model"
+    }
+  },
+  "optimization": {
+    "updates": 60000,
+    "smoke_updates": 10,
+    "batch_size": 64,
+    "formal_dataloader_workers": 8,
+    "smoke_dataloader_workers": 0,
+    "diagnostic_dataloader_workers": 16,
+    "dataloader_pin_memory": true,
+    "dataloader_persistent_workers": true,
+    "dataloader_prefetch_factor": 2,
+    "optimizer": "AdamW",
+    "learning_rate": 0.0001,
+    "betas": [0.95, 0.999],
+    "epsilon": 1e-8,
+    "weight_decay": 1e-6,
+    "scheduler": "cosine LambdaLR",
+    "warmup_updates": 500,
+    "gradient_clip_norm": 1.0,
+    "precision": "float32",
+    "automatic_mixed_precision": false,
+    "gradient_accumulation_steps": 1,
+    "torch_num_threads": 8,
+    "seed": 20260827,
+    "checkpoint_interval": 5000,
+    "checkpoint_selection": "fixed final checkpoint at update 60000; no validation-based selection"
+  },
+  "validation20": {
+    "episodes_per_task": 20,
+    "seed_start_by_task": [20260820, 20261820, 20262820, 20263820],
+    "maximum_steps": [500, 500, 1200, 800],
+    "simulation_backend": "cpu",
+    "inference_weights": "ema_model",
+    "inference_steps": 20,
+    "replan_interval": 6,
+    "execution": "TOPP interpolation for seven joint targets; gripper command held; synchronous arms",
+    "evaluator_revision": "dp-official-obs3-horizon8-exec6-command-state-topp-v6",
+    "rgb_preprocessing": "uint8_div_255_to_unit_float",
+    "action_decoding": "training min/max inverse exactly once, then environment bound clipping"
+  },
+  "artifacts": {
+    "training_entrypoint": "deployment/mars_dp/train.py",
+    "evaluator_entrypoint": "deployment/mars_dp/evaluate.py",
+    "validation_entrypoint": "deployment/mars_dp/run_validation.py",
+    "supervisor_config": "deployment/mars_dp/mars-dp-v3.conf",
+    "formal_run": "/workspace/runs/mars_dp_v3",
+    "checkpoint": "/workspace/runs/mars_dp_v3/formal/last.pt",
+    "checkpoint_sha256": "e8c65a0e434b4c36c749b8393320524098e24c13c456cd85d25c4a311f9bfe9a",
+    "final_report": "/workspace/runs/mars_dp_v3/final_report.json",
+    "validation_summary": "/workspace/runs/mars_dp_v3/validation20/summary.json",
+    "source_base_revision": "393d874c3ce452790b1a4013268a7bc4fb9a5919",
+    "source_identity": "the v3 files below are bound by SHA-256 because the reference server checkout contained uncommitted experiment patches",
+    "source_sha256": {
+      "common.py": "ceffd626a330a6feda1fd76086d8e45bd5c12f725a7b6843db95da6c512f9fae",
+      "dataset.py": "d8374f445526cf1f750a0f6bb2841808645fd195b601c27261a4cf9199fbbb14",
+      "train.py": "4547b444b96f861c98f5d5482d30515176f55657d7306c5343de36b877cc1c9b",
+      "modeling.py": "13d3e6c30e2f3ed327c74fd872021c72589f0d753a566af82a8f01518018b170",
+      "evaluate.py": "7adfc368747aae2551422ce87e069c34fa3b5dcef5e3ec822eb113cf011ae76e",
+      "run_validation.py": "2f1070c342496b4604160e7e46d5ed638550b547ced19cb0d130f51438f37a8f",
+      "supervisor_v3.py": "b7d28b8046e317c85b1014b657f4d25f5dc84a420aa070a12f5ff0bf92371eaa",
+      "finalize.py": "455260ad19c9111053703c4da41f395c2fddaf7d05ca7fefdc8ae4c3b9d441cc"
+    }
+  },
+  "software": {
+    "python_environment": "/venv/main",
+    "torch": "2.11.0+cu128",
+    "diffusers": "0.32.2",
+    "numpy": "1.26.4",
+    "h5py": "3.16.0",
+    "gymnasium": "0.29.1",
+    "trainable_parameters": 96532424,
+    "total_model_parameters": 96532526
+  },
+  "fairness_note": "The 60k-update budget is the established shared-DP baseline recipe (300 epochs x 200 updates), while preserving DP's native batch size and optimizer settings."
+}

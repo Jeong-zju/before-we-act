@@ -19,6 +19,8 @@ def main():
     low, high = np.asarray(ACTION_LOW, np.float32), np.asarray(ACTION_HIGH, np.float32)
     assert np.all(np.asarray(ds.stats["a_min"]) >= low - 1e-6)
     assert np.all(np.asarray(ds.stats["a_max"]) <= high + 1e-6)
+    np.testing.assert_allclose(ds.stats["q_min"], ds.stats["a_min"], atol=0, rtol=0)
+    np.testing.assert_allclose(ds.stats["q_max"], ds.stats["a_max"], atol=0, rtol=0)
 
     # Pick a non-padded window and prove obs/action share the official timeline:
     # obs=[t-2,t-1,t], action=[t-2,...,t+5].
@@ -28,12 +30,12 @@ def main():
     positions = np.arange(current - 2, current + 6)
     with h5py.File(path, "r") as handle:
         group = handle[trajectory]
-        expected_q = np.asarray(group[f"obs/agent/panda-{arm}/qpos"])[positions[:3]]
         expected_a = np.clip(np.asarray(group[f"actions/panda-{arm}"])[positions], low, high)
+        expected_q = expected_a[:3]
     assert sample["head_cam"].shape == (3, 3, 240, 320)
-    assert sample["agent_pos"].shape == (3, 9)
+    assert sample["agent_pos"].shape == (3, 8)
     assert sample["action"].shape == (8, 8)
-    np.testing.assert_allclose(sample["agent_pos"].numpy(), expected_q, atol=0, rtol=0)
+    np.testing.assert_allclose(sample["agent_pos"].numpy(), expected_q, atol=1e-6, rtol=0)
     np.testing.assert_allclose(sample["action"].numpy(), expected_a, atol=1e-6, rtol=0)
 
     codec = _limits(ds.stats["a_min"], ds.stats["a_max"])
@@ -46,6 +48,7 @@ def main():
         "temporal_contract": "obs[t-2:t], action[t-2:t+5], execute prediction.action == action_pred[:,2:]",
         "policy_shape": {"obs_steps": 3, "horizon": 8, "action_steps": 8, "executable_steps": 6},
         "action_targets_clipped_before_stats": True,
+        "state_contract": "official own commanded action8 (7 arm targets + gripper command)",
         "normalizer_roundtrip_max_abs_error": codec_error,
         "episodes": ds.stats["episodes"],
         "local_streams": ds.stats["local_streams"],

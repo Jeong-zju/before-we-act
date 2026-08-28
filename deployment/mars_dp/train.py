@@ -27,10 +27,11 @@ def lr_scheduler(opt, total, warmup, start=0):
     for group in opt.param_groups: group.setdefault("initial_lr", group["lr"])
     return torch.optim.lr_scheduler.LambdaLR(opt, rate, last_epoch=start-1)
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("--data-root",required=True); p.add_argument("--output",required=True); p.add_argument("--steps",type=int,default=60000); p.add_argument("--batch-size",type=int,default=64); p.add_argument("--workers",type=int,default=16); p.add_argument("--resume",action="store_true"); p.add_argument("--smoke",action="store_true"); a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("--data-root",required=True); p.add_argument("--output",required=True); p.add_argument("--steps",type=int,default=60000); p.add_argument("--run-until",type=int); p.add_argument("--batch-size",type=int,default=64); p.add_argument("--workers",type=int,default=16); p.add_argument("--resume",action="store_true"); p.add_argument("--smoke",action="store_true"); a=p.parse_args()
     seed=20260827; random.seed(seed); np.random.seed(seed); torch.manual_seed(seed); torch.set_num_threads(8)
-    out=Path(a.output); out.mkdir(parents=True,exist_ok=True); target=min(a.steps,10) if a.smoke else a.steps
-    ds=MarsDPDataset(a.data_root,out/"normalization.json"); sampler=TaskBalancedBatchSampler(ds.task_indices,a.batch_size,target,seed)
+    out=Path(a.output); out.mkdir(parents=True,exist_ok=True); target=min(a.steps,10) if a.smoke else min(a.steps, a.run_until or a.steps)
+    if target <= 0 or target > a.steps: raise ValueError("run-until must be in (0, steps]")
+    ds=MarsDPDataset(a.data_root,out/"normalization.json"); sampler=TaskBalancedBatchSampler(ds.task_indices,a.batch_size,target,seed,activity=ds.activity,activity_mix=0.75)
     dl=DataLoader(ds,batch_sampler=sampler,num_workers=a.workers,pin_memory=True,persistent_workers=a.workers>0,prefetch_factor=2 if a.workers else None)
     dev=torch.device("cuda:0"); model=build_policy(ds.stats,dev); opt=torch.optim.AdamW(model.parameters(),lr=1e-4,betas=(.95,.999),eps=1e-8,weight_decay=1e-6); start=0; saved={}
     latest=out/"last.pt"
@@ -52,8 +53,8 @@ def main():
             for eb,b in zip(ema_model.buffers(),model.buffers()): eb.copy_(b)
         if absolute==1 or absolute%20==0: print(json.dumps({"step":absolute,"target_updates":target,"loss":float(loss),"grad_norm":grad,"lr":sched.get_last_lr()[0],"updates_per_second":step/max(time.monotonic()-t0,1e-6)}),flush=True)
         if absolute%5000==0 or absolute==target:
-            payload={"schema":"mars-control.dp.checkpoint.v2","step":absolute,"model":model.state_dict(),"ema_model":ema_model.state_dict(),"optimizer":opt.state_dict(),"scheduler":sched.state_dict(),"ema_step":ema.optimization_step,"stats":ds.stats,"contract":"shared_weights_strict_local_rgb_qpos_to_absolute_action8","config":{"obs_steps":3,"horizon":8,"action_steps":8,"diffusion_train_steps":100,"batch_size":a.batch_size,"all_600_episodes_no_split":True,"task_balanced":True,"action_clip":"robofactory_pd_joint_pos_bounds","seed":seed}}
+            payload={"schema":"mars-control.dp.checkpoint.v3","step":absolute,"model":model.state_dict(),"ema_model":ema_model.state_dict(),"optimizer":opt.state_dict(),"scheduler":sched.state_dict(),"ema_step":ema.optimization_step,"stats":ds.stats,"contract":"shared_weights_strict_local_rgb_own_command_state_to_absolute_action8","config":{"obs_steps":3,"horizon":8,"action_steps":8,"diffusion_train_steps":100,"batch_size":a.batch_size,"all_600_episodes_no_split":True,"task_balanced":True,"state":"official RoboFactory own commanded action8 feedback","activity_sampling":"75% activity-weighted anchors, 25% uniform anchors; six-step normalized joint displacement score","action_clip":"robofactory_pd_joint_pos_bounds","seed":seed}}
             atomic_torch(latest,payload)
             if absolute%5000==0: atomic_torch(out/f"checkpoint_{absolute:06d}.pt",payload)
-    status={"status":"complete","step":target,"checkpoint":str(latest),"checkpoint_sha256":digest(latest),"episodes":600,"local_streams":1650,"indexed_local_timesteps":len(ds),"all_episodes":True,"completed_at":datetime.now(timezone.utc).isoformat()}; atomic_json(out/("smoke_status.json" if a.smoke else "status.json"),status)
+    status={"status":"complete" if target==a.steps or a.smoke else "diagnostic_checkpoint","step":target,"total_target_steps":a.steps,"checkpoint":str(latest),"checkpoint_sha256":digest(latest),"episodes":600,"local_streams":1650,"indexed_local_timesteps":len(ds),"all_episodes":True,"completed_at":datetime.now(timezone.utc).isoformat()}; atomic_json(out/("smoke_status.json" if a.smoke else "status.json"),status)
 if __name__=="__main__": main()

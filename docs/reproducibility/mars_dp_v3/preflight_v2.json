@@ -1,0 +1,16 @@
+{
+  "action_targets_clipped_before_stats": true,
+  "episodes": 600,
+  "local_streams": 1650,
+  "normalizer_roundtrip_max_abs_error": 2.9802322387695312e-08,
+  "policy_shape": {
+    "action_steps": 8,
+    "executable_steps": 6,
+    "horizon": 8,
+    "obs_steps": 3
+  },
+  "schema": "mars-control.dp.preflight.v2",
+  "state_contract": "official own commanded action8 (7 arm targets + gripper command)",
+  "status": "complete",
+  "temporal_contract": "obs[t-2:t], action[t-2:t+5], execute prediction.action == action_pred[:,2:]"
+}
