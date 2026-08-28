@@ -1,0 +1,12 @@
+{
+  "schema": "mars-control.maniflow.frozen-config.v1",
+  "status": "frozen",
+  "benchmark": "MARS-Control",
+  "policy": "ManiFlow",
+  "upstream": {"repository": "https://github.com/geyan21/ManiFlow_Policy", "commit": "ef2f116f1f90163ed36e657b8c5503740bb468af"},
+  "data": {"tasks": ["place_cube_in_cup", "strike_cube_hard", "three_robots_place_shoes", "four_robots_stack_cube"], "episodes_per_task": 150, "total_episodes": 600, "local_streams": 1650, "split": "none; all demonstrations", "obs_steps": 2, "horizon": 16, "action_dim": 8, "qpos_dim": 9, "rgb": "uint8 HWC -> float32 /255 -> bilinear 224", "normalization": "global all-data min/max to [-1,1]"},
+  "policy_contract": {"name": "shared_checkpoint_strict_local_rgb_qpos_to_local_action8", "weight_sharing": "one checkpoint shared by every arm and task", "forbidden_inputs": ["peer_rgb", "peer_qpos", "global_rgb", "joint_action", "task_id", "arm_id", "language"]},
+  "model": {"class": "ManiFlowTransformerImagePolicy", "vision": "resnet34.a1_in1k from scratch with GroupNorm", "n_layer": 12, "n_head": 8, "n_emb": 768, "flow_batch_ratio": 0.75, "consistency_batch_ratio": 0.25, "denoise_timesteps": 10, "ema": {"power": 0.75, "max_value": 0.9999}},
+  "optimization": {"updates": 60000, "smoke_updates": 2, "batch_size": 128, "workers": 16, "optimizer": "AdamW", "learning_rate": 0.0001, "betas": [0.9, 0.95], "weight_decay": 0.001, "scheduler": "cosine", "warmup_updates": 500, "precision": "bfloat16 autocast", "seed": 20260828},
+  "validation20": {"episodes_per_task": 20, "max_steps": {"place_cube_in_cup": 500, "strike_cube_hard": 500, "three_robots_place_shoes": 1200, "four_robots_stack_cube": 800}, "sim_backend": "cpu", "replan_interval": 8, "action_decode": "inverse global min/max exactly once then env clip"}
+}
