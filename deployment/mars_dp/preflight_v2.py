@@ -37,7 +37,7 @@ def main():
     np.testing.assert_allclose(sample["action"].numpy(), expected_a, atol=1e-6, rtol=0)
 
     codec = _limits(ds.stats["a_min"], ds.stats["a_max"])
-    decoded = codec.unnormalize(codec.normalize(sample["action"])).numpy()
+    decoded = codec.unnormalize(codec.normalize(sample["action"])).detach().numpy()
     codec_error = float(np.max(np.abs(decoded - sample["action"].numpy())))
     assert codec_error < 1e-5
     report = {
