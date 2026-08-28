@@ -17,5 +17,5 @@ def main():
                         if g[f"obs/sensor_data/head_camera_agent{arm}/rgb"].shape[-1] != 3 or g[f"obs/agent/panda-{arm}/qpos"].shape[-1] != 9 or g[f"actions/panda-{arm}"].shape[-1] != 8: raise RuntimeError(f"schema drift {task}:{tr}:{arm}")
         if eps!=150: raise RuntimeError(f"{task}: expected 150 episodes, got {eps}")
         report["tasks"][task]={"episodes":eps,"local_streams":streams,"joint_steps":steps}; report["episodes"]+=eps; report["local_streams"]+=streams
-    atomic_json(Path(os.environ.get("MARS_DP_RUN_ROOT","/workspace/runs/mars_dp"))/"audit.json",report); print(json.dumps(report))
+    atomic_json(Path(os.environ.get("MARS_DP_RUN_ROOT","/workspace/runs/mars_dp_v2"))/"audit.json",report); print(json.dumps(report))
 if __name__=="__main__": main()
