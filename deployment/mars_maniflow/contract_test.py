@@ -7,7 +7,18 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from .common import ACTION_HIGH, ACTION_LOW, POLICY_CONTRACT, atomic_json, load_frozen_config
+from .common import (
+    ACTION_HIGH,
+    ACTION_LOW,
+    MAX_STEPS_BY_TASK,
+    POLICY_CONTRACT,
+    REPLAN_INTERVAL,
+    TASKS,
+    TEMPORAL_ENSEMBLE_DECAY,
+    TemporalEnsemble,
+    atomic_json,
+    load_frozen_config,
+)
 from .dataset import MarsManiFlowDataset
 from .modeling import ACTION_STEPS, HORIZON, OBS_STEPS, model_config
 
@@ -29,6 +40,25 @@ def main() -> None:
     assert np.all(np.asarray(action_stats["min"]) >= low - 1e-6)
     assert np.all(np.asarray(action_stats["max"]) <= high + 1e-6)
     assert (OBS_STEPS, HORIZON, ACTION_STEPS) == (2, 16, 15)
+    assert {task.name: task.max_steps for task in TASKS} == MAX_STEPS_BY_TASK
+    validation = frozen["validation20"]
+    assert validation["max_steps"] == MAX_STEPS_BY_TASK
+    assert validation["replan_interval"] == REPLAN_INTERVAL == 8
+    assert validation["chunk_aggregation"] == "temporal_ensemble"
+    assert validation["temporal_ensemble_decay"] == TEMPORAL_ENSEMBLE_DECAY == 0.01
+
+    # At a chunk boundary, blend the old prediction at offset 8 and the new
+    # prediction at offset 0. Newer predictions receive the larger weight.
+    ensemble = TemporalEnsemble(1, TEMPORAL_ENSEMBLE_DECAY)
+    old = np.arange(15, dtype=np.float32)[:, None]
+    new = np.full((15, 1), 100, dtype=np.float32)
+    ensemble.add(0, old[None])
+    np.testing.assert_allclose(ensemble.select(7)[0], old[7], atol=1e-7, rtol=0)
+    ensemble.add(REPLAN_INTERVAL, new[None])
+    weights = np.exp(-TEMPORAL_ENSEMBLE_DECAY * np.asarray([1, 0], np.float32))
+    expected = (old[8] * weights[0] + new[0] * weights[1]) / weights.sum()
+    np.testing.assert_allclose(ensemble.select(8)[0], expected, atol=1e-6, rtol=0)
+    np.testing.assert_allclose(ensemble.select(15)[0], new[7], atol=1e-7, rtol=0)
 
     # Prove an interior dataset window is obs[t-1:t] with action[t-1:t+14].
     index = next(i for i, row in enumerate(dataset.entries) if row[-1] == 5)
@@ -51,6 +81,10 @@ def main() -> None:
         "policy_contract": POLICY_CONTRACT,
         "temporal_contract": model_config()["temporal_contract"],
         "action_clip": model_config()["action_clip"],
+        "max_steps": MAX_STEPS_BY_TASK,
+        "chunk_aggregation": "temporal_ensemble",
+        "replan_interval": REPLAN_INTERVAL,
+        "temporal_ensemble_decay": TEMPORAL_ENSEMBLE_DECAY,
         "frozen_schema": frozen["schema"],
         "dataset_size": len(dataset),
     }
