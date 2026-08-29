@@ -212,6 +212,15 @@ def run_wave(
             else inherited_ld_path
         ),
     )
+    if policy == "openvla":
+        # Final DDP checkpoint merging can exceed NCCL's barrier timeout.  If
+        # that happened, materialize the inference model once, offline, under
+        # this supervisor-managed validation stage before starting workers.
+        subprocess.run(
+            [PYTHONS["openvla"], str(SCRIPT_ROOT / "prepare_openvla_checkpoint.py"),
+             "--checkpoint", checkpoint],
+            env=base_env, check=True,
+        )
     render_preflight(base_env)
     active = []
     for task, gpu in assignments:
