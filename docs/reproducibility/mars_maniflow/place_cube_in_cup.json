@@ -1,0 +1,144 @@
+{
+  "checkpoint_sha256": "69a53b432b90aeebd286d7ec445a025264676ab4b81f86a02d5379008d14781e",
+  "chunk_aggregation": "temporal_ensemble",
+  "episodes": 20,
+  "episodes_detail": [
+    {
+      "episode": 0,
+      "seed": 20260820,
+      "steps": 329,
+      "success": true
+    },
+    {
+      "episode": 1,
+      "seed": 20260821,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 2,
+      "seed": 20260822,
+      "steps": 319,
+      "success": true
+    },
+    {
+      "episode": 3,
+      "seed": 20260823,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 4,
+      "seed": 20260824,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 5,
+      "seed": 20260825,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 6,
+      "seed": 20260826,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 7,
+      "seed": 20260827,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 8,
+      "seed": 20260828,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 9,
+      "seed": 20260829,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 10,
+      "seed": 20260830,
+      "steps": 333,
+      "success": true
+    },
+    {
+      "episode": 11,
+      "seed": 20260831,
+      "steps": 327,
+      "success": true
+    },
+    {
+      "episode": 12,
+      "seed": 20260832,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 13,
+      "seed": 20260833,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 14,
+      "seed": 20260834,
+      "steps": 338,
+      "success": true
+    },
+    {
+      "episode": 15,
+      "seed": 20260835,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 16,
+      "seed": 20260836,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 17,
+      "seed": 20260837,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 18,
+      "seed": 20260838,
+      "steps": 500,
+      "success": false
+    },
+    {
+      "episode": 19,
+      "seed": 20260839,
+      "steps": 500,
+      "success": false
+    }
+  ],
+  "evaluator_revision": "maniflow-mars-temporal-ensemble-v3",
+  "max_steps": 500,
+  "policy_contract": "shared_checkpoint_strict_local_rgb_qpos_to_local_action8",
+  "preprocessing": {
+    "action": "env_clipped_before_training_minmax_inverse_once_then_env_clip",
+    "qpos": "global_corpus_minmax_to_minus1_plus1",
+    "rgb": "uint8_div_255_then_model_resize"
+  },
+  "replan_interval": 8,
+  "schema": "mars-control.maniflow.validation20.task.v3",
+  "seed_start": 20260820,
+  "status": "complete",
+  "success_rate": 0.25,
+  "successes": 5,
+  "target_episodes": 20,
+  "task": "place_cube_in_cup",
+  "temporal_ensemble_decay": 0.01
+}

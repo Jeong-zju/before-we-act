@@ -1,0 +1,13 @@
+{
+  "all_episodes": true,
+  "completed_at": "2026-08-28T18:00:40.720412+00:00",
+  "contract": "shared_checkpoint_strict_local_rgb_qpos_to_local_action8",
+  "dataset_passes": 7.418010698162304,
+  "dataset_size": 1035318,
+  "episodes": 600,
+  "local_streams": 1650,
+  "samples_seen": 7680000,
+  "schema": "mars-control.maniflow.training.v1",
+  "status": "complete",
+  "step": 60000
+}
