@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader, Sampler
 
 from .dataset import MarsManiFlowDataset, TaskBalancedBatchSampler
 from .modeling import build_policy, model_config
+from .common import load_frozen_config
 from maniflow.model.diffusion.ema_model import EMAModel
 
 
@@ -92,26 +93,64 @@ def main():
     p.add_argument("--log-every", type=int, default=20); p.add_argument("--seed", type=int, default=20260822)
     p.add_argument("--resume", action="store_true"); p.add_argument("--smoke", action="store_true")
     args = p.parse_args()
+    frozen = load_frozen_config()
+    if not args.smoke:
+        expected = frozen["optimization"]
+        pinned = {
+            "steps": expected["updates"], "batch_size": expected["batch_size"],
+            "grad_accum": expected["grad_accum"], "workers": expected["workers"],
+            "locality": expected["locality"],
+            "save_every": expected["save_every"], "seed": expected["seed"],
+            "log_every": expected["log_every"], "resume": True,
+            "dataset_root": frozen["paths"]["dataset_root"],
+            "stats": frozen["paths"]["normalization_stats"],
+            "output": frozen["paths"]["output"],
+        }
+        actual = {"steps": args.steps, "batch_size": args.batch_size,
+                  "grad_accum": args.grad_accum, "workers": args.workers,
+                  "locality": args.locality,
+                  "save_every": args.save_every, "seed": args.seed,
+                  "log_every": args.log_every, "resume": args.resume,
+                  "dataset_root": args.dataset_root, "stats": args.stats,
+                  "output": args.output}
+        if actual != pinned:
+            raise RuntimeError(f"formal ManiFlow training contract drift: expected {pinned}, got {actual}")
     if args.batch_size % 4:
         raise ValueError("ManiFlow 3:1 flow/consistency split requires batch size divisible by four")
     torch.manual_seed(args.seed); np.random.seed(args.seed); random.seed(args.seed)
-    torch.backends.cuda.matmul.allow_tf32 = True; torch.backends.cudnn.allow_tf32 = True; torch.backends.cudnn.benchmark = True
+    torch.set_num_threads(frozen["runtime"]["torch_threads"])
+    torch.backends.cuda.matmul.allow_tf32 = frozen["optimization"]["tf32_matmul"]
+    torch.backends.cudnn.allow_tf32 = frozen["optimization"]["tf32_cudnn"]
+    torch.backends.cudnn.benchmark = frozen["optimization"]["cudnn_benchmark"]
     device = torch.device("cuda:0")
     output = Path(args.output); output.mkdir(parents=True, exist_ok=True)
     dataset = MarsManiFlowDataset(args.dataset_root, args.stats)
     sampler = TaskBalancedBatchSampler(dataset.task_indices, args.batch_size, args.steps, args.seed)
-    loader = DataLoader(dataset, batch_sampler=sampler, num_workers=args.workers, pin_memory=True,
-                        persistent_workers=args.workers > 0, prefetch_factor=2 if args.workers else None)
+    loader = DataLoader(
+        dataset, batch_sampler=sampler, num_workers=args.workers,
+        pin_memory=frozen["optimization"]["pin_memory"],
+        persistent_workers=frozen["optimization"]["persistent_workers"] if args.workers else False,
+        prefetch_factor=frozen["optimization"]["prefetch_factor"] if args.workers else None,
+    )
     model = build_policy(device); ema_model = copy.deepcopy(model).eval().requires_grad_(False)
-    ema = EMAModel(ema_model, update_after_step=0, inv_gamma=1.0, power=0.75, min_value=0.0, max_value=0.9999)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, betas=(0.9, 0.95), eps=1e-8, weight_decay=1e-3)
+    ema_cfg = frozen["ema"]
+    ema = EMAModel(ema_model, update_after_step=ema_cfg["update_after_step"],
+                   inv_gamma=ema_cfg["inv_gamma"], power=ema_cfg["power"],
+                   min_value=ema_cfg["min_value"], max_value=ema_cfg["max_value"])
+    optim_cfg = frozen["optimization"]
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=optim_cfg["learning_rate"], betas=tuple(optim_cfg["betas"]),
+        eps=optim_cfg["epsilon"], weight_decay=optim_cfg["weight_decay"],
+        amsgrad=optim_cfg["amsgrad"],
+    )
     start = 0; latest = output / "last.pt"
     if args.resume and latest.is_file():
         old = torch.load(latest, map_location="cpu", weights_only=False)
         if old.get("config") != model_config(): raise RuntimeError("resume config drift")
         model.load_state_dict(old["model"]); ema.averaged_model.load_state_dict(old["ema_model"])
         optimizer.load_state_dict(old["optimizer"]); start = int(old["step"]); ema.optimization_step = int(old["ema_step"])
-    lr = scheduler(optimizer, args.steps, min(500, max(args.steps // 20, 1)), start)
+    warmup = min(optim_cfg["warmup_updates"], max(args.steps // 20, 1)) if args.smoke else optim_cfg["warmup_updates"]
+    lr = scheduler(optimizer, args.steps, warmup, start)
     if start and "scheduler" in old: lr.load_state_dict(old["scheduler"])
     model.train(); optimizer.zero_grad(set_to_none=True)
     log = (output / "train.jsonl").open("a", buffering=1); iterator = iter(loader)
@@ -127,7 +166,7 @@ def main():
             scaled = loss / args.grad_accum
         scaled.backward()
         if step % args.grad_accum == 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), optim_cfg["gradient_clip_norm"])
             optimizer.step(); optimizer.zero_grad(set_to_none=True); lr.step(); ema.step(model)
         if step == 1 or step % args.log_every == 0:
             now = time.monotonic(); elapsed = now - started

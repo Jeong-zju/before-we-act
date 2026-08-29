@@ -115,6 +115,18 @@ def load_frozen_config(path: str | Path = FROZEN_CONFIG) -> dict:
         raise ValueError("ManiFlow chunk aggregation drift")
     if validation["temporal_ensemble_decay"] != TEMPORAL_ENSEMBLE_DECAY:
         raise ValueError("ManiFlow temporal ensemble decay drift")
+    optimization = value["optimization"]
+    expected_optimization = {
+        "updates": 60000,
+        "batch_size": 128,
+        "grad_accum": 1,
+        "workers": 16,
+        "seed": 20260822,
+        "save_every": 5000,
+        "log_every": 50,
+    }
+    if {key: optimization[key] for key in expected_optimization} != expected_optimization:
+        raise ValueError("ManiFlow optimization contract drift")
     return value
 
 
