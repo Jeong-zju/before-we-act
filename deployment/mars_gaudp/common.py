@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json, os, tempfile
+import hashlib
 from pathlib import Path
 
 TASKS = ("place_cube_in_cup", "strike_cube_hard", "three_robots_place_shoes", "four_robots_stack_cube")
@@ -12,6 +13,28 @@ ENVS = {
 }
 ACTION_LOW = (-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973, -1.0)
 ACTION_HIGH = (2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973, 1.0)
+POLICY_CONTRACT = "shared_weights_decentralized_local_rgb_gaussian_qpos_to_absolute_action8"
+FROZEN_CONFIG = Path(__file__).with_name("mars_control_gaudp_v1.json")
+
+def sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(16 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+def load_frozen_config(path: str | Path = FROZEN_CONFIG) -> dict:
+    config_path = Path(path)
+    value = json.loads(config_path.read_text())
+    if value.get("schema") != "mars-control.gaudp.frozen-config.v1":
+        raise ValueError(f"unexpected GauDP config schema: {config_path}")
+    if value.get("status") != "frozen":
+        raise ValueError(f"GauDP config is not frozen: {config_path}")
+    if value["policy_contract"]["name"] != POLICY_CONTRACT:
+        raise ValueError("GauDP policy contract drift")
+    if value["data"]["tasks"] != list(TASKS):
+        raise ValueError("MARS-Control task order drift")
+    return value
 
 def atomic_json(path: str | Path, value: dict) -> None:
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
