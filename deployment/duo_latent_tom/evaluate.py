@@ -78,6 +78,7 @@ def local_observation(observation: dict, arm: int, image_history: deque, qpos_hi
         "image": torch.from_numpy(np.stack(tuple(image_history)).copy()).to(device).unsqueeze(0),
         "qpos": torch.from_numpy(np.stack(tuple(qpos_history)).copy()).to(device).unsqueeze(0),
         "task": torch.nn.functional.one_hot(torch.tensor([task_id], device=device), num_classes=len(TASKS)).float(),
+        "arm_id": torch.nn.functional.one_hot(torch.tensor([arm], device=device), num_classes=2).float(),
     }
 
 
@@ -121,10 +122,12 @@ def evaluate_task(*, checkpoint: Path, data: Path, output: Path, task: str,
                     own = [local_observation(observation, arm, histories[arm], qhistories[arm], TASKS.index(task), model.q_mean.device) for arm in range(2)]
                     replanners = [arm for arm in range(2) if chunks[arm] is None or offsets[arm] >= replan_interval]
                     if replanners:
-                        batch = {key: torch.cat([own[arm][key] for arm in replanners], dim=0) for key in ("image", "qpos", "task")}
+                        batch = {key: torch.cat([own[arm][key] for arm in replanners], dim=0) for key in ("image", "qpos", "task", "arm_id")}
                         predicted = model.predict_chunk(batch, steps=diffusion_steps).float().cpu().numpy()
                         for position, arm in enumerate(replanners):
                             chunks[arm] = predicted[position]
+                            # This causal dataset conditions on observation[t]
+                            # and predicts action[t+1] at chunk index zero.
                             offsets[arm] = 0
                     action = {}
                     for arm, key in enumerate(("left", "right")):
@@ -143,7 +146,7 @@ def evaluate_task(*, checkpoint: Path, data: Path, output: Path, task: str,
     finally:
         env.close()
     errors = [row for row in rows if row.get("error")]
-    result = {"schema": "duobench.latent-tom.validation20.task.v1", "status": "failed" if errors else "complete", "task": task, "episodes": len(rows), "target_episodes": episodes, "successes": sum(int(x["success"]) for x in rows), "success_rate": float(np.mean([x["success"] for x in rows])), "max_steps": VALIDATION_MAX_STEPS[task], "episodes_detail": rows, "policy_contract": POLICY_CONTRACT, "action_encoding": ACTION_ENCODING, "preprocessing": {"rgb": "uint8_div_255", "qpos": "population_mean_std_with_gripper_gt_0.9_binarization", "action": "population_mean_std_then_pinned_controller_ctrlrange", "ddim_clip_sample": False, "replan_interval": replan_interval}}
+    result = {"schema": "duobench.latent-tom.validation20.task.v2", "status": "failed" if errors else "complete", "task": task, "episodes": len(rows), "target_episodes": episodes, "successes": sum(int(x["success"]) for x in rows), "success_rate": float(np.mean([x["success"] for x in rows])), "max_steps": VALIDATION_MAX_STEPS[task], "episodes_detail": rows, "policy_contract": POLICY_CONTRACT, "action_encoding": ACTION_ENCODING, "preprocessing": {"rgb": "uint8_div_255_imagenet_norm", "qpos": "population_minmax_to_minus1_plus1_with_binary_gripper", "action": "population_minmax_from_minus1_plus1_then_pinned_controller_ctrlrange", "ddim_clip_sample": True, "diffusion_steps": diffusion_steps, "replan_interval": replan_interval}}
     atomic_json(result_path, result)
     if errors:
         raise RuntimeError(f"{task}: {len(errors)} rollout errors")
@@ -155,7 +158,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, required=True); parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True); parser.add_argument("--task", choices=TASKS)
     parser.add_argument("--episodes", type=int, default=20); parser.add_argument("--seed-base", type=int, default=20260820)
-    parser.add_argument("--diffusion-steps", type=int, default=20); parser.add_argument("--replan-interval", type=int, default=8)
+    parser.add_argument("--diffusion-steps", type=int, default=100); parser.add_argument("--replan-interval", type=int, default=20)
     parser.add_argument("--device", default="cuda:0"); parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args()
     config = load_config(); validation = config["validation20"]

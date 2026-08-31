@@ -31,9 +31,11 @@ class DuoLatentToMDataset(Dataset):
             "schema": "duobench.latent-tom.normalization.v1",
             "qpos": {
                 "mean": list(norm["qpos_mean"]), "std": list(norm["qpos_std"]),
+                "min": list(norm["qpos_min"]), "max": list(norm["qpos_max"]),
             },
             "action": {
                 "mean": list(norm["action_mean"]), "std": list(norm["action_std"]),
+                "min": list(norm["action_min"]), "max": list(norm["action_max"]),
             },
             "population": norm["population"],
             "action_lag_rows": 1,
@@ -83,10 +85,16 @@ class DuoLatentToMDataset(Dataset):
         wrist_key = "left" if arm == 0 else "right"
         wrist = np.asarray(data[wrist_key][obs_start:current + 1], dtype=np.uint8)
         images = np.concatenate((head, wrist), axis=2)
+        peer_wrist_key = "right" if arm == 0 else "left"
+        peer_wrist = np.asarray(data[peer_wrist_key][obs_start:current + 1], dtype=np.uint8)
+        peer_images = np.concatenate((head, peer_wrist), axis=2)
+        peer_qpos = np.asarray(state[obs_start:current + 1, 1 - arm], dtype=np.float32)
         if len(images) < self.obs_steps:
             pad = self.obs_steps - len(images)
             images = np.concatenate((np.repeat(images[:1], pad, axis=0), images))
             qpos = np.concatenate((np.repeat(qpos[:1], pad, axis=0), qpos))
+            peer_images = np.concatenate((np.repeat(peer_images[:1], pad, axis=0), peer_images))
+            peer_qpos = np.concatenate((np.repeat(peer_qpos[:1], pad, axis=0), peer_qpos))
 
         target_start = current + 1
         target_end = min(episode_end, target_start + self.horizon)
@@ -103,6 +111,12 @@ class DuoLatentToMDataset(Dataset):
         return {
             "image": torch.from_numpy(np.moveaxis(images, -1, 1).copy()),
             "qpos": torch.from_numpy(np.ascontiguousarray(qpos)),
+            # Peer fields are training-only ToM targets. predict_chunk has no
+            # peer input surface, preserving decentralized deployment.
+            "peer_image": torch.from_numpy(np.moveaxis(peer_images, -1, 1).copy()),
+            "peer_qpos": torch.from_numpy(np.ascontiguousarray(peer_qpos)),
+            "arm_id": torch.nn.functional.one_hot(torch.tensor(arm), num_classes=2).float(),
+            "peer_arm_id": torch.nn.functional.one_hot(torch.tensor(1 - arm), num_classes=2).float(),
             "task": torch.from_numpy(task),
             "action": torch.from_numpy(np.ascontiguousarray(actions)),
             "action_mask": torch.from_numpy(mask),

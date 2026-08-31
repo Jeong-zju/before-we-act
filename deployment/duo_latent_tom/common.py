@@ -22,7 +22,7 @@ VALIDATION_MAX_STEPS = {
 }
 
 POLICY_CONTRACT = (
-    "shared_checkpoint_strict_local_shared_head_rgb_own_wrist_rgb_qpos8_task11_to_local_action8"
+    "shared_checkpoint_strict_local_shared_head_own_wrist_qpos8_task11_arm_id2_to_local_action8"
 )
 ACTION_ENCODING = "absolute_joint7_binary_gripper1"
 UPSTREAM_COMMIT = "a51d929027799a53d54e7d7d2ba90e2703642b4a"

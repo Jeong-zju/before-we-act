@@ -30,7 +30,7 @@ def main() -> None:
         "runtime_contract": True,
     }
     norm = manifest.get("normalization", {})
-    for key in ("qpos_mean", "qpos_std", "action_mean", "action_std"):
+    for key in ("qpos_mean", "qpos_std", "qpos_min", "qpos_max", "action_mean", "action_std", "action_min", "action_max"):
         values = np.asarray(norm.get(key, []), dtype=np.float64)
         checks["normalization_finite"] &= bool(values.shape == (8,) and np.isfinite(values).all())
     q_std = np.asarray(norm.get("qpos_std", []), dtype=float)
@@ -63,8 +63,8 @@ def main() -> None:
                 local = np.concatenate((q[:7], [q[7]])).astype(np.float32)
                 action[key] = {"joints": local[:7], "gripper": np.asarray([local[7]], dtype=np.float32)}
             env.step(action)
-            runtime_rows[task] = {"image_shape": list(own[0]["image"].shape), "qpos_shape": list(own[0]["qpos"].shape), "task_shape": list(own[0]["task"].shape)}
-            checks["runtime_contract"] &= own[0]["image"].shape == (1, 2, 3, 224, 448) and own[0]["qpos"].shape == (1, 2, 8)
+            runtime_rows[task] = {"image_shape": list(own[0]["image"].shape), "qpos_shape": list(own[0]["qpos"].shape), "task_shape": list(own[0]["task"].shape), "arm_id_shape": list(own[0]["arm_id"].shape)}
+            checks["runtime_contract"] &= own[0]["image"].shape == (1, 2, 3, 224, 448) and own[0]["qpos"].shape == (1, 2, 8) and own[0]["arm_id"].shape == (1, 2)
         except Exception as error:
             checks["runtime_contract"] = False; runtime_rows[task] = {"error": f"{type(error).__name__}: {error}"}
         finally:

@@ -41,17 +41,17 @@ def valid(stage: str) -> bool:
     tests = {
         "environment_preflight": lambda: True,
         "download": lambda: load_json(DATASET / "download_receipt.json").get("status") == "complete",
-        "prepare": lambda: load_json(DATA / "manifest.json").get("total_episodes") == 550,
+        "prepare": lambda: load_json(DATA / "manifest.json").get("total_episodes") == 550 and "qpos_min" in load_json(DATA / "manifest.json").get("normalization", {}),
         "data_audit": lambda: load_json(RUN / "audit.json").get("passed") is True,
         "interface_preflight": lambda: load_json(RUN / "preflight.json").get("passed") is True,
         "smoke_train": lambda: load_json(RUN / "smoke/smoke_status.json").get("step") == 2 and (RUN / "smoke/final.pt").is_file(),
         "smoke_checkpoint": lambda: load_json(RUN / "smoke/checkpoint_smoke.json").get("status") == "complete",
         "smoke_isolation": lambda: load_json(RUN / "smoke/isolation.json").get("status") == "complete",
         "smoke_validation": lambda: load_json(RUN / "smoke/validation/summary.json").get("total_episodes") == 11,
-        "formal_train": lambda: load_json(RUN / "formal/status.json").get("step") == 50000 and (RUN / "formal/final.pt").is_file(),
-        "formal_checkpoint": lambda: load_json(RUN / "formal/checkpoint_smoke.json").get("checkpoint_step") == 50000,
-        "formal_isolation": lambda: load_json(RUN / "formal/isolation.json").get("checkpoint_step") == 50000,
-        "validation20": lambda: load_json(RUN / "formal/validation20/summary.json").get("total_episodes") == 220,
+        "formal_train": lambda: load_json(RUN / "formal/status.json").get("step") == 60000 and (RUN / "formal/final.pt").is_file(),
+        "formal_checkpoint": lambda: load_json(RUN / "formal/checkpoint_smoke.json").get("checkpoint_step") == 60000,
+        "formal_isolation": lambda: load_json(RUN / "formal/isolation.json").get("checkpoint_step") == 60000,
+        "validation20": lambda: load_json(RUN / "formal/validation20/summary.json").get("total_episodes") == 220 and load_json(RUN / "formal/validation20/summary.json").get("diffusion_steps") == 100,
         "finalize": lambda: load_json(RUN / "final_report.json").get("status") == "complete",
     }
     return bool(tests[stage]())

@@ -295,7 +295,9 @@ def main():
     a_std = np.maximum(action.std((0, 1)), 1e-4)
     manifest["normalization"] = {
         "qpos_mean": qpos.mean((0, 1)).tolist(), "qpos_std": q_std.tolist(),
+        "qpos_min": qpos.min((0, 1)).tolist(), "qpos_max": qpos.max((0, 1)).tolist(),
         "action_mean": action.mean((0, 1)).tolist(), "action_std": a_std.tolist(),
+        "action_min": action.min((0, 1)).tolist(), "action_max": action.max((0, 1)).tolist(),
         "action_encoding": "absolute_joint7_binary_gripper1",
         "action_target_contract_id": ACTION_TARGET_CONTRACT_ID,
         "action_target_contract_sha256": ACTION_TARGET_CONTRACT_SHA256,

@@ -110,7 +110,8 @@ def main() -> None:
             batch = next(iterator)
         except StopIteration:
             iterator = iter(loader); batch = next(iterator)
-        obs = {key: value.to(device, non_blocking=True) for key, value in batch.items() if key in ("image", "qpos", "task")}
+        obs = {key: value.to(device, non_blocking=True) for key, value in batch.items()
+               if key in ("image", "qpos", "task", "arm_id", "peer_image", "peer_qpos", "peer_arm_id")}
         action = batch["action"].to(device, non_blocking=True)
         mask = batch["action_mask"].to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
