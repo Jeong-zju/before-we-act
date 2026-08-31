@@ -1,0 +1,377 @@
+{
+  "action_encoding": "absolute_joint7_binary_gripper1",
+  "checks": {
+    "all_episodes": true,
+    "all_frames": true,
+    "all_tasks": true,
+    "array_contract": true,
+    "causal_pairs": true,
+    "cuda_available_single_gpu": true,
+    "dataset_revision": true,
+    "normalization_finite": true,
+    "normalization_std_positive": true,
+    "runtime_contract": true,
+    "task_horizons": true
+  },
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+  "passed": true,
+  "policy_contract": "shared_checkpoint_strict_local_shared_head_own_wrist_qpos8_task11_arm_id2_to_local_action8",
+  "runtime": {
+    "ball_maze": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    },
+    "bin_sort": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    },
+    "block_balance": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    },
+    "carry_pot": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    },
+    "hinge_chest": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    },
+    "join_blocks": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    },
+    "pour_marbles": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    },
+    "spring_door": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    },
+    "transfer_cube": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    },
+    "transfer_gate": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    },
+    "transfer_reorient": {
+      "arm_id_shape": [
+        1,
+        2
+      ],
+      "image_shape": [
+        1,
+        2,
+        3,
+        224,
+        448
+      ],
+      "qpos_shape": [
+        1,
+        2,
+        8
+      ],
+      "task_shape": [
+        1,
+        11
+      ]
+    }
+  },
+  "schema": "duobench.latent-tom.preflight.v1",
+  "status": "complete",
+  "tasks": {
+    "ball_maze": {
+      "episodes": 50,
+      "frames": 17180,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 526
+    },
+    "bin_sort": {
+      "episodes": 50,
+      "frames": 13292,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 365
+    },
+    "block_balance": {
+      "episodes": 50,
+      "frames": 37688,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 1091
+    },
+    "carry_pot": {
+      "episodes": 50,
+      "frames": 17849,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 840
+    },
+    "hinge_chest": {
+      "episodes": 50,
+      "frames": 21954,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 610
+    },
+    "join_blocks": {
+      "episodes": 50,
+      "frames": 43431,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 1314
+    },
+    "pour_marbles": {
+      "episodes": 50,
+      "frames": 22098,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 549
+    },
+    "spring_door": {
+      "episodes": 50,
+      "frames": 40326,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 1070
+    },
+    "transfer_cube": {
+      "episodes": 50,
+      "frames": 21833,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 605
+    },
+    "transfer_gate": {
+      "episodes": 50,
+      "frames": 26261,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 630
+    },
+    "transfer_reorient": {
+      "episodes": 50,
+      "frames": 24076,
+      "shape_head": [
+        224,
+        224,
+        3
+      ],
+      "validation_max_steps": 883
+    }
+  }
+}

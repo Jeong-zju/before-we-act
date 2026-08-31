@@ -1,0 +1,8 @@
+{
+  "checkpoint_step": 60000,
+  "cross_actor_input_perturbation_max_abs_diff_expected_zero": 0.0,
+  "encoder_repeat_max_abs_diff": 0.0,
+  "policy_contract": "shared_checkpoint_strict_local_shared_head_own_wrist_qpos8_task11_arm_id2_to_local_action8",
+  "schema": "duobench.latent-tom.runtime-isolation.v1",
+  "status": "complete"
+}

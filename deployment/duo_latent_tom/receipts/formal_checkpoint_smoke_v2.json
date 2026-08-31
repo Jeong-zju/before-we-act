@@ -1,0 +1,14 @@
+{
+  "checkpoint_step": 60000,
+  "ddim_clip_sample": true,
+  "finite": true,
+  "normalization_mode": "limits",
+  "policy_contract": "shared_checkpoint_strict_local_shared_head_own_wrist_qpos8_task11_arm_id2_to_local_action8",
+  "schema": "duobench.latent-tom.checkpoint-smoke.v2",
+  "shape": [
+    1,
+    40,
+    8
+  ],
+  "status": "complete"
+}

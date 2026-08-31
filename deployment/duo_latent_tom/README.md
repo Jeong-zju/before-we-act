@@ -29,3 +29,24 @@ training plus checkpoint/isolation smoke tests, performs a two-step rollout
 smoke on every task, resumes full training, then launches Validation20 with
 the eleven frozen task-specific horizons. Atomic stage receipts make the
 entire sequence restartable.
+
+## Reproduction
+
+On the prepared server image, put the Hugging Face credential in
+`/workspace/.secrets/hf_token` and install the repository plus its pinned
+LatentToM, DuoBench, and RobotControlStack source revisions. Then run:
+
+```bash
+cd /workspace/repos/before-we-act
+DUO_LATENT_TOM_REPO=$PWD \\
+  DUO_LATENT_TOM_RUN=/workspace/runs/duobench-latent-tom \\
+  DUO_LATENT_TOM_PREPARED=/workspace/runs/duobench-latent-tom/data \\
+  bash deployment/duo_latent_tom/launch.sh
+```
+
+The launcher performs download, all-data preparation, audits, smoke tests,
+60,000-update training, checkpoint checks, and 20-rollout validation for every
+task. The formal run uses `duobench_latent_tom_v1.json`; the complete contract
+and source-file hashes are in `duobench_latent_tom_complete_config_v1.json`.
+The small JSON files under `receipts/` are hash-bound results from the
+completed server run; the large checkpoint is intentionally not vendored.
