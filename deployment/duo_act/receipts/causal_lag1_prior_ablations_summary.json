@@ -1,0 +1,906 @@
+{
+  "schema": "duobench-act-causal-prior-three-task-ablation-v1",
+  "status": "complete",
+  "seeds_by_task": {
+    "ball_maze": [
+      20260820,
+      20260821,
+      20260822
+    ],
+    "spring_door": [
+      20267820,
+      20267821,
+      20267822
+    ],
+    "transfer_gate": [
+      20269820,
+      20269821,
+      20269822
+    ]
+  },
+  "tasks": [
+    "ball_maze",
+    "spring_door",
+    "transfer_gate"
+  ],
+  "modes": [
+    "first",
+    "open30",
+    "ensemble"
+  ],
+  "runtime_contract": {
+    "state_gripper": "physical_width_gt_0.9_to_binary",
+    "gym_box_clip": false,
+    "controller_saturation": "MuJoCo_FR3_actuator_ctrlrange"
+  },
+  "checkpoints": {
+    "old": "/workspace/runs/duobench-act/formal/final.pt",
+    "new": "/workspace/runs/duobench-act/causal_lag1_prior/final.pt"
+  },
+  "cells": {
+    "old": {
+      "ball_maze": {
+        "first": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.5,
+          "max_stage_progress": 0.75,
+          "transitional_gripper_observations": 635
+        },
+        "open30": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.3333333333333333,
+          "max_stage_progress": 0.75,
+          "transitional_gripper_observations": 28
+        },
+        "ensemble": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.25,
+          "max_stage_progress": 0.75,
+          "transitional_gripper_observations": 1116
+        }
+      },
+      "spring_door": {
+        "first": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.1111111111111111,
+          "max_stage_progress": 0.3333333333333333,
+          "transitional_gripper_observations": 294
+        },
+        "open30": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.2222222222222222,
+          "max_stage_progress": 0.3333333333333333,
+          "transitional_gripper_observations": 64
+        },
+        "ensemble": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.0,
+          "max_stage_progress": 0.0,
+          "transitional_gripper_observations": 2766
+        }
+      },
+      "transfer_gate": {
+        "first": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.0,
+          "max_stage_progress": 0.0,
+          "transitional_gripper_observations": 0
+        },
+        "open30": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.0,
+          "max_stage_progress": 0.0,
+          "transitional_gripper_observations": 0
+        },
+        "ensemble": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.0,
+          "max_stage_progress": 0.0,
+          "transitional_gripper_observations": 0
+        }
+      }
+    },
+    "new": {
+      "ball_maze": {
+        "first": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.5,
+          "max_stage_progress": 0.75,
+          "transitional_gripper_observations": 810
+        },
+        "open30": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.75,
+          "max_stage_progress": 0.75,
+          "transitional_gripper_observations": 81
+        },
+        "ensemble": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.6666666666666666,
+          "max_stage_progress": 0.75,
+          "transitional_gripper_observations": 2422
+        }
+      },
+      "spring_door": {
+        "first": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.2222222222222222,
+          "max_stage_progress": 0.3333333333333333,
+          "transitional_gripper_observations": 901
+        },
+        "open30": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.5555555555555555,
+          "max_stage_progress": 0.6666666666666666,
+          "transitional_gripper_observations": 51
+        },
+        "ensemble": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.4444444444444444,
+          "max_stage_progress": 0.6666666666666666,
+          "transitional_gripper_observations": 1123
+        }
+      },
+      "transfer_gate": {
+        "first": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.16666666666666666,
+          "max_stage_progress": 0.5,
+          "transitional_gripper_observations": 495
+        },
+        "open30": {
+          "episodes": 3,
+          "successes": 2,
+          "success_rate": 0.6666666666666666,
+          "mean_max_stage_progress": 0.6666666666666666,
+          "max_stage_progress": 1.0,
+          "transitional_gripper_observations": 46
+        },
+        "ensemble": {
+          "episodes": 3,
+          "successes": 0,
+          "success_rate": 0.0,
+          "mean_max_stage_progress": 0.08333333333333333,
+          "max_stage_progress": 0.25,
+          "transitional_gripper_observations": 1449
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "checkpoint": "old",
+      "task": "ball_maze",
+      "mode": "first",
+      "seed": 20260820,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 15.533597074449062
+    },
+    {
+      "checkpoint": "old",
+      "task": "ball_maze",
+      "mode": "first",
+      "seed": 20260821,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 635,
+      "seconds": 18.913278645835817
+    },
+    {
+      "checkpoint": "old",
+      "task": "ball_maze",
+      "mode": "first",
+      "seed": 20260822,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 16.83798684179783
+    },
+    {
+      "checkpoint": "old",
+      "task": "ball_maze",
+      "mode": "open30",
+      "seed": 20260820,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 16,
+      "seconds": 10.705976892262697
+    },
+    {
+      "checkpoint": "old",
+      "task": "ball_maze",
+      "mode": "open30",
+      "seed": 20260821,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.25,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 12,
+      "seconds": 11.927368856035173
+    },
+    {
+      "checkpoint": "old",
+      "task": "ball_maze",
+      "mode": "open30",
+      "seed": 20260822,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 8.687819097191095
+    },
+    {
+      "checkpoint": "old",
+      "task": "ball_maze",
+      "mode": "ensemble",
+      "seed": 20260820,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 443,
+      "seconds": 15.993736649863422
+    },
+    {
+      "checkpoint": "old",
+      "task": "ball_maze",
+      "mode": "ensemble",
+      "seed": 20260821,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 673,
+      "seconds": 17.60058524645865
+    },
+    {
+      "checkpoint": "old",
+      "task": "ball_maze",
+      "mode": "ensemble",
+      "seed": 20260822,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 13.36994753498584
+    },
+    {
+      "checkpoint": "old",
+      "task": "spring_door",
+      "mode": "first",
+      "seed": 20267820,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.3333333333333333,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 294,
+      "seconds": 29.917554137296975
+    },
+    {
+      "checkpoint": "old",
+      "task": "spring_door",
+      "mode": "first",
+      "seed": 20267821,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 26.47162031661719
+    },
+    {
+      "checkpoint": "old",
+      "task": "spring_door",
+      "mode": "first",
+      "seed": 20267822,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 25.874904619529843
+    },
+    {
+      "checkpoint": "old",
+      "task": "spring_door",
+      "mode": "open30",
+      "seed": 20267820,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.3333333333333333,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 13,
+      "seconds": 16.199700228869915
+    },
+    {
+      "checkpoint": "old",
+      "task": "spring_door",
+      "mode": "open30",
+      "seed": 20267821,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 31,
+      "seconds": 16.310009503737092
+    },
+    {
+      "checkpoint": "old",
+      "task": "spring_door",
+      "mode": "open30",
+      "seed": 20267822,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.3333333333333333,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 20,
+      "seconds": 16.988748607225716
+    },
+    {
+      "checkpoint": "old",
+      "task": "spring_door",
+      "mode": "ensemble",
+      "seed": 20267820,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 919,
+      "seconds": 28.094476872123778
+    },
+    {
+      "checkpoint": "old",
+      "task": "spring_door",
+      "mode": "ensemble",
+      "seed": 20267821,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 921,
+      "seconds": 27.76362686417997
+    },
+    {
+      "checkpoint": "old",
+      "task": "spring_door",
+      "mode": "ensemble",
+      "seed": 20267822,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 926,
+      "seconds": 26.348401521332562
+    },
+    {
+      "checkpoint": "old",
+      "task": "transfer_gate",
+      "mode": "first",
+      "seed": 20269820,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 16.971787406131625
+    },
+    {
+      "checkpoint": "old",
+      "task": "transfer_gate",
+      "mode": "first",
+      "seed": 20269821,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 15.275179330259562
+    },
+    {
+      "checkpoint": "old",
+      "task": "transfer_gate",
+      "mode": "first",
+      "seed": 20269822,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 16.623433200642467
+    },
+    {
+      "checkpoint": "old",
+      "task": "transfer_gate",
+      "mode": "open30",
+      "seed": 20269820,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 10.29369689617306
+    },
+    {
+      "checkpoint": "old",
+      "task": "transfer_gate",
+      "mode": "open30",
+      "seed": 20269821,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 8.876468638889492
+    },
+    {
+      "checkpoint": "old",
+      "task": "transfer_gate",
+      "mode": "open30",
+      "seed": 20269822,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 8.774423762224615
+    },
+    {
+      "checkpoint": "old",
+      "task": "transfer_gate",
+      "mode": "ensemble",
+      "seed": 20269820,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 18.172391962260008
+    },
+    {
+      "checkpoint": "old",
+      "task": "transfer_gate",
+      "mode": "ensemble",
+      "seed": 20269821,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 15.830342279747128
+    },
+    {
+      "checkpoint": "old",
+      "task": "transfer_gate",
+      "mode": "ensemble",
+      "seed": 20269822,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 17.227755036205053
+    },
+    {
+      "checkpoint": "new",
+      "task": "ball_maze",
+      "mode": "first",
+      "seed": 20260820,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 14.661623816937208
+    },
+    {
+      "checkpoint": "new",
+      "task": "ball_maze",
+      "mode": "first",
+      "seed": 20260821,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 741,
+      "seconds": 17.137406575493515
+    },
+    {
+      "checkpoint": "new",
+      "task": "ball_maze",
+      "mode": "first",
+      "seed": 20260822,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 69,
+      "seconds": 14.63641721662134
+    },
+    {
+      "checkpoint": "new",
+      "task": "ball_maze",
+      "mode": "open30",
+      "seed": 20260820,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 27,
+      "seconds": 13.336239596828818
+    },
+    {
+      "checkpoint": "new",
+      "task": "ball_maze",
+      "mode": "open30",
+      "seed": 20260821,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 26,
+      "seconds": 10.763742483220994
+    },
+    {
+      "checkpoint": "new",
+      "task": "ball_maze",
+      "mode": "open30",
+      "seed": 20260822,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 28,
+      "seconds": 10.544800890609622
+    },
+    {
+      "checkpoint": "new",
+      "task": "ball_maze",
+      "mode": "ensemble",
+      "seed": 20260820,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.5,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 811,
+      "seconds": 17.732076342217624
+    },
+    {
+      "checkpoint": "new",
+      "task": "ball_maze",
+      "mode": "ensemble",
+      "seed": 20260821,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 783,
+      "seconds": 16.48870798200369
+    },
+    {
+      "checkpoint": "new",
+      "task": "ball_maze",
+      "mode": "ensemble",
+      "seed": 20260822,
+      "success": false,
+      "steps": 526,
+      "max_stage_progress": 0.75,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 828,
+      "seconds": 15.781525167636573
+    },
+    {
+      "checkpoint": "new",
+      "task": "spring_door",
+      "mode": "first",
+      "seed": 20267820,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.3333333333333333,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 74,
+      "seconds": 27.497504157945514
+    },
+    {
+      "checkpoint": "new",
+      "task": "spring_door",
+      "mode": "first",
+      "seed": 20267821,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.3333333333333333,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 827,
+      "seconds": 27.31115507055074
+    },
+    {
+      "checkpoint": "new",
+      "task": "spring_door",
+      "mode": "first",
+      "seed": 20267822,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 26.770894055254757
+    },
+    {
+      "checkpoint": "new",
+      "task": "spring_door",
+      "mode": "open30",
+      "seed": 20267820,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.6666666666666666,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 19,
+      "seconds": 16.26170675177127
+    },
+    {
+      "checkpoint": "new",
+      "task": "spring_door",
+      "mode": "open30",
+      "seed": 20267821,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.6666666666666666,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 18,
+      "seconds": 16.075443834997714
+    },
+    {
+      "checkpoint": "new",
+      "task": "spring_door",
+      "mode": "open30",
+      "seed": 20267822,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.3333333333333333,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 14,
+      "seconds": 16.03972346894443
+    },
+    {
+      "checkpoint": "new",
+      "task": "spring_door",
+      "mode": "ensemble",
+      "seed": 20267820,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.3333333333333333,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 323,
+      "seconds": 28.53859931975603
+    },
+    {
+      "checkpoint": "new",
+      "task": "spring_door",
+      "mode": "ensemble",
+      "seed": 20267821,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.3333333333333333,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 423,
+      "seconds": 28.061282940208912
+    },
+    {
+      "checkpoint": "new",
+      "task": "spring_door",
+      "mode": "ensemble",
+      "seed": 20267822,
+      "success": false,
+      "steps": 1070,
+      "max_stage_progress": 0.6666666666666666,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 377,
+      "seconds": 27.725339537486434
+    },
+    {
+      "checkpoint": "new",
+      "task": "transfer_gate",
+      "mode": "first",
+      "seed": 20269820,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 16.299109912477434
+    },
+    {
+      "checkpoint": "new",
+      "task": "transfer_gate",
+      "mode": "first",
+      "seed": 20269821,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0.5,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 495,
+      "seconds": 16.707183650694788
+    },
+    {
+      "checkpoint": "new",
+      "task": "transfer_gate",
+      "mode": "first",
+      "seed": 20269822,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 0,
+      "seconds": 15.239122631028295
+    },
+    {
+      "checkpoint": "new",
+      "task": "transfer_gate",
+      "mode": "open30",
+      "seed": 20269820,
+      "success": true,
+      "steps": 484,
+      "max_stage_progress": 1.0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 15,
+      "seconds": 8.24247616250068
+    },
+    {
+      "checkpoint": "new",
+      "task": "transfer_gate",
+      "mode": "open30",
+      "seed": 20269821,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 14,
+      "seconds": 9.448559735901654
+    },
+    {
+      "checkpoint": "new",
+      "task": "transfer_gate",
+      "mode": "open30",
+      "seed": 20269822,
+      "success": true,
+      "steps": 537,
+      "max_stage_progress": 1.0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 17,
+      "seconds": 9.726132803596556
+    },
+    {
+      "checkpoint": "new",
+      "task": "transfer_gate",
+      "mode": "ensemble",
+      "seed": 20269820,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 463,
+      "seconds": 17.045220786705613
+    },
+    {
+      "checkpoint": "new",
+      "task": "transfer_gate",
+      "mode": "ensemble",
+      "seed": 20269821,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0.25,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 446,
+      "seconds": 16.158616546541452
+    },
+    {
+      "checkpoint": "new",
+      "task": "transfer_gate",
+      "mode": "ensemble",
+      "seed": 20269822,
+      "success": false,
+      "steps": 630,
+      "max_stage_progress": 0,
+      "state_gripper_encoding": "physical_width_gt_0.9_to_binary",
+      "gym_box_clip": false,
+      "transitional_gripper_observations": 540,
+      "seconds": 15.604674328118563
+    }
+  ]
+}
