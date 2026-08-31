@@ -80,12 +80,28 @@ class TeamBeliefConfig:
             raise ValueError("belief_free_nats must be non-negative")
         if not 0.0 <= self.belief_representation_scale <= 1.0:
             raise ValueError("belief_representation_scale must be in [0, 1]")
-        if self.source_frequency_hz != 20:
-            raise ValueError("3-N2 is frozen to the audited 20 Hz source corpus")
-        if tuple(self.future_offsets_steps) != FUTURE_OFFSETS_STEPS:
-            raise ValueError("future step anchors must remain [4, 8, 16, 32]")
+        if self.source_frequency_hz < 1:
+            raise ValueError("source frequency must be positive")
+        if len(self.future_offsets_steps) != len(FUTURE_OFFSETS_SECONDS):
+            raise ValueError("exactly four future step anchors are required")
+        if any(int(step) < 1 for step in self.future_offsets_steps) or any(
+            right <= left
+            for left, right in zip(
+                self.future_offsets_steps, self.future_offsets_steps[1:]
+            )
+        ):
+            raise ValueError("future step anchors must be positive and increasing")
         if tuple(self.future_offsets_seconds) != FUTURE_OFFSETS_SECONDS:
             raise ValueError("future second anchors must remain [0.2, 0.4, 0.8, 1.6]")
+        expected_steps = tuple(
+            int(round(seconds * self.source_frequency_hz))
+            for seconds in self.future_offsets_seconds
+        )
+        if tuple(self.future_offsets_steps) != expected_steps:
+            raise ValueError(
+                "future step anchors must preserve the registered second anchors "
+                f"at {self.source_frequency_hz} Hz: expected {expected_steps}"
+            )
 
 
 @dataclass
@@ -207,7 +223,7 @@ class ActionConditionedFuturePredictor(nn.Module):
         nn.init.normal_(self.delta_head.weight, mean=0.0, std=0.002)
         nn.init.zeros_(self.delta_head.bias)
         self.horizon_gain_raw = nn.Parameter(
-            torch.zeros(len(FUTURE_OFFSETS_STEPS))
+            torch.zeros(len(config.future_offsets_steps))
         )
 
     def horizon_gain(self) -> torch.Tensor:
@@ -239,7 +255,7 @@ class ActionConditionedFuturePredictor(nn.Module):
         ):
             raise ValueError("future predictor view mask must be boolean [batch,view]")
 
-        horizon = max(FUTURE_OFFSETS_STEPS)
+        horizon = max(self.config.future_offsets_steps)
         if future_action is None:
             future_action = current_visual.new_zeros(
                 batch, horizon, self.config.action_dim
@@ -289,7 +305,7 @@ class ActionConditionedFuturePredictor(nn.Module):
         projected_action = projected_action * future_action_mask.unsqueeze(-1).to(
             projected_action.dtype
         )
-        boundaries = (0, *FUTURE_OFFSETS_STEPS)
+        boundaries = (0, *self.config.future_offsets_steps)
         action_segments = []
         for start, end in zip(boundaries[:-1], boundaries[1:], strict=True):
             segment_mask = future_action_mask[:, start:end]
@@ -304,14 +320,14 @@ class ActionConditionedFuturePredictor(nn.Module):
             -1, self.config.max_views, -1, -1
         ).reshape(
             batch * self.config.max_views,
-            len(FUTURE_OFFSETS_STEPS),
+            len(self.config.future_offsets_steps),
             self.config.d_model,
         )
         rollout, _ = self.recurrent(action, hidden)
         anchored = rollout.view(
             batch,
             self.config.max_views,
-            len(FUTURE_OFFSETS_STEPS),
+            len(self.config.future_offsets_steps),
             self.config.d_model,
         ).transpose(1, 2)
         delta = self.delta_head(self.output_norm(anchored))
@@ -553,7 +569,7 @@ class TrainingTeacherBranch(nn.Module):
             raise ValueError("teacher current/future batch differs")
         if current.shape[1:] != future.shape[2:]:
             raise ValueError("teacher current/future view and patch layouts differ")
-        if future.shape[1] != len(FUTURE_OFFSETS_STEPS):
+        if future.shape[1] != len(self.config.future_offsets_steps):
             raise ValueError("teacher must preserve all four future anchor slots")
         if inputs.current_visual_mask.shape != current.shape[:-1]:
             raise ValueError("teacher current visual mask differs")
@@ -659,7 +675,7 @@ class PredictiveTeamBeliefCore(nn.Module):
         self.uncertainty_gain_raw = nn.Parameter(torch.tensor(-2.25))
         self.future_predictor = ActionConditionedFuturePredictor(config)
         self.teammate_delta_head = nn.Linear(
-            d, len(FUTURE_OFFSETS_STEPS) * config.state_dim
+            d, len(config.future_offsets_steps) * config.state_dim
         )
         self.teammate_action_head = nn.Linear(d, 16 * config.action_dim * 2)
         self.teacher_branch: TrainingTeacherBranch | None = (
@@ -933,7 +949,7 @@ class PredictiveTeamBeliefCore(nn.Module):
             future_action_mask,
         )
         teammate_delta = self.teammate_delta_head(final_mu[:, 1]).view(
-            batch, len(FUTURE_OFFSETS_STEPS), self.config.state_dim
+            batch, len(self.config.future_offsets_steps), self.config.state_dim
         )
         teammate_action_parameters = self.teammate_action_head(final_mu[:, 1]).view(
             batch, 16, self.config.action_dim, 2

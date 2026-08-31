@@ -1,0 +1,188 @@
+"""Closed-loop B-core/TUNE evaluator with paired local-input enforcement."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+from typing import Any, Mapping
+
+import numpy as np
+
+from .config import ACTION_DIM, ACTION_HORIZON, ACTION_ENCODING, TASKS, VALIDATION_EPISODES, VALIDATION_MAX_STEPS
+from .stage_common import artifact, assert_common_paths, atomic_json, common_parser, publish_result, require_stage_result, sha256_file
+from .seed_discovery import SEED_MANIFEST_SCHEMA
+
+
+def _is_smoke_operation(args: argparse.Namespace) -> bool:
+    return str(getattr(args, "operation", "")) in {"smoke-closed-loop", "smoke", "smoke-paired"}
+
+
+def _stage_name(operation: str) -> str:
+    return {
+        "smoke-closed-loop": "bcore_smoke_closed_loop",
+        "validation20": "bcore_validation20",
+    }.get(str(operation), "bcore_evaluate")
+
+
+def _progress_paths(run: Path, operation: str, task: str) -> tuple[Path, Path]:
+    root = run / "progress" / _stage_name(operation)
+    return root / f"{task}.jsonl", root / f"{task}.receipt.json"
+
+
+def _checkpoint(args: argparse.Namespace) -> Path:
+    smoke = _is_smoke_operation(args)
+    stage = "bcore_smoke_train" if smoke else "bcore_select"
+    dep = require_stage_result(args.run, stage, config_sha256=args.config_sha256)
+    root = (args.run / "artifacts" / stage).expanduser().resolve()
+    candidates: list[Path] = []
+    for row in dep.get("artifacts", []):
+        if not isinstance(row, Mapping):
+            continue
+        path = Path(str(row.get("path", "")))
+        if not path.is_absolute():
+            path = args.run / path
+        try:
+            path = path.expanduser().resolve(strict=True)
+        except FileNotFoundError:
+            continue
+        if (
+            root in path.parents
+            and path.is_file()
+            and row.get("kind")
+            in {"checkpoint", "deployment_checkpoint", "bcore_checkpoint"}
+            and sha256_file(path) == row.get("sha256")
+        ):
+            candidates.append(path)
+    verified = list(dict.fromkeys(candidates))
+    declared: list[Path] = []
+    for key in ("checkpoint", "deployment_checkpoint", "selected_checkpoint"):
+        raw = dep.get(key)
+        if not raw:
+            continue
+        path = Path(str(raw))
+        if not path.is_absolute():
+            path = args.run / path
+        try:
+            path = path.expanduser().resolve(strict=True)
+        except FileNotFoundError:
+            continue
+        # A declared field may disambiguate hashed artifacts, but can never
+        # introduce an unhashed checkpoint or escape the stage namespace.
+        if path in verified:
+            declared.append(path)
+    declared = list(dict.fromkeys(declared))
+    values = declared if declared else verified
+    if len(values) != 1:
+        raise RuntimeError(
+            f"{stage} must publish exactly one hash-verified B-core deployment "
+            f"checkpoint below {root}; found {values}"
+        )
+    return values[0]
+
+
+def _runtime(checkpoint: Path, args: argparse.Namespace):
+    # bcore_runtime is supplied by the benchmark adapter.  Import lazily so a
+    # data-only audit does not pull CUDA/SAPIEN into its process.
+    try:
+        from .bcore_runtime import BicoordBcoreRuntime  # preferred spelling
+    except ImportError:
+        try:
+            from .bcore_runtime import BiCoordBcoreRuntime as BicoordBcoreRuntime
+        except ImportError as error:
+            raise RuntimeError("bicoord_care.bcore_runtime is required for physical B-core validation") from error
+    return BicoordBcoreRuntime.from_checkpoint(checkpoint, device=os.environ.get("BICOORD_EVAL_DEVICE", "cuda:0"), dino_model=str(args.dino_model))
+
+
+def _official_seeds(args: argparse.Namespace, task: str, *, count: int) -> list[int]:
+    """Load and hash-check the expert-valid seed manifest; never synthesize it."""
+
+    stage = "seed_discovery_smoke" if _is_smoke_operation(args) else "seed_discovery"
+    dependency = require_stage_result(args.run, stage, config_sha256=args.config_sha256)
+    path = Path(str(dependency.get("seed_manifest", "")))
+    digest = dependency.get("seed_manifest_sha256")
+    if not path.is_file() or not isinstance(digest, str) or sha256_file(path) != digest:
+        raise RuntimeError("seed discovery manifest is missing or changed")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if value.get("schema") != SEED_MANIFEST_SCHEMA or value.get("policy_independent") is not True:
+        raise RuntimeError("seed manifest is not the frozen policy-independent contract")
+    rows = value.get("valid_seeds", {}).get(task)
+    if not isinstance(rows, list) or len(rows) < count or len(set(rows)) != len(rows):
+        raise RuntimeError(f"expert-valid seed coverage is incomplete for {task}")
+    return [int(seed) for seed in rows[:count]]
+
+
+def _make_env(root: Path, task: str, seed: int):
+    if str(root) not in sys.path: sys.path.insert(0, str(root))
+    import importlib, yaml
+    module = importlib.import_module(f"envs.{task}"); cls = getattr(module, task); env = cls()
+    cfg = yaml.safe_load((root / "task_config" / "demo_clean.yml").read_text())
+    cfg.update({"task_name": task, "task_config": "demo_clean", "seed": int(seed), "now_ep_num": 0, "is_test": True, "eval_mode": True, "render_freq": 0, "save_data": False, "save_path": str(root / "data"), "need_plan": False, "dual_arm": True, "data_type": {"rgb": True, "qpos": True, "endpose": False, "depth": False, "pointcloud": False, "third_view": False}})
+    emb = cfg.get("embodiment", ["aloha-agilex"]); emb_cfg = yaml.safe_load((root / "task_config" / "_embodiment_config.yml").read_text()); robot = Path(emb_cfg[emb[0]]["file_path"]); robot = robot if robot.is_absolute() else root / robot
+    robot_conf = yaml.safe_load((robot / "config.yml").read_text()); cfg.update({"left_robot_file": str(robot), "right_robot_file": str(robot), "left_embodiment_config": robot_conf, "right_embodiment_config": robot_conf, "dual_arm_embodied": True})
+    env.setup_demo(**cfg); return env
+
+
+def _run_episode(runtime: Any, root: Path, task: str, seed: int, limit: int, progress: Path, belief_enabled: bool = True) -> dict[str, Any]:
+    env = _make_env(root, task, seed); runtime.reset(task); observation = env.get_obs(); digest = hashlib.sha256(); success = False; steps = 0; progress_value = 0.0
+    progress.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with progress.open("a") as stream:
+            for step in range(limit):
+                action, diagnostic = runtime.act(observation, task, belief_enabled=belief_enabled)
+                # Runtime must return one controller command per arm, not a
+                # single concatenated vector or peer-conditioned tensor.
+                if not isinstance(action, Mapping) or set(action) != {0, 1}:
+                    raise ValueError(f"B-core runtime action keys differ: {action!r}")
+                rows = []
+                for arm in (0, 1):
+                    value = action[arm]
+                    if isinstance(value, Mapping):
+                        joints = np.asarray(value.get("joints"), np.float32).reshape(-1); grip = np.asarray(value.get("gripper"), np.float32).reshape(-1)
+                        value = np.r_[joints, grip]
+                    value = np.asarray(value, np.float32).reshape(-1)
+                    if value.shape != (ACTION_DIM,) or not np.isfinite(value).all(): raise ValueError("B-core local action must be finite [7]")
+                    rows.append(value); digest.update(value.tobytes())
+                command = np.concatenate(rows)
+                env.take_action(command); observation = env.get_obs(); steps = step + 1
+                try: success = bool(getattr(env, "eval_success", False) or env.check_success())
+                except Exception: success = bool(getattr(env, "eval_success", False))
+                progress_value = float(np.clip(getattr(env, "stage_eval_score", 0.0), 0.0, 1.0))
+                stream.write(json.dumps({"task": task, "seed": seed, "step": steps, "max_steps": limit, "progress": progress_value, "success": success, "belief_enabled": belief_enabled, "diagnostic": diagnostic}, default=str, sort_keys=True) + "\n"); stream.flush()
+                if success: break
+    finally:
+        try: env.close_env()
+        except Exception:
+            try: env.close()
+            except Exception: pass
+    return {"task": task, "seed": int(seed), "success": success, "steps": steps, "max_steps": limit, "progress": progress_value, "action_trace_sha256": digest.hexdigest(), "strictly_decentralized": True, "per_arm_independent_inputs": True, "belief_enabled": belief_enabled}
+
+
+def run(args: argparse.Namespace) -> dict[str, Any]:
+    assert_common_paths(args)
+    task = getattr(args, "task", None)
+    if task not in TASKS: raise ValueError(f"invalid B-core task: {task}")
+    episodes = int(getattr(args, "episodes", 1)); expected = VALIDATION_EPISODES if args.operation == "validation20" else 1
+    if episodes != expected: raise ValueError(f"{args.operation} requires {expected} episodes")
+    limit = int(getattr(args, "max_steps", 0) or VALIDATION_MAX_STEPS[task])
+    if limit != VALIDATION_MAX_STEPS[task]: raise ValueError(f"{task}: max steps must be {VALIDATION_MAX_STEPS[task]}")
+    checkpoint = _checkpoint(args); runtime = _runtime(checkpoint, args)
+    if args.operation == "validation20":
+        seeds = _official_seeds(args, task, count=episodes)
+    else:
+        seed_start = int(getattr(args, "seed_start", None) or (20260930 + TASKS.index(task) * 100))
+        seeds = [seed_start + i for i in range(episodes)]
+    stage = _stage_name(args.operation)
+    progress, receipt = _progress_paths(args.run, args.operation, task)
+    rows = [_run_episode(runtime, args.benchmark_repo, task, seed, limit, progress) for seed in seeds]
+    atomic_json(receipt, {"schema": "before-we-act.bicoord.validation-progress/1", "stage": stage, "task": task, "episodes": episodes, "completed": episodes, "max_steps": limit, "seeds": seeds, "seed_source": "expert_seed_manifest" if args.operation == "validation20" else "smoke_probe", "checkpoint": str(checkpoint), "checkpoint_sha256": sha256_file(checkpoint), "selector": "bcore"})
+    return publish_result(args, stage=stage, include_model_contract=True, artifacts=[artifact(progress, kind="validation_progress"), artifact(receipt, kind="progress_receipt")], task=task, episodes=episodes, completed=episodes, successes=sum(int(r["success"]) for r in rows), max_steps=limit, seeds=seeds, seed_source="expert_seed_manifest" if args.operation == "validation20" else "smoke_probe", progress_receipt=str(receipt.resolve()), checkpoint=str(checkpoint), checkpoint_sha256=sha256_file(checkpoint), action_encoding=ACTION_ENCODING, action_horizon=ACTION_HORIZON, paired=False, selector_off_control=False)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = common_parser(__doc__, ("smoke-closed-loop", "validation20")); parser.add_argument("--task", choices=TASKS, required=True); parser.add_argument("--episodes", type=int, default=1); parser.add_argument("--max-steps", type=int); parser.add_argument("--record-progress", action="store_true"); parser.add_argument("--seed-start", type=int); args = parser.parse_args(argv); run(args); return 0
+
+
+if __name__ == "__main__": raise SystemExit(main())

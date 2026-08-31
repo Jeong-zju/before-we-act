@@ -364,6 +364,7 @@ class TemporalActionBackboneOps:
         dino_model: str,
         image_height: int = 480,
         image_width: int = 640,
+        strict_dino_contract: bool = False,
     ) -> None:
         if not isinstance(self, nn.Module):
             raise TypeError("temporal action backbone requires nn.Module ownership")
@@ -375,6 +376,31 @@ class TemporalActionBackboneOps:
         token = os.environ.get("HF_TOKEN")
         processor = AutoImageProcessor.from_pretrained(dino_model, token=token)
         self.vision = AutoModel.from_pretrained(dino_model, token=token)
+        if strict_dino_contract:
+            observed = {
+                "model_type": getattr(self.vision.config, "model_type", None),
+                "hidden_size": getattr(self.vision.config, "hidden_size", None),
+                "patch_size": getattr(self.vision.config, "patch_size", None),
+                "num_register_tokens": getattr(
+                    self.vision.config, "num_register_tokens", None
+                ),
+                "image_size": getattr(self.vision.config, "image_size", None),
+            }
+            expected = {
+                "model_type": "dinov3_vit",
+                "hidden_size": 768,
+                "patch_size": 16,
+                "num_register_tokens": 4,
+                "image_size": 224,
+            }
+            if observed != expected:
+                raise ValueError(
+                    f"strict DINOv3 ViT-B/16 model contract differs: {observed}"
+                )
+            mean = tuple(float(value) for value in processor.image_mean)
+            std = tuple(float(value) for value in processor.image_std)
+            if mean != (0.485, 0.456, 0.406) or std != (0.229, 0.224, 0.225):
+                raise ValueError("strict DINOv3 normalization contract differs")
         self.vision.requires_grad_(False)
         self.vision.eval()
         self.vision_backbone = "dinov3_vitb16_frozen"
@@ -385,7 +411,13 @@ class TemporalActionBackboneOps:
         self.register_buffer(
             "dino_std", torch.tensor(processor.image_std).view(1, -1, 1, 1)
         )
+        self.strict_dino_contract = bool(strict_dino_contract)
         self.vision_proj = nn.Linear(self.vision.config.hidden_size, d_model)
+        # These are benchmark-native input/output widths, not hidden model
+        # capacity.  The constructor has always exposed them; retaining them
+        # here removes the historical RoboFactory-only validator below.
+        self.state_dim = int(state_dim)
+        self.action_dim = int(action_dim)
         self.state = nn.Sequential(
             nn.Linear(state_dim, d_model),
             nn.GELU(),
@@ -578,10 +610,18 @@ class TemporalActionBackboneOps:
             raise ValueError(
                 f"history visual contract differs: {history_visual_raw.shape}"
             )
-        if tuple(history_qpos.shape[1:]) != (HISTORY_STEPS, 9):
-            raise ValueError("history qpos contract differs")
-        if tuple(history_action.shape[1:]) != (HISTORY_STEPS, 8):
-            raise ValueError("history action contract differs")
+        if tuple(history_qpos.shape[1:]) != (HISTORY_STEPS, self.state_dim):
+            raise ValueError(
+                "history qpos contract differs: expected "
+                f"{(HISTORY_STEPS, self.state_dim)}, got "
+                f"{tuple(history_qpos.shape[1:])}"
+            )
+        if tuple(history_action.shape[1:]) != (HISTORY_STEPS, self.action_dim):
+            raise ValueError(
+                "history action contract differs: expected "
+                f"{(HISTORY_STEPS, self.action_dim)}, got "
+                f"{tuple(history_action.shape[1:])}"
+            )
         visual = torch.cat(
             (
                 history_visual_raw[:, :-1].to(current_visual_raw.dtype),

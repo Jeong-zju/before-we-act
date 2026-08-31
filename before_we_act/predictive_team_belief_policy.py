@@ -165,6 +165,7 @@ class PredictiveTeamBeliefPolicy(nn.Module):
         dino_model: str,
         image_height: int = 480,
         image_width: int = 640,
+        strict_dino_contract: bool = False,
         include_teacher: bool = True,
         residual_safety: Mapping[str, object] | ResidualSafetyConfig | None = None,
     ) -> None:
@@ -192,6 +193,7 @@ class PredictiveTeamBeliefPolicy(nn.Module):
             dino_model=dino_model,
             image_height=image_height,
             image_width=image_width,
+            strict_dino_contract=strict_dino_contract,
         )
         self.team_belief_config = team_belief_config
         self.belief_core = PredictiveTeamBeliefCore(

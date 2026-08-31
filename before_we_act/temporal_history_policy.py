@@ -36,6 +36,7 @@ class TemporalHistoryPolicy(nn.Module):
         dino_model: str,
         image_height: int = 480,
         image_width: int = 640,
+        strict_dino_contract: bool = False,
     ) -> None:
         nn.Module.__init__(self)
         TemporalActionBackboneOps._initialize_temporal_action_backbone(
@@ -53,6 +54,7 @@ class TemporalHistoryPolicy(nn.Module):
             dino_model=dino_model,
             image_height=image_height,
             image_width=image_width,
+            strict_dino_contract=strict_dino_contract,
         )
 
     train = TemporalActionBackboneOps.train
