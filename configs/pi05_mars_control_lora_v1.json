@@ -1,0 +1,221 @@
+{
+  "schema": "bwa.pi05.mars_control.lora.config.v1",
+  "status": "frozen",
+  "purpose": "Machine-readable record of every configurable field used by the formal pi0.5 LoRA run on MARS-Control.",
+  "source": {
+    "openpi_commit": "15a9616a00943ada6c20a0f158e3adb39df2ccac",
+    "robofactory_commit": "2d34fb38c80cb06550a5dbf99abac2c89f4336ed",
+    "config_module": "deployment/pi05_reproduction/openpi_patch/src/openpi/training/mars_control_config.py",
+    "remote_config_module_sha256": "885b438cd97f903880eb3360bd8534f061bdcaed48889757295168c4c5ffb959",
+    "adaptation_source_sha256": {
+      "common.py": "b6dbaf50f156afff96fca24cacaa3c96c49fc6c69c3c3717b01a1a74a94d00bb",
+      "mars_control_config.py": "885b438cd97f903880eb3360bd8534f061bdcaed48889757295168c4c5ffb959",
+      "mars_control_dataset.py": "eeab31c92a725b052ccafae42b33c4d7465984142d5c32adf2cd5ee6ba012046",
+      "audit_norm.py": "069a8415a81c821476637d1f3a9663a26a29e49b4fd6b8a011366aa7df12a3e2",
+      "supervisor.py": "cf37855a011bd1a2d296035a4f9c0d1f835282bb3e70966c673a34b4738a5dff",
+      "validation_launcher.py": "32b5a50539d16a7ef67bcb8bbebefa7f320ed41f93c7f0dbecadd36aa4ce90d2",
+      "task_validate.py": "87f75d4f5893361c0ec4798146e9f19ed00ba45526887ea492d6c5187dbe993c",
+      "rpc_server.py": "22551112673653aefc7b055e0332886de6b6e34ca2976163a95dc0ce57881ee6"
+    },
+    "remote_run_root": "/workspace/runs/pi05_mars",
+    "remote_checkpoint": "/workspace/runs/pi05_mars/checkpoints/pi05_mars_control_lora/all600_4gpu_dp_b128/29999"
+  },
+  "openpi_train_config": {
+    "name": "pi05_mars_control_lora",
+    "project_name": "openpi",
+    "exp_name": "all600_4gpu_dp_b128",
+    "weight_loader": "gs://openpi-assets/checkpoints/pi05_base/params",
+    "pytorch_weight_path": null,
+    "pytorch_training_precision": "bfloat16",
+    "ema_decay": null,
+    "assets_base_dir": "/workspace/runs/pi05_mars/assets",
+    "checkpoint_base_dir": "/workspace/runs/pi05_mars/checkpoints",
+    "seed": 42,
+    "batch_size": 128,
+    "num_workers": 8,
+    "num_train_steps": 30000,
+    "log_interval": 100,
+    "save_interval": 1000,
+    "keep_period": 10000,
+    "overwrite": false,
+    "resume": false,
+    "wandb_enabled": false,
+    "fsdp_devices": 1,
+    "freeze_filter": "All(PathRegex('.*llm.*'), Not(PathRegex('.*lora.*'))) in the NNX parameter tree",
+    "policy_metadata": {
+      "benchmark": "MARS-Control",
+      "protocol": "shared_weights_decentralized_local_rgb_qpos_to_local_action8",
+      "episodes": 600,
+      "global_batch_size": 128,
+      "sample_budget": 3840000,
+      "parallelism": "four-way data parallel"
+    }
+  },
+  "data": {
+    "repo_id": "mars_control",
+    "dataset_root": "/workspace/datasets/mars_control",
+    "tasks": [
+      {"name": "place_cube_in_cup", "hf_repo": "Jeong-zju/mars-control-place-cube-in-cup-rf", "revision": "3878150bec8f4830e1a57a01a13762a10abc8d52", "prompt": "Place the cube in the cup", "episodes": 150, "arms": 2, "indexed_local_timesteps": 102604},
+      {"name": "strike_cube_hard", "hf_repo": "Jeong-zju/mars-control-strike-cube-hard-rf", "revision": "bc7051cb0560058bf426e792871faa1ca8a4f78f", "prompt": "Strike the cube hard", "episodes": 150, "arms": 2, "indexed_local_timesteps": 147138},
+      {"name": "three_robots_place_shoes", "hf_repo": "Jeong-zju/mars-control-three-robots-place-shoes-rf", "revision": "ad231c7eff530f71f0c5302b6c03c7164bbcc896", "prompt": "Three robots place shoes", "episodes": 150, "arms": 3, "indexed_local_timesteps": 235356},
+      {"name": "four_robots_stack_cube", "hf_repo": "Jeong-zju/mars-control-four-robots-stack-cube-rf", "revision": "3fa4833f5e34c3565da04af99c62d516e048fcfc", "prompt": "Four robots stack the cube", "episodes": 150, "arms": 4, "indexed_local_timesteps": 550220}
+    ],
+    "episodes_total": 600,
+    "local_arm_streams": 1650,
+    "indexed_local_timesteps": 1035318,
+    "split": "none; all demonstrations used for training",
+    "sample_unit": "one local-arm stream timestep",
+    "task_sampling": "four equal-probability virtual task lanes; shorter lanes wrap",
+    "shuffle": true,
+    "dataloader_seed": 42,
+    "dataloader_drop_last": true,
+    "dataloader_persistent_workers": true,
+    "dataloader_multiprocessing_context": "spawn",
+    "action_horizon": 16,
+    "short_trajectory_padding": "repeat final valid action",
+    "action_sequence_keys": ["actions"],
+    "terminal_truncation": "first HDF5 data/done index inclusive",
+    "required_schema": {
+      "image": "own head camera uint8 HWC 240x320x3",
+      "state": "own panda qpos float32 9-D",
+      "action": "own commanded pd_joint_pos float32 8-D",
+      "trajectory_success": "terminal success must be true"
+    }
+  },
+  "interface": {
+    "policy_contract": "shared_weights_decentralized_local_rgb_qpos_to_local_action8",
+    "observation": "own head RGB + own 9-D qpos + task prompt",
+    "output": "own local 8-D action",
+    "shared_weights": true,
+    "forbidden_inputs": ["peer_rgb", "peer_qpos", "global_rgb", "joint_action", "arm_id"],
+    "action_bounds_low": [-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973, -1.0],
+    "action_bounds_high": [2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973, 1.0],
+    "action_codec": "DeltaActions on joints 0..6; dimension 7 gripper remains absolute; inverse AbsoluteActions exactly once"
+  },
+  "model": {
+    "model_type": "PI05",
+    "pi05": true,
+    "paligemma_variant": "gemma_2b_lora",
+    "action_expert_variant": "gemma_300m_lora",
+    "action_dim": 32,
+    "action_horizon": 16,
+    "max_token_len": 200,
+    "dtype": "bfloat16",
+    "discrete_state_input": true,
+    "pytorch_compile_mode": "max-autotune",
+    "initialization": "pi05_base checkpoint",
+    "weight_loader": "gs://openpi-assets/checkpoints/pi05_base/params",
+    "trainable_parameters": "LLM non-LoRA parameters frozen by Pi0Config.get_freeze_filter(); LLM LoRA parameters and non-LLM vision/action/time projection parameters remain trainable"
+  },
+  "transforms": {
+    "repack": {"image": "observation/image", "state": "observation/state", "actions": "actions", "prompt": "prompt"},
+    "input_transform": "RoboFactoryInputs(PI05); own camera -> base_0_rgb; left/right wrist slots zero-filled and masked",
+    "model_transforms": [
+      "InjectDefaultPrompt(None)",
+      "ResizeImages(224,224)",
+      "TokenizePrompt(PaligemmaTokenizer(max_token_len=200), discrete_state_input=True)",
+      "PadStatesAndActions(model_action_dim=32)",
+      "CastFloat32"
+    ],
+    "augmentation": "none",
+    "use_quantile_norm": true,
+    "image_normalization": "uint8 HWC is converted by the OpenPI vision preprocessing; no dataset augmentation"
+  },
+  "normalization": {
+    "stats_source": "/workspace/runs/pi05_mars/assets/pi05_mars_control_lora/mars_control/norm_stats.json",
+    "stats_sha256": "a24b5dbb348598ceeb1e4e580ecce8892c0e61208d0f25ac268ed14884c327cb",
+    "method": "all-corpus per-dimension 1st/99th quantiles after action clipping and DeltaActions transform",
+    "action_clipped_before_statistics": true,
+    "state_dimensions": 9,
+    "action_dimensions": 8,
+    "state": {
+      "mean": [0.11229252070188522, 0.36941584944725037, 0.020585764199495316, -1.8669092655181885, -0.026843827217817307, 2.2850570678710938, 1.0234129428863525, 0.03180558234453201, 0.03181754797697067],
+      "std": [0.46532317996025085, 0.43845218420028687, 0.3144294321537018, 0.5115671157836914, 0.23123325407505035, 0.5588141083717346, 0.9502373933792114, 0.012142878025770187, 0.012226755730807781],
+      "q01": [-0.7103249561786652, -0.6626242464780807, -0.6449989813566208, -2.9233887696266176, -0.6687620282173157, 1.5212877988815308, -1.6368208277225493, 0.0, 0.0],
+      "q99": [1.16153085231781, 1.2670033872127533, 0.7232182776927948, -0.4495820838212967, 0.41612766087055203, 3.7529590129852295, 2.8973002433776855, 0.03999999910593033, 0.03999999910593033]
+    },
+    "actions_after_delta_transform": {
+      "mean": [0.0007680433336645365, 0.005771166179329157, -0.001218773191794753, 0.008537317626178265, 0.00013409156235866249, -0.0010329735232517123, -0.000021566478608292527, 0.3700196444988251],
+      "std": [0.06742152571678162, 0.10137476027011871, 0.04925994575023651, 0.1040753722190857, 0.056126564741134644, 0.08065849542617798, 0.11715471744537354, 0.8517202138900757],
+      "q01": [-0.24507333517074587, -0.33301830291748047, -0.18610127717256547, -0.3235550332069397, -0.21105419278144838, -0.25089675426483155, -0.4630867311358452, -1.0],
+      "q99": [0.2653782314062114, 0.3831919249892234, 0.17586022123694328, 0.44299402356147555, 0.20435706675052612, 0.32387906551361034, 0.45862575709819775, 1.0]
+    }
+  },
+  "optimization": {
+    "config_name": "pi05_mars_control_lora",
+    "project_name": "openpi",
+    "experiment_name": "all600_4gpu_dp_b128",
+    "pytorch_weight_path": null,
+    "overwrite_existing": false,
+    "resume": false,
+    "updates": 30000,
+    "global_batch_size": 128,
+    "devices": 4,
+    "jax_process_count": 1,
+    "per_device_shard_batch": 32,
+    "sample_budget": 3840000,
+    "indexed_data_passes": 3.709,
+    "indexed_data_pass_definition": "sample_budget / 1,035,318 indexed local timesteps (the balanced virtual lane length is recorded separately by the dataset implementation)",
+    "optimizer": "AdamW",
+    "adam_b1": 0.9,
+    "adam_b2": 0.95,
+    "adam_eps": 1e-8,
+    "weight_decay": 1e-10,
+    "gradient_clip_global_norm": 1.0,
+    "lr_schedule": "warmup_cosine_decay",
+    "warmup_steps": 250,
+    "peak_lr": 5e-5,
+    "decay_steps": 30000,
+    "decay_lr": 5e-6,
+    "ema_decay": null,
+    "random_seed": 42,
+    "log_interval": 100
+  },
+  "runtime": {
+    "hardware": "4x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "gpu_memory_mib": 97887,
+    "cuda_visible_devices": "0,1,2,3",
+    "fsdp_devices": 1,
+    "num_workers": 8,
+    "pytorch_training_precision": "bfloat16",
+    "wandb_enabled": false,
+    "tokenizers_parallelism": false,
+    "xla_preallocate": false,
+    "xla_allocator": "platform",
+    "jax": "0.6.2",
+    "jaxlib": "0.6.2",
+    "flax": "0.10.2",
+    "optax": "0.2.4",
+    "orbax_checkpoint": "0.11.13",
+    "numpy": "1.26.4",
+    "h5py": "3.13.0",
+    "tyro": "0.9.22"
+  },
+  "checkpointing": {
+    "assets_base_dir": "/workspace/runs/pi05_mars/assets",
+    "checkpoint_base_dir": "/workspace/runs/pi05_mars/checkpoints",
+    "experiment_name": "all600_4gpu_dp_b128",
+    "save_interval": 1000,
+    "keep_period": 10000,
+    "formal_final_step": 29999,
+    "checkpoint_selection": "fixed final checkpoint; no validation-based selection",
+    "resume_policy": "resume latest incomplete checkpoint when present; otherwise initialize from pi05_base",
+    "run_receipt_sha256": {
+      "audit": "d11b94d636afde30e3d86b211dc6fc4ccbb84e87c737c538dd1bb6c56540ba88",
+      "formal_train_log": "0a94b5878f9160028b0a3fd0f5fafc06abe770ad322b8e498b305536f9881d42"
+    }
+  },
+  "validation": {
+    "episodes_per_task": 20,
+    "total_episodes": 80,
+    "task_max_steps": {
+      "place_cube_in_cup": 500,
+      "strike_cube_hard": 500,
+      "three_robots_place_shoes": 1200,
+      "four_robots_stack_cube": 800
+    },
+    "temporal_ensemble_decay": 0.01,
+    "summary_path": "/workspace/runs/pi05_mars/validation20/summary.json",
+    "summary_sha256": "557ff72d1ada9af0519429cacbc6c77ca76e8d94318b7ab6b2fcf108223ca522"
+  }
+}

@@ -12,9 +12,12 @@ actual=$(git -C "$OPENPI_DIR" rev-parse HEAD)
   exit 3
 }
 
+(cd "$PATCH_DIR" && sha256sum -c SHA256SUMS)
 git -C "$OPENPI_DIR" apply --check "$PATCH_DIR/openpi_tracked.patch"
 git -C "$OPENPI_DIR" apply "$PATCH_DIR/openpi_tracked.patch"
 install -D -m 0644 "$PATCH_DIR/src/openpi/policies/robofactory_policy.py" "$OPENPI_DIR/src/openpi/policies/robofactory_policy.py"
 install -D -m 0644 "$PATCH_DIR/src/openpi/training/robofactory_config.py" "$OPENPI_DIR/src/openpi/training/robofactory_config.py"
 install -D -m 0644 "$PATCH_DIR/src/openpi/training/robofactory_dataset.py" "$OPENPI_DIR/src/openpi/training/robofactory_dataset.py"
+install -D -m 0644 "$PATCH_DIR/src/openpi/training/mars_control_dataset.py" "$OPENPI_DIR/src/openpi/training/mars_control_dataset.py"
+install -D -m 0644 "$PATCH_DIR/src/openpi/training/mars_control_config.py" "$OPENPI_DIR/src/openpi/training/mars_control_config.py"
 echo "Applied π0.5 RoboFactory patch to $OPENPI_DIR"
