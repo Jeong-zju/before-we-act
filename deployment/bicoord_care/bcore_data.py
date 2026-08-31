@@ -19,6 +19,7 @@ from collections import Counter, OrderedDict, defaultdict
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 import random
 from typing import Any, Iterable, Mapping, Sequence
@@ -73,6 +74,14 @@ BCORE_UPDATES = 120_000
 BCORE_SEEDS = tuple(int(value) for value in FORMAL_SEEDS)
 DATA_SEED = 20260901
 TEAMMATE_ACTION_HORIZON = 16
+
+# B-core rotates six extra paired situations per update over 18 task
+# buckets.  Compute the complete circular period explicitly; integer
+# division happens to work for today's 18/6 values but is not the definition
+# and regresses to one for non-divisible batch contracts.
+BALANCE_CYCLE_UPDATES = len(TASKS) // math.gcd(
+    len(TASKS), EFFECTIVE_BATCH // ARM_COUNT - len(TASKS)
+)
 
 # The official GO1 -> LeRobot conversion records BiCoord at 15 FPS.  The
 # predictive core's registered horizons are in seconds, therefore the exact
@@ -598,7 +607,7 @@ class BiCoordPairedSituationBatchSampler(Sampler[list[BiCoordBeliefRequest]]):
     Each task contributes one paired situation (two arm-local rows) and six
     extra paired situations rotate across tasks.  Thus every update has 24
     situations/48 rows, every task is represented, and over a three-update
-    cycle each task receives exactly two extra pairs.
+    cycle each task receives exactly one extra pair (two extra arm rows).
     """
 
     BASE_PAIRS_PER_TASK = 1
@@ -700,7 +709,7 @@ class BiCoordPairedSituationBatchSampler(Sampler[list[BiCoordBeliefRequest]]):
             "paired_arms": True,
             "base_pairs_per_task": self.BASE_PAIRS_PER_TASK,
             "extra_pairs_per_update": self.EXTRA_PAIRS_PER_UPDATE,
-            "balance_cycle_updates": len(TASKS) // self.EXTRA_PAIRS_PER_UPDATE,
+            "balance_cycle_updates": BALANCE_CYCLE_UPDATES,
             "action_lag_rows": 1,
         }
 

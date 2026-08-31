@@ -444,12 +444,13 @@ class BiCoordBcoreRuntime(B0HRuntime):
                 output.base_prediction.float().cpu().numpy() * self.a_std[None, None]
                 + self.a_mean[None, None]
             ).astype(np.float32)
-            validate_native_gripper_vector(
-                reference_chunk, context="B-core predicted action chunk"
-            )
-            validate_native_gripper_vector(
-                base_chunk, context="B-core base action chunk"
-            )
+            if (
+                reference_chunk.shape != (2, ACTION_HORIZON, ACTION_DIM)
+                or base_chunk.shape != (2, ACTION_HORIZON, ACTION_DIM)
+                or not np.isfinite(reference_chunk).all()
+                or not np.isfinite(base_chunk).all()
+            ):
+                raise ValueError("B-core predicted chunks must be finite [2,100,7]")
             reference_plan_map = self.ensemble.add_and_plan(
                 {arm: reference_chunk[arm] for arm in (0, 1)}
             )
@@ -471,6 +472,10 @@ class BiCoordBcoreRuntime(B0HRuntime):
                 output.belief_residual.detach().float().cpu().numpy()
                 * self.a_std[None, None]
             )
+            reference_gripper = reference_chunk[..., -1]
+            base_gripper = base_chunk[..., -1]
+            reference_plan_gripper = reference_plan[..., -1]
+            low, high = GRIPPER_NATIVE_RANGE
             diagnostics = {
                 "policy_family": "PredictiveTeamBeliefPolicy",
                 "method_family": "CARE",
@@ -499,6 +504,31 @@ class BiCoordBcoreRuntime(B0HRuntime):
                 "residual_norm_mean": float(
                     np.linalg.norm(residual, axis=-1).mean()
                 ),
+                # The unexecuted chunk/plan tails remain unchanged.  Their
+                # range is evidence, not a clipping trigger; the actual row
+                # is checked fail-closed by record_executed_actions below.
+                "reference_chunk_gripper_min": float(reference_gripper.min()),
+                "reference_chunk_gripper_max": float(reference_gripper.max()),
+                "reference_chunk_gripper_oob_count": int(
+                    np.count_nonzero(
+                        (reference_gripper < low) | (reference_gripper > high)
+                    )
+                ),
+                "base_chunk_gripper_min": float(base_gripper.min()),
+                "base_chunk_gripper_max": float(base_gripper.max()),
+                "base_chunk_gripper_oob_count": int(
+                    np.count_nonzero((base_gripper < low) | (base_gripper > high))
+                ),
+                "reference_plan_gripper_min": float(reference_plan_gripper.min()),
+                "reference_plan_gripper_max": float(reference_plan_gripper.max()),
+                "reference_plan_gripper_oob_count": int(
+                    np.count_nonzero(
+                        (reference_plan_gripper < low)
+                        | (reference_plan_gripper > high)
+                    )
+                ),
+                "executed_gripper_oob_count": 0,
+                "policy_output_clipping": False,
             }
             context = BcoreContext(
                 reference_plan=reference_plan.astype(np.float32),

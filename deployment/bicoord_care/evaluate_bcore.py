@@ -11,7 +11,16 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from .config import ACTION_DIM, ACTION_HORIZON, ACTION_ENCODING, TASKS, VALIDATION_EPISODES, VALIDATION_MAX_STEPS
+from .config import (
+    ACTION_DIM,
+    ACTION_HORIZON,
+    ACTION_ENCODING,
+    SMOKE_INTERFACE_STEPS,
+    TASKS,
+    VALIDATION_EPISODES,
+    VALIDATION_MAX_STEPS,
+    validate_native_gripper_vector,
+)
 from .stage_common import artifact, assert_common_paths, atomic_json, common_parser, publish_result, require_stage_result, sha256_file
 from .seed_discovery import SEED_MANIFEST_SCHEMA
 
@@ -30,6 +39,13 @@ def _stage_name(operation: str) -> str:
 def _progress_paths(run: Path, operation: str, task: str) -> tuple[Path, Path]:
     root = run / "progress" / _stage_name(operation)
     return root / f"{task}.jsonl", root / f"{task}.receipt.json"
+
+
+def _reset_progress(progress: Path, receipt: Path) -> None:
+    """Discard partial/stale task evidence before a complete worker replay."""
+
+    progress.unlink(missing_ok=True)
+    receipt.unlink(missing_ok=True)
 
 
 def _checkpoint(args: argparse.Namespace) -> Path:
@@ -127,11 +143,14 @@ def _make_env(root: Path, task: str, seed: int):
 
 def _run_episode(runtime: Any, root: Path, task: str, seed: int, limit: int, progress: Path, belief_enabled: bool = True) -> dict[str, Any]:
     env = _make_env(root, task, seed); runtime.reset(task); observation = env.get_obs(); digest = hashlib.sha256(); success = False; steps = 0; progress_value = 0.0
+    prediction_oob = 0; plan_oob = 0
     progress.parent.mkdir(parents=True, exist_ok=True)
     try:
         with progress.open("a") as stream:
             for step in range(limit):
                 action, diagnostic = runtime.act(observation, task, belief_enabled=belief_enabled)
+                prediction_oob += int(diagnostic.get("reference_chunk_gripper_oob_count", 0))
+                plan_oob += int(diagnostic.get("reference_plan_gripper_oob_count", 0))
                 # Runtime must return one controller command per arm, not a
                 # single concatenated vector or peer-conditioned tensor.
                 if not isinstance(action, Mapping) or set(action) != {0, 1}:
@@ -146,18 +165,21 @@ def _run_episode(runtime: Any, root: Path, task: str, seed: int, limit: int, pro
                     if value.shape != (ACTION_DIM,) or not np.isfinite(value).all(): raise ValueError("B-core local action must be finite [7]")
                     rows.append(value); digest.update(value.tobytes())
                 command = np.concatenate(rows)
+                validate_native_gripper_vector(
+                    np.stack(rows), context="B-core native controller command"
+                )
                 env.take_action(command); observation = env.get_obs(); steps = step + 1
                 try: success = bool(getattr(env, "eval_success", False) or env.check_success())
                 except Exception: success = bool(getattr(env, "eval_success", False))
                 progress_value = float(np.clip(getattr(env, "stage_eval_score", 0.0), 0.0, 1.0))
-                stream.write(json.dumps({"task": task, "seed": seed, "step": steps, "max_steps": limit, "progress": progress_value, "success": success, "belief_enabled": belief_enabled, "diagnostic": diagnostic}, default=str, sort_keys=True) + "\n"); stream.flush()
+                stream.write(json.dumps({"task": task, "seed": seed, "step": steps, "max_steps": limit, "progress": progress_value, "success": success, "belief_enabled": belief_enabled, "diagnostic": diagnostic, "action_clipped": False, "policy_output_clipping": False, "executed_gripper_oob_count": 0, "prediction_gripper_oob_count": int(diagnostic.get("reference_chunk_gripper_oob_count", 0)), "ensemble_plan_gripper_oob_count": int(diagnostic.get("reference_plan_gripper_oob_count", 0))}, default=str, sort_keys=True) + "\n"); stream.flush()
                 if success: break
     finally:
         try: env.close_env()
         except Exception:
             try: env.close()
             except Exception: pass
-    return {"task": task, "seed": int(seed), "success": success, "steps": steps, "max_steps": limit, "progress": progress_value, "action_trace_sha256": digest.hexdigest(), "strictly_decentralized": True, "per_arm_independent_inputs": True, "belief_enabled": belief_enabled}
+    return {"task": task, "seed": int(seed), "success": success, "steps": steps, "max_steps": limit, "progress": progress_value, "action_trace_sha256": digest.hexdigest(), "strictly_decentralized": True, "per_arm_independent_inputs": True, "belief_enabled": belief_enabled, "policy_output_clipping": False, "executed_gripper_oob_count": 0, "prediction_gripper_oob_count": prediction_oob, "ensemble_plan_gripper_oob_count": plan_oob}
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -166,8 +188,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if task not in TASKS: raise ValueError(f"invalid B-core task: {task}")
     episodes = int(getattr(args, "episodes", 1)); expected = VALIDATION_EPISODES if args.operation == "validation20" else 1
     if episodes != expected: raise ValueError(f"{args.operation} requires {expected} episodes")
-    limit = int(getattr(args, "max_steps", 0) or VALIDATION_MAX_STEPS[task])
-    if limit != VALIDATION_MAX_STEPS[task]: raise ValueError(f"{task}: max steps must be {VALIDATION_MAX_STEPS[task]}")
+    expected_limit = SMOKE_INTERFACE_STEPS if args.operation == "smoke-closed-loop" else VALIDATION_MAX_STEPS[task]
+    limit = int(getattr(args, "max_steps", 0) or expected_limit)
+    if limit != expected_limit: raise ValueError(f"{task}: max steps for {args.operation} must be {expected_limit}")
     checkpoint = _checkpoint(args); runtime = _runtime(checkpoint, args)
     if args.operation == "validation20":
         seeds = _official_seeds(args, task, count=episodes)
@@ -176,9 +199,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         seeds = [seed_start + i for i in range(episodes)]
     stage = _stage_name(args.operation)
     progress, receipt = _progress_paths(args.run, args.operation, task)
+    # B-core task workers replay all requested episodes after failure.  The
+    # JSONL is therefore attempt-local evidence even though its stable path is
+    # reused; clear it for formal Validation20 as well as for smoke.
+    _reset_progress(progress, receipt)
     rows = [_run_episode(runtime, args.benchmark_repo, task, seed, limit, progress) for seed in seeds]
-    atomic_json(receipt, {"schema": "before-we-act.bicoord.validation-progress/1", "stage": stage, "task": task, "episodes": episodes, "completed": episodes, "max_steps": limit, "seeds": seeds, "seed_source": "expert_seed_manifest" if args.operation == "validation20" else "smoke_probe", "checkpoint": str(checkpoint), "checkpoint_sha256": sha256_file(checkpoint), "selector": "bcore"})
-    return publish_result(args, stage=stage, include_model_contract=True, artifacts=[artifact(progress, kind="validation_progress"), artifact(receipt, kind="progress_receipt")], task=task, episodes=episodes, completed=episodes, successes=sum(int(r["success"]) for r in rows), max_steps=limit, seeds=seeds, seed_source="expert_seed_manifest" if args.operation == "validation20" else "smoke_probe", progress_receipt=str(receipt.resolve()), checkpoint=str(checkpoint), checkpoint_sha256=sha256_file(checkpoint), action_encoding=ACTION_ENCODING, action_horizon=ACTION_HORIZON, paired=False, selector_off_control=False)
+    rollout_steps = [int(row["steps"]) for row in rows]
+    progress_sha256 = sha256_file(progress)
+    prediction_oob = sum(int(row.get("prediction_gripper_oob_count", 0)) for row in rows)
+    plan_oob = sum(int(row.get("ensemble_plan_gripper_oob_count", 0)) for row in rows)
+    atomic_json(receipt, {"schema": "before-we-act.bicoord.validation-progress/1", "status": "PASSED", "stage": stage, "task": task, "episodes": episodes, "completed": episodes, "max_steps": limit, "rollout_steps": rollout_steps, "rows": rows, "rows_path": str(progress.resolve()), "rows_sha256": progress_sha256, "seeds": seeds, "seed_source": "expert_seed_manifest" if args.operation == "validation20" else "smoke_probe", "checkpoint": str(checkpoint), "checkpoint_sha256": sha256_file(checkpoint), "selector": "bcore", "smoke_interface_steps": SMOKE_INTERFACE_STEPS if args.operation == "smoke-closed-loop" else None, "policy_output_clipping": False, "action_clipping": False, "state_clipping": False, "gripper_reparameterization": False, "executed_gripper_oob_count": 0, "prediction_gripper_oob_count": prediction_oob, "ensemble_plan_gripper_oob_count": plan_oob})
+    return publish_result(args, stage=stage, include_model_contract=True, artifacts=[artifact(progress, kind="validation_progress"), artifact(receipt, kind="progress_receipt")], task=task, episodes=episodes, completed=episodes, successes=sum(int(r["success"]) for r in rows), max_steps=limit, rollout_steps=rollout_steps, seeds=seeds, seed_source="expert_seed_manifest" if args.operation == "validation20" else "smoke_probe", progress_receipt=str(receipt.resolve()), progress_receipt_sha256=sha256_file(receipt), checkpoint=str(checkpoint), checkpoint_sha256=sha256_file(checkpoint), action_encoding=ACTION_ENCODING, action_horizon=ACTION_HORIZON, paired=False, selector_off_control=False, smoke_interface_steps=SMOKE_INTERFACE_STEPS if args.operation == "smoke-closed-loop" else None, policy_output_clipping=False, action_clipping=False, state_clipping=False, gripper_reparameterization=False, executed_gripper_oob_count=0, prediction_gripper_oob_count=prediction_oob, ensemble_plan_gripper_oob_count=plan_oob)
 
 
 def main(argv: list[str] | None = None) -> int:

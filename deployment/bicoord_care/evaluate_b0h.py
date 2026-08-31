@@ -20,6 +20,8 @@ from .config import (
     TASKS,
     VALIDATION_EPISODES,
     VALIDATION_MAX_STEPS,
+    SMOKE_INTERFACE_STEPS,
+    validate_native_gripper_vector,
 )
 from .runtime import B0HRuntime
 from .stage_common import (
@@ -114,6 +116,19 @@ def _progress_paths(run: Path, operation: str, task: str) -> tuple[Path, Path]:
     return root / f"{task}.jsonl", root / f"{task}.receipt.json"
 
 
+def _reset_progress(progress: Path, receipt: Path) -> None:
+    """Remove an uncommitted task trace before replaying its worker.
+
+    Evaluator workers do not support resuming an episode from a partial trace.
+    Clearing both evidence files makes a supervisor retry fail closed instead
+    of appending new rows to a prior attempt's JSONL (or exposing a stale
+    receipt while the replacement worker is still running).
+    """
+
+    progress.unlink(missing_ok=True)
+    receipt.unlink(missing_ok=True)
+
+
 def _bench_env(benchmark_root: Path, task: str, seed: int):
     """Construct the official RoboTwin task without changing its source."""
     if str(benchmark_root) not in sys.path:
@@ -189,20 +204,36 @@ def _progress_value(env: Any) -> float:
         return 0.0
 
 
-def _run_episode(runtime: B0HRuntime, benchmark_root: Path, task: str, seed: int, max_steps: int, progress_path: Path) -> dict[str, Any]:
+def _run_episode(
+    runtime: B0HRuntime,
+    benchmark_root: Path,
+    task: str,
+    seed: int,
+    max_steps: int,
+    progress_path: Path,
+) -> dict[str, Any]:
     env = _bench_env(benchmark_root, task, seed)
     runtime.reset()
     observation = env.get_obs()
     trace = hashlib.sha256(); success = False; steps = 0
     progress_path.parent.mkdir(parents=True, exist_ok=True)
     final_progress = 0.0
+    prediction_oob = 0
+    plan_oob = 0
     with progress_path.open("a", encoding="utf-8") as stream:
         try:
             for step in range(int(max_steps)):
                 chunks = runtime.act(observation, task)
+                diagnostics = dict(runtime.last_prediction_diagnostics)
+                prediction_oob += int(diagnostics.get("prediction_gripper_oob_count", 0))
+                plan_oob += int(diagnostics.get("ensemble_plan_gripper_oob_count", 0))
                 current = np.concatenate((chunks[0][0], chunks[1][0]), axis=0).astype(np.float32)
                 if current.shape != (ACTION_DIM * 2,) or not np.isfinite(current).all():
                     raise RuntimeError(f"invalid B0-H action at {task}/{seed}/{step}: {current.shape}")
+                validate_native_gripper_vector(
+                    current.reshape(2, ACTION_DIM),
+                    context="B0-H native controller command",
+                )
                 trace.update(current.tobytes())
                 env.take_action(current)
                 observation = env.get_obs()
@@ -220,6 +251,11 @@ def _run_episode(runtime: B0HRuntime, benchmark_root: Path, task: str, seed: int
                     "max_steps": int(max_steps),
                     "progress": _progress_value(env),
                     "success": bool(success),
+                    "prediction_gripper_oob_count": int(diagnostics.get("prediction_gripper_oob_count", 0)),
+                    "ensemble_plan_gripper_oob_count": int(diagnostics.get("ensemble_plan_gripper_oob_count", 0)),
+                    "executed_gripper_oob_count": 0,
+                    "action_clipped": False,
+                    "policy_output_clipping": False,
                 }
                 stream.write(json.dumps(row, sort_keys=True) + "\n")
                 if steps == 1 or steps % 25 == 0 or success:
@@ -244,6 +280,13 @@ def _run_episode(runtime: B0HRuntime, benchmark_root: Path, task: str, seed: int
         "action_trace_sha256": trace.hexdigest(),
         "strictly_decentralized": True,
         "per_arm_independent_inputs": True,
+        "prediction_gripper_oob_count": prediction_oob,
+        "ensemble_plan_gripper_oob_count": plan_oob,
+        "executed_gripper_oob_count": 0,
+        "policy_output_clipping": False,
+        "action_clipping": False,
+        "state_clipping": False,
+        "gripper_reparameterization": False,
     }
 
 
@@ -255,23 +298,50 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if task not in TASKS:
         raise ValueError(task)
     episodes = int(getattr(args, "episodes", 1))
-    if episodes < 1 or (args.operation == "validation20" and episodes != VALIDATION_EPISODES):
-        raise ValueError(f"invalid episode count for {args.operation}: {episodes}")
-    max_steps = int(getattr(args, "max_steps", 0) or VALIDATION_MAX_STEPS[task])
-    if max_steps != VALIDATION_MAX_STEPS[task]:
-        raise ValueError(f"{task}: frozen validation horizon is {VALIDATION_MAX_STEPS[task]}, got {max_steps}")
+    expected_episodes = (
+        VALIDATION_EPISODES if args.operation == "validation20" else 1
+    )
+    if episodes != expected_episodes:
+        raise ValueError(
+            f"{args.operation} requires {expected_episodes} episodes, got {episodes}"
+        )
+    requested_max_steps = int(getattr(args, "max_steps", 0) or 0)
+    expected_max_steps = (
+        SMOKE_INTERFACE_STEPS
+        if args.operation == "smoke-closed-loop"
+        else VALIDATION_MAX_STEPS[task]
+    )
+    max_steps = requested_max_steps or expected_max_steps
+    if max_steps != expected_max_steps:
+        raise ValueError(f"{task}: expected max_steps={expected_max_steps} for {args.operation}, got {max_steps}")
     checkpoint = _checkpoint_from_dependencies(args)
     runtime = B0HRuntime.from_checkpoint(checkpoint, dino_model=args.dino_model, device=os.environ.get("BICOORD_EVAL_DEVICE", "cuda:0"))
     seed_value = getattr(args, "seed_start", None)
     seed_start = int(seed_value if seed_value is not None else 20260920 + TASKS.index(task) * 100)
     stage_name = _stage_name(args.operation)
     progress, progress_receipt = _progress_paths(args.run, args.operation, task)
+    # This evaluator has no episode-level resume contract: a supervisor retry
+    # replays the complete task worker.  Start every operation (including the
+    # formal probe/Validation20 paths) from an empty JSONL so rows from an
+    # interrupted attempt cannot be re-hashed into the replacement receipt.
+    _reset_progress(progress, progress_receipt)
     rows: list[dict[str, Any]] = []
     for index in range(episodes):
-        rows.append(_run_episode(runtime, args.benchmark_repo, task, seed_start + index, max_steps, progress))
+        rows.append(
+            _run_episode(
+                runtime,
+                args.benchmark_repo,
+                task,
+                seed_start + index,
+                max_steps,
+                progress,
+            )
+        )
         print(json.dumps(rows[-1], sort_keys=True), flush=True)
+    progress_sha256 = sha256_file(progress)
     atomic_json(progress_receipt, {
         "schema": "before-we-act.bicoord.validation-progress/1",
+        "status": "PASSED",
         "stage": stage_name,
         "stage_operation": args.operation,
         "task": task,
@@ -279,8 +349,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "completed": len(rows),
         "max_steps": max_steps,
         "rows_path": str(progress.resolve()),
+        "rows_sha256": progress_sha256,
+        "rows": rows,
         "checkpoint": str(checkpoint),
         "checkpoint_sha256": sha256_file(checkpoint),
+        "rollout_steps": [int(row["steps"]) for row in rows],
+        "smoke_interface_steps": (
+            SMOKE_INTERFACE_STEPS
+            if args.operation == "smoke-closed-loop"
+            else None
+        ),
+        "policy_output_clipping": False,
+        "action_clipping": False,
+        "state_clipping": False,
+        "gripper_reparameterization": False,
+        "executed_gripper_oob_count": sum(
+            int(row.get("executed_gripper_oob_count", 0)) for row in rows
+        ),
+        "prediction_gripper_oob_count": sum(
+            int(row.get("prediction_gripper_oob_count", 0)) for row in rows
+        ),
+        "ensemble_plan_gripper_oob_count": sum(
+            int(row.get("ensemble_plan_gripper_oob_count", 0)) for row in rows
+        ),
     })
     result = publish_result(
         args,
@@ -292,13 +383,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         completed=len(rows),
         successes=sum(int(row["success"]) for row in rows),
         max_steps=max_steps,
+        rollout_steps=[int(row["steps"]) for row in rows],
         progress_receipt=str(progress_receipt.resolve()),
+        progress_receipt_sha256=sha256_file(progress_receipt),
         checkpoint=str(checkpoint),
         checkpoint_sha256=sha256_file(checkpoint),
         action_encoding=ACTION_ENCODING,
         history_steps=HISTORY_STEPS,
         action_horizon=ACTION_HORIZON,
         strict_local_inputs=True,
+        smoke_interface_steps=SMOKE_INTERFACE_STEPS if args.operation == "smoke-closed-loop" else None,
+        policy_output_clipping=False,
+        action_clipping=False,
+        state_clipping=False,
+        gripper_reparameterization=False,
+        executed_gripper_oob_count=sum(int(row.get("executed_gripper_oob_count", 0)) for row in rows),
+        prediction_gripper_oob_count=sum(int(row.get("prediction_gripper_oob_count", 0)) for row in rows),
+        ensemble_plan_gripper_oob_count=sum(int(row.get("ensemble_plan_gripper_oob_count", 0)) for row in rows),
     )
     return result
 

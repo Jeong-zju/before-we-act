@@ -29,7 +29,12 @@ from deployment.bicoord_care.config import (
     FUTURE_OFFSETS_STEPS,
     validate_native_gripper_vector,
 )
+from deployment.bicoord_care.bcore_data import (
+    BALANCE_CYCLE_UPDATES as BCORE_BALANCE_CYCLE_UPDATES,
+    BiCoordPairedSituationBatchSampler,
+)
 from deployment.bicoord_care.data import (
+    BALANCE_CYCLE_UPDATES as B0H_BALANCE_CYCLE_UPDATES,
     BiCoordBalancedDistributedBatchSampler,
     BiCoordEpisode,
     BiCoordTemporalDataset,
@@ -338,7 +343,36 @@ def test_sampler_task_balance_ddp_and_cursor() -> None:
     reconstructed.sort(key=lambda item: item[0])
     assert [row.sample_key for _, row in reconstructed] == [row.sample_key for row in global_rows]
     cursor = sampler.cursor_receipt(1)
+    assert B0H_BALANCE_CYCLE_UPDATES == 3
+    assert cursor["balance_cycle_updates"] == 3
+    assert Counter(row.task for row in sampler.requests_for_update(1)) == Counter(
+        row.task for row in sampler.requests_for_update(4)
+    )
     assert sampler.validate_cursor(cursor) == 1
     cursor["next_sample_keys"][0] = "drift"
     with pytest.raises(ValueError):
         sampler.validate_cursor(cursor)
+
+
+def test_bcore_sampler_rotation_cycle_and_cursor_receipt() -> None:
+    sampler = BiCoordPairedSituationBatchSampler(
+        _sampler_episodes(), updates=4, data_seed=17
+    )
+    totals: Counter[str] = Counter()
+    for update in range(1, 4):
+        rows = sampler.requests_for_update(update)
+        counts = Counter(row.task for row in rows)
+        assert len(rows) == EFFECTIVE_BATCH
+        assert set(counts.values()) <= {2, 4}
+        totals.update(counts)
+    # One base pair per update plus one rotating extra pair per task over the
+    # complete three-update cycle gives eight local-arm rows per task.
+    assert totals == Counter({task: 8 for task in TASKS})
+    assert Counter(row.task for row in sampler.requests_for_update(1)) == Counter(
+        row.task for row in sampler.requests_for_update(4)
+    )
+
+    cursor = sampler.cursor_receipt(1)
+    assert BCORE_BALANCE_CYCLE_UPDATES == 3
+    assert cursor["balance_cycle_updates"] == 3
+    assert sampler.validate_cursor(cursor) == 1

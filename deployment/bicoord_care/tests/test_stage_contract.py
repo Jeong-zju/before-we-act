@@ -35,8 +35,14 @@ from deployment.bicoord_care.train_b0h import (
     _validate_cache_receipt,
     _publish_supervisor_result,
 )
-from deployment.bicoord_care.evaluate_b0h import _progress_paths as b0h_progress_paths
-from deployment.bicoord_care.evaluate_bcore import _progress_paths as bcore_progress_paths
+from deployment.bicoord_care.evaluate_b0h import (
+    _progress_paths as b0h_progress_paths,
+    _reset_progress as reset_b0h_progress,
+)
+from deployment.bicoord_care.evaluate_bcore import (
+    _progress_paths as bcore_progress_paths,
+    _reset_progress as reset_bcore_progress,
+)
 
 
 def _episode() -> BiCoordEpisode:
@@ -274,6 +280,22 @@ def test_closed_loop_progress_roots_are_stage_isolated(tmp_path: Path) -> None:
     assert bcore_smoke_receipt.parent.name == "bcore_smoke_closed_loop"
     assert b0h_probe.parent.name == "b0h_probe"
     assert bcore_formal.parent.name == "bcore_validation20"
+
+
+@pytest.mark.parametrize("reset", [reset_b0h_progress, reset_bcore_progress])
+def test_formal_retry_clears_partial_progress_and_stale_receipt(
+    tmp_path: Path, reset
+) -> None:
+    """A replay must never append to evidence left by a failed attempt."""
+
+    progress = tmp_path / "formal" / "task.jsonl"
+    receipt = tmp_path / "formal" / "task.receipt.json"
+    progress.parent.mkdir(parents=True)
+    progress.write_text('{"step": 1}\n', encoding="utf-8")
+    receipt.write_text('{"status": "PASSED"}\n', encoding="utf-8")
+    reset(progress, receipt)
+    assert not progress.exists()
+    assert not receipt.exists()
 
 
 def test_formal_dino_receipt_drives_18_smoke_episodes_but_1800_formal(

@@ -30,6 +30,7 @@ from .config import (
     ACTION_ENCODING,
     ACTION_HORIZON,
     ARM_COUNT,
+    BALANCE_CYCLE_UPDATES,
     BASE_SAMPLES_PER_TASK,
     DATASET_REVISION,
     EFFECTIVE_BATCH,
@@ -780,7 +781,7 @@ class BiCoordBalancedDistributedBatchSampler(Sampler[list[BiCoordTemporalRequest
             "effective_batch": EFFECTIVE_BATCH,
             "base_samples_per_task": BASE_SAMPLES_PER_TASK,
             "extra_samples_per_update": EXTRA_SAMPLES_PER_UPDATE,
-            "balance_cycle_updates": len(TASKS) // EXTRA_SAMPLES_PER_UPDATE,
+            "balance_cycle_updates": BALANCE_CYCLE_UPDATES,
         }
 
     def validate_cursor(self, receipt: Mapping[str, Any]) -> int:

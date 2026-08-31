@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from typing import Final, Mapping
 
 
@@ -97,6 +98,12 @@ EPISODES_PER_TASK: Final[int] = 100
 TOTAL_EPISODES: Final[int] = len(TASKS) * EPISODES_PER_TASK
 VALIDATION_EPISODES: Final[int] = 20
 VALIDATION_HORIZON_METHOD: Final[str] = "benchmark_fixed_per_task"
+# A learned-policy smoke is an interface test, not a competence evaluation.
+# Two controller ticks are the minimum which exercise reset/inference/act on
+# the first tick and observation + executed-action history feedback on the
+# second.  Formal probes and Validation20 continue to use the task-specific
+# horizons above.
+SMOKE_INTERFACE_STEPS: Final[int] = 2
 
 # BiCoord's benchmark-owned RoboTwin-to-LeRobot converter registers the
 # demonstration stream at 15 FPS.  This is the sequence clock used by the
@@ -147,13 +154,15 @@ DINO_HIDDEN_SIZE: Final[int] = 768
 
 # Matched-compute training protocol.  48 is not divisible by 18, so each
 # update has two examples/task plus twelve rotating extras.  Over a three
-# update cycle every task receives exactly six examples, while every update
-# remains a full batch and each trajectory is sampled uniformly within its
-# task bucket.
+# update cycle every task receives six base examples plus two rotating extras,
+# while every update remains a full batch and each trajectory is sampled
+# uniformly within its task bucket.
 EFFECTIVE_BATCH: Final[int] = 48
 BASE_SAMPLES_PER_TASK: Final[int] = 2
 EXTRA_SAMPLES_PER_UPDATE: Final[int] = EFFECTIVE_BATCH - len(TASKS) * BASE_SAMPLES_PER_TASK
-BALANCE_CYCLE_UPDATES: Final[int] = len(TASKS) // 6  # 3 updates; 12 extras/update
+BALANCE_CYCLE_UPDATES: Final[int] = len(TASKS) // math.gcd(
+    len(TASKS), EXTRA_SAMPLES_PER_UPDATE
+)  # 3 updates; 12 extras/update
 LOCAL_BATCH_4GPU: Final[int] = EFFECTIVE_BATCH // 4
 
 FORMAL_B0H_UPDATES: Final[int] = 120_000
@@ -302,6 +311,7 @@ __all__ = [
     "ROLES",
     "ROLE_RANK",
     "SOURCE_FREQUENCY_HZ",
+    "SMOKE_INTERFACE_STEPS",
     "STATE_DIM",
     "TASKS",
     "TASK_TEXT",

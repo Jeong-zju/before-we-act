@@ -39,8 +39,10 @@ from .config import (
     ACTION_ENCODING,
     ACTION_HORIZON,
     TASKS,
+    SMOKE_INTERFACE_STEPS,
     VALIDATION_EPISODES,
     VALIDATION_MAX_STEPS,
+    validate_native_gripper_vector,
 )
 from .data import load_normalization_receipt, project_local_observation
 from .evaluate_bcore import _checkpoint, _make_env, _official_seeds, _runtime
@@ -313,6 +315,8 @@ def _episode(
     safety_rejections = {0: 0, 1: 0}
     uncertainty_fallbacks = {0: 0, 1: 0}
     out_of_source_range = 0
+    prediction_gripper_oob = 0
+    plan_gripper_oob = 0
     success = False
     progress = 0.0
     inference_seconds: list[float] = []
@@ -320,6 +324,13 @@ def _episode(
         started = time.perf_counter()
         context = runtime.act_with_context(
             observation, task, belief_enabled=True, commit=False
+        )
+        diagnostics = dict(context.diagnostics)
+        prediction_gripper_oob += int(
+            diagnostics.get("reference_chunk_gripper_oob_count", 0)
+        )
+        plan_gripper_oob += int(
+            diagnostics.get("reference_plan_gripper_oob_count", 0)
         )
         if (
             context.memory.shape
@@ -364,6 +375,9 @@ def _episode(
                 override_steps += 1
         if actions.shape != (2, ACTION_DIM) or not np.isfinite(actions).all():
             raise RuntimeError("paired CARE produced a non-finite native action")
+        validate_native_gripper_vector(
+            actions, context="paired CARE native controller command"
+        )
         out_of_source_range += int(
             np.count_nonzero(
                 (actions < action_min[None]) | (actions > action_max[None])
@@ -395,6 +409,15 @@ def _episode(
                 "per_arm_independent_selector": True,
                 "cross_arm_arbitration": False,
                 "action_clipped": False,
+                "policy_output_clipping": False,
+                "gripper_reparameterization": False,
+                "prediction_gripper_oob_count": int(
+                    diagnostics.get("reference_chunk_gripper_oob_count", 0)
+                ),
+                "ensemble_plan_gripper_oob_count": int(
+                    diagnostics.get("reference_plan_gripper_oob_count", 0)
+                ),
+                "executed_gripper_oob_count": 0,
             },
         )
         if success:
@@ -419,11 +442,16 @@ def _episode(
         "predicted_safety_rejections": {str(key): value for key, value in safety_rejections.items()},
         "uncertainty_fallback_steps": {str(key): value for key, value in uncertainty_fallbacks.items()},
         "commands_outside_training_population_range": out_of_source_range,
-        "action_clipping": False,
-        "state_clipping": False,
         "per_arm_independent_selector": True,
         "cross_arm_lower_bound_arbitration": False,
         "strictly_decentralized": True,
+        "policy_output_clipping": False,
+        "action_clipping": False,
+        "state_clipping": False,
+        "gripper_reparameterization": False,
+        "prediction_gripper_oob_count": prediction_gripper_oob,
+        "ensemble_plan_gripper_oob_count": plan_gripper_oob,
+        "executed_gripper_oob_count": 0,
         "action_trace_sha256": action_digest.hexdigest(),
         "reference_action_trace_sha256": reference_digest.hexdigest(),
         "mean_inference_seconds": float(np.mean(inference_seconds)),
@@ -576,9 +604,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     episodes = int(getattr(args, "episodes", expected_episodes))
     if episodes != expected_episodes:
         raise ValueError(f"{args.operation} requires {expected_episodes} paired seeds")
-    max_steps = int(getattr(args, "max_steps", 0) or VALIDATION_MAX_STEPS[task])
-    if max_steps != VALIDATION_MAX_STEPS[task]:
-        raise ValueError(f"{task}: paired max steps must be {VALIDATION_MAX_STEPS[task]}")
+    expected_max_steps = (
+        VALIDATION_MAX_STEPS[task] if formal else SMOKE_INTERFACE_STEPS
+    )
+    max_steps = int(getattr(args, "max_steps", 0) or expected_max_steps)
+    if max_steps != expected_max_steps:
+        raise ValueError(
+            f"{task}: paired max steps for {args.operation} must be "
+            f"{expected_max_steps}"
+        )
     reference_checkpoint = _checkpoint(args)
     reference_sha = sha256_file(reference_checkpoint)
     runtime = _runtime(reference_checkpoint, args)
@@ -695,6 +729,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ],
         },
     )
+    prediction_oob = sum(
+        int(row[mode].get("prediction_gripper_oob_count", 0))
+        for row in rows
+        for mode in ("selector_off", "care")
+    )
+    plan_oob = sum(
+        int(row[mode].get("ensemble_plan_gripper_oob_count", 0))
+        for row in rows
+        for mode in ("selector_off", "care")
+    )
+    executed_oob = sum(
+        int(row[mode].get("executed_gripper_oob_count", 0))
+        for row in rows
+        for mode in ("selector_off", "care")
+    )
     receipt = progress_root / f"{task}.receipt.json"
     receipt_value = {
         "schema": PAIRED_RECEIPT_SCHEMA,
@@ -741,6 +790,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "pair_manifest": str(pair_manifest.resolve()),
         "pair_manifest_sha256": sha256_file(pair_manifest),
         "rows": rows,
+        "smoke_interface_steps": SMOKE_INTERFACE_STEPS if not formal else None,
+        "policy_output_clipping": False,
+        "action_clipping": False,
+        "state_clipping": False,
+        "gripper_reparameterization": False,
+        "executed_gripper_oob_count": executed_oob,
+        "prediction_gripper_oob_count": prediction_oob,
+        "ensemble_plan_gripper_oob_count": plan_oob,
     }
     atomic_json(receipt, receipt_value)
     stage = "paired_validation20" if formal else "paired_validation_smoke"
@@ -793,6 +850,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         action_horizon=ACTION_HORIZON,
         action_clipping=False,
         state_clipping=False,
+        smoke_interface_steps=SMOKE_INTERFACE_STEPS if not formal else None,
+        policy_output_clipping=False,
+        gripper_reparameterization=False,
+        executed_gripper_oob_count=executed_oob,
+        prediction_gripper_oob_count=prediction_oob,
+        ensemble_plan_gripper_oob_count=plan_oob,
     )
 
 

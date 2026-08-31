@@ -110,6 +110,12 @@ class B0HRuntime:
         self.rows: dict[int, deque[_HistoryRow]] = {0: deque(maxlen=HISTORY_STEPS), 1: deque(maxlen=HISTORY_STEPS)}
         self.pending_actions: dict[int, np.ndarray | None] = {0: None, 1: None}
         self.ensemble = AbsoluteChunkEnsemble()
+        # Range telemetry is intentionally kept separate from the native
+        # command gate.  A regression head is unbounded in normalized space;
+        # future rows of a 100-step chunk may therefore fall outside the
+        # simulator population range even though they are not executed at the
+        # current tick.  We record that fact, but never transform the values.
+        self.last_prediction_diagnostics: dict[str, Any] = {}
 
     @staticmethod
     def _validate_stats_contract(stats: Mapping[str, Any]) -> None:
@@ -209,6 +215,7 @@ class B0HRuntime:
             rows.clear()
         self.pending_actions = {0: None, 1: None}
         self.ensemble.reset()
+        self.last_prediction_diagnostics = {}
 
     def _features(self, head: np.ndarray, wrists: Sequence[np.ndarray]) -> np.ndarray:
         frames = np.stack([head, *wrists], axis=0)
@@ -267,17 +274,38 @@ class B0HRuntime:
         with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.device.type == "cuda"):
             prediction, _mu, _logvar = self.model(**merged)
         values = prediction.float().cpu().numpy() * self.a_std[None, None, :] + self.a_mean[None, None, :]
-        # Native simulator commands are continuous drive targets.  Reject an
-        # out-of-range prediction rather than clipping or binarizing it; a
-        # range mismatch is a deployment error that must remain observable.
-        validate_native_gripper_vector(values, context="B0-H predicted action chunk")
+        if values.shape != (2, ACTION_HORIZON, ACTION_DIM) or not np.isfinite(values).all():
+            raise ValueError("B0-H predicted action chunk must be finite [2,100,7]")
+        raw_gripper = values[..., -1]
+        prediction_oob = int(np.count_nonzero(
+            (raw_gripper < GRIPPER_NATIVE_RANGE[0])
+            | (raw_gripper > GRIPPER_NATIVE_RANGE[1])
+        ))
         actions = self.ensemble.add_and_plan({arm: values[arm].astype(np.float32) for arm in (0, 1)})
+        executed = np.stack((actions[0][0], actions[1][0])).astype(np.float32)
+        # Only the row sent to the native controller is a command boundary.
+        # Keep this fail-closed check (and do not clip): an out-of-range
+        # current action is a real adapter/model error, while an out-of-range
+        # tail is telemetry for a future tick.
+        validate_native_gripper_vector(executed, context="B0-H executed action")
+        plan_gripper = np.stack((actions[0][..., -1], actions[1][..., -1]))
+        plan_oob = int(np.count_nonzero(
+            (plan_gripper < GRIPPER_NATIVE_RANGE[0])
+            | (plan_gripper > GRIPPER_NATIVE_RANGE[1])
+        ))
+        self.last_prediction_diagnostics = {
+            "prediction_gripper_oob_count": prediction_oob,
+            "prediction_gripper_min": float(np.min(raw_gripper)),
+            "prediction_gripper_max": float(np.max(raw_gripper)),
+            "ensemble_plan_gripper_oob_count": plan_oob,
+            "ensemble_plan_gripper_min": float(np.min(plan_gripper)),
+            "ensemble_plan_gripper_max": float(np.max(plan_gripper)),
+            "executed_gripper_oob_count": 0,
+            "policy_output_clipping": False,
+        }
         # The first row is the command consumed at this control tick.  Keep
         # the full chunk for temporal ensembling in the caller if desired.
         for arm in (0, 1):
-            validate_native_gripper_vector(
-                actions[arm], context=f"B0-H ensembled action plan arm {arm}"
-            )
             self.pending_actions[arm] = actions[arm][0].copy()
         return actions
 
