@@ -8,6 +8,28 @@ from typing import Any, Mapping
 FIDELITY_SCHEMA = "before-we-act.bicoord.care-reactive-replay-fidelity/1"
 FIDELITY_TOLERANCE = 1e-6
 FIDELITY_STEPS = 64
+EXPECTED_DISCRETE_DIFFERENCE_KEYS = frozenset(
+    {
+        "branch_step",
+        "success",
+        "active",
+        "all_joint_changes_below_0_02",
+        "hard_safety_violation",
+        "collision_or_drop",
+        "robot_conflict",
+        "duplicate_work",
+    }
+)
+EXPECTED_SAFETY_DIFFERENCE_KEYS = frozenset(
+    {
+        "drop",
+        "robot_collision",
+        "hard_safety_violation",
+        "dropped_actor_names",
+        "robot_contact_bodies",
+    }
+)
+EXPECTED_OUTCOME_DIFFERENCE_KEYS = frozenset({"8", "16", "32", "64"})
 
 _ERROR_FIELDS = (
     "utility_max_abs_error",
@@ -59,7 +81,8 @@ def strict_fidelity_row_valid(value: Any) -> bool:
         return False
     if value.get("passed") is not True:
         return False
-    if value.get("repeat_id") not in (0, 1):
+    repeat_id = value.get("repeat_id")
+    if not isinstance(repeat_id, int) or isinstance(repeat_id, bool) or repeat_id not in (0, 1):
         return False
     try:
         tolerance = float(value.get("tolerance"))
@@ -86,6 +109,8 @@ def strict_fidelity_row_valid(value: Any) -> bool:
             numeric = [float(error) for error in errors]
         except (TypeError, ValueError):
             return False
+        if any(isinstance(error, bool) for error in errors):
+            return False
         if any(
             not math.isfinite(error)
             or error < 0.0
@@ -93,11 +118,17 @@ def strict_fidelity_row_valid(value: Any) -> bool:
             for error in numeric
         ):
             return False
+    expected_difference_keys = {
+        "discrete_label_difference_steps": EXPECTED_DISCRETE_DIFFERENCE_KEYS,
+        "safety_label_difference_steps": EXPECTED_SAFETY_DIFFERENCE_KEYS,
+        "outcome_discrete_difference_horizons": EXPECTED_OUTCOME_DIFFERENCE_KEYS,
+    }
     for field in _EMPTY_DIFFERENCE_FIELDS:
         differences = value.get(field)
         if (
             not isinstance(differences, Mapping)
             or not differences
+            or set(differences) != expected_difference_keys[field]
             or any(
                 not isinstance(item, list) or len(item) != 0
                 for item in differences.values()
@@ -127,6 +158,9 @@ __all__ = [
     "FIDELITY_SCHEMA",
     "FIDELITY_STEPS",
     "FIDELITY_TOLERANCE",
+    "EXPECTED_DISCRETE_DIFFERENCE_KEYS",
+    "EXPECTED_SAFETY_DIFFERENCE_KEYS",
+    "EXPECTED_OUTCOME_DIFFERENCE_KEYS",
     "strict_fidelity_receipts_valid",
     "strict_fidelity_row_valid",
 ]

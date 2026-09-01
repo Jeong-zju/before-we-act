@@ -5,6 +5,9 @@ import math
 from deployment.bicoord_care.branch_fidelity import (
     FIDELITY_SCHEMA,
     FIDELITY_STEPS,
+    EXPECTED_DISCRETE_DIFFERENCE_KEYS,
+    EXPECTED_SAFETY_DIFFERENCE_KEYS,
+    EXPECTED_OUTCOME_DIFFERENCE_KEYS,
     FIDELITY_TOLERANCE,
     strict_fidelity_receipts_valid,
     strict_fidelity_row_valid,
@@ -38,9 +41,15 @@ def _row(repeat_id: int) -> dict[str, object]:
         "active_label_difference_steps": [],
         "all_joint_changes_label_difference_steps": [],
         "success_label_difference_steps": [],
-        "discrete_label_difference_steps": {"success": []},
-        "safety_label_difference_steps": {"drop": []},
-        "outcome_discrete_difference_horizons": {"8": [], "16": [], "32": [], "64": []},
+        "discrete_label_difference_steps": {
+            key: [] for key in EXPECTED_DISCRETE_DIFFERENCE_KEYS
+        },
+        "safety_label_difference_steps": {
+            key: [] for key in EXPECTED_SAFETY_DIFFERENCE_KEYS
+        },
+        "outcome_discrete_difference_horizons": {
+            key: [] for key in EXPECTED_OUTCOME_DIFFERENCE_KEYS
+        },
     }
 
 
