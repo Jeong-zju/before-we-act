@@ -1,0 +1,24 @@
+{
+  "schema": "duobench.dp.validation-summary.compact.v1",
+  "status": "complete",
+  "checkpoint_sha256": "7d71c2877fa90b53ca4cf2c48d9f22d14875f995c99649b374ef2219ba2f341e",
+  "evaluator_revision": "duobench-dp-obs3-lag1-h8-exec6-direct-v1",
+  "episodes_per_task": 20,
+  "total_episodes": 220,
+  "successes": 1,
+  "macro_success_rate": 0.004545454545454546,
+  "normalized_final_stage_progress": 0.07840909090909091,
+  "tasks": {
+    "ball_maze": {"successes": 0, "success_rate": 0.0, "mean_final_stage_progress": 0.475, "max_steps": 526},
+    "bin_sort": {"successes": 0, "success_rate": 0.0, "mean_final_stage_progress": 0.0, "max_steps": 365},
+    "block_balance": {"successes": 0, "success_rate": 0.0, "mean_final_stage_progress": 0.0, "max_steps": 1091},
+    "carry_pot": {"successes": 0, "success_rate": 0.0, "mean_final_stage_progress": 0.2333333333333333, "max_steps": 840},
+    "hinge_chest": {"successes": 0, "success_rate": 0.0, "mean_final_stage_progress": 0.0, "max_steps": 610},
+    "join_blocks": {"successes": 0, "success_rate": 0.0, "mean_final_stage_progress": 0.0, "max_steps": 1314},
+    "pour_marbles": {"successes": 0, "success_rate": 0.0, "mean_final_stage_progress": 0.05, "max_steps": 549},
+    "spring_door": {"successes": 0, "success_rate": 0.0, "mean_final_stage_progress": 0.016666666666666666, "max_steps": 1070},
+    "transfer_cube": {"successes": 0, "success_rate": 0.0, "mean_final_stage_progress": 0.0, "max_steps": 605},
+    "transfer_gate": {"successes": 1, "success_rate": 0.05, "mean_final_stage_progress": 0.05, "max_steps": 630},
+    "transfer_reorient": {"successes": 0, "success_rate": 0.0, "mean_final_stage_progress": 0.0375, "max_steps": 883}
+  }
+}

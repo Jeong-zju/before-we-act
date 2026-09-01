@@ -1,0 +1,14 @@
+{
+  "all_data": true,
+  "checkpoint": "/workspace/runs/duobench-dp/formal/final.pt",
+  "checkpoint_sha256": "7d71c2877fa90b53ca4cf2c48d9f22d14875f995c99649b374ef2219ba2f341e",
+  "completed_at": "2026-08-31T06:07:55.931358+00:00",
+  "episodes": 550,
+  "equivalent_indexed_sample_traversals": 6.726504529880394,
+  "formal_target_steps": 60000,
+  "indexed_local_samples": 570876,
+  "samples_drawn": 3840000,
+  "schema": "duobench.dp.training-status.v1",
+  "status": "complete",
+  "step": 60000
+}

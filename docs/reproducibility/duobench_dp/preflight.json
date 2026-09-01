@@ -1,0 +1,81 @@
+{
+  "checks": {
+    "all_285988_frames": true,
+    "all_550_episodes": true,
+    "arrays": true,
+    "binary_gripper": true,
+    "causal_lag_one": true,
+    "controller_action_contract": true,
+    "controller_action_range": true,
+    "corpus_minmax": true,
+    "dataset_revision": true,
+    "dataset_sample_contract": true,
+    "eleven_tasks": true,
+    "episode_boundaries": true,
+    "model_inference_contract": true,
+    "model_loss_finite": true,
+    "rgb_contract": true,
+    "validation_horizons": true
+  },
+  "model": {
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "loss": 1.2614108324050903,
+    "prediction_shape": [
+      2,
+      6,
+      8
+    ],
+    "trainable_parameters": 96532424
+  },
+  "passed": true,
+  "schema": "duobench.dp.preflight.v1",
+  "stats": {
+    "a_max": [
+      2.7437000274658203,
+      1.7836999893188477,
+      2.900700092315674,
+      -0.1518000066280365,
+      2.80649995803833,
+      4.516900062561035,
+      3.015899896621704,
+      1.0
+    ],
+    "a_min": [
+      -2.7437000274658203,
+      -1.7836999893188477,
+      -2.900700092315674,
+      -3.042099952697754,
+      -2.80649995803833,
+      0.5444999933242798,
+      -3.015899896621704,
+      0.0
+    ],
+    "action_lag_rows": 1,
+    "all_550_episodes_no_split": true,
+    "causal_decisions": 570876,
+    "episodes": 550,
+    "indexed_local_samples": 570876,
+    "population": "all_causal_pairs_all_11_tasks_all_50_demos_both_local_arms",
+    "q_max": [
+      2.7440199851989746,
+      1.7842518091201782,
+      2.903139352798462,
+      -0.5411092638969421,
+      2.8728435039520264,
+      4.5164618492126465,
+      3.018761396408081,
+      1.0
+    ],
+    "q_min": [
+      -2.7438158988952637,
+      -1.7491339445114136,
+      -2.9012606143951416,
+      -3.0516903400421143,
+      -2.8319122791290283,
+      0.5581910014152527,
+      -3.0159528255462646,
+      0.0
+    ]
+  },
+  "status": "PASSED"
+}
