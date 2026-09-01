@@ -161,7 +161,8 @@ class Articulation:
 
 
 class PhysxCpuSystem:
-    def __init__(self):
+    def __init__(self, scene=None):
+        self.scene = scene
         self.hidden_solver_state = np.asarray([0.125, -0.25], np.float64)
 
     def pack(self):
@@ -172,13 +173,19 @@ class PhysxCpuSystem:
         if restored.shape != (2,):
             raise ValueError("malformed fake PhysX state")
         self.hidden_solver_state = restored.copy()
+        # Model the SAPIEN side effect observed on contact-rich articulation
+        # scenes: unpack may recompute qacc/qf caches.  The production
+        # serializer must re-apply the captured values after this call.
+        if self.scene is not None:
+            self.scene.articulation.qacc[:] = 77
+            self.scene.articulation.qf[:] = 78
 
 
 class Scene:
     def __init__(self):
         self.actor = Actor()
         self.articulation = Articulation()
-        self.physx_system = PhysxCpuSystem()
+        self.physx_system = PhysxCpuSystem(self)
         self.packed = b"scene-poses-v1"
 
     def get_physx_system(self):

@@ -10,9 +10,10 @@ error before any branch is labelled as physical.
 
 The serializer below is also a reference implementation for the adapter.  It
 captures SAPIEN scene poses, rigid-body velocities, articulation qpos/qvel/
-qacc/root state, drive targets, the PhysX CPU-system state blob (including
-solver/contact state not exposed by entity accessors), controller/task scalar
-state, wrapper clocks, and Python/NumPy/Torch RNG.  A caller must still run
+qacc/root state, drive targets, and the PhysX CPU-system state blob (the
+authoritative component state exposed by SAPIEN; solver/contact internals are
+not exposed by its public API), controller/task scalar state, wrapper clocks,
+and Python/NumPy/Torch RNG.  A caller must still run
 :func:`restore_probe` twice and require the <=1e-6 result before using formal
 CARE data.
 """
@@ -638,6 +639,24 @@ def restore_state(env: Any, state: Mapping[str, Any]) -> None:
         if "physx_state" not in state:
             raise SnapshotCapabilityError("snapshot lacks PhysX system state")
         _physx_system(scene).unpack(bytes(state["physx_state"]))
+        # SAPIEN's PhysX unpack restores the authoritative dynamics but may
+        # recompute articulation acceleration/force caches as a side effect.
+        # Those caches are part of the captured controller state and can
+        # affect the next absolute-drive integration on contact-rich tasks.
+        # Re-apply them after unpack so every sibling starts with the exact
+        # captured qacc/qf rather than an implementation-defined recompute.
+        for key, row in state["articulations"].items():
+            obj = by_key.get(key)
+            if obj is None:
+                raise SnapshotCapabilityError(f"articulation identity drift during restore: {key}")
+            if "qacc" in row and not _set_attr(
+                obj, ("set_qacc", "qacc"), np.array(row["qacc"], copy=True)
+            ):
+                raise SnapshotCapabilityError("cannot restore articulation qacc after PhysX unpack")
+            if "qf" in row and not _set_attr(
+                obj, ("set_qf", "qf"), np.array(row["qf"], copy=True)
+            ):
+                raise SnapshotCapabilityError("cannot restore articulation qf after PhysX unpack")
         for key, value in state.get("env_attrs", {}).items():
             setattr(base, key, _restore_numeric(value))
         robot = getattr(base, "robot", None)
