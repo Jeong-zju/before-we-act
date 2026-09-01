@@ -559,6 +559,109 @@ def _run_branch(
     return row, [value[peer].copy() for value in executed]
 
 
+def _fidelity_diagnostic(
+    reactive: Mapping[str, Any], replay: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Summarize continuous and discrete differences before a fidelity fail.
+
+    This is failure evidence only; it is never consumed as CARE supervision.
+    Keeping both levels is important because the utility vector contains
+    thresholded labels (active/deadlock) which can amplify a tiny physical or
+    policy numerical difference into a visible utility delta.
+    """
+
+    def _array(row: Mapping[str, Any], key: str) -> np.ndarray:
+        return np.asarray(row.get(key, []), dtype=np.float64)
+
+    reactive_actions = _array(reactive, "executed_actions")
+    replay_actions = _array(replay, "executed_actions")
+    reactive_metrics = reactive.get("metrics", [])
+    replay_metrics = replay.get("metrics", [])
+    reactive_qpos = np.asarray(
+        [item.get("qpos", []) for item in reactive_metrics], dtype=np.float64
+    )
+    replay_qpos = np.asarray(
+        [item.get("qpos", []) for item in replay_metrics], dtype=np.float64
+    )
+    reactive_progress = np.asarray(
+        [item.get("progress", np.nan) for item in reactive_metrics], dtype=np.float64
+    )
+    replay_progress = np.asarray(
+        [item.get("progress", np.nan) for item in replay_metrics], dtype=np.float64
+    )
+
+    def _max_abs(first: np.ndarray, second: np.ndarray) -> float:
+        if first.shape != second.shape or not first.size:
+            return float("inf") if first.shape != second.shape else 0.0
+        return float(np.max(np.abs(first - second)))
+
+    active_diff = []
+    stagnant_diff = []
+    for index, (left, right) in enumerate(zip(reactive_metrics, replay_metrics)):
+        if left.get("active") != right.get("active"):
+            active_diff.append(index)
+        if left.get("all_joint_changes_below_0_02") != right.get(
+            "all_joint_changes_below_0_02"
+        ):
+            stagnant_diff.append(index)
+    utility_diff: dict[str, dict[str, Any]] = {}
+    for horizon in HORIZONS:
+        key = str(horizon)
+        left = reactive.get("outcomes", {}).get(key, {})
+        right = replay.get("outcomes", {}).get(key, {})
+        left_vector = np.asarray(left.get("bounded_utility_vector", []), dtype=np.float64)
+        right_vector = np.asarray(right.get("bounded_utility_vector", []), dtype=np.float64)
+        utility_diff[key] = {
+            "utility_reactive": float(left.get("utility_main", np.nan)),
+            "utility_replay": float(right.get("utility_main", np.nan)),
+            "utility_abs_error": abs(
+                float(left.get("utility_main", np.nan))
+                - float(right.get("utility_main", np.nan))
+            ),
+            "bounded_vector_abs_error": _max_abs(left_vector, right_vector),
+            "bounded_vector_reactive": left_vector.tolist(),
+            "bounded_vector_replay": right_vector.tolist(),
+        }
+    action_per_step = (
+        np.max(np.abs(reactive_actions - replay_actions), axis=(1, 2))
+        if reactive_actions.shape == replay_actions.shape
+        and reactive_actions.ndim == 3
+        else np.asarray([], dtype=np.float64)
+    )
+    qpos_per_step = (
+        np.max(np.abs(reactive_qpos - replay_qpos), axis=(1, 2))
+        if reactive_qpos.shape == replay_qpos.shape and reactive_qpos.ndim == 3
+        else np.asarray([], dtype=np.float64)
+    )
+    return {
+        "schema": "before-we-act.bicoord.care-fidelity-diagnostic/1",
+        "reactive_status": reactive.get("status"),
+        "replay_status": replay.get("status"),
+        "executed_action_shape": list(reactive_actions.shape),
+        "executed_action_max_abs_error": _max_abs(reactive_actions, replay_actions),
+        "executed_action_max_abs_error_by_step": action_per_step.tolist(),
+        "executed_action_first_difference": next(
+            (
+                index
+                for index, (left, right) in enumerate(
+                    zip(reactive_actions.reshape(len(reactive_actions), -1), replay_actions.reshape(len(replay_actions), -1))
+                )
+                if not np.array_equal(left, right)
+            ),
+            None,
+        )
+        if reactive_actions.shape == replay_actions.shape
+        else None,
+        "qpos_shape": list(reactive_qpos.shape),
+        "qpos_max_abs_error": _max_abs(reactive_qpos, replay_qpos),
+        "qpos_max_abs_error_by_step": qpos_per_step.tolist(),
+        "progress_max_abs_error": _max_abs(reactive_progress, replay_progress),
+        "active_label_difference_steps": active_diff,
+        "all_joint_changes_label_difference_steps": stagnant_diff,
+        "utility_by_horizon": utility_diff,
+    }
+
+
 def _targets(branches: Sequence[Mapping[str, Any]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     keyed = {
         (int(row["candidate_id"]), str(row["regime"]), int(row["repeat_id"])): row
@@ -795,7 +898,15 @@ def _collect_family(
             )
             fidelity.append({"repeat_id": repeat, "utility_max_abs_error": difference})
             if difference > SNAPSHOT_TOLERANCE:
-                raise RuntimeError(f"candidate-0 reactive/replay fidelity failed: {difference}")
+                diagnostic = _fidelity_diagnostic(reference_reactive, reference_replay)
+                diagnostic["repeat_id"] = int(repeat)
+                diagnostic["snapshot_id"] = snapshot_id
+                diagnostic_path = output_root / f"family_{family_id:06d}.fidelity_diagnostic.json"
+                atomic_json(diagnostic_path, diagnostic)
+                raise RuntimeError(
+                    f"candidate-0 reactive/replay fidelity failed: {difference}; "
+                    f"diagnostic={diagnostic_path}"
+                )
             for candidate in range(1, CANDIDATES):
                 reactive, _ = _run_branch(
                     env=env,

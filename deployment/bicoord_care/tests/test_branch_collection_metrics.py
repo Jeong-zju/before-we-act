@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from deployment.bicoord_care import branch_collection as module
 
@@ -83,3 +84,50 @@ def test_deadlock_run_begins_after_first_observed_tick() -> None:
     # With nine observations there are now eight consecutive comparable
     # transitions; only rows 1..8 belong to the deadlock run.
     assert module._deadlock_mask(rows, start_progress=0.0) == [False] + [True] * 8
+
+
+def test_fidelity_diagnostic_exposes_discrete_and_continuous_differences() -> None:
+    metrics = [
+        {
+            "qpos": [[0.0] * 7, [0.0] * 7],
+            "progress": 0.0,
+            "active": [False, False],
+            "all_joint_changes_below_0_02": True,
+        }
+    ]
+    replay_metrics = [dict(metrics[0], active=[True, False])]
+    actions = np.zeros((1, 2, 7), dtype=np.float32)
+    replay_actions = actions.copy()
+    replay_actions[0, 0, 0] = 1e-4
+    row = {
+        "status": "VALID",
+        "executed_actions": actions.tolist(),
+        "metrics": metrics,
+        "outcomes": {
+            str(horizon): {
+                "utility_main": 0.0,
+                "bounded_utility_vector": [0.0] * 8,
+            }
+            for horizon in module.HORIZONS
+        },
+    }
+    replay = {
+        "status": "VALID",
+        "executed_actions": replay_actions.tolist(),
+        "metrics": replay_metrics,
+        "outcomes": {
+            str(horizon): {
+                "utility_main": 0.0340909090909 if horizon == 16 else 0.0,
+                "bounded_utility_vector": [0.0] * 8,
+            }
+            for horizon in module.HORIZONS
+        },
+    }
+
+    diagnostic = module._fidelity_diagnostic(row, replay)
+
+    assert diagnostic["executed_action_max_abs_error"] == pytest.approx(1e-4)
+    assert diagnostic["executed_action_first_difference"] == 0
+    assert diagnostic["active_label_difference_steps"] == [0]
+    assert diagnostic["all_joint_changes_label_difference_steps"] == []
+    assert diagnostic["utility_by_horizon"]["16"]["utility_abs_error"] > 0.03
