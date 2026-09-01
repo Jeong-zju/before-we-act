@@ -1,0 +1,68 @@
+{
+  "schema": "before-we-act.duobench.pi05.lora.v2",
+  "canonical_local_config": "configs/pi05_duobench_lora_formal_v1.json",
+  "status": "frozen",
+  "benchmark": "DuoBench",
+  "source": {
+    "openpi_commit": "15a9616a00943ada6c20a0f158e3adb39df2ccac",
+    "duobench_commit": "082a57cdafea9db115029e6fe9e03691e755f93f",
+    "rcs_commit": "4f78aeffae3bc4d0c02e7beab993e5406261dcf6",
+    "dataset_revision": "b741bc915d942ecadaefb4e3de6bbd716c1b8b1b"
+  },
+  "data": {
+    "episodes": 550,
+    "tasks": 11,
+    "episodes_per_task": 50,
+    "split": "none; all simulation demonstrations",
+    "causal_alignment": "post-action observation row i -> action row i+1",
+    "action_lag_rows": 1,
+    "action_horizon": 16,
+    "tail_padding": "repeat final valid action inside episode",
+    "sampling": "equal-probability task lanes; uniform episode/arm/timestep",
+    "local_observation": "head RGB + own wrist RGB + own 8-D state + task prompt",
+    "forbidden_inputs": ["peer wrist", "peer state", "peer action", "joint action", "privileged simulator state", "arm id"]
+  },
+  "model": {
+    "family": "upstream OpenPI pi0.5",
+    "pi05": true,
+    "action_dim": 32,
+    "action_horizon": 16,
+    "paligemma_variant": "gemma_2b_lora",
+    "action_expert_variant": "gemma_300m_lora",
+    "initialization": "pi05_base",
+    "freeze_filter": "Pi0Config.get_freeze_filter()",
+    "quantile_normalization": "upstream [-1,1]"
+  },
+  "optimization": {
+    "updates": 25000,
+    "global_batch_size": 128,
+    "devices": 4,
+    "sample_budget": 3200000,
+    "warmup_steps": 500,
+    "peak_lr": 0.00005,
+    "decay_lr": 0.000005,
+    "weight_decay": 0.0000000001,
+    "seed": 42,
+    "selection": "fixed final checkpoint; no validation-based selection"
+  },
+  "validation": {
+    "episodes_per_task": 20,
+    "total_episodes": 220,
+    "temporal_ensemble_decay": 0.01,
+    "replan_interval": 1,
+    "max_steps": {
+      "ball_maze": 526,
+      "bin_sort": 365,
+      "block_balance": 1091,
+      "carry_pot": 840,
+      "hinge_chest": 610,
+      "join_blocks": 1314,
+      "pour_marbles": 549,
+      "spring_door": 1070,
+      "transfer_cube": 605,
+      "transfer_gate": 630,
+      "transfer_reorient": 883
+    }
+  },
+  "policy_contract": "shared_weights_decentralized_head_rgb_local_wrist_rgb_own_state8_to_own_action8"
+}

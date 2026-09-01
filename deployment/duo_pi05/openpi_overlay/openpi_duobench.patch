@@ -1,0 +1,19 @@
+diff --git a/src/openpi/training/config.py b/src/openpi/training/config.py
+--- a/src/openpi/training/config.py
++++ b/src/openpi/training/config.py
+@@ -564 +564,2 @@
++import openpi.training.duobench_config as duobench_config  # noqa: E402
+ # Use `get_config` if you need to get a config by name in your code.
+@@ -954 +955,2 @@
++    duobench_config.make_config(),
+     TrainConfig(
+diff --git a/src/openpi/training/data_loader.py b/src/openpi/training/data_loader.py
+--- a/src/openpi/training/data_loader.py
++++ b/src/openpi/training/data_loader.py
+@@ -19 +19,2 @@
++from openpi.training.duobench_dataset import DuoBenchDataset
+ import openpi.transforms as _transforms
+@@ -146 +147,3 @@
++    if repo_id == "duobench":
++        return DuoBenchDataset(action_horizon=action_horizon)
+     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
