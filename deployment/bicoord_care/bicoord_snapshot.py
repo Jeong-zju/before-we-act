@@ -10,9 +10,11 @@ error before any branch is labelled as physical.
 
 The serializer below is also a reference implementation for the adapter.  It
 captures SAPIEN scene poses, rigid-body velocities, articulation qpos/qvel/
-qacc/root state, drive targets, controller/task scalar state, wrapper clocks,
-and Python/NumPy/Torch RNG.  A caller must still run :func:`restore_probe`
-twice and require the <=1e-6 result before using formal CARE data.
+qacc/root state, drive targets, the PhysX CPU-system state blob (including
+solver/contact state not exposed by entity accessors), controller/task scalar
+state, wrapper clocks, and Python/NumPy/Torch RNG.  A caller must still run
+:func:`restore_probe` twice and require the <=1e-6 result before using formal
+CARE data.
 """
 from __future__ import annotations
 
@@ -27,7 +29,7 @@ import numpy as np
 import torch
 
 
-SNAPSHOT_SCHEMA = "before-we-act.bicoord.exact-snapshot/1"
+SNAPSHOT_SCHEMA = "before-we-act.bicoord.exact-snapshot/2"
 SNAPSHOT_TOLERANCE = 1e-6
 
 
@@ -259,6 +261,20 @@ def _component(entity: Any, predicate: str) -> Any:
     return None
 
 
+def _physx_system(scene: Any) -> Any:
+    """Resolve the scene-owned PhysX system across supported SAPIEN 3 APIs."""
+
+    getter = getattr(scene, "get_physx_system", None)
+    system = getter() if callable(getter) else getattr(scene, "physx_system", None)
+    if system is None:
+        raise SnapshotCapabilityError("scene lacks PhysX system access")
+    if not callable(getattr(system, "pack", None)):
+        raise SnapshotCapabilityError("PhysX system lacks pack")
+    if not callable(getattr(system, "unpack", None)):
+        raise SnapshotCapabilityError("PhysX system lacks unpack")
+    return system
+
+
 def _is_dynamic_component(component: Any) -> bool:
     if component is None:
         return False
@@ -414,6 +430,10 @@ def capability_report(env: Any) -> dict[str, Any]:
         for name in ("pack_poses", "unpack_poses", "get_all_actors", "get_all_articulations"):
             if not callable(getattr(scene, name, None)):
                 missing.append(f"scene.{name}")
+        try:
+            _physx_system(scene)
+        except SnapshotCapabilityError as error:
+            missing.append(str(error))
     if not callable(getattr(base, "get_obs", None)):
         missing.append("get_obs")
     if not callable(getattr(base, "take_action", None)):
@@ -465,6 +485,7 @@ def capture_state(env: Any) -> dict[str, Any]:
         "schema": SNAPSHOT_SCHEMA,
         "serializer": "reference_serializer",
         "scene_poses": bytes(scene.pack_poses()),
+        "physx_state": bytes(_physx_system(scene).pack()),
         "actors": {_object_key(obj, i): _actor_state(obj) for i, obj in enumerate(actors)},
         "articulations": {_object_key(obj, i): _articulation_state(obj) for i, obj in enumerate(arts)},
         "env_attrs": {},
@@ -608,6 +629,15 @@ def restore_state(env: Any, state: Mapping[str, Any]) -> None:
         # and articulation-link poses exactly, this gives the paired evaluator
         # a stable state hash without weakening its bitwise drift gate.
         scene.unpack_poses(bytes(state["scene_poses"]))
+        # Entity setters do not expose the PhysX solver/contact warm-start
+        # state.  Restore the scene-owned CPU-system blob last so the next
+        # integration begins from the exact captured physical state rather
+        # than merely matching visible poses and generalized coordinates.
+        # This is intentionally mandatory: snapshots created by schema v1 or
+        # runtimes without pack/unpack must never be accepted as CARE data.
+        if "physx_state" not in state:
+            raise SnapshotCapabilityError("snapshot lacks PhysX system state")
+        _physx_system(scene).unpack(bytes(state["physx_state"]))
         for key, value in state.get("env_attrs", {}).items():
             setattr(base, key, _restore_numeric(value))
         robot = getattr(base, "robot", None)

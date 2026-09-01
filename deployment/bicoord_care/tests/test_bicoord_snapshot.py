@@ -9,6 +9,8 @@ import torch
 
 from deployment.bicoord_care.bicoord_snapshot import (
     SNAPSHOT_TOLERANCE,
+    SnapshotCapabilityError,
+    capability_report,
     capture_state,
     restore_probe,
     restore_state,
@@ -158,11 +160,29 @@ class Articulation:
         return self.joints
 
 
+class PhysxCpuSystem:
+    def __init__(self):
+        self.hidden_solver_state = np.asarray([0.125, -0.25], np.float64)
+
+    def pack(self):
+        return self.hidden_solver_state.tobytes()
+
+    def unpack(self, value):
+        restored = np.frombuffer(value, dtype=np.float64)
+        if restored.shape != (2,):
+            raise ValueError("malformed fake PhysX state")
+        self.hidden_solver_state = restored.copy()
+
+
 class Scene:
     def __init__(self):
         self.actor = Actor()
         self.articulation = Articulation()
+        self.physx_system = PhysxCpuSystem()
         self.packed = b"scene-poses-v1"
+
+    def get_physx_system(self):
+        return self.physx_system
 
     def pack_poses(self):
         return self.packed
@@ -215,7 +235,9 @@ class Env:
             + float(self.python_rng.random())
             + float(torch.rand((), generator=self.torch_rng))
         )
-        self.scene.actor.pose.p[0] += value + noise
+        solver_effect = float(self.scene.physx_system.hidden_solver_state[0])
+        self.scene.actor.pose.p[0] += value + noise + solver_effect
+        self.scene.physx_system.hidden_solver_state += np.asarray([0.01, -0.02])
         self.scene.articulation.qpos[0] += value
         self.take_action_cnt += 1
         self.stage_eval_score += 0.01
@@ -259,6 +281,7 @@ def test_reference_snapshot_restores_physics_controllers_wrappers_and_rng() -> N
     env.scene.actor.pose.p[:] = 99
     env.scene.actor.component.linear_velocity[:] = 98
     env.scene.actor.component.kinematic = False
+    env.scene.physx_system.hidden_solver_state[:] = 90
     env.scene.articulation.qacc[:] = 97
     env.scene.articulation.qf[:] = 96
     env.scene.articulation.root_pose = Pose([95, 95, 95])
@@ -281,7 +304,29 @@ def test_reference_snapshot_restores_physics_controllers_wrappers_and_rng() -> N
         else:
             assert np.allclose(left, right)
     assert env.scene.actor.component.kinematic is True
+    assert np.array_equal(
+        env.scene.physx_system.hidden_solver_state,
+        np.asarray([0.125, -0.25]),
+    )
     assert env.robot.left_gripper_val == 0.1
+
+
+def test_reference_snapshot_requires_physx_pack_and_unpack() -> None:
+    wrapper = Wrapper(Env())
+    wrapper.env.scene.physx_system = object()
+    report = capability_report(wrapper)
+    assert report["exact"] is False
+    assert "PhysX system lacks pack" in report["missing"]
+    with pytest.raises(SnapshotCapabilityError, match="PhysX system lacks pack"):
+        capture_state(wrapper)
+
+
+def test_reference_restore_rejects_snapshot_without_physx_state() -> None:
+    wrapper = Wrapper(Env())
+    state = capture_state(wrapper)
+    state.pop("physx_state")
+    with pytest.raises(SnapshotCapabilityError, match="lacks PhysX system state"):
+        restore_state(wrapper, state)
 
 
 def test_restore_probe_requires_bitwise_repeatable_post_restore_rollouts() -> None:
