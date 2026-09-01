@@ -103,6 +103,7 @@ GPU_IDS = (0, 1, 2, 3)
 HEARTBEAT_INTERVAL_SECONDS = 15.0
 CHILD_TERMINATION_GRACE_SECONDS = 10.0
 CHILD_WAIT_POLL_SECONDS = 1.0
+NON_RESUMABLE_STAGES = frozenset({"branch_smoke", "branch_collection"})
 
 SUPERVISOR_SCHEMA = "before-we-act.bicoord-care-supervisor/1"
 RESULT_SCHEMA = "before-we-act.bicoord-care-stage-result/1"
@@ -1029,21 +1030,72 @@ class GpuScheduler:
                     f"{self._format_cleanup_errors(cleanup_errors)}"
                 ) from error
             raise
-        errors: list[BaseException] = []
-        for item in active:
-            try:
-                self._wait(item)
-            except BaseException as error:  # finish accounting for every child
-                errors.append(error)
-        if errors:
-            # Preserve the terminal interruption type.  Wrapping it in the
-            # generic SupervisorError makes ``run_stage`` treat a deliberate
-            # service stop as a retryable worker failure and can start a new
-            # GPU wave while supervisord is waiting for shutdown.
-            interrupted = [error for error in errors if isinstance(error, Interrupted)]
-            if interrupted:
-                raise Interrupted("; ".join(str(error) for error in interrupted))
-            raise SupervisorError("; ".join(str(error) for error in errors))
+        # Monitor the wave as a unit.  Waiting for workers in launch order can
+        # hide a rank-3 fidelity failure behind a still-running rank-0 job for
+        # minutes, allowing more invalid branch families to be published.
+        # Poll every owned child and stop all siblings as soon as any one
+        # exits unsuccessfully.
+        remaining: dict[int, ActiveProcess] = {
+            item.process.pid: item for item in active
+        }
+        while remaining:
+            if self._interrupted.is_set():
+                cleanup_errors = self._terminate_and_reap(
+                    tuple(remaining.values())
+                )
+                raise Interrupted(
+                    "supervisor interrupted"
+                    f"{self._format_cleanup_errors(cleanup_errors)}"
+                )
+            failures: list[tuple[ActiveProcess, int]] = []
+            registry_changed = False
+            for pid, item in tuple(remaining.items()):
+                poll = getattr(item.process, "poll", None)
+                if not callable(poll):
+                    raise TypeError("wave child process lacks poll()")
+                try:
+                    code = poll()
+                except ChildProcessError:
+                    code = getattr(item.process, "returncode", None)
+                    if code is None:
+                        code = -1
+                if code is None:
+                    continue
+                remaining.pop(pid)
+                registry_changed = self._remove_owned(item) or registry_changed
+                if int(code) != 0:
+                    failures.append((item, int(code)))
+            if registry_changed:
+                try:
+                    self._status_callback()
+                except BaseException as error:
+                    cleanup_errors = self._terminate_and_reap(
+                        tuple(remaining.values())
+                    )
+                    raise SupervisorError(
+                        "failed to publish GPU-wave status"
+                        f"{self._format_cleanup_errors(cleanup_errors)}"
+                    ) from error
+            if failures:
+                cleanup_errors = self._terminate_and_reap(
+                    tuple(remaining.values())
+                )
+                if self._interrupted.is_set():
+                    raise Interrupted(
+                        "supervisor interrupted"
+                        f"{self._format_cleanup_errors(cleanup_errors)}"
+                    )
+                detail = "; ".join(
+                    f"{item.name} exited {code}; see {item.log_path}"
+                    for item, code in failures
+                )
+                raise SupervisorError(
+                    detail + self._format_cleanup_errors(cleanup_errors)
+                )
+            if remaining:
+                time.sleep(CHILD_WAIT_POLL_SECONDS)
+        if self._interrupted.is_set():
+            raise Interrupted("supervisor interrupted")
 
     def interrupt(self) -> None:
         """Terminate only child process groups launched by this scheduler."""
@@ -4303,7 +4355,7 @@ class Supervisor:
             stage_extra += ["--smoke", "--stage-name", "bcore_smoke_cache"]
         elif spec.name == "bcore_cache":
             stage_extra += ["--stage-name", "bcore_cache"]
-        return [
+        command = [
             *launcher,
             spec.operation,
             "--repo",
@@ -4320,10 +4372,14 @@ class Supervisor:
             str(candidate),
             "--config-sha256",
             self.config_hash,
-            "--auto-resume",
-            *stage_extra,
-            *extra,
         ]
+        # Physical branch stages are intentionally non-resumable.  A failed
+        # attempt may have exposed only a prefix of families before a strict
+        # fidelity gate fired; passing an auto-resume flag would make that
+        # partial population look reusable on a later invocation.
+        if spec.name not in NON_RESUMABLE_STAGES:
+            command.append("--auto-resume")
+        return [*command, *stage_extra, *extra]
 
     def _single_action(self, spec: StageSpec, candidate: Path) -> None:
         extras: list[str] = []
@@ -5164,8 +5220,50 @@ class Supervisor:
         except InvalidArtifact:
             pass
         dependency_hashes = self._dependency_hashes(spec)
+        attempt_marker = (
+            self.s.run / "stage_attempts" / f"{spec.name}.started.json"
+        )
+        if spec.name in NON_RESUMABLE_STAGES:
+            artifact_root = self.s.run / "artifacts" / (
+                "branch_smoke" if spec.name == "branch_smoke" else "branches"
+            )
+            worker_root = self.s.run / "worker_results" / spec.name
+            prior_logs = list(
+                (self.s.run / "logs").glob(f"{spec.name}_rank_*.log")
+            )
+            prior_candidates = list(
+                self.results.glob(f".{spec.name}.*.candidate.json")
+            )
+            if (
+                attempt_marker.exists()
+                or artifact_root.exists()
+                or worker_root.exists()
+                or prior_logs
+                or prior_candidates
+            ):
+                raise SupervisorError(
+                    f"{spec.name} has an unfinished prior attempt in this run; "
+                    "physical branch stages require a completely new run path"
+                )
+            _atomic_json(
+                attempt_marker,
+                {
+                    "schema": "before-we-act.bicoord.nonresumable-stage-attempt/1",
+                    "stage": spec.name,
+                    "started_at": _utc_now(),
+                    "config_sha256": self.config_hash,
+                    "run": str(self.s.run),
+                    "resume_allowed": False,
+                },
+            )
         candidate = self.results / f".{spec.name}.{os.getpid()}.candidate.json"
-        attempts = 3 if spec.operation not in {"source-preflight", "formal-audit"} else 2
+        attempts = (
+            1
+            if spec.name in NON_RESUMABLE_STAGES
+            else 3
+            if spec.operation not in {"source-preflight", "formal-audit"}
+            else 2
+        )
         last_error: BaseException | None = None
         for attempt in range(1, attempts + 1):
             self._set_status(

@@ -93,6 +93,7 @@ def test_base_commands_explicitly_isolate_smoke_cache_and_branch(tmp_path: Path)
     cache_spec = sup.STAGES["bcore_smoke_cache"]
     cache_command = supervisor._base_command(cache_spec, tmp_path / "cache.json")
     assert "--smoke" in cache_command
+    assert "--auto-resume" in cache_command
     assert cache_command[cache_command.index("--stage-name") + 1] == "bcore_smoke_cache"
 
     branch_spec = sup.STAGES["branch_smoke"]
@@ -113,6 +114,7 @@ def test_base_commands_explicitly_isolate_smoke_cache_and_branch(tmp_path: Path)
         assert command[command.index("--families-per-task") + 1] == "1"
         assert command[command.index("--branches-per-family") + 1] == "24"
         assert "--smoke" in command
+        assert "--auto-resume" not in command
 
 
 def test_seed_discovery_is_gpu_task_queued() -> None:
@@ -503,19 +505,33 @@ def test_seed_attempt_retains_explicit_pre_overlay_structural_failure(
     )
 
 
-def test_interrupted_gpu_wave_is_terminal_not_retryable(tmp_path: Path) -> None:
+def test_interrupted_gpu_wave_is_terminal_not_retryable(
+    tmp_path: Path, monkeypatch
+) -> None:
     scheduler = sup.GpuScheduler(_settings(tmp_path), lambda: None)
-    active = object()
-    scheduler._spawn = lambda *_args, **_kwargs: active  # type: ignore[method-assign]
+    process = _FakeSchedulerProcess(4099)
+    active = sup.ActiveProcess(
+        "worker", process, (0,), tmp_path / "worker.log", 1.0
+    )
+    kill_calls: list[tuple[int, int]] = []
 
-    def interrupted(_active):
-        raise sup.Interrupted("service stop")
+    def spawn(*_args, **_kwargs):
+        scheduler.active[process.pid] = active
+        scheduler._interrupted.set()
+        return active
 
-    scheduler._wait = interrupted  # type: ignore[method-assign]
-    with pytest.raises(sup.Interrupted, match="service stop"):
+    def fake_killpg(pgid, signum):
+        kill_calls.append((pgid, signum))
+        process.returncode = -signum
+
+    scheduler._spawn = spawn  # type: ignore[method-assign]
+    monkeypatch.setattr(sup.os, "killpg", fake_killpg)
+    with pytest.raises(sup.Interrupted, match="supervisor interrupted"):
         scheduler.run_wave(
             [("worker", ["python", "-V"], 0, tmp_path / "worker.log")]
         )
+    assert kill_calls == [(process.pid, sup.signal.SIGTERM)]
+    assert scheduler.active == {}
 
 
 def test_interrupted_scheduler_cannot_spawn_another_worker(tmp_path: Path) -> None:
@@ -543,6 +559,74 @@ class _FakeSchedulerProcess:
             self.returncode = 0
         return self.returncode
 
+
+def test_gpu_wave_first_failure_immediately_terminates_siblings(
+    tmp_path: Path, monkeypatch
+) -> None:
+    scheduler = sup.GpuScheduler(_settings(tmp_path), lambda: None)
+    failed = _FakeSchedulerProcess(4201)
+    failed.returncode = 7
+    sibling = _FakeSchedulerProcess(4202)
+    processes = iter((failed, sibling))
+    kill_calls: list[tuple[int, int]] = []
+
+    def spawn(name, _command, gpus, log_path):
+        process = next(processes)
+        active = sup.ActiveProcess(name, process, tuple(gpus), log_path, 1.0)
+        scheduler.active[process.pid] = active
+        return active
+
+    def fake_killpg(pgid, signum):
+        kill_calls.append((pgid, signum))
+        if pgid == sibling.pid:
+            sibling.returncode = -signum
+
+    scheduler._spawn = spawn  # type: ignore[method-assign]
+    monkeypatch.setattr(sup.os, "killpg", fake_killpg)
+    with pytest.raises(sup.SupervisorError, match="failed exited 7"):
+        scheduler.run_wave(
+            [
+                ("failed", ["python", "failed.py"], 0, tmp_path / "failed.log"),
+                ("sibling", ["python", "sibling.py"], 1, tmp_path / "sibling.log"),
+            ]
+        )
+    assert kill_calls == [(sibling.pid, sup.signal.SIGTERM)]
+    assert sibling.wait_calls == [sup.CHILD_TERMINATION_GRACE_SECONDS]
+    assert scheduler.active == {}
+
+
+def test_branch_stage_failure_is_single_attempt_and_requires_new_run(
+    tmp_path: Path,
+) -> None:
+    supervisor = sup.Supervisor(_settings(tmp_path))
+    spec = sup.STAGES["branch_smoke"]
+    action_calls = 0
+
+    def no_receipt(_stage):
+        raise sup.InvalidArtifact("not complete")
+
+    def fail_action(_spec, _candidate):
+        nonlocal action_calls
+        action_calls += 1
+        raise RuntimeError("strict fidelity failure")
+
+    supervisor._validate_receipt = no_receipt  # type: ignore[method-assign]
+    supervisor._dependency_hashes = lambda _spec: {}  # type: ignore[method-assign]
+    supervisor._run_action = fail_action  # type: ignore[method-assign]
+    supervisor._set_status = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+    with pytest.raises(sup.SupervisorError, match="failed after 1 attempts"):
+        supervisor.run_stage(spec)
+    marker = (
+        supervisor.s.run
+        / "stage_attempts"
+        / "branch_smoke.started.json"
+    )
+    assert marker.is_file()
+    assert json.loads(marker.read_text(encoding="utf-8"))["resume_allowed"] is False
+    with pytest.raises(sup.SupervisorError, match="completely new run path"):
+        supervisor.run_stage(spec)
+    assert action_calls == 1
 
 def test_interrupt_race_before_popen_never_launches_child(
     tmp_path: Path, monkeypatch
