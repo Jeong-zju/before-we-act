@@ -108,6 +108,24 @@ def test_validate_pair_records_metadata_scales_and_equal_mesh_hashes(tmp_path: P
     )
 
 
+def test_low_level_pair_allows_arbitrary_directories_but_optional_name_gate_does_not(
+    tmp_path: Path,
+) -> None:
+    small, large, _, _ = _objects(tmp_path)
+    arbitrary_small = tmp_path / "small-fixture"
+    arbitrary_large = tmp_path / "large-fixture"
+    small.rename(arbitrary_small)
+    large.rename(arbitrary_large)
+
+    assert validate_asset_pair(arbitrary_small, arbitrary_large)["status"] == "PASSED"
+    with pytest.raises(AssetContractError, match="must be named 003_plate"):
+        validate_asset_pair(
+            arbitrary_small,
+            arbitrary_large,
+            require_canonical_names=True,
+        )
+
+
 def test_in_memory_overlay_is_contact_only_and_does_not_mutate_inputs() -> None:
     small = _metadata(scale=0.025, contacts=[])
     large = _metadata(

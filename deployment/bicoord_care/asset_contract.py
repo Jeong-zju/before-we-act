@@ -291,6 +291,7 @@ def validate_asset_pair(
     *,
     expected_small_scale: Sequence[float] = DEFAULT_SMALL_SCALE,
     expected_large_scale: Sequence[float] = DEFAULT_LARGE_SCALE,
+    require_canonical_names: bool = False,
 ) -> dict[str, Any]:
     """Validate the two object records and return immutable provenance.
 
@@ -301,11 +302,11 @@ def validate_asset_pair(
 
     small_root = Path(small_directory).expanduser().resolve(strict=True)
     large_root = Path(large_directory).expanduser().resolve(strict=True)
-    if small_root.name != SMALL_OBJECT_NAME:
+    if require_canonical_names and small_root.name != SMALL_OBJECT_NAME:
         raise AssetContractError(
             f"small object directory must be named {SMALL_OBJECT_NAME}: {small_root}"
         )
-    if large_root.name != LARGE_OBJECT_NAME:
+    if require_canonical_names and large_root.name != LARGE_OBJECT_NAME:
         raise AssetContractError(
             f"large object directory must be named {LARGE_OBJECT_NAME}: {large_root}"
         )
@@ -392,6 +393,7 @@ def apply_contact_points_overlay(
     output_path: str | Path | None = None,
     small_directory: str | Path | None = None,
     large_directory: str | Path | None = None,
+    require_canonical_names: bool = False,
 ) -> dict[str, Any]:
     """Apply the reference contact poses to small metadata, atomically.
 
@@ -410,7 +412,11 @@ def apply_contact_points_overlay(
 
     # Validate the pair before considering a write.  This also checks mesh
     # equality and expected scales when callers pass object directories.
-    provenance = validate_asset_pair(small_directory, large_directory)
+    provenance = validate_asset_pair(
+        small_directory,
+        large_directory,
+        require_canonical_names=require_canonical_names,
+    )
     if small_path != Path(small_metadata_path).expanduser().resolve(strict=True):
         raise AssetContractError("unexpected small metadata path resolution")
     if large_path != Path(large_metadata_path).expanduser().resolve(strict=True):
@@ -502,6 +508,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_path=args.output,
         small_directory=small,
         large_directory=large,
+        require_canonical_names=True,
     )
     if args.receipt:
         _atomic_write_json(args.receipt, result)
