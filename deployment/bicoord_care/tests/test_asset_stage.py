@@ -168,6 +168,31 @@ def test_runtime_overlay_rejects_non_contact_drift(tmp_path: Path) -> None:
         apply_task_overlay(env, "place_plate_and_cup", overlay)
 
 
+def test_runtime_overlay_rolls_back_first_plate_when_second_rejects(
+    tmp_path: Path,
+) -> None:
+    contacts = [_pose(0.1), _pose(0.2), _pose(0.3), _pose(0.4)]
+    overlay = _overlay_fixture(tmp_path, _plate(contacts=contacts))
+    first_original = _plate(contacts=[])
+    second_original = _plate(contacts=[])
+    second_original["scale"] = [0.5, 0.5, 0.5]
+    first = SimpleNamespace(config=first_original)
+    second = SimpleNamespace(config=second_original)
+
+    with pytest.raises(RuntimeAssetError, match="actor scale differs"):
+        apply_task_overlay(
+            SimpleNamespace(plate=first, plate_2=second),
+            "place_plate_and_cup",
+            overlay,
+        )
+
+    # The dual-actor operation is atomic: validating plate_2 after mutating
+    # plate must not leave a half-overlaid simulator scene behind.
+    assert first.config == first_original
+    assert second.config == second_original
+    assert first.config["contact_points_pose"] == []
+
+
 def test_runtime_overlay_rejects_non_object_stage_receipt(tmp_path: Path) -> None:
     contacts = [_pose(0.1), _pose(0.2), _pose(0.3), _pose(0.4)]
     overlay = _overlay_fixture(tmp_path, _plate(contacts=contacts))

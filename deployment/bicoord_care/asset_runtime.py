@@ -435,17 +435,34 @@ def apply_task_overlay(
         expected_scale = DEFAULT_SHOVEL_SCALE
         missing_contact_allowed = True
     actors: dict[str, Any] = {}
+    actor_objects: dict[str, Any] = {}
+    original_configs: dict[str, Any] = {}
     for attribute in attributes:
         actor = getattr(env, attribute, None)
         if actor is None:
             raise RuntimeAssetError(f"official {task} task lacks self.{attribute}")
-        actors[attribute] = _apply_actor_overlay(
-            actor,
-            overlay,
-            actor_label=actor_label,
-            expected_scale=expected_scale,
-            missing_contact_allowed=missing_contact_allowed,
-        )
+        actor_objects[attribute] = actor
+        original_configs[attribute] = copy.deepcopy(getattr(actor, "config", None))
+    try:
+        for attribute, actor in actor_objects.items():
+            actors[attribute] = _apply_actor_overlay(
+                actor,
+                overlay,
+                actor_label=actor_label,
+                expected_scale=expected_scale,
+                missing_contact_allowed=missing_contact_allowed,
+            )
+    except BaseException:
+        # Applying two plate actors is a single compatibility operation.  If
+        # the second actor has drifted, restore the first actor's original
+        # in-memory metadata before propagating the failure; otherwise a
+        # caller could accidentally continue with a half-overlaid scene.
+        for attribute, actor in actor_objects.items():
+            try:
+                actor.config = original_configs[attribute]
+            except Exception:
+                pass
+        raise
     hashes = {row["after_sha256"] for row in actors.values()}
     if hashes != {provenance["contact_points_pose_sha256"]}:
         raise RuntimeAssetError(f"{task} actors received unaudited contact metadata")

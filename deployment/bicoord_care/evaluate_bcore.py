@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -153,8 +154,17 @@ def _make_env(root: Path, task: str, seed: int):
         raise
 
 
+def _asset_overlay_evidence(env: Any) -> dict[str, Any]:
+    """Return a detached runtime-overlay proof for a hashed episode row."""
+
+    observed = getattr(env, "_bicoord_asset_overlay", None)
+    if isinstance(observed, Mapping):
+        return {"asset_overlay": copy.deepcopy(dict(observed))}
+    return {}
+
+
 def _run_episode(runtime: Any, root: Path, task: str, seed: int, limit: int, progress: Path, belief_enabled: bool = True) -> dict[str, Any]:
-    env = _make_env(root, task, seed); runtime.reset(task); observation = env.get_obs(); digest = hashlib.sha256(); success = False; steps = 0; progress_value = 0.0
+    env = _make_env(root, task, seed); asset_overlay = _asset_overlay_evidence(env); runtime.reset(task); observation = env.get_obs(); digest = hashlib.sha256(); success = False; steps = 0; progress_value = 0.0
     prediction_oob = 0; plan_oob = 0
     progress.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -191,7 +201,7 @@ def _run_episode(runtime: Any, root: Path, task: str, seed: int, limit: int, pro
         except Exception:
             try: env.close()
             except Exception: pass
-    return {"task": task, "seed": int(seed), "success": success, "steps": steps, "max_steps": limit, "progress": progress_value, "action_trace_sha256": digest.hexdigest(), "strictly_decentralized": True, "per_arm_independent_inputs": True, "belief_enabled": belief_enabled, "policy_output_clipping": False, "executed_gripper_oob_count": 0, "prediction_gripper_oob_count": prediction_oob, "ensemble_plan_gripper_oob_count": plan_oob}
+    return {"task": task, "seed": int(seed), "success": success, "steps": steps, "max_steps": limit, "progress": progress_value, "action_trace_sha256": digest.hexdigest(), "strictly_decentralized": True, "per_arm_independent_inputs": True, "belief_enabled": belief_enabled, "policy_output_clipping": False, "executed_gripper_oob_count": 0, "prediction_gripper_oob_count": prediction_oob, "ensemble_plan_gripper_oob_count": plan_oob, **asset_overlay}
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:

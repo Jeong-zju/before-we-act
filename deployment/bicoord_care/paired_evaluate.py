@@ -9,6 +9,7 @@ candidates; there is no cross-arm lower-bound arbitration.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -78,6 +79,23 @@ def _close_env(env: Any) -> None:
             env.close()
         except Exception:
             pass
+
+
+def _asset_overlay_evidence(env: Any) -> dict[str, Any]:
+    """Copy the task overlay proof into each selector-mode episode row.
+
+    A paired run shares one freshly constructed official environment between
+    selector-off and CARE.  The detached mapping is persisted in both mode
+    rows, then in the per-seed pair file and aggregate paired receipt.  This
+    gives validation an auditable link to the exact run-local asset overlay
+    without allowing later mutation of the live actor configuration to alter
+    the recorded proof.
+    """
+
+    observed = getattr(env, "_bicoord_asset_overlay", None)
+    if isinstance(observed, Mapping):
+        return {"asset_overlay": copy.deepcopy(dict(observed))}
+    return {}
 
 
 def _care_checkpoint(args: argparse.Namespace, *, formal: bool) -> Path:
@@ -304,6 +322,7 @@ def _episode(
     initial_observation: Mapping[str, Any],
 ) -> dict[str, Any]:
     mode = "care" if selector_enabled else "selector_off"
+    asset_overlay = _asset_overlay_evidence(env)
     runtime.reset(task)
     # The caller supplies the observation captured from the exact paired
     # initial state.  Do not advance a camera/RNG stream with an extra get_obs.
@@ -456,6 +475,7 @@ def _episode(
         "reference_action_trace_sha256": reference_digest.hexdigest(),
         "mean_inference_seconds": float(np.mean(inference_seconds)),
         "p95_inference_seconds": float(np.quantile(inference_seconds, 0.95)),
+        **asset_overlay,
     }
 
 

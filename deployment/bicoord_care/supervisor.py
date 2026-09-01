@@ -243,6 +243,19 @@ def _canonical_hash(value: object) -> str:
     ).hexdigest()
 
 
+def _preserves_mapping_except(
+    pristine: Mapping[str, Any], effective: Mapping[str, Any], excluded: Sequence[str]
+) -> bool:
+    """Compare complete metadata records while ignoring explicit overlay keys."""
+
+    omitted = set(excluded)
+    return {
+        key: value for key, value in pristine.items() if key not in omitted
+    } == {
+        key: value for key, value in effective.items() if key not in omitted
+    }
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -1788,6 +1801,7 @@ class Supervisor:
         snapshot_ids: set[str] = set()
         task_counts: Counter[str] = Counter()
         ranks: set[int] = set()
+        overlay_expectations: Mapping[str, Mapping[str, Any]] | None = None
         for manifest_path in manifests:
             manifest = _read_json(manifest_path)
             self._require_mapping_values(
@@ -1843,6 +1857,15 @@ class Supervisor:
                 task = str(family.get("task", ""))
                 if family_id in family_ids or snapshot_id in snapshot_ids or task not in TASKS:
                     raise InvalidArtifact("branch family identity is duplicate/invalid")
+                if task in {"place_plate_and_cup", "sweep_block"}:
+                    if overlay_expectations is None:
+                        overlay_expectations = self._asset_runtime_expectations()
+                    self._validate_seed_asset_overlay(
+                        task,
+                        family,
+                        overlay_expectations,
+                        context=f"branch family {family_path}",
+                    )
                 if family_id % 4 != rank:
                     raise InvalidArtifact("branch family was published by the wrong rank")
                 family_ids.add(family_id)
@@ -1901,6 +1924,7 @@ class Supervisor:
         *,
         episodes: int,
         max_steps_by_task: Mapping[str, int] | None = None,
+        stage_name: str | None = None,
     ) -> None:
         horizon_map = MAX_STEPS if max_steps_by_task is None else max_steps_by_task
         tasks = result.get("tasks")
@@ -2006,6 +2030,7 @@ class Supervisor:
         reference_paths: set[str] = set()
         care_paths: set[str] = set()
         all_pair_files: set[str] = set()
+        overlay_expectations: Mapping[str, Mapping[str, Any]] | None = None
         expected_operation = (
             "smoke-paired" if episodes == 1 else "validation20-paired"
         )
@@ -2326,6 +2351,18 @@ class Supervisor:
                         },
                         f"{task}/{seed}/{mode}",
                     )
+                    if stage_name is not None and task in {
+                        "place_plate_and_cup",
+                        "sweep_block",
+                    }:
+                        if overlay_expectations is None:
+                            overlay_expectations = self._asset_runtime_expectations()
+                        self._validate_seed_asset_overlay(
+                            task,
+                            rollout,
+                            overlay_expectations,
+                            context=f"{task}/{seed}/{mode} validation",
+                        )
                     steps = int(rollout.get("steps", -1))
                     if steps < 1 or steps > expected_steps:
                         raise InvalidArtifact(f"{task}/{seed}/{mode}: invalid step count")
@@ -2388,6 +2425,15 @@ class Supervisor:
                     task_control += 1
                 if bool(pair_file["care"]["success"]):
                     task_care += 1
+                if (
+                    stage_name is not None
+                    and task in {"place_plate_and_cup", "sweep_block"}
+                    and pair_file["selector_off"].get("asset_overlay")
+                    != pair_file["care"].get("asset_overlay")
+                ):
+                    raise InvalidArtifact(
+                        f"{task}/{seed}: paired modes used different asset overlays"
+                    )
             for mode in ("selector_off", "care"):
                 _validate_paired_progress(
                     combined_progress_paths[mode],
@@ -2501,12 +2547,16 @@ class Supervisor:
         *,
         require_success: bool,
         max_steps_by_task: Mapping[str, int] | None = None,
+        stage_name: str | None = None,
     ) -> None:
         horizon_map = MAX_STEPS if max_steps_by_task is None else max_steps_by_task
         tasks = result.get("tasks")
         if not isinstance(tasks, Mapping) or tuple(tasks) != TASKS:
             raise InvalidArtifact("validation task coverage/order differs")
         successes = 0
+        checkpoint_identities: set[tuple[str, str]] = set()
+        overlay_expectations: Mapping[str, Mapping[str, Any]] | None = None
+        nonpaired_tasks = 0
         for task in TASKS:
             row = tasks[task]
             if not isinstance(row, Mapping):
@@ -2522,27 +2572,33 @@ class Supervisor:
             task_successes = int(row.get("successes", -1))
             if not 0 <= task_successes <= episodes:
                 raise InvalidArtifact(f"{task}: invalid validation successes")
-            if expected_steps == SMOKE_INTERFACE_STEPS and row.get("paired") is not True:
-                # Smoke workers publish a hashed receipt containing the
-                # per-episode rows and the JSONL trace.  Verify both rather
-                # than trusting aggregate counters supplied by a worker.
+            if row.get("paired") is not True:
+                # Every non-paired worker, including the formal B0-H probe and
+                # B-core Validation20 workers, publishes a hashed receipt
+                # containing its per-episode rows and JSONL trace.  Verify the
+                # complete evidence rather than trusting aggregate counters.
+                nonpaired_tasks += 1
+                is_smoke = expected_steps == SMOKE_INTERFACE_STEPS
+                expected_smoke_steps = (
+                    SMOKE_INTERFACE_STEPS if is_smoke else None
+                )
                 self._require_mapping_values(
                     row,
                     {
-                        "smoke_interface_steps": SMOKE_INTERFACE_STEPS,
+                        "smoke_interface_steps": expected_smoke_steps,
                         "policy_output_clipping": False,
                         "action_clipping": False,
                         "state_clipping": False,
                         "gripper_reparameterization": False,
                         "executed_gripper_oob_count": 0,
                     },
-                    f"{task} smoke worker",
+                    f"{task} validation worker",
                 )
                 receipt_value = row.get("progress_receipt")
                 receipt_digest = row.get("progress_receipt_sha256")
                 if not isinstance(receipt_value, str) or not isinstance(receipt_digest, str):
                     raise InvalidArtifact(
-                        f"{task}: smoke progress receipt provenance is missing"
+                        f"{task}: validation progress receipt provenance is missing"
                     )
                 receipt_path = Path(receipt_value).expanduser().resolve()
                 if (
@@ -2550,7 +2606,7 @@ class Supervisor:
                     or len(receipt_digest) != 64
                     or _sha256(receipt_path) != receipt_digest
                 ):
-                    raise InvalidArtifact(f"{task}: smoke progress receipt hash differs")
+                    raise InvalidArtifact(f"{task}: validation progress receipt hash differs")
                 artifacts = row.get("artifacts")
                 if not isinstance(artifacts, list) or not any(
                     isinstance(item, Mapping)
@@ -2560,40 +2616,82 @@ class Supervisor:
                     for item in artifacts
                 ):
                     raise InvalidArtifact(
-                        f"{task}: smoke result did not bind its progress receipt artifact"
+                        f"{task}: validation result did not bind its progress receipt artifact"
                     )
                 receipt = _read_json(receipt_path)
+                worker_stage = row.get("stage")
+                if stage_name is not None and (
+                    not isinstance(worker_stage, str) or not worker_stage
+                ):
+                    raise InvalidArtifact(
+                        f"{task}: validation worker stage is missing"
+                    )
+                if not isinstance(worker_stage, str) or not worker_stage:
+                    # Direct unit callers may exercise this helper without a
+                    # full stage result envelope.  Production callers always
+                    # pass ``stage_name`` and take the strict branch above.
+                    worker_stage = receipt.get("stage", "")
+                receipt_expected = {
+                    "status": "PASSED",
+                    "task": task,
+                    "episodes": episodes,
+                    "completed": episodes,
+                    "max_steps": expected_steps,
+                    "smoke_interface_steps": expected_smoke_steps,
+                    "policy_output_clipping": False,
+                    "action_clipping": False,
+                    "state_clipping": False,
+                    "gripper_reparameterization": False,
+                    "executed_gripper_oob_count": 0,
+                }
+                if stage_name is not None:
+                    receipt_expected.update(
+                        {
+                            "schema": "before-we-act.bicoord.validation-progress/1",
+                            "stage": worker_stage,
+                        }
+                    )
                 self._require_mapping_values(
                     receipt,
-                    {
-                        "status": "PASSED",
-                        "task": task,
-                        "episodes": episodes,
-                        "completed": episodes,
-                        "max_steps": expected_steps,
-                        "smoke_interface_steps": SMOKE_INTERFACE_STEPS,
-                        "policy_output_clipping": False,
-                        "action_clipping": False,
-                        "state_clipping": False,
-                        "gripper_reparameterization": False,
-                        "executed_gripper_oob_count": 0,
-                    },
-                    f"{task} smoke progress receipt",
+                    receipt_expected,
+                    f"{task} validation progress receipt",
                 )
+                if stage_name is not None:
+                    checkpoint_value = row.get("checkpoint")
+                    checkpoint_digest = row.get("checkpoint_sha256")
+                    if (
+                        not isinstance(checkpoint_value, str)
+                        or not isinstance(checkpoint_digest, str)
+                        or len(checkpoint_digest) != 64
+                    ):
+                        raise InvalidArtifact(
+                            f"{task}: validation checkpoint provenance is missing"
+                        )
+                    checkpoint_path = Path(checkpoint_value).expanduser().resolve()
+                    if (
+                        not checkpoint_path.is_file()
+                        or _sha256(checkpoint_path) != checkpoint_digest
+                        or receipt.get("checkpoint") != checkpoint_value
+                        or receipt.get("checkpoint_sha256") != checkpoint_digest
+                    ):
+                        raise InvalidArtifact(
+                            f"{task}: validation checkpoint path/hash differs"
+                        )
+                    checkpoint_identities.add((str(checkpoint_path), checkpoint_digest))
                 receipt_rows = receipt.get("rows")
                 if not isinstance(receipt_rows, list) or len(receipt_rows) != episodes:
-                    raise InvalidArtifact(f"{task}: smoke receipt row coverage differs")
+                    raise InvalidArtifact(f"{task}: validation receipt row coverage differs")
                 progress_value = receipt.get("rows_path")
                 progress_digest = receipt.get("rows_sha256")
                 if not isinstance(progress_value, str) or not isinstance(progress_digest, str):
-                    raise InvalidArtifact(f"{task}: smoke progress path/hash is missing")
+                    raise InvalidArtifact(f"{task}: validation progress path/hash is missing")
                 progress_path = Path(progress_value).expanduser().resolve()
                 if (
                     not progress_path.is_file()
                     or len(progress_digest) != 64
                     or _sha256(progress_path) != progress_digest
                 ):
-                    raise InvalidArtifact(f"{task}: smoke progress hash differs")
+                    raise InvalidArtifact(f"{task}: validation progress hash differs")
                 if not any(
                     isinstance(item, Mapping)
                     and item.get("kind") == "validation_progress"
@@ -2602,7 +2700,7 @@ class Supervisor:
                     for item in artifacts
                 ):
                     raise InvalidArtifact(
-                        f"{task}: smoke result did not bind its progress artifact"
+                        f"{task}: validation result did not bind its progress artifact"
                     )
                 expected_rollout_steps: list[int] = []
                 expected_seeds: list[int] = []
@@ -2611,75 +2709,101 @@ class Supervisor:
                 plan_oob = 0
                 for episode_row in receipt_rows:
                     if not isinstance(episode_row, Mapping):
-                        raise InvalidArtifact(f"{task}: smoke receipt episode row is invalid")
+                        raise InvalidArtifact(f"{task}: validation receipt episode row is invalid")
                     if episode_row.get("task") != task:
-                        raise InvalidArtifact(f"{task}: smoke receipt task differs")
+                        raise InvalidArtifact(f"{task}: validation receipt task differs")
                     if int(episode_row.get("max_steps", -1)) != expected_steps:
-                        raise InvalidArtifact(f"{task}: smoke receipt max_steps differs")
+                        raise InvalidArtifact(f"{task}: validation receipt max_steps differs")
                     steps = int(episode_row.get("steps", -1))
                     success = episode_row.get("success")
                     if steps < 1 or steps > expected_steps or not isinstance(success, bool):
-                        raise InvalidArtifact(f"{task}: smoke receipt episode bounds differ")
+                        raise InvalidArtifact(f"{task}: validation receipt episode bounds differ")
                     # Environments may report success before the configured
-                    # smoke horizon; only an unsuccessful early stop is
+                    # validation horizon; only an unsuccessful early stop is
                     # invalid.
                     if steps < expected_steps and not success:
                         raise InvalidArtifact(
-                            f"{task}: smoke episode terminated before horizon without success"
+                            f"{task}: validation episode terminated before horizon without success"
                         )
                     expected_rollout_steps.append(steps)
                     seed = int(episode_row.get("seed", -1))
                     if seed < 0:
-                        raise InvalidArtifact(f"{task}: smoke receipt seed is invalid")
+                        raise InvalidArtifact(f"{task}: validation receipt seed is invalid")
                     expected_seeds.append(seed)
                     receipt_successes += int(success)
-                    prediction_oob += int(
-                        episode_row.get("prediction_gripper_oob_count", 0)
-                    )
-                    plan_oob += int(
-                        episode_row.get("ensemble_plan_gripper_oob_count", 0)
-                    )
+                    for telemetry_key in (
+                        "prediction_gripper_oob_count",
+                        "ensemble_plan_gripper_oob_count",
+                        "executed_gripper_oob_count",
+                    ):
+                        value = episode_row.get(telemetry_key)
+                        if (
+                            isinstance(value, bool)
+                            or not isinstance(value, int)
+                            or value < 0
+                        ):
+                            raise InvalidArtifact(
+                                f"{task}: validation episode {telemetry_key} is invalid"
+                            )
+                    prediction_oob += int(episode_row["prediction_gripper_oob_count"])
+                    plan_oob += int(episode_row["ensemble_plan_gripper_oob_count"])
                     trace_digest = episode_row.get("action_trace_sha256")
                     if not isinstance(trace_digest, str) or len(trace_digest) != 64:
-                        raise InvalidArtifact(f"{task}: smoke action trace hash is invalid")
+                        raise InvalidArtifact(f"{task}: validation action trace hash is invalid")
                     try:
                         int(trace_digest, 16)
                     except ValueError as error:
                         raise InvalidArtifact(
-                            f"{task}: smoke action trace hash is not hexadecimal"
+                            f"{task}: validation action trace hash is not hexadecimal"
                         ) from error
+                    if stage_name is not None and task in {
+                        "place_plate_and_cup",
+                        "sweep_block",
+                    }:
+                        if overlay_expectations is None:
+                            overlay_expectations = self._asset_runtime_expectations()
+                        self._validate_seed_asset_overlay(
+                            task,
+                            episode_row,
+                            overlay_expectations,
+                            context=f"{task} validation seed {seed}",
+                        )
                 if len(set(expected_seeds)) != episodes:
-                    raise InvalidArtifact(f"{task}: smoke receipt seeds are not unique")
+                    raise InvalidArtifact(f"{task}: validation receipt seeds are not unique")
+                if row.get("seeds") is not None and row.get("seeds") != expected_seeds:
+                    raise InvalidArtifact(f"{task}: validation worker seeds differ")
+                if receipt.get("seeds") is not None and receipt.get("seeds") != expected_seeds:
+                    raise InvalidArtifact(f"{task}: validation receipt seeds differ")
                 if row.get("rollout_steps") != expected_rollout_steps:
-                    raise InvalidArtifact(f"{task}: smoke rollout step summary differs")
+                    raise InvalidArtifact(f"{task}: validation rollout step summary differs")
                 if receipt.get("rollout_steps") != expected_rollout_steps:
-                    raise InvalidArtifact(f"{task}: smoke receipt rollout steps differ")
+                    raise InvalidArtifact(f"{task}: validation receipt rollout steps differ")
                 if task_successes != receipt_successes:
-                    raise InvalidArtifact(f"{task}: smoke success summary differs")
+                    raise InvalidArtifact(f"{task}: validation success summary differs")
                 telemetry = {
                     "prediction_gripper_oob_count": prediction_oob,
                     "ensemble_plan_gripper_oob_count": plan_oob,
                     "executed_gripper_oob_count": 0,
                 }
-                self._require_mapping_values(receipt, telemetry, f"{task} smoke receipt")
-                self._require_mapping_values(row, telemetry, f"{task} smoke worker")
+                self._require_mapping_values(receipt, telemetry, f"{task} validation receipt")
+                self._require_mapping_values(row, telemetry, f"{task} validation worker")
                 lines = progress_path.read_text(encoding="utf-8").splitlines()
                 if not lines:
-                    raise InvalidArtifact(f"{task}: smoke progress is empty")
+                    raise InvalidArtifact(f"{task}: validation progress is empty")
                 by_seed: dict[int, list[Mapping[str, Any]]] = {}
                 for line in lines:
                     try:
                         progress_row = json.loads(line)
                     except (TypeError, json.JSONDecodeError) as error:
                         raise InvalidArtifact(
-                            f"{task}: smoke progress has invalid JSON"
+                            f"{task}: validation progress has invalid JSON"
                         ) from error
                     if not isinstance(progress_row, Mapping):
-                        raise InvalidArtifact(f"{task}: smoke progress row is not an object")
+                        raise InvalidArtifact(f"{task}: validation progress row is not an object")
                     if progress_row.get("task") != task:
-                        raise InvalidArtifact(f"{task}: smoke progress task differs")
+                        raise InvalidArtifact(f"{task}: validation progress task differs")
                     if int(progress_row.get("max_steps", -1)) != expected_steps:
-                        raise InvalidArtifact(f"{task}: smoke progress max_steps differs")
+                        raise InvalidArtifact(f"{task}: validation progress max_steps differs")
                     self._require_mapping_values(
                         progress_row,
                         {
@@ -2687,24 +2811,28 @@ class Supervisor:
                             "policy_output_clipping": False,
                             "executed_gripper_oob_count": 0,
                         },
-                        f"{task} smoke progress row",
+                        f"{task} validation progress row",
                     )
                     seed = int(progress_row.get("seed", -1))
                     by_seed.setdefault(seed, []).append(progress_row)
                 if set(by_seed) != set(expected_seeds):
-                    raise InvalidArtifact(f"{task}: smoke progress seed coverage differs")
+                    raise InvalidArtifact(f"{task}: validation progress seed coverage differs")
                 for episode_row in receipt_rows:
                     seed = int(episode_row["seed"])
                     trace = by_seed.get(seed, [])
                     steps = int(episode_row["steps"])
                     sequence = [int(item.get("step", -1)) for item in trace]
                     if len(trace) != steps or sequence != list(range(1, steps + 1)):
-                        raise InvalidArtifact(f"{task}: smoke progress step sequence differs")
+                        raise InvalidArtifact(f"{task}: validation progress step sequence differs")
                     if trace[-1].get("success") is not episode_row["success"]:
                         raise InvalidArtifact(
-                            f"{task}: smoke progress final success differs"
+                            f"{task}: validation progress final success differs"
                         )
             successes += task_successes
+        if stage_name is not None and nonpaired_tasks and len(checkpoint_identities) != 1:
+            raise InvalidArtifact(
+                "validation workers used different checkpoints or checkpoint paths"
+            )
         if require_success and successes <= 0:
             raise Blocked("reference policy has zero successes; downstream CARE is unsafe")
 
@@ -3152,16 +3280,11 @@ class Supervisor:
             effective_plate_value = _read_json(overlay_path)
             if (
                 pristine_plate_value.get(CONTACT_KEY) != []
-                or {
-                    key: value
-                    for key, value in effective_plate_value.items()
-                    if key != CONTACT_KEY
-                }
-                != {
-                    key: value
-                    for key, value in pristine_plate_value.items()
-                    if key != CONTACT_KEY
-                }
+                or not _preserves_mapping_except(
+                    pristine_plate_value,
+                    effective_plate_value,
+                    (CONTACT_KEY,),
+                )
                 or canonical_json_sha256(effective_plate_value.get(CONTACT_KEY))
                 != plate.get("target_contact_points_pose_sha256")
             ):
@@ -3287,12 +3410,11 @@ class Supervisor:
                 != pristine_shovel.get(LEGACY_CONTACT_KEY)
                 or effective_shovel.get(LEGACY_TRANSFORM_KEY)
                 != pristine_shovel.get(LEGACY_TRANSFORM_KEY)
-                or {
-                    key: value
-                    for key, value in effective_shovel.items()
-                    if key != CONTACT_KEY
-                }
-                != pristine_shovel
+                or not _preserves_mapping_except(
+                    pristine_shovel,
+                    effective_shovel,
+                    (CONTACT_KEY,),
+                )
             ):
                 raise InvalidArtifact(
                     "shovel overlay did not preserve the pristine legacy record"
@@ -3825,22 +3947,38 @@ class Supervisor:
                 1,
                 require_success=False,
                 max_steps_by_task=SMOKE_MAX_STEPS,
+                stage_name=spec.name,
             )
         elif spec.result_kind == "validation20":
-            self._validate_task_results(result, VALIDATION_EPISODES, require_success=False)
+            self._validate_task_results(
+                result,
+                VALIDATION_EPISODES,
+                require_success=spec.name == "bcore_validation20",
+                stage_name=spec.name,
+            )
         elif spec.result_kind == "validation":
             probe_episodes = int(result.get("episodes_per_task", 1))
             if probe_episodes < 1:
                 raise InvalidArtifact("probe episodes must be positive")
-            self._validate_task_results(result, probe_episodes, require_success=True)
-        if spec.name == "bcore_validation20":
-            self._validate_task_results(result, VALIDATION_EPISODES, require_success=True)
+            self._validate_task_results(
+                result,
+                probe_episodes,
+                require_success=True,
+                stage_name=spec.name,
+            )
         if spec.name == "paired_validation_smoke":
             self._validate_paired_result(
-                result, episodes=1, max_steps_by_task=SMOKE_MAX_STEPS
+                result,
+                episodes=1,
+                max_steps_by_task=SMOKE_MAX_STEPS,
+                stage_name=spec.name,
             )
         elif spec.name == "paired_validation20":
-            self._validate_paired_result(result, episodes=VALIDATION_EPISODES)
+            self._validate_paired_result(
+                result,
+                episodes=VALIDATION_EPISODES,
+                stage_name=spec.name,
+            )
         if spec.name == "bcore_select":
             if result.get("closed_loop_results_used_for_selection") is not False:
                 raise InvalidArtifact("B-core selection must be offline")

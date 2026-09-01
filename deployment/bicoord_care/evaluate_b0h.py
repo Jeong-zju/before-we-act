@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -210,6 +211,24 @@ def _progress_value(env: Any) -> float:
         return 0.0
 
 
+def _asset_overlay_evidence(env: Any, task: str) -> dict[str, Any]:
+    """Copy the immutable runtime asset proof into an episode receipt.
+
+    ``_bench_env`` applies the audited compatibility overlay immediately after
+    constructing the official task.  Keeping that proof on the returned
+    episode row (which is itself embedded in the hashed progress receipt)
+    lets the supervisor verify that validation used the same run-local overlay
+    as seed discovery.  Do not synthesize a PASS when an adapter forgot to
+    publish its evidence; the resulting row is intentionally incomplete and
+    is rejected by the supervisor's affected-task gate.
+    """
+
+    observed = getattr(env, "_bicoord_asset_overlay", None)
+    if isinstance(observed, Mapping):
+        return {"asset_overlay": copy.deepcopy(dict(observed))}
+    return {}
+
+
 def _run_episode(
     runtime: B0HRuntime,
     benchmark_root: Path,
@@ -219,6 +238,7 @@ def _run_episode(
     progress_path: Path,
 ) -> dict[str, Any]:
     env = _bench_env(benchmark_root, task, seed)
+    asset_overlay = _asset_overlay_evidence(env, task)
     runtime.reset()
     observation = env.get_obs()
     trace = hashlib.sha256(); success = False; steps = 0
@@ -293,6 +313,7 @@ def _run_episode(
         "action_clipping": False,
         "state_clipping": False,
         "gripper_reparameterization": False,
+        **asset_overlay,
     }
 
 

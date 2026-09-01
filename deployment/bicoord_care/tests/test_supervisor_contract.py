@@ -149,6 +149,26 @@ def test_asset_contract_gates_dataset_audit_and_runtime_overlay(tmp_path: Path) 
     assert environment["BICOORD_REQUIRE_ASSET_OVERLAY"] == "1"
 
 
+def test_preserves_mapping_except_ignores_only_overlay_field() -> None:
+    pristine = {
+        "scale": [0.025, 0.025, 0.025],
+        "contact_points_pose": [],
+        "center": [0.0, 0.0, 0.0],
+    }
+    effective = {
+        "scale": [0.025, 0.025, 0.025],
+        "contact_points_pose": [[1.0]],
+        "center": [0.0, 0.0, 0.0],
+    }
+    assert sup._preserves_mapping_except(
+        pristine, effective, ("contact_points_pose",)
+    )
+    effective["scale"] = [0.026, 0.025, 0.025]
+    assert not sup._preserves_mapping_except(
+        pristine, effective, ("contact_points_pose",)
+    )
+
+
 def test_asset_contract_paths_are_canonical_and_non_symbolic(tmp_path: Path) -> None:
     expected = (
         tmp_path

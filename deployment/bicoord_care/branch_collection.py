@@ -633,6 +633,15 @@ def _collect_family(
         raise RuntimeError(f"refusing to overwrite inconsistent CARE family: {snapshot_id}")
 
     env = _make_env(args.benchmark_repo, task, seed)
+    # The environment constructor applies the run-local compatibility overlay
+    # for the two released metadata defects.  Persist a detached copy in the
+    # family receipt so formal counterfactual data cannot silently come from a
+    # different asset contract than validation.
+    asset_overlay = getattr(env, "_bicoord_asset_overlay", None)
+    if isinstance(asset_overlay, Mapping):
+        asset_overlay = deepcopy(dict(asset_overlay))
+    else:
+        asset_overlay = None
     started = time.perf_counter()
     try:
         runtime.reset(task)
@@ -800,6 +809,7 @@ def _collect_family(
             "candidate_transform_clipping": False,
             "candidate_values_outside_source_population_range": out_of_source_range,
             "normalization_receipt_sha256": normalization["sha256"],
+            "asset_overlay": asset_overlay,
             "branches": branches,
             "wall_seconds": time.perf_counter() - started,
             "npz": str(npz_path.resolve()),
