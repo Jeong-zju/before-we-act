@@ -34,6 +34,13 @@ def _row(repeat_id: int) -> dict[str, object]:
         "discrete_labels_equal": True,
         "safety_labels_equal": True,
         "outcome_discrete_labels_equal": True,
+        "branch_contract_difference_fields": [],
+        "active_label_difference_steps": [],
+        "all_joint_changes_label_difference_steps": [],
+        "success_label_difference_steps": [],
+        "discrete_label_difference_steps": {"success": []},
+        "safety_label_difference_steps": {"drop": []},
+        "outcome_discrete_difference_horizons": {"8": [], "16": [], "32": [], "64": []},
     }
 
 
