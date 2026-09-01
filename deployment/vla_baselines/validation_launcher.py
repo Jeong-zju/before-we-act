@@ -17,7 +17,10 @@ import sys
 import tempfile
 import time
 
-TASKS = ("lift_barrier", "camera_alignment", "long_pipeline_delivery", "take_photo", "pass_shoe", "place_food")
+MARS_CONTROL = os.environ.get("BWA_MARS_CONTROL") == "1"
+TASKS = (("place_cube_in_cup", "strike_cube_hard", "three_robots_place_shoes", "four_robots_stack_cube")
+         if MARS_CONTROL else
+         ("lift_barrier", "camera_alignment", "long_pipeline_delivery", "take_photo", "pass_shoe", "place_food"))
 # RoboFactory's CPU simulation backend still uses Vulkan for RGB rendering.  Running
 # several renderer instances at once can lose a Vulkan device on this host, so keep
 # closed-loop tasks isolated.  Policy inference still uses a GPU, while completed
@@ -34,6 +37,9 @@ PARALLEL_WAVES = (
     (("lift_barrier", 0), ("camera_alignment", 1), ("long_pipeline_delivery", 2), ("take_photo", 3)),
     (("pass_shoe", 0), ("place_food", 1)),
 )
+if MARS_CONTROL:
+    WAVES = tuple(((task, gpu),) for gpu, task in enumerate(TASKS))
+    PARALLEL_WAVES = (tuple((task, gpu) for gpu, task in enumerate(TASKS)),)
 PYTHONS = {
     "rdt": "/workspace/venvs/rdt/bin/python",
     "openvla": "/workspace/venvs/openvla/bin/python",
@@ -212,6 +218,13 @@ def run_wave(
             else inherited_ld_path
         ),
     )
+    if MARS_CONTROL:
+        base_env.update(
+            BWA_MARS_CONTROL="1",
+            OPENVLA_MARS_CONTROL_ROOT="/workspace/datasets/mars_control",
+            MARS_ROBOFACTORY_ROOT="/workspace/repos/RoboFactory-MARS",
+            PYTHONPATH="/workspace/repos/RoboFactory-MARS:/workspace/repos/before-we-act",
+        )
     if policy == "openvla":
         # Final DDP checkpoint merging can exceed NCCL's barrier timeout.  If
         # that happened, materialize the inference model once, offline, under
@@ -256,6 +269,9 @@ def run_wave(
              "--socket", str(item["socket"]), "--task", item["task"], "--output", str(item["result"]),
              "--episodes", str(episodes), "--seed", str(seed), "--sim-backend", "cpu",
              "--temporal-ensemble-decay", "0.01", "--cpu-threads", "8"]
+        if MARS_CONTROL:
+            evaluator.extend(["--dataset-root", "/workspace/datasets/mars_control",
+                              "--config-root", "/workspace/repos/RoboFactory-MARS/configs/table"])
         if max_steps_override is not None:
             evaluator.extend(["--max-steps-override", str(max_steps_override)])
         if formal:
@@ -312,8 +328,14 @@ def main() -> None:
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
     try:
-        visible_gpu_count = len(os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(","))
-        single_gpu = visible_gpu_count == 1 or int(os.environ.get("BWA_GPU_COUNT", "1")) == 1
+        if os.environ.get("CUDA_VISIBLE_DEVICES"):
+            visible_gpu_count = len([x for x in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if x.strip()])
+        else:
+            visible_gpu_count = len(
+                subprocess.check_output(["nvidia-smi", "--list-gpus"], text=True).splitlines()
+            )
+        configured_gpu_count = int(os.environ.get("BWA_GPU_COUNT", visible_gpu_count))
+        single_gpu = min(visible_gpu_count, configured_gpu_count) == 1
         waves = tuple(((task, 0),) for task in TASKS) if args.policy == "gaudp" or single_gpu else (
             PARALLEL_WAVES if os.environ.get("BWA_VALIDATION_PARALLEL") == "1" else WAVES
         )

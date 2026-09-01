@@ -14,6 +14,13 @@ from typing import Any
 
 import numpy as np
 
+MARS_ACTION_LOW = np.asarray(
+    [-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973, -1.0], np.float32
+)
+MARS_ACTION_HIGH = np.asarray(
+    [2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973, 1.0], np.float32
+)
+
 TASK_EMBEDS = {
     "camera_alignment": "camera_alignment/lang_embed.pt",
     "lift_barrier": "lift_barrier/lang_embed.pt",
@@ -65,6 +72,21 @@ def _validate_decentralized_request(observations: Any) -> None:
         raise ValueError(f"local RGB must be uint8 HxWx3, got {image.shape} {image.dtype}")
     if state.shape != (9,) or not np.isfinite(state).all():
         raise ValueError(f"local qpos must be finite shape (9,), got {state.shape}")
+
+
+def _decode_openvla_chunk(chunk: np.ndarray, qpos: np.ndarray, action_encoding: str) -> np.ndarray:
+    """Decode one newly generated chunk before temporal ensembling."""
+    chunk = np.asarray(chunk, np.float32)
+    if action_encoding == "absolute":
+        return chunk
+    if action_encoding != "joint_residual_gripper_absolute":
+        raise ValueError(f"unsupported checkpoint action encoding: {action_encoding}")
+    qpos = np.asarray(qpos, np.float32)
+    if chunk.ndim != 2 or chunk.shape[1] != 8 or qpos.shape != (9,):
+        raise ValueError(f"invalid residual decode shapes: chunk={chunk.shape}, qpos={qpos.shape}")
+    absolute = chunk.copy()
+    absolute[..., :7] += qpos[:7]
+    return np.clip(absolute, MARS_ACTION_LOW, MARS_ACTION_HIGH)
 
 
 class RDTBackend:
@@ -181,7 +203,7 @@ class OpenVLABackend:
             use_proprio=True,
             center_crop=False,
             lora_rank=32,
-            unnorm_key="robofactory",
+            unnorm_key="mars_control" if os.environ.get("BWA_MARS_CONTROL") == "1" else "robofactory",
             use_relative_actions=False,
             load_in_8bit=False,
             load_in_4bit=False,
@@ -190,6 +212,11 @@ class OpenVLABackend:
         self.processor = get_processor(self.cfg)
         self.proprio_projector = get_proprio_projector(self.cfg, self.vla.llm_dim, 9)
         self.action_head = get_action_head(self.cfg, self.vla.llm_dim)
+        self.action_encoding = self.vla.norm_stats.get(self.cfg.unnorm_key, {}).get(
+            "action_encoding", "absolute"
+        )
+        if self.action_encoding not in {"absolute", "joint_residual_gripper_absolute"}:
+            raise ValueError(f"unsupported checkpoint action encoding: {self.action_encoding}")
 
     def reset(self) -> None:
         return None
@@ -207,7 +234,11 @@ class OpenVLABackend:
                 proprio_projector=self.proprio_projector,
                 use_film=False,
             )
-            output.append(np.asarray(values, np.float32))
+            # Decode each freshly generated chunk against the qpos from the
+            # same observation, before the evaluator's temporal ensemble
+            # mixes historical absolute commands.
+            chunk = _decode_openvla_chunk(values, obs["state"], self.action_encoding)
+            output.append(chunk)
         return output
 
 

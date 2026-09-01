@@ -106,6 +106,12 @@ MARS-Control Diffusion Policy 的正式 v3 复现入口位于
 一键 supervisor、source/config/checkpoint SHA 校验和参考运行回执。旧 v1
 配置保留作历史记录，不能用于复现论文中的 v3 结果。
 
+MARS-Control OpenVLA-OFT 7B LoRA-r32 的完整复现入口位于
+[`deployment/openvla_mars/README.md`](deployment/openvla_mars/README.md)。该入口
+固定 OpenVLA-OFT 与 RoboFactory-MARS commit、四任务全量数据、残差动作编码、
+训练/验证图像契约、四 GPU supervisor、训练与闭环 smoke、150k 正式训练和
+Validation20；上游五文件补丁及完整运行参数分别保存在 `patches/` 与 `configs/`。
+
 远程服务器可使用 [`scripts/wam_automation.sh`](scripts/wam_automation.sh)
 把代码/RoboFactory 下载、双 uv 环境、Hugging Face 数据、DINOv3、训练和
 真实闭环验证按顺序组合执行；`full` 可从零运行完整链路，`full-smoke`

@@ -11,13 +11,26 @@ from pathlib import Path
 import pickle
 import socket
 import struct
+import sys
 import tempfile
 
 import gymnasium as gym
 import numpy as np
 import torch
 import yaml
-import robofactory.tasks  # noqa: F401
+mars_root = os.environ.get("MARS_ROBOFACTORY_ROOT")
+if os.environ.get("BWA_MARS_CONTROL") == "1" and mars_root:
+    # MARS task configs resolve simulator assets relative to the benchmark
+    # checkout (for example assets/scenes/table/table.glb).
+    os.chdir(mars_root)
+try:
+    import robofactory.tasks  # noqa: F401
+except ModuleNotFoundError:
+    mars_root = os.environ.get("MARS_ROBOFACTORY_ROOT")
+    if not mars_root:
+        raise
+    sys.path.insert(0, mars_root)
+    import tasks  # noqa: F401
 
 TASK_PROMPTS = {
     "camera_alignment": "Align the cameras together",
@@ -27,6 +40,12 @@ TASK_PROMPTS = {
     "place_food": "Place the food together",
     "take_photo": "Take a photo together",
 }
+TASK_PROMPTS.update({
+    "place_cube_in_cup": "place the cube in the cup together",
+    "strike_cube_hard": "strike the cube hard together",
+    "three_robots_place_shoes": "place the shoes together",
+    "four_robots_stack_cube": "stack the cubes together",
+})
 MAX_STEPS = {
     "lift_barrier": 500,
     "camera_alignment": 1500,
@@ -35,6 +54,14 @@ MAX_STEPS = {
     "pass_shoe": 500,
     "place_food": 500,
 }
+MAX_STEPS.update({
+    "place_cube_in_cup": 500,
+    "strike_cube_hard": 500,
+    "three_robots_place_shoes": 1200,
+    "four_robots_stack_cube": 800,
+})
+MARS_BOUNDS_LOW = np.asarray([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973, -1.0], np.float32)
+MARS_BOUNDS_HIGH = np.asarray([2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973, 1.0], np.float32)
 
 
 def _atomic_json(path: Path, payload: dict) -> None:
@@ -90,6 +117,8 @@ def _terminal(value) -> bool:
 
 
 def _action_codec(dataset_root: Path, task: str, agent: int) -> tuple[np.ndarray, np.ndarray]:
+    if os.environ.get("BWA_MARS_CONTROL") == "1":
+        return MARS_BOUNDS_LOW.copy(), MARS_BOUNDS_HIGH.copy()
     manifest = json.loads((dataset_root / task / "training_manifest.json").read_text())
     codec = manifest["action"]["codec"]["config"]
     start = agent * 8
@@ -152,13 +181,16 @@ def evaluate(args) -> dict:
                 config=str(config_path),
                 obs_mode="rgb",
                 control_mode="pd_joint_pos",
-                render_mode="rgb_array",
+                # Match the native training capture path: sensor observations
+                # rendered with the default shader pack at 320x240.
+                render_mode="sensors",
+                reward_mode="dense",
                 num_envs=1,
                 sim_backend=args.sim_backend,
                 render_backend="cpu",
-                sensor_configs={"shader_pack": "minimal", "width": 320, "height": 240},
-                human_render_camera_configs={"shader_pack": "minimal"},
-                viewer_camera_configs={"shader_pack": "minimal"},
+                sensor_configs={"shader_pack": "default", "width": 320, "height": 240},
+                human_render_camera_configs={"shader_pack": "default"},
+                viewer_camera_configs={"shader_pack": "default"},
             )
             obs, _ = env.reset(seed=args.seed + episode)
             rpc(args.socket, {"op": "reset"})
@@ -216,6 +248,8 @@ def evaluate(args) -> dict:
             "sim_backend": args.sim_backend,
             "temporal_ensemble_decay": args.temporal_ensemble_decay,
             "camera_size": [320, 240],
+            "render_mode": "sensors",
+            "shader_pack": "default",
             "policy_contract": "shared_weights_decentralized_local_rgb_qpos_to_local_action8",
             "episodes_detail": episodes,
             "updated_at": datetime.now(timezone.utc).isoformat(),
