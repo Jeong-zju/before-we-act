@@ -77,8 +77,9 @@ def test_settings_binds_a_valid_care_source_revision(tmp_path: Path) -> None:
 
 
 def test_run_path_lock_rejects_concurrent_supervisors(tmp_path: Path) -> None:
-    first = sup.Supervisor(_settings(tmp_path))
-    second = sup.Supervisor(_settings(tmp_path))
+    settings = _settings(tmp_path)
+    first = sup.Supervisor(settings)
+    second = sup.Supervisor(settings)
     first.s.run.mkdir(parents=True)
     first._acquire_run_lock()
     try:
