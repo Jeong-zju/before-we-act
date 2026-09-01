@@ -320,7 +320,19 @@ def _step_metrics(
     current = _qpos(observation)
     success, progress = _success_progress(env)
     safety = _physical_safety(env, baseline)
-    movement = np.linalg.norm(current[:, :6] - previous_qpos[:, :6], axis=1)
+    # Match the upstream CARE/BiCoord utility contract: ``active`` is based
+    # on the command that was sent at this control tick versus the qpos at the
+    # beginning of the tick.  Using the post-step qpos here is subtly wrong:
+    # it folds simulator integration/rendering noise into a discrete 0.02
+    # threshold and can make an identical reactive/replay command sequence
+    # receive different utility labels.  The native upstream implementation
+    # measures the six physical joint coordinates for this gate; the seventh
+    # coordinate is the continuous gripper drive target and is not folded into
+    # the inactivity threshold or otherwise reparameterized.
+    command = np.asarray(actions, dtype=np.float32)
+    if command.shape != (2, ACTION_DIM) or not np.isfinite(command).all():
+        raise RuntimeError("BiCoord physical action metrics require finite [2,7] actions")
+    movement = np.linalg.norm(command[:, :6] - previous_qpos[:, :6], axis=1)
     if not np.isfinite(actions).all() or not np.isfinite(movement).all():
         safety["hard_safety_violation"] = True
     return {
@@ -340,11 +352,16 @@ def _step_metrics(
 
 def _deadlock_mask(rows: Sequence[Mapping[str, Any]], start_progress: float) -> list[bool]:
     stagnant: list[bool] = []
-    previous = float(start_progress)
+    # The first observed tick has no previous *row* to compare against.  The
+    # upstream CARE collector therefore starts with ``None`` rather than the
+    # snapshot's scalar progress; otherwise a zero-progress first tick is
+    # incorrectly counted toward the eight-step deadlock run.
+    previous: float | None = None
     for row in rows:
         progress = float(row["progress"])
         stagnant.append(
-            abs(progress - previous) <= 1e-4
+            previous is not None
+            and abs(progress - previous) <= 1e-4
             and bool(row["all_joint_changes_below_0_02"])
             and not bool(row["success"])
         )
