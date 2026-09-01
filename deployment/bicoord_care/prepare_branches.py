@@ -11,7 +11,7 @@ import torch
 
 from .config import TASKS
 from .bcore_data import BICOORD_CARE_MEMORY_TOKENS, BICOORD_CARE_MEMORY_WIDTH
-from .branch_fidelity import strict_fidelity_receipts_valid
+from .branch_fidelity import seed_replay_probe_valid, strict_fidelity_receipts_valid
 from .data import load_normalization_receipt
 from .stage_common import artifact, assert_common_paths, atomic_json, common_parser, publish_result, require_stage_result, sha256_file
 
@@ -113,7 +113,7 @@ def _records(
             if family.get("care_memory_semantics") != "PredictiveTeamBeliefPolicy.belief.mu+belief.event_memory":
                 raise ValueError(f"branch family memory semantics differ: {manifest}")
             probe = family.get("restore_probe")
-            if not isinstance(probe, Mapping) or probe.get("schema") != "before-we-act.bicoord.seed-replay-probe/1" or probe.get("rebuilt_anchor_state_exact_match") is not True or probe.get("passed") is not True or float(probe.get("max_abs_error", float("inf"))) > 1e-6:
+            if not seed_replay_probe_valid(probe):
                 raise ValueError(f"branch family restore probe failed: {manifest}")
             fidelity = family.get("reference_reactive_replay_fidelity")
             if not strict_fidelity_receipts_valid(fidelity):

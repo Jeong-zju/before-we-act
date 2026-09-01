@@ -154,6 +154,62 @@ def strict_fidelity_receipts_valid(value: Any) -> bool:
     )
 
 
+def finite_error_within(value: Any, tolerance: float = FIDELITY_TOLERANCE) -> bool:
+    """Reject missing, boolean, negative, and non-finite error evidence."""
+
+    if isinstance(value, bool):
+        return False
+    try:
+        error = float(value)
+    except (TypeError, ValueError):
+        return False
+    return bool(math.isfinite(error) and 0.0 <= error <= tolerance)
+
+
+def seed_replay_probe_valid(value: Any) -> bool:
+    """Validate the exact seeded-prefix reconstruction evidence."""
+
+    if not isinstance(value, Mapping):
+        return False
+    if value.get("schema") != "before-we-act.bicoord.seed-replay-probe/1":
+        return False
+    if value.get("restore_mode") != "official_seed_plus_reference_prefix_replay":
+        return False
+    if value.get("passed") is not True or value.get("rebuilt_anchor_state_exact_match") is not True:
+        return False
+    repeats = value.get("repeats")
+    if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats != 2:
+        return False
+    try:
+        tolerance = float(value.get("tolerance"))
+    except (TypeError, ValueError):
+        return False
+    if tolerance != FIDELITY_TOLERANCE or not finite_error_within(
+        value.get("max_abs_error"), tolerance
+    ):
+        return False
+    expected = value.get("expected_anchor_state_sha256")
+    rebuilt = value.get("rebuilt_anchor_state_sha256")
+    return bool(
+        isinstance(expected, str)
+        and len(expected) == 64
+        and _hex_digest(expected)
+        and isinstance(rebuilt, list)
+        and len(rebuilt) == 2
+        and all(item == expected for item in rebuilt)
+    )
+
+
+def _hex_digest(value: str) -> bool:
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+
+
 __all__ = [
     "FIDELITY_SCHEMA",
     "FIDELITY_STEPS",
@@ -161,6 +217,8 @@ __all__ = [
     "EXPECTED_DISCRETE_DIFFERENCE_KEYS",
     "EXPECTED_SAFETY_DIFFERENCE_KEYS",
     "EXPECTED_OUTCOME_DIFFERENCE_KEYS",
+    "finite_error_within",
+    "seed_replay_probe_valid",
     "strict_fidelity_receipts_valid",
     "strict_fidelity_row_valid",
 ]

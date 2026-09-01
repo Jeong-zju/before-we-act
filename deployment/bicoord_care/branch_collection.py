@@ -970,13 +970,15 @@ def _fidelity_summary(
     """Build a strict continuous and discrete reactive/replay fidelity gate."""
 
     diagnostic = _fidelity_diagnostic(reactive, replay)
-    utility_error = max(
-        float(row["utility_abs_error"])
-        for row in diagnostic["utility_by_horizon"].values()
+    def _finite_max(values: Sequence[Any]) -> float:
+        numeric = [float(value) for value in values]
+        return max(numeric) if numeric and all(math.isfinite(value) and value >= 0.0 for value in numeric) else math.inf
+
+    utility_error = _finite_max(
+        [row["utility_abs_error"] for row in diagnostic["utility_by_horizon"].values()]
     )
-    bounded_utility_error = max(
-        float(row["bounded_vector_abs_error"])
-        for row in diagnostic["utility_by_horizon"].values()
+    bounded_utility_error = _finite_max(
+        [row["bounded_vector_abs_error"] for row in diagnostic["utility_by_horizon"].values()]
     )
     outcome_discrete_equal = not any(
         diagnostic["outcome_discrete_difference_horizons"].values()

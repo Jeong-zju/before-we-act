@@ -47,7 +47,7 @@ from .asset_contract import (
     SHOVEL_VISUAL_BYTES,
     SHOVEL_VISUAL_SHA256,
 )
-from .branch_fidelity import strict_fidelity_receipts_valid
+from .branch_fidelity import seed_replay_probe_valid, strict_fidelity_receipts_valid
 from .config import (
     ACTION_DIM,
     ACTION_ENCODING,
@@ -1970,13 +1970,7 @@ class Supervisor:
                     raise InvalidArtifact("branch family reused an expert-valid seed")
                 task_seeds[task].add(family_seed)
                 probe = family.get("restore_probe")
-                if (
-                    not isinstance(probe, Mapping)
-                    or probe.get("schema") != "before-we-act.bicoord.seed-replay-probe/1"
-                    or probe.get("rebuilt_anchor_state_exact_match") is not True
-                    or probe.get("passed") is not True
-                    or float(probe.get("max_abs_error", float("inf"))) > 1e-6
-                ):
+                if not seed_replay_probe_valid(probe):
                     raise InvalidArtifact("physical branch restore probe failed")
                 fidelity = family.get("reference_reactive_replay_fidelity")
                 if not strict_fidelity_receipts_valid(fidelity):
