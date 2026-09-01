@@ -1789,11 +1789,9 @@ class Supervisor:
                 "provider_policy": "B-core/TUNE",
                 "families": expected_families,
                 "branches_per_family": BRANCHES_PER_FAMILY,
-                    "physical_simulator_outcomes": True,
-                    "offline_demonstration_error_used": False,
-                    "seed_manifest": seed_manifest,
-                    "seed_manifest_sha256": seed_manifest_sha,
-                },
+                "physical_simulator_outcomes": True,
+                "offline_demonstration_error_used": False,
+            },
             f"{spec.name} result",
         )
         seed_stage = "seed_discovery_smoke" if smoke else "branch_seed_discovery"
