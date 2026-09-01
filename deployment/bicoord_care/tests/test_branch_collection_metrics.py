@@ -194,3 +194,102 @@ def test_fidelity_summary_rejects_hidden_physical_drift_even_when_utility_matche
     assert summary["utility_max_abs_error"] == 0.0
     assert summary["executed_action_max_abs_error"] == pytest.approx(1e-5)
     assert summary["passed"] is False
+
+
+def test_fidelity_summary_rejects_success_or_safety_label_drift() -> None:
+    # Use a complete 64-tick trace so this test isolates the discrete gate,
+    # rather than failing merely because a fixture is abbreviated.
+    metrics = []
+    for step in range(module.MAX_BRANCH_STEPS):
+        metrics.append(
+            {
+                "branch_step": step,
+                "qpos": [[0.0] * 7, [0.0] * 7],
+                "progress": 0.0,
+                "success": False,
+                "active": [False, False],
+                "all_joint_changes_below_0_02": True,
+                "hard_safety_violation": False,
+                "collision_or_drop": False,
+                "robot_conflict": False,
+                "duplicate_work": False,
+                "safety": {
+                    "drop": False,
+                    "robot_collision": False,
+                    "hard_safety_violation": False,
+                    "dropped_actors": [],
+                    "robot_robot_contacts": [],
+                },
+            }
+        )
+    outcomes = {
+        str(horizon): {
+            "requested_steps": horizon,
+            "observed_steps": horizon,
+            "hard_safety_violation": False,
+            "first_success_step": None,
+            "physical_simulator_outcome": True,
+            "utility_main": 0.0,
+            "bounded_utility_vector": [0.0] * 8,
+        }
+        for horizon in module.HORIZONS
+    }
+    row = {
+        "candidate_id": 0,
+        "repeat_id": 0,
+        "branch_seed": 1,
+        "status": "VALID",
+        "physical_simulator_outcome": True,
+        "simulator_steps": module.MAX_BRANCH_STEPS,
+        "intervention_steps": module.INTERVENTION_STEPS,
+        "candidate_transform_clipped": False,
+        "action_clipped": False,
+        "focal_policy_output_used": True,
+        "executed_actions": np.zeros((module.MAX_BRANCH_STEPS, 2, 7), dtype=np.float32).tolist(),
+        "metrics": metrics,
+        "outcomes": outcomes,
+    }
+    row["schema"] = module.FIDELITY_SCHEMA
+    row["tolerance"] = module.FIDELITY_TOLERANCE
+    equal_summary = module._fidelity_summary(row, row)
+    assert equal_summary["passed"] is True
+    assert len(equal_summary["executed_action_max_abs_error_by_step"]) == 64
+    assert len(equal_summary["qpos_max_abs_error_by_step"]) == 64
+    assert len(equal_summary["progress_max_abs_error_by_step"]) == 64
+    replay = {
+        **row,
+        "metrics": [
+            {**metric, "success": step == 17,
+             "safety": {**metric["safety"], "drop": step == 23}}
+            for step, metric in enumerate(metrics)
+        ],
+    }
+    summary = module._fidelity_summary(row, replay)
+    assert summary["success_labels_equal"] is False
+    assert summary["safety_labels_equal"] is False
+    assert summary["discrete_labels_equal"] is False
+    assert summary["passed"] is False
+
+
+def test_fidelity_summary_rejects_truncated_or_missing_discrete_trace() -> None:
+    row = {
+        "candidate_id": 0,
+        "repeat_id": 0,
+        "branch_seed": 1,
+        "status": "VALID",
+        "physical_simulator_outcome": True,
+        "simulator_steps": module.MAX_BRANCH_STEPS,
+        "intervention_steps": module.INTERVENTION_STEPS,
+        "candidate_transform_clipped": False,
+        "action_clipped": False,
+        "focal_policy_output_used": True,
+        "executed_actions": [],
+        "metrics": [],
+        "outcomes": {},
+    }
+    # A malformed trace must produce a diagnostic, not an exception that a
+    # caller could accidentally interpret as a successful no-op.
+    replay = dict(row)
+    diagnostic = module._fidelity_diagnostic(row, replay)
+    assert diagnostic["trajectory_complete"] is False
+    assert module._fidelity_summary(row, replay)["passed"] is False

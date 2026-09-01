@@ -37,6 +37,7 @@ from .bicoord_snapshot import (
     restore_state,
     state_sha256,
 )
+from .branch_fidelity import FIDELITY_SCHEMA, FIDELITY_STEPS, FIDELITY_TOLERANCE
 from .config import (
     ACTION_DIM,
     ACTION_HORIZON,
@@ -65,6 +66,47 @@ CANDIDATES = 6
 BRANCHES_PER_FAMILY = CANDIDATES * 2 * 2
 INTERVENTION_STEPS = 1
 MAX_BRANCH_STEPS = max(HORIZONS)
+if MAX_BRANCH_STEPS != FIDELITY_STEPS:
+    raise RuntimeError("BiCoord fidelity receipt horizon differs from branch protocol")
+
+# These fields are discrete parts of the upstream CARE physical-branch
+# contract.  Utility is deliberately *not* a substitute for checking them:
+# weighted/thresholded utility can remain identical while a simulator or
+# wrapper has silently changed a success, activity, or safety label.
+_FIDELITY_DISCRETE_KEYS = (
+    "branch_step",
+    "success",
+    "active",
+    "all_joint_changes_below_0_02",
+    "hard_safety_violation",
+    "collision_or_drop",
+    "robot_conflict",
+    "duplicate_work",
+)
+_FIDELITY_SAFETY_KEYS = (
+    "drop",
+    "robot_collision",
+    "hard_safety_violation",
+    "dropped_actor_names",
+    "robot_contact_bodies",
+)
+_FIDELITY_OUTCOME_KEYS = (
+    "requested_steps",
+    "observed_steps",
+    "hard_safety_violation",
+    "first_success_step",
+    "physical_simulator_outcome",
+)
+_FIDELITY_BRANCH_EXPECTED = {
+    "candidate_id": 0,
+    "status": "VALID",
+    "physical_simulator_outcome": True,
+    "simulator_steps": MAX_BRANCH_STEPS,
+    "intervention_steps": INTERVENTION_STEPS,
+    "candidate_transform_clipped": False,
+    "action_clipped": False,
+    "focal_policy_output_used": True,
+}
 
 
 def _atomic_npz(path: Path, **values: np.ndarray) -> None:
@@ -666,17 +708,25 @@ def _fidelity_diagnostic(
     replay_actions = _array(replay, "executed_actions")
     reactive_metrics = reactive.get("metrics", [])
     replay_metrics = replay.get("metrics", [])
+    if not isinstance(reactive_metrics, (list, tuple)):
+        reactive_metrics = []
+    if not isinstance(replay_metrics, (list, tuple)):
+        replay_metrics = []
     reactive_qpos = np.asarray(
-        [item.get("qpos", []) for item in reactive_metrics], dtype=np.float64
+        [item.get("qpos", []) if isinstance(item, Mapping) else [] for item in reactive_metrics],
+        dtype=np.float64,
     )
     replay_qpos = np.asarray(
-        [item.get("qpos", []) for item in replay_metrics], dtype=np.float64
+        [item.get("qpos", []) if isinstance(item, Mapping) else [] for item in replay_metrics],
+        dtype=np.float64,
     )
     reactive_progress = np.asarray(
-        [item.get("progress", np.nan) for item in reactive_metrics], dtype=np.float64
+        [item.get("progress", np.nan) if isinstance(item, Mapping) else np.nan for item in reactive_metrics],
+        dtype=np.float64,
     )
     replay_progress = np.asarray(
-        [item.get("progress", np.nan) for item in replay_metrics], dtype=np.float64
+        [item.get("progress", np.nan) if isinstance(item, Mapping) else np.nan for item in replay_metrics],
+        dtype=np.float64,
     )
 
     def _max_abs(first: np.ndarray, second: np.ndarray) -> float:
@@ -684,20 +734,129 @@ def _fidelity_diagnostic(
             return float("inf") if first.shape != second.shape else 0.0
         return float(np.max(np.abs(first - second)))
 
-    active_diff = []
-    stagnant_diff = []
-    for index, (left, right) in enumerate(zip(reactive_metrics, replay_metrics)):
-        if left.get("active") != right.get("active"):
+    # Keep the old, named fields for consumers that already inspect them, but
+    # also publish one complete discrete-label audit.  ``zip`` alone is not
+    # sufficient here: a truncated trace must fail closed instead of looking
+    # equal over its common prefix.
+    active_diff: list[int] = []
+    stagnant_diff: list[int] = []
+    success_diff: list[int] = []
+    discrete_diff: dict[str, list[int]] = {
+        key: [] for key in _FIDELITY_DISCRETE_KEYS
+    }
+    safety_diff: dict[str, list[int]] = {key: [] for key in _FIDELITY_SAFETY_KEYS}
+    metric_length_equal = len(reactive_metrics) == len(replay_metrics)
+    metric_count = max(len(reactive_metrics), len(replay_metrics))
+    missing = object()
+    for index in range(metric_count):
+        left = reactive_metrics[index] if index < len(reactive_metrics) else missing
+        right = replay_metrics[index] if index < len(replay_metrics) else missing
+        if left is missing or right is missing:
+            for key in _FIDELITY_DISCRETE_KEYS:
+                discrete_diff[key].append(index)
+            for key in _FIDELITY_SAFETY_KEYS:
+                safety_diff[key].append(index)
             active_diff.append(index)
-        if left.get("all_joint_changes_below_0_02") != right.get(
-            "all_joint_changes_below_0_02"
+            stagnant_diff.append(index)
+            success_diff.append(index)
+            continue
+        if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+            for key in _FIDELITY_DISCRETE_KEYS:
+                discrete_diff[key].append(index)
+            for key in _FIDELITY_SAFETY_KEYS:
+                safety_diff[key].append(index)
+            active_diff.append(index)
+            stagnant_diff.append(index)
+            success_diff.append(index)
+            continue
+        for key in _FIDELITY_DISCRETE_KEYS:
+            if key not in left or key not in right or left.get(key) != right.get(key):
+                discrete_diff[key].append(index)
+        if (
+            "active" not in left
+            or "active" not in right
+            or left.get("active") != right.get("active")
+        ):
+            active_diff.append(index)
+        if (
+            "all_joint_changes_below_0_02" not in left
+            or "all_joint_changes_below_0_02" not in right
+            or left.get("all_joint_changes_below_0_02")
+            != right.get("all_joint_changes_below_0_02")
         ):
             stagnant_diff.append(index)
+        if (
+            "success" not in left
+            or "success" not in right
+            or left.get("success") != right.get("success")
+        ):
+            success_diff.append(index)
+        left_safety = left.get("safety", {})
+        right_safety = right.get("safety", {})
+        if not isinstance(left_safety, Mapping):
+            left_safety = {}
+        if not isinstance(right_safety, Mapping):
+            right_safety = {}
+        # Contact impulse magnitudes are continuous and are covered by the
+        # physical-state probe.  For the branch receipt, compare the discrete
+        # contact/drop identities as well as their boolean safety labels.
+        left_contacts = tuple(
+            sorted(
+                tuple(sorted(str(body) for body in contact.get("bodies", ())))
+                for contact in left_safety.get("robot_robot_contacts", ())
+                if isinstance(contact, Mapping)
+            )
+        )
+        right_contacts = tuple(
+            sorted(
+                tuple(sorted(str(body) for body in contact.get("bodies", ())))
+                for contact in right_safety.get("robot_robot_contacts", ())
+                if isinstance(contact, Mapping)
+            )
+        )
+        safety_values = {
+            "drop": left_safety.get("drop") == right_safety.get("drop")
+            if "drop" in left_safety and "drop" in right_safety
+            else False,
+            "robot_collision": left_safety.get("robot_collision")
+            == right_safety.get("robot_collision")
+            if "robot_collision" in left_safety and "robot_collision" in right_safety
+            else False,
+            "hard_safety_violation": left_safety.get("hard_safety_violation")
+            == right_safety.get("hard_safety_violation")
+            if "hard_safety_violation" in left_safety
+            and "hard_safety_violation" in right_safety
+            else False,
+            "dropped_actor_names": tuple(
+                sorted(str(name) for name in left_safety.get("dropped_actors", ()))
+            )
+            == tuple(sorted(str(name) for name in right_safety.get("dropped_actors", ())))
+            if "dropped_actors" in left_safety and "dropped_actors" in right_safety
+            else False,
+            "robot_contact_bodies": left_contacts == right_contacts
+            if "robot_robot_contacts" in left_safety
+            and "robot_robot_contacts" in right_safety
+            else False,
+        }
+        for key, equal in safety_values.items():
+            if not equal:
+                safety_diff[key].append(index)
     utility_diff: dict[str, dict[str, Any]] = {}
+    outcome_discrete_diff: dict[str, list[str]] = {}
     for horizon in HORIZONS:
         key = str(horizon)
-        left = reactive.get("outcomes", {}).get(key, {})
-        right = replay.get("outcomes", {}).get(key, {})
+        reactive_outcomes = reactive.get("outcomes", {})
+        replay_outcomes = replay.get("outcomes", {})
+        if not isinstance(reactive_outcomes, Mapping):
+            reactive_outcomes = {}
+        if not isinstance(replay_outcomes, Mapping):
+            replay_outcomes = {}
+        left = reactive_outcomes.get(key, {})
+        right = replay_outcomes.get(key, {})
+        if not isinstance(left, Mapping):
+            left = {}
+        if not isinstance(right, Mapping):
+            right = {}
         left_vector = np.asarray(left.get("bounded_utility_vector", []), dtype=np.float64)
         right_vector = np.asarray(right.get("bounded_utility_vector", []), dtype=np.float64)
         utility_diff[key] = {
@@ -711,6 +870,11 @@ def _fidelity_diagnostic(
             "bounded_vector_reactive": left_vector.tolist(),
             "bounded_vector_replay": right_vector.tolist(),
         }
+        outcome_discrete_diff[key] = [
+            field
+            for field in _FIDELITY_OUTCOME_KEYS
+            if field not in left or field not in right or left.get(field) != right.get(field)
+        ]
     action_per_step = (
         np.max(np.abs(reactive_actions - replay_actions), axis=(1, 2))
         if reactive_actions.shape == replay_actions.shape
@@ -722,31 +886,80 @@ def _fidelity_diagnostic(
         if reactive_qpos.shape == replay_qpos.shape and reactive_qpos.ndim == 3
         else np.asarray([], dtype=np.float64)
     )
+    progress_per_step = (
+        np.abs(reactive_progress - replay_progress)
+        if reactive_progress.shape == replay_progress.shape
+        and reactive_progress.ndim == 1
+        else np.asarray([], dtype=np.float64)
+    )
+    action_shape_equal = reactive_actions.shape == replay_actions.shape
+    qpos_shape_equal = reactive_qpos.shape == replay_qpos.shape
+    trajectory_complete = bool(
+        metric_length_equal
+        and len(reactive_metrics) == MAX_BRANCH_STEPS
+        and len(replay_metrics) == MAX_BRANCH_STEPS
+        and reactive_actions.shape == (MAX_BRANCH_STEPS, 2, ACTION_DIM)
+        and replay_actions.shape == (MAX_BRANCH_STEPS, 2, ACTION_DIM)
+        and reactive_qpos.shape == (MAX_BRANCH_STEPS, 2, ACTION_DIM)
+        and replay_qpos.shape == (MAX_BRANCH_STEPS, 2, ACTION_DIM)
+        and reactive_progress.shape == (MAX_BRANCH_STEPS,)
+        and replay_progress.shape == (MAX_BRANCH_STEPS,)
+    )
+    action_first_difference: int | None = None
+    if (
+        action_shape_equal
+        and reactive_actions.ndim == 3
+        and reactive_actions.shape[0] == replay_actions.shape[0]
+    ):
+        for index, (left, right) in enumerate(
+            zip(reactive_actions, replay_actions)
+        ):
+            if not np.array_equal(left, right):
+                action_first_difference = index
+                break
+    branch_contract_difference_fields = [
+        key
+        for key, expected in _FIDELITY_BRANCH_EXPECTED.items()
+        if reactive.get(key) != expected or replay.get(key) != expected
+    ]
+    if (
+        reactive.get("repeat_id") not in (0, 1)
+        or reactive.get("repeat_id") != replay.get("repeat_id")
+    ):
+        branch_contract_difference_fields.append("repeat_id")
+    if (
+        not isinstance(reactive.get("branch_seed"), int)
+        or reactive.get("branch_seed") != replay.get("branch_seed")
+    ):
+        branch_contract_difference_fields.append("branch_seed")
     return {
         "schema": "before-we-act.bicoord.care-fidelity-diagnostic/1",
         "reactive_status": reactive.get("status"),
         "replay_status": replay.get("status"),
         "executed_action_shape": list(reactive_actions.shape),
+        "replay_executed_action_shape": list(replay_actions.shape),
+        "executed_action_shape_equal": action_shape_equal,
         "executed_action_max_abs_error": _max_abs(reactive_actions, replay_actions),
         "executed_action_max_abs_error_by_step": action_per_step.tolist(),
-        "executed_action_first_difference": next(
-            (
-                index
-                for index, (left, right) in enumerate(
-                    zip(reactive_actions.reshape(len(reactive_actions), -1), replay_actions.reshape(len(replay_actions), -1))
-                )
-                if not np.array_equal(left, right)
-            ),
-            None,
-        )
-        if reactive_actions.shape == replay_actions.shape
-        else None,
+        "executed_action_first_difference": action_first_difference,
         "qpos_shape": list(reactive_qpos.shape),
+        "replay_qpos_shape": list(replay_qpos.shape),
+        "qpos_shape_equal": qpos_shape_equal,
         "qpos_max_abs_error": _max_abs(reactive_qpos, replay_qpos),
         "qpos_max_abs_error_by_step": qpos_per_step.tolist(),
         "progress_max_abs_error": _max_abs(reactive_progress, replay_progress),
+        "progress_max_abs_error_by_step": progress_per_step.tolist(),
+        "metric_length_equal": metric_length_equal,
+        "reactive_metric_count": len(reactive_metrics),
+        "replay_metric_count": len(replay_metrics),
+        "trajectory_complete": trajectory_complete,
+        "branch_contract_difference_fields": branch_contract_difference_fields,
         "active_label_difference_steps": active_diff,
         "all_joint_changes_label_difference_steps": stagnant_diff,
+        "success_label_difference_steps": success_diff,
+        "discrete_label_difference_steps": discrete_diff,
+        "safety_label_difference_steps": safety_diff,
+        "outcome_discrete_difference_horizons": outcome_discrete_diff,
         "utility_by_horizon": utility_diff,
     }
 
@@ -761,26 +974,85 @@ def _fidelity_summary(
         float(row["utility_abs_error"])
         for row in diagnostic["utility_by_horizon"].values()
     )
+    bounded_utility_error = max(
+        float(row["bounded_vector_abs_error"])
+        for row in diagnostic["utility_by_horizon"].values()
+    )
+    outcome_discrete_equal = not any(
+        diagnostic["outcome_discrete_difference_horizons"].values()
+    )
+    discrete_equal = (
+        diagnostic["metric_length_equal"]
+        and diagnostic["trajectory_complete"]
+        and not diagnostic["branch_contract_difference_fields"]
+        and not any(diagnostic["discrete_label_difference_steps"].values())
+        and not any(diagnostic["safety_label_difference_steps"].values())
+        and outcome_discrete_equal
+    )
     passed = bool(
         utility_error <= SNAPSHOT_TOLERANCE
+        and bounded_utility_error <= SNAPSHOT_TOLERANCE
         and float(diagnostic["executed_action_max_abs_error"]) <= SNAPSHOT_TOLERANCE
         and float(diagnostic["qpos_max_abs_error"]) <= SNAPSHOT_TOLERANCE
         and float(diagnostic["progress_max_abs_error"]) <= SNAPSHOT_TOLERANCE
-        and not diagnostic["active_label_difference_steps"]
-        and not diagnostic["all_joint_changes_label_difference_steps"]
+        and discrete_equal
     )
     return {
+        "schema": FIDELITY_SCHEMA,
+        "tolerance": FIDELITY_TOLERANCE,
         "repeat_id": int(reactive.get("repeat_id", -1)),
         "utility_max_abs_error": utility_error,
+        "bounded_utility_max_abs_error": bounded_utility_error,
         "executed_action_max_abs_error": float(
             diagnostic["executed_action_max_abs_error"]
         ),
+        "executed_action_max_abs_error_by_step": diagnostic[
+            "executed_action_max_abs_error_by_step"
+        ],
         "qpos_max_abs_error": float(diagnostic["qpos_max_abs_error"]),
+        "qpos_max_abs_error_by_step": diagnostic["qpos_max_abs_error_by_step"],
         "progress_max_abs_error": float(diagnostic["progress_max_abs_error"]),
+        "progress_max_abs_error_by_step": diagnostic[
+            "progress_max_abs_error_by_step"
+        ],
+        "metric_length_equal": bool(diagnostic["metric_length_equal"]),
+        "trajectory_complete": bool(diagnostic["trajectory_complete"]),
+        "branch_contract_equal": not bool(
+            diagnostic["branch_contract_difference_fields"]
+        ),
+        "branch_contract_difference_fields": diagnostic[
+            "branch_contract_difference_fields"
+        ],
         "active_labels_equal": not bool(diagnostic["active_label_difference_steps"]),
+        "active_label_difference_steps": diagnostic[
+            "active_label_difference_steps"
+        ],
         "stagnant_labels_equal": not bool(
             diagnostic["all_joint_changes_label_difference_steps"]
         ),
+        "all_joint_changes_label_difference_steps": diagnostic[
+            "all_joint_changes_label_difference_steps"
+        ],
+        "success_labels_equal": not bool(
+            diagnostic["success_label_difference_steps"]
+        ),
+        "success_label_difference_steps": diagnostic[
+            "success_label_difference_steps"
+        ],
+        "discrete_labels_equal": bool(discrete_equal),
+        "safety_labels_equal": not any(
+            diagnostic["safety_label_difference_steps"].values()
+        ),
+        "outcome_discrete_labels_equal": bool(outcome_discrete_equal),
+        "discrete_label_difference_steps": diagnostic[
+            "discrete_label_difference_steps"
+        ],
+        "safety_label_difference_steps": diagnostic[
+            "safety_label_difference_steps"
+        ],
+        "outcome_discrete_difference_horizons": diagnostic[
+            "outcome_discrete_difference_horizons"
+        ],
         "passed": passed,
     }
 
@@ -904,35 +1176,15 @@ def _collect_family(
     npz_path = output_root / f"family_{family_id:06d}.npz"
     json_path = output_root / f"family_{family_id:06d}.json"
     if npz_path.exists() or json_path.exists():
-        if not (npz_path.is_file() and json_path.is_file()):
-            raise RuntimeError(f"partial CARE family exists: {snapshot_id}")
-        existing = json.loads(json_path.read_text(encoding="utf-8"))
-        if (
-            existing.get("status") == "PASSED"
-            and existing.get("snapshot_id") == snapshot_id
-            and existing.get("checkpoint_sha256") == checkpoint_sha256
-            and existing.get("seed_manifest") == seed_manifest
-            and existing.get("seed_manifest_sha256") == seed_manifest_sha256
-            and existing.get("physical_simulator_outcomes") is True
-            and existing.get("schema") == BRANCH_SCHEMA
-            and existing.get("simulator_restore_mode")
-            == "official_seed_plus_reference_prefix_replay"
-            and existing.get("npz_sha256") == sha256_file(npz_path)
-        ):
-            return {
-                "family": {
-                    "family_id": existing.get("family_id"),
-                    "snapshot_id": existing.get("snapshot_id"),
-                    "task": existing.get("task"),
-                    "status": existing.get("status"),
-                },
-                "npz": str(npz_path.resolve()),
-                "npz_sha256": sha256_file(npz_path),
-                "manifest": str(json_path.resolve()),
-                "manifest_sha256": sha256_file(json_path),
-                "reused": True,
-            }
-        raise RuntimeError(f"refusing to overwrite inconsistent CARE family: {snapshot_id}")
+        # Physical branches are not resumable artifacts.  A worker may only
+        # publish a family into an empty run namespace; even a byte-valid
+        # family from an earlier attempt cannot prove that its failed sibling
+        # wave used the same executable/revision/runtime state.  The
+        # supervisor enforces this at stage scope, and the worker independently
+        # fails closed here for direct/manual invocations.
+        raise RuntimeError(
+            f"CARE family output already exists; use a completely new run: {snapshot_id}"
+        )
 
     _seed_rng(seed)
     env = _make_env(args.benchmark_repo, task, seed)

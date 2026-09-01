@@ -47,6 +47,7 @@ from .asset_contract import (
     SHOVEL_VISUAL_BYTES,
     SHOVEL_VISUAL_SHA256,
 )
+from .branch_fidelity import strict_fidelity_receipts_valid
 from .config import (
     ACTION_DIM,
     ACTION_ENCODING,
@@ -1978,21 +1979,7 @@ class Supervisor:
                 ):
                     raise InvalidArtifact("physical branch restore probe failed")
                 fidelity = family.get("reference_reactive_replay_fidelity")
-                if (
-                    not isinstance(fidelity, list)
-                    or len(fidelity) != 2
-                    or any(
-                        not isinstance(row, Mapping)
-                        or row.get("passed") is not True
-                        or float(row.get("utility_max_abs_error", float("inf"))) > 1e-6
-                        or float(row.get("executed_action_max_abs_error", float("inf"))) > 1e-6
-                        or float(row.get("qpos_max_abs_error", float("inf"))) > 1e-6
-                        or float(row.get("progress_max_abs_error", float("inf"))) > 1e-6
-                        or row.get("active_labels_equal") is not True
-                        or row.get("stagnant_labels_equal") is not True
-                        for row in fidelity
-                    )
-                ):
+                if not strict_fidelity_receipts_valid(fidelity):
                     raise InvalidArtifact("reference reactive/replay fidelity failed")
                 branches = family.get("branches")
                 if not isinstance(branches, list) or len(branches) != BRANCHES_PER_FAMILY:
