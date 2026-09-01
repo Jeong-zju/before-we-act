@@ -1,9 +1,10 @@
 """Collect physical same-snapshot CARE branch families on BiCoord.
 
 Every label in this module comes from a SAPIEN rollout.  A family freezes the
-simulator, controller, RNG, and B-core local-history state, proves repeatable
-restore, and then executes the registered ``6 candidates x 2 response regimes
-x 2 repeats`` design.  Offline demonstration error is deliberately absent:
+reference action prefix and B-core local-history state, deterministically
+rebuilds a fresh official seeded simulator for every sibling, and then
+executes the registered ``6 candidates x 2 response regimes x 2 repeats``
+design.  Offline demonstration error is deliberately absent:
 it is not a counterfactual outcome and must never authorize CARE training.
 """
 from __future__ import annotations
@@ -33,7 +34,6 @@ from .bcore_data import (
 from .bicoord_snapshot import (
     SNAPSHOT_TOLERANCE,
     capture_state,
-    restore_probe,
     restore_state,
     state_sha256,
 )
@@ -431,56 +431,129 @@ def _restore_runtime_and_env(
     *,
     branch_seed: int | None = None,
 ) -> Mapping[str, Any]:
-    restore_state(env, simulator_state)
+    # SAPIEN's public PhysX pack/unpack omits the contact solver warm-start
+    # manifold.  On contact-rich BiCoord scenes that hidden state changes the
+    # very next integration even though every exposed pose/qpos/cache matches.
+    # A branch-capable environment may therefore provide a deterministic
+    # seed+prefix rebuild hook.  It creates a fresh official environment and
+    # replays the frozen B-core prefix, restoring the complete solver history
+    # without pretending that the opaque PhysX cache was serialized.
+    rebuild = getattr(env, "_bicoord_rebuild_at_anchor", None)
+    if callable(rebuild):
+        rebuild()
+    else:
+        restore_state(env, simulator_state)
     runtime.restore_state(runtime_state)
     if branch_seed is not None:
         _seed_rng(branch_seed)
     return env.get_obs()
 
 
-def _reference_probe(
-    env: Any,
-    runtime: Any,
+class _RebuildableBranchEnv:
+    """Forward an environment while replacing it for every branch restore."""
+
+    def __init__(self, factory: Any) -> None:
+        self._factory = factory
+        self._current: Any | None = None
+
+    def _bicoord_rebuild_at_anchor(self) -> Any:
+        if self._current is not None:
+            _close_env(self._current)
+        self._current = self._factory()
+        return self._current
+
+    def close(self) -> None:
+        if self._current is not None:
+            _close_env(self._current)
+            self._current = None
+
+    def close_env(self) -> None:
+        self.close()
+
+    def __getattr__(self, name: str) -> Any:
+        if self._current is None:
+            raise RuntimeError("branch environment has not been rebuilt")
+        return getattr(self._current, name)
+
+
+def _replay_anchor_environment(
+    args: argparse.Namespace,
     task: str,
-    simulator_state: Mapping[str, Any],
+    seed: int,
+    prefix_actions: Sequence[np.ndarray],
+) -> Any:
+    """Construct the official task and replay its reference prefix exactly."""
+
+    # setup_demo and task assets consume process RNG in a few released task
+    # modules.  Seed before construction so every rebuild starts from the same
+    # official stream, then replay the exact native controller commands.
+    _seed_rng(seed)
+    env = _make_env(args.benchmark_repo, task, seed)
+    try:
+        observation = env.get_obs()
+        for action in prefix_actions:
+            value = np.asarray(action, dtype=np.float32)
+            if value.shape != (2, ACTION_DIM) or not np.isfinite(value).all():
+                raise RuntimeError("frozen B-core prefix action is invalid")
+            env.take_action(value.reshape(-1))
+            observation = env.get_obs()
+        return env
+    except BaseException:
+        _close_env(env)
+        raise
+
+
+def _replay_reference_probe(
+    *,
+    args: argparse.Namespace,
+    task: str,
+    seed: int,
+    prefix_actions: Sequence[np.ndarray],
+    runtime: Any,
     runtime_state: Mapping[str, Any],
 ) -> dict[str, Any]:
-    def rollout(restored_env: Any) -> Mapping[str, Any]:
-        runtime.restore_state(runtime_state)
-        observation = restored_env.get_obs()
-        actions: list[np.ndarray] = []
-        qpos: list[np.ndarray] = []
-        progress: list[float] = []
-        success: list[bool] = []
-        for _ in range(2):
-            context = runtime.act_with_context(observation, task, belief_enabled=True, commit=False)
-            actual = context.reference_plan[:, 0].copy()
-            runtime.record_executed_actions(actual)
-            restored_env.take_action(actual.reshape(-1))
-            observation = restored_env.get_obs()
-            actions.append(actual)
-            qpos.append(_qpos(observation))
-            ok, score = _success_progress(restored_env)
-            progress.append(score)
-            success.append(ok)
-        return {
-            "actions": np.stack(actions),
-            "qpos": np.stack(qpos),
-            "progress": np.asarray(progress, dtype=np.float64),
-            "success": np.asarray(success, dtype=bool),
-        }
+    """Prove deterministic post-anchor rollouts using fresh official envs."""
 
-    report = restore_probe(
-        env,
-        simulator_state,
-        rollout,
-        repeats=2,
-        tolerance=SNAPSHOT_TOLERANCE,
-    )
-    if report.get("passed") is not True:
-        raise RuntimeError(f"BiCoord snapshot restore probe failed: {report}")
-    _restore_runtime_and_env(env, runtime, simulator_state, runtime_state)
-    return report
+    rows: list[Mapping[str, Any]] = []
+    for _ in range(2):
+        env = _replay_anchor_environment(args, task, seed, prefix_actions)
+        try:
+            runtime.restore_state(runtime_state)
+            observation = env.get_obs()
+            actions: list[np.ndarray] = []
+            qpos: list[np.ndarray] = []
+            progress: list[float] = []
+            success: list[bool] = []
+            for _step in range(2):
+                context = runtime.act_with_context(observation, task, belief_enabled=True, commit=False)
+                actual = context.reference_plan[:, 0].copy()
+                runtime.record_executed_actions(actual)
+                env.take_action(actual.reshape(-1))
+                observation = env.get_obs()
+                actions.append(actual)
+                qpos.append(_qpos(observation))
+                ok, score = _success_progress(env)
+                progress.append(score)
+                success.append(ok)
+            rows.append({
+                "actions": np.stack(actions),
+                "qpos": np.stack(qpos),
+                "progress": np.asarray(progress, dtype=np.float64),
+                "success": np.asarray(success, dtype=bool),
+            })
+        finally:
+            _close_env(env)
+    from .bicoord_snapshot import max_abs
+
+    error = max((max_abs(rows[0], row) for row in rows[1:]), default=math.inf)
+    return {
+        "schema": "before-we-act.bicoord.seed-replay-probe/1",
+        "repeats": 2,
+        "max_abs_error": float(error),
+        "tolerance": SNAPSHOT_TOLERANCE,
+        "passed": bool(error <= SNAPSHOT_TOLERANCE),
+        "restore_mode": "official_seed_plus_reference_prefix_replay",
+    }
 
 
 def _run_branch(
@@ -499,64 +572,70 @@ def _run_branch(
     baseline: Mapping[str, float],
     peer_replay: Sequence[np.ndarray] | None,
     start_progress: float,
+    env_factory: Any | None = None,
 ) -> tuple[dict[str, Any], list[np.ndarray]]:
     if regime not in {"reactive", "replay"}:
         raise ValueError("CARE branch regime must be reactive or replay")
     seed = _branch_seed(snapshot_id, repeat)
-    observation = _restore_runtime_and_env(
-        env, runtime, simulator_state, runtime_state, branch_seed=seed
-    )
-    executed: list[np.ndarray] = []
-    metrics: list[dict[str, Any]] = []
-    replay_max_abs = 0.0
-    for step in range(MAX_BRANCH_STEPS):
-        previous_qpos = _qpos(observation)
-        context = runtime.act_with_context(observation, task, belief_enabled=True, commit=False)
-        actual = context.reference_plan[:, 0].copy()
-        if step < INTERVENTION_STEPS:
-            actual[focal_arm] = candidate_chunks[candidate, step]
-        if regime == "replay":
-            if peer_replay is None or step >= len(peer_replay):
-                raise RuntimeError("CARE replay branch lacks candidate-0 peer support")
-            peer = 1 - focal_arm
-            replayed = np.asarray(peer_replay[step], dtype=np.float32)
-            if replayed.shape != (ACTION_DIM,) or not np.isfinite(replayed).all():
-                raise RuntimeError("CARE replay peer action is invalid")
-            actual[peer] = replayed
-            replay_max_abs = max(replay_max_abs, float(np.max(np.abs(actual[peer] - replayed))))
-        if actual.shape != (2, ACTION_DIM) or not np.isfinite(actual).all():
-            raise RuntimeError("CARE physical branch action is invalid")
-        # Commit exactly the command sent to the native absolute controller.
-        runtime.record_executed_actions(actual)
-        env.take_action(actual.reshape(-1))
-        observation = env.get_obs()
-        executed.append(actual.copy())
-        metrics.append(_step_metrics(env, observation, previous_qpos, actual, baseline, step))
-    outcomes = {
-        str(horizon): outcome_at_horizon(metrics, start_progress, horizon)
-        for horizon in HORIZONS
-    }
-    row = {
-        "candidate_id": int(candidate),
-        "regime": regime,
-        "repeat_id": int(repeat),
-        "branch_seed": int(seed),
-        "status": "VALID",
-        "physical_simulator_outcome": True,
-        "simulator_steps": MAX_BRANCH_STEPS,
-        "intervention_steps": INTERVENTION_STEPS,
-        "candidate_transform_clipped": False,
-        "action_clipped": False,
-        "peer_action_source": "reactive_policy" if regime == "reactive" else "candidate0_reactive_replay_log",
-        "peer_policy_output_used": regime == "reactive",
-        "focal_policy_output_used": True,
-        "replay_peer_action_max_abs_error": replay_max_abs,
-        "outcomes": outcomes,
-        "executed_actions": [value.tolist() for value in executed],
-        "metrics": metrics,
-    }
-    peer = 1 - focal_arm
-    return row, [value[peer].copy() for value in executed]
+    branch_env = env_factory() if env_factory is not None else env
+    try:
+        observation = _restore_runtime_and_env(
+            branch_env, runtime, simulator_state, runtime_state, branch_seed=seed
+        )
+        executed: list[np.ndarray] = []
+        metrics: list[dict[str, Any]] = []
+        replay_max_abs = 0.0
+        for step in range(MAX_BRANCH_STEPS):
+            previous_qpos = _qpos(observation)
+            context = runtime.act_with_context(observation, task, belief_enabled=True, commit=False)
+            actual = context.reference_plan[:, 0].copy()
+            if step < INTERVENTION_STEPS:
+                actual[focal_arm] = candidate_chunks[candidate, step]
+            if regime == "replay":
+                if peer_replay is None or step >= len(peer_replay):
+                    raise RuntimeError("CARE replay branch lacks candidate-0 peer support")
+                peer = 1 - focal_arm
+                replayed = np.asarray(peer_replay[step], dtype=np.float32)
+                if replayed.shape != (ACTION_DIM,) or not np.isfinite(replayed).all():
+                    raise RuntimeError("CARE replay peer action is invalid")
+                actual[peer] = replayed
+                replay_max_abs = max(replay_max_abs, float(np.max(np.abs(actual[peer] - replayed))))
+            if actual.shape != (2, ACTION_DIM) or not np.isfinite(actual).all():
+                raise RuntimeError("CARE physical branch action is invalid")
+            # Commit exactly the command sent to the native absolute controller.
+            runtime.record_executed_actions(actual)
+            branch_env.take_action(actual.reshape(-1))
+            observation = branch_env.get_obs()
+            executed.append(actual.copy())
+            metrics.append(_step_metrics(branch_env, observation, previous_qpos, actual, baseline, step))
+        outcomes = {
+            str(horizon): outcome_at_horizon(metrics, start_progress, horizon)
+            for horizon in HORIZONS
+        }
+        row = {
+            "candidate_id": int(candidate),
+            "regime": regime,
+            "repeat_id": int(repeat),
+            "branch_seed": int(seed),
+            "status": "VALID",
+            "physical_simulator_outcome": True,
+            "simulator_steps": MAX_BRANCH_STEPS,
+            "intervention_steps": INTERVENTION_STEPS,
+            "candidate_transform_clipped": False,
+            "action_clipped": False,
+            "peer_action_source": "reactive_policy" if regime == "reactive" else "candidate0_reactive_replay_log",
+            "peer_policy_output_used": regime == "reactive",
+            "focal_policy_output_used": True,
+            "replay_peer_action_max_abs_error": replay_max_abs,
+            "outcomes": outcomes,
+            "executed_actions": [value.tolist() for value in executed],
+            "metrics": metrics,
+        }
+        peer = 1 - focal_arm
+        return row, [value[peer].copy() for value in executed]
+    finally:
+        if env_factory is not None:
+            _close_env(branch_env)
 
 
 def _fidelity_diagnostic(
@@ -808,6 +887,7 @@ def _collect_family(
             }
         raise RuntimeError(f"refusing to overwrite inconsistent CARE family: {snapshot_id}")
 
+    _seed_rng(seed)
     env = _make_env(args.benchmark_repo, task, seed)
     # The environment constructor applies the run-local compatibility overlay
     # for the two released metadata defects.  Persist a detached copy in the
@@ -822,12 +902,14 @@ def _collect_family(
     try:
         runtime.reset(task)
         observation = env.get_obs()
+        prefix_actions: list[np.ndarray] = []
         for step in range(anchor_step):
             context = runtime.act_with_context(observation, task, belief_enabled=True, commit=False)
             action = context.reference_plan[:, 0].copy()
             runtime.record_executed_actions(action)
             env.take_action(action.reshape(-1))
             observation = env.get_obs()
+            prefix_actions.append(action.copy())
             success, _progress = _success_progress(env)
             if success:
                 raise RuntimeError(f"B-core reached a terminal state before frozen anchor {snapshot_id}")
@@ -836,8 +918,19 @@ def _collect_family(
         runtime_state = runtime.snapshot_state()
         simulator_state_hash = state_sha256(simulator_state)
         runtime_state_hash = state_sha256(runtime_state)
-        probe = _reference_probe(env, runtime, task, simulator_state, runtime_state)
-        observation = _restore_runtime_and_env(env, runtime, simulator_state, runtime_state)
+        probe = _replay_reference_probe(
+            args=args,
+            task=task,
+            seed=seed,
+            prefix_actions=prefix_actions,
+            runtime=runtime,
+            runtime_state=runtime_state,
+        )
+        if probe.get("passed") is not True:
+            raise RuntimeError(f"BiCoord seed+prefix replay probe failed: {probe}")
+        # The original official environment is still exactly at the anchor;
+        # only the pure policy runtime was used by the replay probe.
+        runtime.restore_state(runtime_state)
         preview = runtime.act_with_context(observation, task, belief_enabled=True, commit=False)
         if preview.memory.shape != (2, BICOORD_CARE_MEMORY_TOKENS, BICOORD_CARE_MEMORY_WIDTH):
             raise RuntimeError("B-core exposed decoded hidden instead of belief/event CARE memory")
@@ -852,6 +945,13 @@ def _collect_family(
             np.count_nonzero((candidates < action_min[None, None]) | (candidates > action_max[None, None]))
         )
         baseline = _drop_baseline(env)
+        def branch_env_factory() -> _RebuildableBranchEnv:
+            return _RebuildableBranchEnv(
+                lambda: _replay_anchor_environment(
+                    args, task, seed, prefix_actions
+                )
+            )
+
         branches: list[dict[str, Any]] = []
         fidelity: list[dict[str, Any]] = []
         for repeat in (0, 1):
@@ -870,6 +970,7 @@ def _collect_family(
                 baseline=baseline,
                 peer_replay=None,
                 start_progress=start_progress,
+                env_factory=branch_env_factory,
             )
             branches.append(reference_reactive)
             reference_replay, _ = _run_branch(
@@ -887,6 +988,7 @@ def _collect_family(
                 baseline=baseline,
                 peer_replay=peer_log,
                 start_progress=start_progress,
+                env_factory=branch_env_factory,
             )
             branches.append(reference_replay)
             difference = max(
@@ -923,6 +1025,7 @@ def _collect_family(
                     baseline=baseline,
                     peer_replay=None,
                     start_progress=start_progress,
+                    env_factory=branch_env_factory,
                 )
                 branches.append(reactive)
             for candidate in range(1, CANDIDATES):
@@ -941,6 +1044,7 @@ def _collect_family(
                     baseline=baseline,
                     peer_replay=peer_log,
                     start_progress=start_progress,
+                    env_factory=branch_env_factory,
                 )
                 branches.append(replay)
         targets, hard_safety, usable = _targets(branches)
@@ -990,6 +1094,9 @@ def _collect_family(
             "simulator_state_sha256": simulator_state_hash,
             "runtime_state_sha256": runtime_state_hash,
             "restore_probe": probe,
+            "simulator_restore_mode": "official_seed_plus_reference_prefix_replay",
+            "reference_prefix_steps": len(prefix_actions),
+            "reference_prefix_sha256": state_sha256(prefix_actions),
             "reference_reactive_replay_fidelity": fidelity,
             "action_clipping": False,
             "candidate_transform_clipping": False,

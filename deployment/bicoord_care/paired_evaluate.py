@@ -1,8 +1,8 @@
 """Paired selector-off/CARE closed-loop evaluation for BiCoord.
 
-For every expert-valid seed this worker executes selector-off first, restores
-the exact initial SAPIEN/controller/RNG state, verifies the restore hash, and
-then executes CARE.  The two arms share the frozen B-core and CARE weights but
+For every expert-valid seed this worker executes selector-off first, creates a
+fresh official environment from the same seed, verifies its state/observation
+hash, and then executes CARE.  The two arms share the frozen B-core and CARE weights but
 are scored independently from their own belief/event memory and local action
 candidates; there is no cross-arm lower-bound arbitration.
 """
@@ -33,8 +33,8 @@ from .bcore_data import (
     BICOORD_CARE_MEMORY_TOKENS,
     BICOORD_CARE_MEMORY_WIDTH,
 )
-from .bicoord_snapshot import capture_state, restore_state, state_sha256
-from .branch_collection import CANDIDATES, candidate_plan
+from .bicoord_snapshot import capture_state, state_sha256
+from .branch_collection import CANDIDATES, _seed_rng, candidate_plan
 from .config import (
     ACTION_DIM,
     ACTION_ENCODING,
@@ -493,9 +493,14 @@ def _paired_seed(
     action_min: np.ndarray,
     action_max: np.ndarray,
 ) -> dict[str, Any]:
+    # Do not rely on SAPIEN's public PhysX pack/unpack for the paired control
+    # reset: released PhysX builds omit contact warm-start state.  Construct
+    # two fresh official environments from the same seed instead.  This keeps
+    # selector-off and CARE independent while preserving identical initial
+    # observations and all benchmark-native initialization.
+    _seed_rng(seed)
     env = _make_env(args.benchmark_repo, task, seed)
     try:
-        runtime.reset(task)
         initial_observation = env.get_obs()
         initial_observation_hash = _observation_sha256(initial_observation)
         initial_state = capture_state(env)
@@ -514,19 +519,19 @@ def _paired_seed(
             action_max=action_max,
             initial_observation=initial_observation,
         )
-        restore_state(env, initial_state)
-        restored_state_hash = state_sha256(capture_state(env))
-        if restored_state_hash != initial_state_hash:
-            raise RuntimeError("paired selector-off/CARE initial simulator state differs")
+    finally:
+        _close_env(env)
+
+    _seed_rng(seed)
+    env = _make_env(args.benchmark_repo, task, seed)
+    try:
         restored_observation = env.get_obs()
+        restored_state_hash = state_sha256(capture_state(env))
         restored_observation_hash = _observation_sha256(restored_observation)
+        if restored_state_hash != initial_state_hash:
+            raise RuntimeError("paired fresh environments have different initial simulator states")
         if restored_observation_hash != initial_observation_hash:
-            raise RuntimeError("paired selector-off/CARE initial policy observation differs")
-        # Rerendering is a diagnostic.  Restore once more so CARE starts from
-        # exactly the same post-observation simulator/RNG state as control.
-        restore_state(env, initial_state)
-        if state_sha256(capture_state(env)) != initial_state_hash:
-            raise RuntimeError("paired state drifted after the rerender probe")
+            raise RuntimeError("paired fresh environments have different initial policy observations")
         care_row = _episode(
             env=env,
             runtime=runtime,
@@ -548,6 +553,7 @@ def _paired_seed(
             "execution_order": ["selector_off", "care"],
             "same_initial_simulator_state": True,
             "same_initial_observation": True,
+            "paired_restore_mode": "fresh_official_seeded_environment",
             "initial_state_sha256": initial_state_hash,
             "restored_state_sha256": restored_state_hash,
             "initial_observation_sha256": initial_observation_hash,
