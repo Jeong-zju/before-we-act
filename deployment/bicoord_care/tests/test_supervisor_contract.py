@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from deployment.bicoord_care import supervisor as sup
+from deployment.bicoord_care import asset_stage
 from deployment.bicoord_care.evaluate_b0h import run as run_b0h_evaluation
 from deployment.bicoord_care.paired_evaluate import run as run_paired_evaluation
 
@@ -90,6 +91,448 @@ def test_base_commands_explicitly_isolate_smoke_cache_and_branch(tmp_path: Path)
 def test_seed_discovery_is_gpu_task_queued() -> None:
     assert sup.STAGES["seed_discovery"].gpu_plan == "seed_task_queue4"
     assert sup.STAGES["seed_discovery_smoke"].gpu_plan == "seed_task_queue4"
+
+
+def test_asset_contract_gates_dataset_audit_and_runtime_overlay(tmp_path: Path) -> None:
+    assert sup.STAGES["asset_contract"].dependencies == ("dataset_download",)
+    assert sup.STAGES["dataset_audit"].dependencies == ("asset_contract",)
+    assert tuple(sup.STAGES).index("asset_contract") < tuple(sup.STAGES).index(
+        "dataset_audit"
+    )
+    supervisor = sup.Supervisor(_settings(tmp_path))
+    environment = supervisor.scheduler.environment((0,))
+    expected = (
+        supervisor.s.run
+        / "artifacts"
+        / "asset_contract"
+        / "overlay"
+        / "003_plate"
+        / "model_data0.json"
+    )
+    assert environment["BICOORD_PLATE_ASSET_OVERLAY"] == str(expected)
+    assert environment["BICOORD_REQUIRE_ASSET_OVERLAY"] == "1"
+
+
+def test_asset_contract_paths_are_canonical_and_non_symbolic(tmp_path: Path) -> None:
+    expected = (
+        tmp_path
+        / "run"
+        / "artifacts"
+        / "asset_contract"
+        / "overlay"
+        / "003_plate"
+        / "model_data0.json"
+    )
+    expected.parent.mkdir(parents=True)
+    expected.write_text("{}\n", encoding="utf-8")
+
+    assert sup._canonical_stage_path(
+        str(expected), expected, label="plate runtime overlay"
+    ) == expected
+    with pytest.raises(sup.InvalidArtifact, match="canonical run artifact"):
+        sup._canonical_stage_path(
+            str(expected.parent / ".." / "003_plate" / expected.name),
+            expected,
+            label="plate runtime overlay",
+        )
+
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}\n", encoding="utf-8")
+    link = expected.parent / "linked.json"
+    link.symlink_to(outside)
+    with pytest.raises(sup.InvalidArtifact, match="canonical run artifact"):
+        sup._canonical_stage_path(str(link), expected, label="plate runtime overlay")
+
+    # A symlinked parent must be rejected even when the final spelling happens
+    # to resolve to the expected file.
+    moved = tmp_path / "real-overlay"
+    moved.mkdir()
+    real = moved / expected.name
+    real.write_text("{}\n", encoding="utf-8")
+    parent = expected.parent
+    expected.unlink()
+    link.unlink()
+    parent.rmdir()
+    parent.symlink_to(moved, target_is_directory=True)
+    with pytest.raises(sup.InvalidArtifact, match="symbolic component"):
+        sup._canonical_stage_path(str(expected), expected, label="plate runtime overlay")
+
+
+def _minimal_asset_result(
+    supervisor: sup.Supervisor, receipt: Path
+) -> dict[str, object]:
+    return {
+        "schema": sup.RESULT_SCHEMA,
+        "stage": "asset_contract",
+        "status": "PASSED",
+        "benchmark_adapter": "BiCoord",
+        "config_sha256": supervisor.config_hash,
+        "artifacts": [],
+        "dataset_archive_sha256": asset_stage.BICOORD_OBJECTS_SHA256,
+        "base_archive_sha256": asset_stage.ROBOTWIN_OBJECTS_SHA256,
+        "contact_points_pose_count": 4,
+        "copied_fields": ["contact_points_pose"],
+        "task_source_modified": False,
+        "upstream_model_modified": False,
+        "normalization_modified": False,
+        "task_asset_references_checked": {
+            "tasks": len(sup.TASKS),
+            "actors": 21,
+            "interactions": 95,
+        },
+        "task_asset_task_count": len(sup.TASKS),
+        "task_asset_actor_reference_count": 21,
+        "task_asset_interaction_reference_count": 95,
+        "task_asset_dynamic_inventory_sha256": (
+            sup.TASK_ASSET_DYNAMIC_INVENTORY_SHA256
+        ),
+        "task_asset_unresolved_inventory_sha256": (
+            sup.TASK_ASSET_UNRESOLVED_INTERACTION_INVENTORY_SHA256
+        ),
+        "asset_contract": str(receipt),
+        "asset_contract_sha256": hashlib.sha256(receipt.read_bytes()).hexdigest(),
+    }
+
+
+def test_asset_result_rejects_an_external_receipt(tmp_path: Path) -> None:
+    supervisor = sup.Supervisor(_settings(tmp_path / "settings"))
+    outside = tmp_path / "outside-receipt.json"
+    outside.write_text("{}\n", encoding="utf-8")
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(
+        json.dumps(_minimal_asset_result(supervisor, outside)), encoding="utf-8"
+    )
+
+    with pytest.raises(sup.InvalidArtifact, match="canonical run artifact"):
+        supervisor._validate_result(sup.STAGES["asset_contract"], candidate)
+
+
+def test_asset_result_rejects_an_external_overlay(tmp_path: Path) -> None:
+    supervisor = sup.Supervisor(_settings(tmp_path / "settings"))
+    receipt = (
+        supervisor.s.run
+        / "artifacts"
+        / "asset_contract"
+        / "asset_contract.json"
+    )
+    receipt.parent.mkdir(parents=True)
+    outside_overlay = tmp_path / "outside-overlay.json"
+    outside_overlay.write_text("{}\n", encoding="utf-8")
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema": "before-we-act.bicoord.asset-contract/1",
+                "status": "PASSED",
+                "dataset_repo_id": sup.FORMAL_DATASET_REPO,
+                "dataset_revision": sup.FORMAL_DATASET_REVISION,
+                "benchmark_revision": sup.BICOORD_CODE_REVISION,
+                "tasks": list(sup.TASKS),
+                "supplemental_assets_installed": True,
+                "benchmark_tracked_source_modified": False,
+                "task_source_modified": False,
+                "upstream_model_modified": False,
+                "normalization_modified": False,
+                "plate_overlay": {
+                    "overlay_metadata": str(outside_overlay),
+                    "target_metadata_sha256": hashlib.sha256(
+                        outside_overlay.read_bytes()
+                    ).hexdigest(),
+                    "copied_fields": ["contact_points_pose"],
+                    "small_scale_preserved": True,
+                    "contact_points_pose_count": 4,
+                    "task_source_modified": False,
+                    "planner_modified": False,
+                    "model_modified": False,
+                    "normalization_modified": False,
+                    "benchmark_asset_source_modified": False,
+                    "mutation_scope": (
+                        "run_artifact_and_actor_config_in_memory_only"
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(
+        json.dumps(_minimal_asset_result(supervisor, receipt)), encoding="utf-8"
+    )
+
+    with pytest.raises(sup.InvalidArtifact, match="canonical run artifact"):
+        supervisor._validate_result(sup.STAGES["asset_contract"], candidate)
+
+
+def test_interrupted_gpu_wave_is_terminal_not_retryable(tmp_path: Path) -> None:
+    scheduler = sup.GpuScheduler(_settings(tmp_path), lambda: None)
+    active = object()
+    scheduler._spawn = lambda *_args, **_kwargs: active  # type: ignore[method-assign]
+
+    def interrupted(_active):
+        raise sup.Interrupted("service stop")
+
+    scheduler._wait = interrupted  # type: ignore[method-assign]
+    with pytest.raises(sup.Interrupted, match="service stop"):
+        scheduler.run_wave(
+            [("worker", ["python", "-V"], 0, tmp_path / "worker.log")]
+        )
+
+
+def test_interrupted_scheduler_cannot_spawn_another_worker(tmp_path: Path) -> None:
+    scheduler = sup.GpuScheduler(_settings(tmp_path), lambda: None)
+    scheduler.interrupt()
+    with pytest.raises(sup.Interrupted, match="supervisor interrupted"):
+        scheduler._spawn(
+            "worker", ["python", "-V"], (0,), tmp_path / "worker.log"
+        )
+    assert not (tmp_path / "worker.log").exists()
+
+
+class _FakeSchedulerProcess:
+    def __init__(self, pid: int):
+        self.pid = pid
+        self.returncode: int | None = None
+        self.wait_calls: list[float | None] = []
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.wait_calls.append(timeout)
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+
+def test_interrupt_race_before_popen_never_launches_child(
+    tmp_path: Path, monkeypatch
+) -> None:
+    scheduler = sup.GpuScheduler(_settings(tmp_path), lambda: None)
+    original_environment = scheduler.environment
+    popen_calls: list[list[str]] = []
+
+    def interrupting_environment(gpus):
+        scheduler.interrupt()
+        return original_environment(gpus)
+
+    def fake_popen(command, **_kwargs):
+        popen_calls.append(list(command))
+        return _FakeSchedulerProcess(4101)
+
+    monkeypatch.setattr(scheduler, "environment", interrupting_environment)
+    monkeypatch.setattr(sup.subprocess, "Popen", fake_popen)
+    with pytest.raises(sup.Interrupted, match="supervisor interrupted"):
+        scheduler._spawn(
+            "worker", ["python", "-V"], (0,), tmp_path / "worker.log"
+        )
+    assert popen_calls == []
+    assert scheduler.active == {}
+    assert scheduler.snapshot() == []
+    assert not (tmp_path / "worker.log").exists()
+
+
+def test_interrupt_race_inside_popen_terminates_reaps_and_unregisters_child(
+    tmp_path: Path, monkeypatch
+) -> None:
+    scheduler = sup.GpuScheduler(_settings(tmp_path), lambda: None)
+    process = _FakeSchedulerProcess(4102)
+    kill_calls: list[tuple[int, int]] = []
+    captured_stdout = None
+
+    def fake_popen(_command, **kwargs):
+        nonlocal captured_stdout
+        captured_stdout = kwargs["stdout"]
+        # This models SIGTERM arriving after the pre-Popen check but before
+        # Popen has returned an object that the scheduler can register.
+        scheduler.interrupt()
+        return process
+
+    def fake_killpg(pgid, signum):
+        kill_calls.append((pgid, signum))
+        process.returncode = -signum
+
+    monkeypatch.setattr(sup.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(sup.os, "killpg", fake_killpg)
+    with pytest.raises(sup.Interrupted, match="supervisor interrupted"):
+        scheduler._spawn(
+            "worker", ["python", "-V"], (0,), tmp_path / "worker.log"
+        )
+    assert kill_calls == [(process.pid, sup.signal.SIGTERM)]
+    assert process.wait_calls == [sup.CHILD_TERMINATION_GRACE_SECONDS]
+    assert captured_stdout is not None and captured_stdout.closed
+    assert scheduler.active == {}
+    assert scheduler.snapshot() == []
+
+
+def test_interrupt_race_after_popen_terminates_reaps_and_unregisters_child(
+    tmp_path: Path, monkeypatch
+) -> None:
+    scheduler = sup.GpuScheduler(_settings(tmp_path), lambda: None)
+    kill_calls: list[tuple[int, int]] = []
+
+    class InterruptAfterPopenProcess(_FakeSchedulerProcess):
+        def __init__(self, pid: int):
+            self._pid = pid
+            self._interrupt_on_pid_read = True
+            self.returncode = None
+            self.wait_calls = []
+
+        @property
+        def pid(self):
+            # Popen has returned; the next scheduler operation reads the PID
+            # to register it.  Deliver SIGTERM immediately before that write.
+            if self._interrupt_on_pid_read:
+                self._interrupt_on_pid_read = False
+                scheduler.interrupt()
+            return self._pid
+
+    process = InterruptAfterPopenProcess(4105)
+
+    def fake_killpg(pgid, signum):
+        kill_calls.append((pgid, signum))
+        process.returncode = -signum
+
+    monkeypatch.setattr(sup.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(sup.os, "killpg", fake_killpg)
+    with pytest.raises(sup.Interrupted, match="supervisor interrupted"):
+        scheduler._spawn(
+            "worker", ["python", "-V"], (0,), tmp_path / "worker.log"
+        )
+    assert kill_calls == [(4105, sup.signal.SIGTERM)]
+    assert process.wait_calls == [sup.CHILD_TERMINATION_GRACE_SECONDS]
+    assert scheduler.active == {}
+    assert scheduler.snapshot() == []
+
+
+def test_partial_wave_spawn_failure_reaps_every_started_owned_group(
+    tmp_path: Path, monkeypatch
+) -> None:
+    scheduler = sup.GpuScheduler(_settings(tmp_path), lambda: None)
+    first = _FakeSchedulerProcess(4103)
+    popen_count = 0
+    kill_calls: list[tuple[int, int]] = []
+
+    def fake_popen(_command, **_kwargs):
+        nonlocal popen_count
+        popen_count += 1
+        if popen_count == 1:
+            return first
+        raise OSError("second spawn failed")
+
+    def fake_killpg(pgid, signum):
+        kill_calls.append((pgid, signum))
+        assert pgid == first.pid
+        first.returncode = -signum
+
+    monkeypatch.setattr(sup.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(sup.os, "killpg", fake_killpg)
+    with pytest.raises(OSError, match="second spawn failed"):
+        scheduler.run_wave(
+            [
+                ("first", ["python", "-V"], 0, tmp_path / "first.log"),
+                ("second", ["python", "-V"], 1, tmp_path / "second.log"),
+            ]
+        )
+    assert kill_calls == [(first.pid, sup.signal.SIGTERM)]
+    assert first.wait_calls == [sup.CHILD_TERMINATION_GRACE_SECONDS]
+    assert scheduler.active == {}
+    assert scheduler.snapshot() == []
+
+
+def test_group_signal_requires_exact_active_registry_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    scheduler = sup.GpuScheduler(_settings(tmp_path), lambda: None)
+    owned_process = _FakeSchedulerProcess(4104)
+    stale_process = _FakeSchedulerProcess(4104)
+    owned = sup.ActiveProcess(
+        "owned", owned_process, (0,), tmp_path / "owned.log", 1.0
+    )
+    stale = sup.ActiveProcess(
+        "stale", stale_process, (0,), tmp_path / "stale.log", 1.0
+    )
+    scheduler.active[owned_process.pid] = owned
+    kill_calls: list[tuple[int, int]] = []
+
+    def fake_killpg(pgid, signum):
+        kill_calls.append((pgid, signum))
+        owned_process.returncode = -signum
+
+    monkeypatch.setattr(sup.os, "killpg", fake_killpg)
+    scheduler._signal_owned_process_group(stale, sup.signal.SIGTERM)
+    assert kill_calls == []
+    scheduler._signal_owned_process_group(owned, sup.signal.SIGTERM)
+    assert kill_calls == [(owned_process.pid, sup.signal.SIGTERM)]
+    assert scheduler._terminate_and_reap((owned,)) == []
+    assert scheduler.active == {}
+
+
+def test_wait_escalates_and_cleans_registry_when_child_ignores_sigterm(
+    tmp_path: Path, monkeypatch
+) -> None:
+    scheduler = sup.GpuScheduler(_settings(tmp_path), lambda: None)
+
+    class StubbornProcess(_FakeSchedulerProcess):
+        def wait(self, timeout=None):
+            self.wait_calls.append(timeout)
+            if self.returncode is not None:
+                return self.returncode
+            if timeout is not None:
+                raise sup.subprocess.TimeoutExpired(["stubborn"], timeout)
+            raise AssertionError("unbounded wait occurred before SIGKILL")
+
+    process = StubbornProcess(4106)
+    active = sup.ActiveProcess(
+        "stubborn", process, (0,), tmp_path / "stubborn.log", 1.0
+    )
+    scheduler.active[process.pid] = active
+    kill_calls: list[tuple[int, int]] = []
+
+    def fake_killpg(pgid, signum):
+        kill_calls.append((pgid, signum))
+        if signum == sup.signal.SIGKILL:
+            process.returncode = -signum
+
+    monkeypatch.setattr(sup.os, "killpg", fake_killpg)
+    scheduler.interrupt()
+    with pytest.raises(sup.Interrupted, match="supervisor interrupted"):
+        scheduler._wait(active)
+    assert kill_calls == [
+        (process.pid, sup.signal.SIGTERM),
+        (process.pid, sup.signal.SIGTERM),
+        (process.pid, sup.signal.SIGKILL),
+    ]
+    assert process.wait_calls == [
+        sup.CHILD_WAIT_POLL_SECONDS,
+        sup.CHILD_TERMINATION_GRACE_SECONDS,
+        None,
+    ]
+    assert scheduler.active == {}
+    assert scheduler.snapshot() == []
+
+
+def test_signal_handler_sets_spawn_barrier_before_status_io(
+    tmp_path: Path, monkeypatch
+) -> None:
+    supervisor = sup.Supervisor(_settings(tmp_path))
+    handlers = {}
+    events: list[str] = []
+
+    def fake_signal(signum, handler):
+        handlers[signum] = handler
+        return sup.signal.SIG_DFL
+
+    monkeypatch.setattr(sup.signal, "signal", fake_signal)
+    monkeypatch.setattr(
+        supervisor.scheduler, "interrupt", lambda: events.append("interrupt")
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_set_status",
+        lambda *_args, **_kwargs: events.append("status"),
+    )
+    supervisor._install_signals()
+    handlers[sup.signal.SIGTERM](sup.signal.SIGTERM, None)
+    assert events == ["interrupt", "status"]
 
 
 @pytest.mark.parametrize(
@@ -460,6 +903,7 @@ def test_scheduler_children_use_benchmark_cwd(tmp_path: Path, monkeypatch) -> No
     def fake_popen(command, *, cwd, env, **kwargs):
         captured["cwd"] = cwd
         captured["env"] = env
+        captured["start_new_session"] = kwargs["start_new_session"]
         return FakeProcess()
 
     monkeypatch.setattr(sup.subprocess, "Popen", fake_popen)
@@ -469,3 +913,4 @@ def test_scheduler_children_use_benchmark_cwd(tmp_path: Path, monkeypatch) -> No
     )
     assert active.process.pid == 4242
     assert captured["cwd"] == settings.benchmark_repo
+    assert captured["start_new_session"] is True

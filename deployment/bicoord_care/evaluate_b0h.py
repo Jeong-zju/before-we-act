@@ -186,6 +186,12 @@ def _bench_env(benchmark_root: Path, task: str, seed: int):
         config["right_embodiment_config"] = robot_config
         config["dual_arm_embodied"] = True
         env.setup_demo(**config)
+        # The pinned task source expects contact point two on ``003_plate``.
+        # Apply the separately audited, contact-only metadata overlay in
+        # memory; no benchmark task/model/normalization source is changed.
+        from .asset_runtime import apply_configured_task_overlay
+
+        env._bicoord_asset_overlay = apply_configured_task_overlay(env, task)
         return env
     except Exception:
         try:

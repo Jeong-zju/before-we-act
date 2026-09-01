@@ -43,6 +43,116 @@ def _tree_path(dataset: Path) -> Path:
     )
 
 
+def _hub_tree_rows(
+    api: Any,
+) -> dict[str, dict[str, Any]]:
+    """Read the immutable file table for the pinned Hub revision.
+
+    ``snapshot_download(local_dir=...)`` writes per-file ``*.metadata``
+    sidecars, but it does not expose the complete path/object table that the
+    offline verifier needs.  Build that table from ``HfApi.list_repo_tree``
+    when a local snapshot does not already carry our versioned manifest.  The
+    caller supplies an API object so this helper stays straightforward to
+    mock in tests and never handles credentials itself.
+    """
+
+    try:
+        # ``expand=False`` keeps the recursive listing on the inexpensive tree
+        # endpoint.  RepoFile still carries size/blob_id/LFS/Xet identities;
+        # this was verified against the pinned BiCoord revision with
+        # huggingface_hub 1.28.0.  ``expand=True`` asks the Hub for per-entry
+        # commit metadata that this manifest neither records nor trusts and is
+        # disproportionately slow for the 9,057-file snapshot.
+        entries = api.list_repo_tree(
+            DATASET_REPO_ID,
+            path_in_repo="",
+            recursive=True,
+            expand=False,
+            revision=DATASET_REVISION,
+            repo_type="dataset",
+        )
+    except TypeError:
+        # Older huggingface_hub releases do not accept ``expand``.  The
+        # immutable blob/LFS identity is still available in their returned
+        # records, so retry with the compatible signature.
+        entries = api.list_repo_tree(
+            DATASET_REPO_ID,
+            path_in_repo="",
+            recursive=True,
+            revision=DATASET_REVISION,
+            repo_type="dataset",
+        )
+    rows: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        # RepoFolder objects have no ``size``/``blob_id`` and must not enter
+        # the file manifest.
+        relative = getattr(entry, "path", None)
+        size = getattr(entry, "size", None)
+        blob_id = getattr(entry, "blob_id", None)
+        if relative is None and isinstance(entry, dict):
+            relative = entry.get("path")
+            size = entry.get("size")
+            blob_id = entry.get("blob_id", entry.get("oid"))
+        if not isinstance(relative, str) or size is None or blob_id is None:
+            continue
+        row: dict[str, Any] = {"size": int(size), "blob_id": str(blob_id)}
+        lfs = getattr(entry, "lfs", None)
+        xet_hash = getattr(entry, "xet_hash", None)
+        if isinstance(entry, dict):
+            lfs = entry.get("lfs", lfs)
+            xet_hash = entry.get("xet_hash", entry.get("xetHash", xet_hash))
+        if lfs is not None:
+            lfs_size = getattr(lfs, "size", None)
+            lfs_sha = getattr(lfs, "sha256", None)
+            if isinstance(lfs, dict):
+                lfs_size = lfs.get("size", lfs_size)
+                lfs_sha = lfs.get("sha256", lfs.get("oid", lfs_sha))
+            if lfs_size is not None and lfs_sha is not None:
+                row.update(lfs_size=int(lfs_size), lfs_sha256=str(lfs_sha))
+        if xet_hash is not None:
+            row["xet_hash"] = str(xet_hash)
+        if relative in rows:
+            raise RuntimeError(f"Hugging Face tree contains duplicate path: {relative}")
+        # Reuse the same strict path/identity checks as the offline verifier.
+        _safe_manifest_parts(relative)
+        _tree_object_identity(row, relative)
+        rows[relative] = row
+    if not rows:
+        raise RuntimeError("Hugging Face API returned an empty file tree")
+    if len(rows) != EXPECTED_SNAPSHOT_FILES:
+        raise RuntimeError(
+            "pinned Hugging Face API tree coverage differs: "
+            f"{len(rows)} != {EXPECTED_SNAPSHOT_FILES}"
+        )
+    hdf5 = {relative for relative in rows if relative.lower().endswith(".hdf5")}
+    expected_hdf5 = {
+        f"{task}/demo_clean/data/episode{episode}.hdf5"
+        for task in TASKS
+        for episode in range(100)
+    }
+    if hdf5 != expected_hdf5:
+        raise RuntimeError("pinned Hugging Face API tree has unexpected HDF5 coverage")
+    return rows
+
+
+def _ensure_tree_manifest(dataset: Path, api: Any) -> Path:
+    """Create the verifier manifest when Hub did not provide it locally."""
+
+    dataset = dataset.expanduser().resolve(strict=True)
+    path = _tree_path(dataset)
+    if path.exists():
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError(f"Hugging Face tree manifest is not a regular file: {path}")
+        return path
+    rows = _hub_tree_rows(api)
+    # ``atomic_json`` creates parent directories and fsyncs the replacement.
+    # Dataset download is a singleton CPU stage under the supervisor.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        atomic_json(path, {"format_version": TREE_FORMAT_VERSION, "files": rows})
+    return path
+
+
 def _safe_manifest_parts(relative: str) -> tuple[str, ...]:
     """Return path components which are safe to join below a snapshot root.
 
@@ -509,7 +619,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             from huggingface_hub import HfApi, snapshot_download
         except Exception as error:  # pragma: no cover - host dependent
             raise RuntimeError("huggingface_hub is required for BiCoord download") from error
-        info = HfApi(token=token).dataset_info(
+        api = HfApi(token=token)
+        info = api.dataset_info(
             DATASET_REPO_ID,
             revision=DATASET_REVISION,
             files_metadata=False,
@@ -519,6 +630,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(
                 f"Hugging Face revision drift: requested {DATASET_REVISION}, resolved {resolved}"
             )
+        _ensure_tree_manifest(args.dataset, api)
         snapshot = str(
             snapshot_download(
                 repo_id=DATASET_REPO_ID,

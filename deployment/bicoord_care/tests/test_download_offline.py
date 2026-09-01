@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -257,3 +258,72 @@ def test_offline_snapshot_rejects_metadata_revision_drift(tmp_path: Path) -> Non
     sidecar.write_text("0" * 40 + "\n" + "\n".join(lines[1:]) + "\n")
     with pytest.raises(RuntimeError, match="metadata provenance differs"):
         download._verify_local_snapshot(dataset, expected_files=TOTAL_EPISODES)
+
+
+def test_hub_tree_manifest_is_generated_for_a_fresh_standard_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    monkeypatch.setattr(download, "TASKS", ("task",))
+    monkeypatch.setattr(download, "EXPECTED_SNAPSHOT_FILES", 100)
+    entries = [
+        SimpleNamespace(
+            path=f"task/demo_clean/data/episode{episode}.hdf5",
+            size=episode,
+            blob_id=f"{episode:040x}",
+            lfs=None,
+            xet_hash=None,
+        )
+        for episode in range(100)
+    ]
+
+    class FakeApi:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def list_repo_tree(self, _repo_id, **kwargs):
+            self.calls.append(kwargs)
+            return iter(entries)
+
+    api = FakeApi()
+    path = download._ensure_tree_manifest(dataset, api)
+    value = json.loads(path.read_text())
+    assert value["format_version"] == download.TREE_FORMAT_VERSION
+    assert len(value["files"]) == 100
+    assert api.calls == [
+        {
+            "path_in_repo": "",
+            "recursive": True,
+            "expand": False,
+            "revision": DATASET_REVISION,
+            "repo_type": "dataset",
+        }
+    ]
+
+
+def test_hub_tree_manifest_rejects_incomplete_api_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    monkeypatch.setattr(download, "TASKS", ("task",))
+    monkeypatch.setattr(download, "EXPECTED_SNAPSHOT_FILES", 100)
+
+    class FakeApi:
+        def list_repo_tree(self, *_args, **_kwargs):
+            return iter(
+                [
+                    SimpleNamespace(
+                        path="task/demo_clean/data/episode0.hdf5",
+                        size=0,
+                        blob_id="a" * 40,
+                        lfs=None,
+                        xet_hash=None,
+                    )
+                ]
+            )
+
+    with pytest.raises(RuntimeError, match="API tree coverage differs"):
+        download._ensure_tree_manifest(dataset, FakeApi())
+    assert not download._tree_path(dataset).exists()

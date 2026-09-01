@@ -263,6 +263,21 @@ def test_missing_task_is_blocked_and_unknown_task_list_is_rejected(tmp_path: Pat
         audit_task_assets(benchmark, assets, tasks=["dynamic", "dynamic"])
 
 
+def test_expected_plate_defect_does_not_mask_a_missing_task(tmp_path: Path) -> None:
+    benchmark, assets = _fixture(tmp_path)
+
+    report = audit_task_assets(
+        benchmark,
+        assets,
+        tasks=["place_plate_and_cup", "does_not_exist"],
+    )
+
+    assert report["expected_pristine_defect_count"] == 2
+    assert report["status"] == "FAILED"
+    assert report["task_reports"][0]["expected_pristine_defects"]
+    assert report["task_reports"][1]["status"] == "BLOCKED"
+
+
 def test_cli_writes_only_requested_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     benchmark, assets = _fixture(tmp_path)
     output = tmp_path / "report.json"

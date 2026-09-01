@@ -47,6 +47,10 @@ from .config import (
     SMOKE_INTERFACE_STEPS,
     STATE_DIM,
     SOURCE_FREQUENCY_HZ as FROZEN_SOURCE_FREQUENCY_HZ,
+    TASK_ASSET_DYNAMIC_INVENTORY_SHA256,
+    TASK_ASSET_DYNAMIC_ITEM_COUNT,
+    TASK_ASSET_UNRESOLVED_INTERACTION_COUNT,
+    TASK_ASSET_UNRESOLVED_INTERACTION_INVENTORY_SHA256,
     TASKS,
     TOTAL_EPISODES,
     VALIDATION_EPISODES,
@@ -77,6 +81,8 @@ CARE_OOF_SEED = 20260904
 CARE_OOF_TRAINING_SEED_OFFSET = 1000
 GPU_IDS = (0, 1, 2, 3)
 HEARTBEAT_INTERVAL_SECONDS = 15.0
+CHILD_TERMINATION_GRACE_SECONDS = 10.0
+CHILD_WAIT_POLL_SECONDS = 1.0
 
 SUPERVISOR_SCHEMA = "before-we-act.bicoord-care-supervisor/1"
 RESULT_SCHEMA = "before-we-act.bicoord-care-stage-result/1"
@@ -119,6 +125,7 @@ DEFAULT_MODULES = {
     "source_preflight": "deployment.bicoord_care.preflight",
     "environment": "deployment.bicoord_care.environment",
     "dataset_download": "deployment.bicoord_care.download",
+    "asset_contract": "deployment.bicoord_care.asset_stage",
     "dataset_audit": "deployment.bicoord_care.audit",
     "dino_cache": "deployment.bicoord_care.cache_dino",
     "b0h_train": "deployment.bicoord_care.train_b0h",
@@ -154,7 +161,8 @@ STAGES: "OrderedDict[str, StageSpec]" = OrderedDict(
         StageSpec("source_preflight", (), "source_preflight", "source-preflight", "all", "pin CARE/BiCoord source and prove four RTX 5090 GPUs"),
         StageSpec("environment", ("source_preflight",), "environment", "install-and-audit", "all", "install the pinned runtime and simulator dependencies"),
         StageSpec("dataset_download", ("environment",), "dataset_download", "download", "cpu", "download the immutable 18-task Hugging Face snapshot"),
-        StageSpec("dataset_audit", ("dataset_download",), "dataset_audit", "formal-audit", "cpu", "audit 1800 HDF5 demos, native ranges, alignment, instructions, and stages", "dataset"),
+        StageSpec("asset_contract", ("dataset_download",), "asset_contract", "verify-and-overlay", "cpu", "bind both official object archives and build the contact-only small-plate runtime overlay", "asset"),
+        StageSpec("dataset_audit", ("asset_contract",), "dataset_audit", "formal-audit", "cpu", "audit 1800 HDF5 demos, native ranges, alignment, instructions, and stages", "dataset"),
         StageSpec("dino_cache", ("dataset_audit",), "dino_cache", "cache-all", "sharded4", "cache frozen DINOv3 ViT-B/16 head and local-wrist features"),
         StageSpec("b0h_smoke_train", ("dino_cache",), "b0h_train", "smoke-train", "all", "five-update four-GPU B0-H training smoke", "training"),
         StageSpec("b0h_smoke_closed_loop", ("b0h_smoke_train",), "b0h_evaluate", "smoke-closed-loop", "task_queue4", "one closed-loop interface smoke per task", "smoke_validation"),
@@ -224,6 +232,46 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _canonical_stage_path(
+    value: object, expected: Path, *, label: str
+) -> Path:
+    """Return an exact, non-symbolic path for a released stage artifact.
+
+    Stage results are child-process input and therefore must not be allowed to
+    redirect the runtime to an out-of-run (or symlinked) receipt.  Comparing
+    the lexical absolute spelling first deliberately rejects aliases such as
+    ``..`` and symlink paths; every existing component is then checked before
+    the final file is opened.
+    """
+
+    if not isinstance(value, str) or not value:
+        raise InvalidArtifact(f"{label} path is missing")
+    observed = Path(value).expanduser()
+    expected_absolute = expected.expanduser().absolute()
+    if not observed.is_absolute() or observed != expected_absolute:
+        raise InvalidArtifact(
+            f"{label} path is not the canonical run artifact: "
+            f"{observed} != {expected_absolute}"
+        )
+    cursor = observed
+    while True:
+        if cursor.is_symlink():
+            raise InvalidArtifact(f"{label} path contains a symbolic component: {cursor}")
+        parent = cursor.parent
+        if parent == cursor:
+            break
+        cursor = parent
+    try:
+        resolved = observed.resolve(strict=False)
+    except OSError as error:
+        raise InvalidArtifact(f"{label} path cannot be resolved: {observed}") from error
+    if resolved != expected_absolute:
+        raise InvalidArtifact(
+            f"{label} path resolves outside the canonical run artifact: {observed}"
+        )
+    return observed
 
 
 def _atomic_json(path: Path, value: object) -> None:
@@ -484,7 +532,7 @@ class Settings:
                 )
             ).resolve(),
             run=Path(
-                os.environ.get("BICOORD_CARE_RUN", "/workspace/runs/bicoord-care-v1")
+                os.environ.get("BICOORD_CARE_RUN", "/workspace/runs/bicoord-care-v3")
             ).resolve(),
             dino_model=Path(
                 os.environ.get(
@@ -573,6 +621,16 @@ class Settings:
                 "deployment_candidate": False,
             },
             "model_contract": MODEL_CONTRACT,
+            "asset_contract": {
+                "small_object": "003_plate",
+                "contact_donor": "003_plate_large",
+                "copied_fields": ["contact_points_pose"],
+                "runtime_scope": "actor_config_in_memory_only",
+                "supplemental_assets_installed": True,
+                "task_source_modified": False,
+                "benchmark_tracked_source_modified": False,
+                "benchmark_asset_source_modified": False,
+            },
             "modules": dict(self.modules),
             "paths": {
                 "repo": str(self.repo),
@@ -638,6 +696,18 @@ class GpuScheduler:
                 # the frozen supervisor config, even when the parent was
                 # instantiated directly rather than through the environment.
                 "BICOORD_CARE_SOURCE_REVISION": self.settings.care_source_revision,
+                # The compatibility file is a hashed output of the
+                # ``asset_contract`` DAG stage.  Simulator adapters apply it
+                # only to the two small-plate actor configs in memory.
+                "BICOORD_PLATE_ASSET_OVERLAY": str(
+                    self.settings.run
+                    / "artifacts"
+                    / "asset_contract"
+                    / "overlay"
+                    / "003_plate"
+                    / "model_data0.json"
+                ),
+                "BICOORD_REQUIRE_ASSET_OVERLAY": "1",
             }
         )
         return environment
@@ -649,55 +719,202 @@ class GpuScheduler:
         gpus: Sequence[int],
         log_path: Path,
     ) -> ActiveProcess:
+        # A service stop is terminal for this supervisor process.  In
+        # particular, do not let a stage-level retry launch a fresh worker
+        # after SIGTERM has already interrupted the previous wave.
+        if self._interrupted.is_set():
+            raise Interrupted("supervisor interrupted")
         gpu_tuple = tuple(int(value) for value in gpus)
         if any(value not in GPU_IDS for value in gpu_tuple):
             raise ValueError(f"invalid GPU lease for {name}: {gpu_tuple}")
         with self._lock:
+            # ``interrupt`` sets the event before acquiring this lock.  This
+            # second check closes the race between the cheap check above and
+            # entering the spawn critical section.
+            if self._interrupted.is_set():
+                raise Interrupted("supervisor interrupted")
             occupied = {gpu for active in self.active.values() for gpu in active.gpus}
             overlap = occupied.intersection(gpu_tuple)
             if overlap:
                 raise RuntimeError(f"GPU lease collision for {name}: {sorted(overlap)}")
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            stream = log_path.open("a", buffering=1)
-            stream.write(
-                json.dumps(
-                    {
-                        "event": "spawn",
-                        "at": _utc_now(),
-                        "name": name,
-                        "gpus": list(gpu_tuple),
-                        # Credentials never enter command arguments.
-                        "command": list(command),
-                    },
-                    sort_keys=True,
+            child_environment = self.environment(gpu_tuple)
+            # A same-thread signal handler can run while building the child
+            # environment even though this is an RLock.  Recheck before any
+            # log or process is created.
+            if self._interrupted.is_set():
+                raise Interrupted("supervisor interrupted")
+            stream = None
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                stream = log_path.open("a", buffering=1)
+                stream.write(
+                    json.dumps(
+                        {
+                            "event": "spawn",
+                            "at": _utc_now(),
+                            "name": name,
+                            "gpus": list(gpu_tuple),
+                            # Credentials never enter command arguments.
+                            "command": list(command),
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
                 )
-                + "\n"
-            )
-            process = subprocess.Popen(
-                list(command),
-                # RoboTwin/BiCoord task code resolves assets and controller
-                # metadata relative to its benchmark checkout (not the CARE
-                # adapter checkout).  Keep both trees on PYTHONPATH, but run
-                # every child from the benchmark root so simulator imports
-                # and relative asset paths are identical to the official
-                # evaluator.
-                cwd=self.settings.benchmark_repo,
-                env=self.environment(gpu_tuple),
-                stdout=stream,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            stream.close()
+                # This check handles an interrupt delivered while preparing
+                # the append-only spawn record.  If a signal lands in the
+                # irreducible Popen window, the post-registration check below
+                # terminates and reaps the newly owned group before returning.
+                if self._interrupted.is_set():
+                    raise Interrupted("supervisor interrupted")
+                process = subprocess.Popen(
+                    list(command),
+                    # RoboTwin/BiCoord task code resolves assets and controller
+                    # metadata relative to its benchmark checkout (not the CARE
+                    # adapter checkout).  Keep both trees on PYTHONPATH, but run
+                    # every child from the benchmark root so simulator imports
+                    # and relative asset paths are identical to the official
+                    # evaluator.
+                    cwd=self.settings.benchmark_repo,
+                    env=child_environment,
+                    stdout=stream,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            finally:
+                if stream is not None:
+                    stream.close()
             active = ActiveProcess(name, process, gpu_tuple, log_path, time.time())
             self.active[process.pid] = active
+        # ``interrupt`` may have run synchronously inside Popen, before the
+        # child could be entered in ``active``.  Registration first gives the
+        # group an ownership identity; this check then closes that window.
+        if self._interrupted.is_set():
+            cleanup_errors = self._terminate_and_reap((active,))
+            detail = self._format_cleanup_errors(cleanup_errors)
+            raise Interrupted(f"supervisor interrupted{detail}")
+        try:
             self._status_callback()
-            return active
+        except BaseException as error:
+            cleanup_errors = self._terminate_and_reap((active,))
+            if cleanup_errors:
+                raise SupervisorError(
+                    f"failed to publish {name} spawn status"
+                    f"{self._format_cleanup_errors(cleanup_errors)}"
+                ) from error
+            raise
+        return active
+
+    def _remove_owned(self, active: ActiveProcess) -> bool:
+        """Remove exactly the process object registered by this scheduler."""
+
+        with self._lock:
+            if self.active.get(active.process.pid) is not active:
+                return False
+            self.active.pop(active.process.pid)
+            return True
+
+    def _signal_owned_process_group(
+        self, active: ActiveProcess, signum: int
+    ) -> None:
+        """Signal a group only while its exact Popen remains registered."""
+
+        with self._lock:
+            if self.active.get(active.process.pid) is not active:
+                return
+            # start_new_session=True makes the direct child's PID the PGID.
+            # poll() prevents signalling a recycled PID after the child was
+            # already reaped by another path.  The getattr fallback keeps the
+            # ownership guard usable with narrow Popen test doubles.
+            poll = getattr(active.process, "poll", None)
+            if poll is not None:
+                try:
+                    if poll() is not None:
+                        return
+                except ChildProcessError:
+                    return
+            try:
+                os.killpg(active.process.pid, signum)
+            except ProcessLookupError:
+                pass
+
+    @staticmethod
+    def _wait_process(process: subprocess.Popen, timeout: float | None = None) -> int:
+        """Wait with a timeout while tolerating minimal Popen test doubles."""
+
+        if timeout is None:
+            return process.wait()
+        try:
+            return process.wait(timeout=timeout)
+        except TypeError as error:
+            # Some contract tests use a tiny ``wait()`` double without the
+            # optional Popen timeout parameter.  Retry only when the fallback
+            # itself accepts no timeout; preserve unrelated TypeErrors.
+            try:
+                return process.wait()
+            except TypeError:
+                raise error
+
+    @staticmethod
+    def _format_cleanup_errors(errors: Sequence[BaseException]) -> str:
+        if not errors:
+            return ""
+        return "; cleanup errors: " + "; ".join(repr(error) for error in errors)
+
+    def _terminate_and_reap(
+        self, processes: Sequence[ActiveProcess]
+    ) -> list[BaseException]:
+        """Terminate, wait for, and unregister a set of owned child groups."""
+
+        errors: list[BaseException] = []
+        for active in processes:
+            try:
+                self._signal_owned_process_group(active, signal.SIGTERM)
+            except BaseException as error:
+                errors.append(error)
+        registry_changed = False
+        for active in processes:
+            try:
+                self._wait_process(
+                    active.process, timeout=CHILD_TERMINATION_GRACE_SECONDS
+                )
+            except subprocess.TimeoutExpired:
+                try:
+                    self._signal_owned_process_group(active, signal.SIGKILL)
+                    self._wait_process(active.process)
+                except BaseException as error:
+                    errors.append(error)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                registry_changed = self._remove_owned(active) or registry_changed
+        if registry_changed:
+            try:
+                self._status_callback()
+            except BaseException as error:
+                errors.append(error)
+        return errors
 
     def _wait(self, active: ActiveProcess) -> None:
-        code = active.process.wait()
-        with self._lock:
-            self.active.pop(active.process.pid, None)
-            self._status_callback()
+        try:
+            while True:
+                try:
+                    code = self._wait_process(
+                        active.process, timeout=CHILD_WAIT_POLL_SECONDS
+                    )
+                    break
+                except subprocess.TimeoutExpired:
+                    if not self._interrupted.is_set():
+                        continue
+                    cleanup_errors = self._terminate_and_reap((active,))
+                    raise Interrupted(
+                        "supervisor interrupted"
+                        f"{self._format_cleanup_errors(cleanup_errors)}"
+                    )
+        finally:
+            removed = self._remove_owned(active)
+            if removed:
+                self._status_callback()
         if self._interrupted.is_set():
             raise Interrupted("supervisor interrupted")
         if code != 0:
@@ -720,10 +937,25 @@ class GpuScheduler:
     ) -> None:
         if len(jobs) > 4 or len({gpu for _, _, gpu, _ in jobs}) != len(jobs):
             raise ValueError("a GPU wave must contain at most one job per GPU")
-        active = [
-            self._spawn(name, command, (gpu,), log_path)
-            for name, command, gpu, log_path in jobs
-        ]
+        active: list[ActiveProcess] = []
+        try:
+            for name, command, gpu, log_path in jobs:
+                active.append(self._spawn(name, command, (gpu,), log_path))
+        except BaseException as error:
+            # A later Popen can fail, or SIGTERM can land while it is being
+            # created.  Either way, a partially launched wave is not allowed
+            # to leave earlier workers running or registered.
+            cleanup_errors = self._terminate_and_reap(active)
+            if isinstance(error, Interrupted):
+                raise Interrupted(
+                    f"{error}{self._format_cleanup_errors(cleanup_errors)}"
+                ) from error
+            if cleanup_errors:
+                raise SupervisorError(
+                    f"wave spawn failed: {error!r}"
+                    f"{self._format_cleanup_errors(cleanup_errors)}"
+                ) from error
+            raise
         errors: list[BaseException] = []
         for item in active:
             try:
@@ -731,6 +963,13 @@ class GpuScheduler:
             except BaseException as error:  # finish accounting for every child
                 errors.append(error)
         if errors:
+            # Preserve the terminal interruption type.  Wrapping it in the
+            # generic SupervisorError makes ``run_stage`` treat a deliberate
+            # service stop as a retryable worker failure and can start a new
+            # GPU wave while supervisord is waiting for shutdown.
+            interrupted = [error for error in errors if isinstance(error, Interrupted)]
+            if interrupted:
+                raise Interrupted("; ".join(str(error) for error in interrupted))
             raise SupervisorError("; ".join(str(error) for error in errors))
 
     def interrupt(self) -> None:
@@ -740,10 +979,7 @@ class GpuScheduler:
         with self._lock:
             active = list(self.active.values())
         for item in active:
-            try:
-                os.killpg(item.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            self._signal_owned_process_group(item, signal.SIGTERM)
 
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -858,8 +1094,10 @@ class Supervisor:
 
     def _install_signals(self) -> None:
         def handler(signum: int, _frame: Any) -> None:
-            self._set_status("interrupting", self.current_stage, signal=signum)
+            # Set the terminal spawn barrier before status I/O.  A slow or
+            # failing filesystem must never leave a window for another child.
             self.scheduler.interrupt()
+            self._set_status("interrupting", self.current_stage, signal=signum)
 
         for signum in (signal.SIGTERM, signal.SIGINT):
             self._old_handlers[signum] = signal.signal(signum, handler)
@@ -1019,6 +1257,144 @@ class Supervisor:
             seen.add(key)
             result.append(dict(row))
         return result
+
+    @staticmethod
+    def _validated_seed_exception_diagnostics(
+        type_counts_value: Any,
+        signature_counts_value: Any,
+        *,
+        context: str,
+    ) -> tuple[dict[str, int], list[dict[str, Any]]]:
+        """Validate one task's exception-count pair without coercing types."""
+
+        if not isinstance(type_counts_value, Mapping):
+            raise InvalidArtifact(f"{context}: exception type counts are not an object")
+        if not isinstance(signature_counts_value, list):
+            raise InvalidArtifact(f"{context}: exception signature counts are not a list")
+        type_counts: dict[str, int] = {}
+        for error_type, count in type_counts_value.items():
+            if (
+                not isinstance(error_type, str)
+                or not error_type
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count <= 0
+            ):
+                raise InvalidArtifact(f"{context}: malformed exception type count")
+            type_counts[error_type] = count
+
+        rows: list[dict[str, Any]] = []
+        derived_type_counts: Counter[str] = Counter()
+        identities: set[tuple[str, str]] = set()
+        for row in signature_counts_value:
+            if not isinstance(row, Mapping) or set(row) != {
+                "error_type",
+                "error_signature",
+                "count",
+            }:
+                raise InvalidArtifact(f"{context}: malformed exception signature row")
+            error_type = row.get("error_type")
+            signature = row.get("error_signature")
+            count = row.get("count")
+            if (
+                not isinstance(error_type, str)
+                or not error_type
+                or not isinstance(signature, str)
+                or len(signature) != 64
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count <= 0
+            ):
+                raise InvalidArtifact(f"{context}: malformed exception signature count")
+            try:
+                int(signature, 16)
+            except ValueError as error:
+                raise InvalidArtifact(
+                    f"{context}: exception signature is not hexadecimal"
+                ) from error
+            identity = (error_type, signature)
+            if identity in identities:
+                raise InvalidArtifact(f"{context}: duplicate exception signature row")
+            identities.add(identity)
+            derived_type_counts[error_type] += count
+            rows.append(
+                {
+                    "error_type": error_type,
+                    "error_signature": signature,
+                    "count": count,
+                }
+            )
+        if rows != sorted(
+            rows, key=lambda row: (row["error_type"], row["error_signature"])
+        ):
+            raise InvalidArtifact(f"{context}: exception signature rows are not sorted")
+        if dict(sorted(derived_type_counts.items())) != dict(sorted(type_counts.items())):
+            raise InvalidArtifact(f"{context}: exception type/signature totals differ")
+        return dict(sorted(type_counts.items())), rows
+
+    @classmethod
+    def _seed_attempt_exception_diagnostics(
+        cls,
+        attempts: Sequence[Any],
+        *,
+        structural_only: bool,
+        context: str,
+    ) -> tuple[dict[str, int], list[dict[str, Any]]]:
+        """Recompute ordinary or structural diagnostics from immutable rows."""
+
+        signature_counts: Counter[tuple[str, str]] = Counter()
+        for index, row in enumerate(attempts, start=1):
+            if not isinstance(row, Mapping):
+                raise InvalidArtifact(f"{context}: attempt {index} is not an object")
+            structural = row.get("structural_error")
+            if not isinstance(structural, bool):
+                raise InvalidArtifact(
+                    f"{context}: attempt {index} lacks a boolean structural_error"
+                )
+            has_exception = "error_type" in row or "error_signature" in row
+            if structural and not has_exception:
+                raise InvalidArtifact(
+                    f"{context}: structural attempt {index} lacks exception evidence"
+                )
+            if not has_exception:
+                continue
+            error_type = row.get("error_type")
+            signature = row.get("error_signature")
+            if (
+                not isinstance(error_type, str)
+                or not error_type
+                or not isinstance(signature, str)
+                or len(signature) != 64
+            ):
+                raise InvalidArtifact(
+                    f"{context}: attempt {index} has malformed exception evidence"
+                )
+            try:
+                int(signature, 16)
+            except ValueError as error:
+                raise InvalidArtifact(
+                    f"{context}: attempt {index} exception signature is not hexadecimal"
+                ) from error
+            if not structural_only or structural:
+                signature_counts[(error_type, signature)] += 1
+
+        rows = [
+            {
+                "error_type": error_type,
+                "error_signature": signature,
+                "count": count,
+            }
+            for (error_type, signature), count in sorted(signature_counts.items())
+        ]
+        type_totals: Counter[str] = Counter()
+        for (error_type, _signature), count in signature_counts.items():
+            type_totals[error_type] += count
+        type_counts = dict(sorted(type_totals.items()))
+        return cls._validated_seed_exception_diagnostics(
+            type_counts,
+            rows,
+            context=context,
+        )
 
     def _validate_cache_workers(
         self, spec: StageSpec, workers: Sequence[Mapping[str, Any]]
@@ -2297,12 +2673,243 @@ class Supervisor:
                 source,
                 {
                     "care_revision": self.s.care_source_revision,
+                    "expected_care_revision": self.s.care_source_revision,
+                    "care_tracked_tree_clean": True,
                     "benchmark_revision": BICOORD_CODE_REVISION,
                     "expected_benchmark_revision": BICOORD_CODE_REVISION,
+                    "benchmark_tracked_tree_clean": True,
                     "dataset_revision": FORMAL_DATASET_REVISION,
                 },
                 "source preflight provenance",
             )
+            tracked = source.get("tracked_source_contract")
+            if not isinstance(tracked, Mapping):
+                raise InvalidArtifact("source preflight omitted tracked-source contract")
+            self._require_mapping_values(
+                tracked,
+                {
+                    "status": "PASSED",
+                    "scope": "tracked_files_only",
+                    "untracked_supplemental_assets_allowed": True,
+                },
+                "tracked source contract",
+            )
+            for label in ("care", "benchmark"):
+                row = tracked.get(label)
+                if not isinstance(row, Mapping):
+                    raise InvalidArtifact(f"tracked source contract lacks {label}")
+                self._require_mapping_values(
+                    row,
+                    {
+                        "status": "CLEAN",
+                        "tracked_tree_clean": True,
+                        "scope": "git_index_and_worktree_tracked_files",
+                        "untracked_files_ignored": True,
+                        "tracked_changes": [],
+                    },
+                    f"tracked {label} source contract",
+                )
+
+        if spec.name == "asset_contract":
+            from .asset_stage import (
+                BICOORD_OBJECTS_SHA256,
+                ROBOTWIN_OBJECTS_SHA256,
+            )
+
+            self._require_mapping_values(
+                result,
+                {
+                    "dataset_archive_sha256": BICOORD_OBJECTS_SHA256,
+                    "base_archive_sha256": ROBOTWIN_OBJECTS_SHA256,
+                    "contact_points_pose_count": 4,
+                    "copied_fields": ["contact_points_pose"],
+                    "task_source_modified": False,
+                    "upstream_model_modified": False,
+                    "normalization_modified": False,
+                    "task_asset_references_checked": {
+                        "tasks": len(TASKS),
+                        "actors": 21,
+                        "interactions": 95,
+                    },
+                    "task_asset_task_count": len(TASKS),
+                    "task_asset_actor_reference_count": 21,
+                    "task_asset_interaction_reference_count": 95,
+                    "task_asset_dynamic_inventory_sha256": TASK_ASSET_DYNAMIC_INVENTORY_SHA256,
+                    "task_asset_unresolved_inventory_sha256": TASK_ASSET_UNRESOLVED_INTERACTION_INVENTORY_SHA256,
+                },
+                "asset contract result",
+            )
+            receipt_path = _canonical_stage_path(
+                result.get("asset_contract"),
+                self.s.run
+                / "artifacts"
+                / "asset_contract"
+                / "asset_contract.json",
+                label="asset contract receipt",
+            )
+            if (
+                not receipt_path.is_file()
+                or result.get("asset_contract_sha256") != _sha256(receipt_path)
+            ):
+                raise InvalidArtifact("asset contract receipt/hash differs")
+            receipt = _read_json(receipt_path)
+            self._require_mapping_values(
+                receipt,
+                {
+                    "schema": "before-we-act.bicoord.asset-contract/1",
+                    "status": "PASSED",
+                    "dataset_repo_id": FORMAL_DATASET_REPO,
+                    "dataset_revision": FORMAL_DATASET_REVISION,
+                    "benchmark_revision": BICOORD_CODE_REVISION,
+                    "tasks": list(TASKS),
+                    "supplemental_assets_installed": True,
+                    "benchmark_tracked_source_modified": False,
+                    "task_source_modified": False,
+                    "upstream_model_modified": False,
+                    "normalization_modified": False,
+                },
+                "asset contract receipt",
+            )
+            plate = receipt.get("plate_overlay")
+            if not isinstance(plate, Mapping):
+                raise InvalidArtifact("asset contract omitted plate overlay")
+            self._require_mapping_values(
+                plate,
+                {
+                    "copied_fields": ["contact_points_pose"],
+                    "small_scale_preserved": True,
+                    "contact_points_pose_count": 4,
+                    "task_source_modified": False,
+                    "planner_modified": False,
+                    "model_modified": False,
+                    "normalization_modified": False,
+                    "benchmark_asset_source_modified": False,
+                    "mutation_scope": "run_artifact_and_actor_config_in_memory_only",
+                },
+                "plate overlay receipt",
+            )
+            overlay_path = _canonical_stage_path(
+                plate.get("overlay_metadata"),
+                self.s.run
+                / "artifacts"
+                / "asset_contract"
+                / "overlay"
+                / "003_plate"
+                / "model_data0.json",
+                label="plate runtime overlay",
+            )
+            if (
+                not overlay_path.is_file()
+                or plate.get("target_metadata_sha256") != _sha256(overlay_path)
+                or result.get("plate_metadata_sha256") != _sha256(overlay_path)
+            ):
+                raise InvalidArtifact("audited plate runtime overlay/hash differs")
+            task_audit = receipt.get("task_asset_audit")
+            if not isinstance(task_audit, Mapping):
+                raise InvalidArtifact("18-task object point-index audit did not pass")
+            self._require_mapping_values(
+                task_audit,
+                {
+                    "schema": "before-we-act.bicoord.task-asset-audit/1",
+                    "status": "PASSED",
+                    "tasks": list(TASKS),
+                    "task_count": len(TASKS),
+                    "actor_reference_count": 21,
+                    "interaction_reference_count": 95,
+                    "references_checked": {
+                        "tasks": len(TASKS),
+                        "actors": 21,
+                        "interactions": 95,
+                    },
+                    "dynamic_item_count": TASK_ASSET_DYNAMIC_ITEM_COUNT,
+                    "dynamic_inventory_sha256": TASK_ASSET_DYNAMIC_INVENTORY_SHA256,
+                    "unresolved_interaction_count": TASK_ASSET_UNRESOLVED_INTERACTION_COUNT,
+                    "unresolved_interaction_inventory_sha256": TASK_ASSET_UNRESOLVED_INTERACTION_INVENTORY_SHA256,
+                    "violations": [],
+                    "expected_pristine_defect_count": 0,
+                    "unexpected_violation_count": 0,
+                    "metadata_override_count": 1,
+                    "metadata_override_keys": [
+                        {"modelname": "003_plate", "model_id": 0}
+                    ],
+                    "read_only_benchmark": True,
+                    "benchmark_files_written": False,
+                },
+                "18-task object point-index audit",
+            )
+            reports = task_audit.get("task_reports")
+            if (
+                not isinstance(reports, list)
+                or len(reports) != len(TASKS)
+                or [row.get("task") for row in reports if isinstance(row, Mapping)]
+                != list(TASKS)
+                or any(
+                    not isinstance(row, Mapping)
+                    or row.get("status") != "PASSED"
+                    or row.get("violations") != []
+                    for row in reports
+                )
+            ):
+                raise InvalidArtifact("18-task object point-index report coverage differs")
+            overrides = task_audit.get("metadata_overrides")
+            if not isinstance(overrides, list) or len(overrides) != 1:
+                raise InvalidArtifact("plate metadata override provenance is missing")
+            override = overrides[0]
+            if not isinstance(override, Mapping):
+                raise InvalidArtifact("plate metadata override provenance is invalid")
+            expected_source = overlay_path.resolve()
+            self._require_mapping_values(
+                override,
+                {
+                    "key": {"modelname": "003_plate", "model_id": 0},
+                    "status": "USED",
+                    "source_type": "file",
+                    "source_path": str(expected_source),
+                    "source_sha256": _sha256(expected_source),
+                    "pristine_source_sha256": plate.get("source_small_metadata_sha256"),
+                    "contract_status": "PASSED",
+                    "error": None,
+                    "used_by_actor_count": 2,
+                    "used_by_interaction_count": 4,
+                },
+                "plate metadata override provenance",
+            )
+            for field_name in ("used_by_actors", "used_by_interactions"):
+                rows = override.get(field_name)
+                if not isinstance(rows, list):
+                    raise InvalidArtifact(
+                        f"plate metadata override {field_name} is missing"
+                    )
+            actor_rows = override["used_by_actors"]
+            if {
+                (row.get("task"), row.get("actor"))
+                for row in actor_rows
+                if isinstance(row, Mapping)
+            } != {
+                ("place_plate_and_cup", "plate"),
+                ("place_plate_and_cup", "plate_2"),
+            }:
+                raise InvalidArtifact("plate metadata override actor provenance differs")
+            interaction_rows = override["used_by_interactions"]
+            observed_interactions = {
+                (
+                    row.get("task"),
+                    row.get("actor"),
+                    row.get("kind"),
+                    tuple(row.get("index_values") or ()),
+                )
+                for row in interaction_rows
+                if isinstance(row, Mapping)
+            }
+            if observed_interactions != {
+                ("place_plate_and_cup", "plate", "grasp_actor", (2,)),
+                ("place_plate_and_cup", "plate", "place_actor", (0,)),
+                ("place_plate_and_cup", "plate_2", "grasp_actor", (2,)),
+                ("place_plate_and_cup", "plate_2", "place_actor", (0,)),
+            }:
+                raise InvalidArtifact(
+                    "plate metadata override interaction provenance differs"
+                )
 
         if spec.result_kind == "dataset":
             if int(result.get("episodes", -1)) != FORMAL_EPISODES:
@@ -2337,6 +2944,8 @@ class Supervisor:
                 raise InvalidArtifact("expert seed discovery imported a learned policy")
             if result.get("closed_loop_policy_results_used") is not False:
                 raise InvalidArtifact("expert seed discovery used policy results")
+            if result.get("structural_error_streak_limit") != 3:
+                raise InvalidArtifact("expert seed structural-error limit differs")
             if int(result.get("episodes_per_task", -1)) not in {1, VALIDATION_EPISODES}:
                 raise InvalidArtifact("expert seed manifest episode count differs")
             valid = result.get("valid_seeds")
@@ -2353,6 +2962,189 @@ class Supervisor:
             expected_sha = result.get("seed_manifest_sha256")
             if not manifest.is_file() or not isinstance(expected_sha, str) or _sha256(manifest) != expected_sha:
                 raise InvalidArtifact("expert seed manifest artifact/hash differs")
+            manifest_value = _read_json(manifest)
+            self._require_mapping_values(
+                manifest_value,
+                {
+                    "valid_seeds": valid,
+                    "structural_error_streak_limit": 3,
+                    "learned_policy_used": False,
+                    "closed_loop_policy_results_used": False,
+                },
+                "expert seed manifest diagnostics",
+            )
+            diagnostic_maps: dict[str, Mapping[str, Any]] = {}
+            for field_name in (
+                "exception_type_counts",
+                "exception_counts",
+                "structural_exception_type_counts",
+                "structural_exception_counts",
+            ):
+                value = manifest_value.get(field_name)
+                if not isinstance(value, Mapping) or tuple(value) != TASKS:
+                    raise InvalidArtifact(
+                        f"expert seed manifest {field_name} task coverage differs"
+                    )
+                if result.get(field_name) != value:
+                    raise InvalidArtifact(
+                        f"expert seed result differs from manifest at {field_name}"
+                    )
+                diagnostic_maps[field_name] = value
+            progress_paths = manifest_value.get("progress_receipts")
+            progress_hashes = manifest_value.get("progress_receipt_sha256")
+            seed_receipts = manifest_value.get("seed_receipts")
+            seed_hashes = manifest_value.get("seed_receipts_sha256")
+            attempts = manifest_value.get("attempts")
+            for mapping, label in (
+                (progress_paths, "progress receipts"),
+                (progress_hashes, "progress hashes"),
+                (seed_receipts, "attempt receipts"),
+                (seed_hashes, "attempt receipt hashes"),
+                (attempts, "attempt rows"),
+            ):
+                if not isinstance(mapping, Mapping) or tuple(mapping) != TASKS:
+                    raise InvalidArtifact(
+                        f"expert seed manifest {label} task coverage differs"
+                    )
+            for task in TASKS:
+                progress_path = Path(str(progress_paths[task]))
+                if (
+                    not progress_path.is_file()
+                    or progress_hashes[task] != _sha256(progress_path)
+                ):
+                    raise InvalidArtifact(f"{task}: expert seed progress changed")
+                progress = _read_json(progress_path)
+                self._require_mapping_values(
+                    progress,
+                    {
+                        "schema": "before-we-act.bicoord.expert-seed-progress/1",
+                        "status": "PASSED",
+                        "task": task,
+                        "valid_seeds": valid[task],
+                        "structural_error_streak_limit": 3,
+                        "policy_independent": True,
+                    },
+                    f"{task} expert seed progress",
+                )
+                task_receipts = seed_receipts[task]
+                task_hashes = seed_hashes[task]
+                task_attempts = attempts[task]
+                if (
+                    not isinstance(task_receipts, list)
+                    or not isinstance(task_hashes, list)
+                    or not isinstance(task_attempts, list)
+                    or len(task_receipts) != len(task_attempts)
+                    or len(task_hashes) != len(task_attempts)
+                    or not task_attempts
+                ):
+                    raise InvalidArtifact(f"{task}: expert attempt evidence differs")
+                task_type_counts, task_error_counts = (
+                    self._validated_seed_exception_diagnostics(
+                        diagnostic_maps["exception_type_counts"][task],
+                        diagnostic_maps["exception_counts"][task],
+                        context=f"{task} aggregate exception diagnostics",
+                    )
+                )
+                task_structural_type_counts, task_structural_error_counts = (
+                    self._validated_seed_exception_diagnostics(
+                        diagnostic_maps["structural_exception_type_counts"][task],
+                        diagnostic_maps["structural_exception_counts"][task],
+                        context=f"{task} aggregate structural exception diagnostics",
+                    )
+                )
+                derived_type_counts, derived_error_counts = (
+                    self._seed_attempt_exception_diagnostics(
+                        task_attempts,
+                        structural_only=False,
+                        context=f"{task} aggregate exception attempt evidence",
+                    )
+                )
+                derived_structural_type_counts, derived_structural_error_counts = (
+                    self._seed_attempt_exception_diagnostics(
+                        task_attempts,
+                        structural_only=True,
+                        context=f"{task} aggregate structural attempt evidence",
+                    )
+                )
+                if (
+                    task_type_counts != derived_type_counts
+                    or task_error_counts != derived_error_counts
+                    or task_structural_type_counts
+                    != derived_structural_type_counts
+                    or task_structural_error_counts
+                    != derived_structural_error_counts
+                ):
+                    raise InvalidArtifact(
+                        f"{task}: aggregate exception diagnostics differ from attempts"
+                    )
+                self._require_mapping_values(
+                    progress,
+                    {
+                        "exception_type_counts": task_type_counts,
+                        "exception_counts": task_error_counts,
+                        "structural_exception_type_counts": (
+                            task_structural_type_counts
+                        ),
+                        "structural_exception_counts": (
+                            task_structural_error_counts
+                        ),
+                    },
+                    f"{task} aggregate progress diagnostics",
+                )
+                for index, (attempt_path_raw, attempt_hash, attempt_row) in enumerate(
+                    zip(task_receipts, task_hashes, task_attempts, strict=True), start=1
+                ):
+                    attempt_path = Path(str(attempt_path_raw))
+                    if (
+                        not attempt_path.is_file()
+                        or not isinstance(attempt_hash, str)
+                        or _sha256(attempt_path) != attempt_hash
+                    ):
+                        raise InvalidArtifact(
+                            f"{task}: expert attempt receipt {index} changed"
+                        )
+                    attempt = _read_json(attempt_path)
+                    if (
+                        attempt.get("schema")
+                        != "before-we-act.bicoord.expert-seed-attempt/1"
+                        or int(attempt.get("attempt_index", -1)) != index
+                        or attempt.get("task") != task
+                        or attempt.get("row") != attempt_row
+                    ):
+                        raise InvalidArtifact(
+                            f"{task}: expert attempt receipt {index} differs"
+                        )
+                    prefix_type_counts, prefix_error_counts = (
+                        self._seed_attempt_exception_diagnostics(
+                            task_attempts[:index],
+                            structural_only=False,
+                            context=f"{task} aggregate attempt receipt {index}",
+                        )
+                    )
+                    prefix_structural_type_counts, prefix_structural_error_counts = (
+                        self._seed_attempt_exception_diagnostics(
+                            task_attempts[:index],
+                            structural_only=True,
+                            context=(
+                                f"{task} aggregate structural attempt receipt {index}"
+                            ),
+                        )
+                    )
+                    self._require_mapping_values(
+                        attempt,
+                        {
+                            "exception_type_counts": prefix_type_counts,
+                            "exception_counts": prefix_error_counts,
+                            "structural_exception_type_counts": (
+                                prefix_structural_type_counts
+                            ),
+                            "structural_exception_counts": (
+                                prefix_structural_error_counts
+                            ),
+                            "structural_error_streak_limit": 3,
+                        },
+                        f"{task} aggregate attempt receipt {index} diagnostics",
+                    )
 
         model_kinds = {
             "training",
@@ -2811,6 +3603,25 @@ class Supervisor:
         artifacts: list[dict[str, Any]] = []
         valid_seeds: dict[str, list[int]] = {}
         attempts: dict[str, list[dict[str, Any]]] = {}
+        exception_type_counts: dict[str, dict[str, int]] = {}
+        exception_counts: dict[str, list[dict[str, Any]]] = {}
+        structural_exception_type_counts: dict[str, dict[str, int]] = {}
+        structural_exception_counts: dict[str, list[dict[str, Any]]] = {}
+        progress_receipts: dict[str, str] = {}
+        progress_receipt_sha256: dict[str, str] = {}
+        seed_receipts: dict[str, list[str]] = {}
+        seed_receipts_sha256: dict[str, list[str]] = {}
+        asset_result = _read_json(self.result_path("asset_contract"))
+        asset_receipt = _read_json(Path(str(asset_result.get("asset_contract", ""))))
+        plate_overlay = asset_receipt.get("plate_overlay")
+        if not isinstance(plate_overlay, Mapping):
+            raise InvalidArtifact("asset contract plate overlay is unavailable")
+        expected_plate_overlay = str(
+            Path(str(plate_overlay.get("overlay_metadata", ""))).resolve()
+        )
+        expected_plate_contacts = plate_overlay.get(
+            "target_contact_points_pose_sha256"
+        )
         for task in TASKS:
             row = _read_json(results[task])
             self._require_mapping_values(
@@ -2829,6 +3640,7 @@ class Supervisor:
                     "policy_independent": True,
                     "learned_policy_used": False,
                     "closed_loop_policy_results_used": False,
+                    "structural_error_streak_limit": 3,
                 },
                 f"{spec.name} worker {task}",
             )
@@ -2863,7 +3675,12 @@ class Supervisor:
                 },
                 f"{task} expert seed manifest",
             )
-            task_attempts = manifest.get("attempts", {}).get(task)
+            manifest_attempts = manifest.get("attempts")
+            task_attempts = (
+                manifest_attempts.get(task)
+                if isinstance(manifest_attempts, Mapping)
+                else None
+            )
             if not isinstance(task_attempts, list) or not task_attempts:
                 raise InvalidArtifact(f"{task}: expert seed attempt evidence is missing")
             valid_attempts = [
@@ -2873,8 +3690,202 @@ class Supervisor:
             ]
             if valid_attempts[:episodes] != seeds:
                 raise InvalidArtifact(f"{task}: selected seeds differ from expert evidence")
+            diagnostic_maps: dict[str, Mapping[str, Any]] = {}
+            for field_name in (
+                "exception_type_counts",
+                "exception_counts",
+                "structural_exception_type_counts",
+                "structural_exception_counts",
+            ):
+                value = manifest.get(field_name)
+                if not isinstance(value, Mapping) or tuple(value) != (task,):
+                    raise InvalidArtifact(
+                        f"{task}: {field_name} task coverage differs"
+                    )
+                diagnostic_maps[field_name] = value
+            task_type_counts, task_error_counts = (
+                self._validated_seed_exception_diagnostics(
+                    diagnostic_maps["exception_type_counts"][task],
+                    diagnostic_maps["exception_counts"][task],
+                    context=f"{task} exception diagnostics",
+                )
+            )
+            task_structural_type_counts, task_structural_error_counts = (
+                self._validated_seed_exception_diagnostics(
+                    diagnostic_maps["structural_exception_type_counts"][task],
+                    diagnostic_maps["structural_exception_counts"][task],
+                    context=f"{task} structural exception diagnostics",
+                )
+            )
+            derived_type_counts, derived_error_counts = (
+                self._seed_attempt_exception_diagnostics(
+                    task_attempts,
+                    structural_only=False,
+                    context=f"{task} exception attempt evidence",
+                )
+            )
+            derived_structural_type_counts, derived_structural_error_counts = (
+                self._seed_attempt_exception_diagnostics(
+                    task_attempts,
+                    structural_only=True,
+                    context=f"{task} structural exception attempt evidence",
+                )
+            )
+            if (
+                task_type_counts != derived_type_counts
+                or task_error_counts != derived_error_counts
+                or task_structural_type_counts != derived_structural_type_counts
+                or task_structural_error_counts != derived_structural_error_counts
+            ):
+                raise InvalidArtifact(
+                    f"{task}: exception diagnostics differ from attempt evidence"
+                )
+            self._require_mapping_values(
+                row,
+                {
+                    "exception_type_counts": {task: task_type_counts},
+                    "exception_counts": {task: task_error_counts},
+                    "structural_exception_type_counts": {
+                        task: task_structural_type_counts
+                    },
+                    "structural_exception_counts": {
+                        task: task_structural_error_counts
+                    },
+                },
+                f"{task} seed worker diagnostics",
+            )
+            if task == "place_plate_and_cup":
+                for attempt_row in task_attempts:
+                    overlay = (
+                        attempt_row.get("asset_overlay")
+                        if isinstance(attempt_row, Mapping)
+                        else None
+                    )
+                    if not isinstance(overlay, Mapping):
+                        raise InvalidArtifact(
+                            "place_plate_and_cup: attempt omitted asset overlay evidence"
+                        )
+                    self._require_mapping_values(
+                        overlay,
+                        {
+                            "task": task,
+                            "applied": True,
+                            "overlay": expected_plate_overlay,
+                            "contact_points_pose_sha256": expected_plate_contacts,
+                            "copied_fields": ["contact_points_pose"],
+                            "task_source_modified": False,
+                        },
+                        "place_plate_and_cup runtime asset overlay",
+                    )
+            task_progress = row.get("progress_receipt")
+            task_progress_sha = row.get("progress_receipt_sha256")
+            progress_path = Path(str(task_progress))
+            if (
+                not progress_path.is_file()
+                or not isinstance(task_progress_sha, str)
+                or _sha256(progress_path) != task_progress_sha
+                or manifest.get("progress_receipts") != {task: str(progress_path)}
+                or manifest.get("progress_receipt_sha256")
+                != {task: task_progress_sha}
+            ):
+                raise InvalidArtifact(f"{task}: expert progress receipt differs")
+            progress = _read_json(progress_path)
+            self._require_mapping_values(
+                progress,
+                {
+                    "schema": "before-we-act.bicoord.expert-seed-progress/1",
+                    "status": "PASSED",
+                    "task": task,
+                    "valid_seeds": seeds,
+                    "attempts_completed": len(task_attempts),
+                    "structural_error_streak_limit": 3,
+                    "exception_type_counts": task_type_counts,
+                    "exception_counts": task_error_counts,
+                    "structural_exception_type_counts": (
+                        task_structural_type_counts
+                    ),
+                    "structural_exception_counts": task_structural_error_counts,
+                    "policy_independent": True,
+                    "learned_policy_used": False,
+                },
+                f"{task} expert progress",
+            )
+            task_seed_receipts = manifest.get("seed_receipts", {}).get(task)
+            task_seed_hashes = manifest.get("seed_receipts_sha256", {}).get(task)
+            if (
+                not isinstance(task_seed_receipts, list)
+                or not isinstance(task_seed_hashes, list)
+                or len(task_seed_receipts) != len(task_attempts)
+                or len(task_seed_hashes) != len(task_attempts)
+            ):
+                raise InvalidArtifact(f"{task}: per-seed receipt coverage differs")
+            for index, (attempt_path_raw, attempt_hash, attempt_row) in enumerate(
+                zip(
+                    task_seed_receipts,
+                    task_seed_hashes,
+                    task_attempts,
+                    strict=True,
+                ),
+                start=1,
+            ):
+                attempt_path = Path(str(attempt_path_raw))
+                if (
+                    not attempt_path.is_file()
+                    or _sha256(attempt_path) != attempt_hash
+                ):
+                    raise InvalidArtifact(
+                        f"{task}: per-seed receipt {index} changed"
+                    )
+                attempt = _read_json(attempt_path)
+                if (
+                    attempt.get("schema")
+                    != "before-we-act.bicoord.expert-seed-attempt/1"
+                    or attempt.get("task") != task
+                    or int(attempt.get("attempt_index", -1)) != index
+                    or attempt.get("row") != attempt_row
+                ):
+                    raise InvalidArtifact(
+                        f"{task}: per-seed receipt {index} differs"
+                    )
+                prefix_type_counts, prefix_error_counts = (
+                    self._seed_attempt_exception_diagnostics(
+                        task_attempts[:index],
+                        structural_only=False,
+                        context=f"{task} attempt receipt {index}",
+                    )
+                )
+                prefix_structural_type_counts, prefix_structural_error_counts = (
+                    self._seed_attempt_exception_diagnostics(
+                        task_attempts[:index],
+                        structural_only=True,
+                        context=f"{task} structural attempt receipt {index}",
+                    )
+                )
+                self._require_mapping_values(
+                    attempt,
+                    {
+                        "exception_type_counts": prefix_type_counts,
+                        "exception_counts": prefix_error_counts,
+                        "structural_exception_type_counts": (
+                            prefix_structural_type_counts
+                        ),
+                        "structural_exception_counts": (
+                            prefix_structural_error_counts
+                        ),
+                        "structural_error_streak_limit": 3,
+                    },
+                    f"{task} per-seed receipt {index} diagnostics",
+                )
             valid_seeds[task] = [int(seed) for seed in seeds]
             attempts[task] = [dict(item) for item in task_attempts]
+            exception_type_counts[task] = task_type_counts
+            exception_counts[task] = task_error_counts
+            structural_exception_type_counts[task] = task_structural_type_counts
+            structural_exception_counts[task] = task_structural_error_counts
+            progress_receipts[task] = str(progress_path)
+            progress_receipt_sha256[task] = task_progress_sha
+            seed_receipts[task] = [str(value) for value in task_seed_receipts]
+            seed_receipts_sha256[task] = [str(value) for value in task_seed_hashes]
             workers.append(row)
             artifacts.extend(row.get("artifacts", []))
 
@@ -2894,6 +3905,15 @@ class Supervisor:
             "max_steps": dict(MAX_STEPS),
             "valid_seeds": valid_seeds,
             "attempts": attempts,
+            "exception_type_counts": exception_type_counts,
+            "exception_counts": exception_counts,
+            "structural_exception_type_counts": structural_exception_type_counts,
+            "structural_exception_counts": structural_exception_counts,
+            "structural_error_streak_limit": 3,
+            "progress_receipts": progress_receipts,
+            "progress_receipt_sha256": progress_receipt_sha256,
+            "seed_receipts": seed_receipts,
+            "seed_receipts_sha256": seed_receipts_sha256,
             "learned_policy_used": False,
             "closed_loop_policy_results_used": False,
         }
@@ -2908,6 +3928,13 @@ class Supervisor:
                 "manifest_sha256": _sha256(aggregate_manifest),
                 "episodes_per_task": episodes,
                 "task_counts": {task: len(valid_seeds[task]) for task in TASKS},
+                "exception_type_counts": exception_type_counts,
+                "exception_counts": exception_counts,
+                "structural_exception_type_counts": (
+                    structural_exception_type_counts
+                ),
+                "structural_exception_counts": structural_exception_counts,
+                "structural_error_streak_limit": 3,
                 "policy_independent": True,
                 "learned_policy_used": False,
             },
@@ -2941,6 +3968,17 @@ class Supervisor:
                 "valid_seeds": valid_seeds,
                 "seed_manifest": str(aggregate_manifest.resolve()),
                 "seed_manifest_sha256": _sha256(aggregate_manifest),
+                "progress_receipts": progress_receipts,
+                "progress_receipts_sha256": progress_receipt_sha256,
+                "exception_type_counts": exception_type_counts,
+                "exception_counts": exception_counts,
+                "structural_exception_type_counts": (
+                    structural_exception_type_counts
+                ),
+                "structural_exception_counts": structural_exception_counts,
+                "structural_error_streak_limit": 3,
+                "seed_receipts": seed_receipts,
+                "seed_receipts_sha256": seed_receipts_sha256,
                 "policy_independent": True,
                 "learned_policy_used": False,
                 "closed_loop_policy_results_used": False,

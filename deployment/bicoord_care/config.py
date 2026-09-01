@@ -170,6 +170,21 @@ FORMAL_BCORE_UPDATES: Final[int] = 120_000
 FORMAL_CARE_UPDATES: Final[int] = 4_000
 FORMAL_SEEDS: Final[tuple[int, ...]] = (20260901, 20260902, 20260903)
 
+# The pinned BiCoord task sources contain a small, intentional set of dynamic
+# actor/index expressions (randomized object variants, list-built actors,
+# etc.) which the static asset auditor must not guess.  We freeze the exact
+# inventories rather than treating any future unresolved reference as
+# harmless.  These hashes are over normalized (benchmark-relative) audit rows
+# and are checked by the supervisor before training.
+TASK_ASSET_DYNAMIC_INVENTORY_SHA256: Final[str] = (
+    "d96b43f4d4c18b07678060eb856d249e9052317d0331bf706562e61c545b264f"
+)
+TASK_ASSET_UNRESOLVED_INTERACTION_INVENTORY_SHA256: Final[str] = (
+    "4173846225b0e5d0fdd79eea6069733ada71e47cd4e5767cabb25be85a070c73"
+)
+TASK_ASSET_DYNAMIC_ITEM_COUNT: Final[int] = 93
+TASK_ASSET_UNRESOLVED_INTERACTION_COUNT: Final[int] = 82
+
 
 @dataclass(frozen=True)
 class ModelContract:

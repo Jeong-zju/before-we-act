@@ -1367,8 +1367,13 @@ def audit_task_assets(
         dynamic.extend(report.dynamic_items)
         violations.extend(f"{task}: {value}" for value in report.violations)
     overlay = _overlay_check(assets)
+    overlay_violation = None
     if overlay.get("status") != "PASSED":
-        violations.append(f"place_plate_and_cup overlay contract: {overlay.get('reason', 'failed')}")
+        overlay_violation = (
+            "place_plate_and_cup overlay contract: "
+            f"{overlay.get('reason', 'failed')}"
+        )
+        violations.append(overlay_violation)
     # The known upstream plate mismatch is deliberately visible, but does not
     # make a pristine audit look like an unknown failure.  Any other violation
     # remains fail-closed.  A caller that requires a clean effective contract
@@ -1379,23 +1384,32 @@ def audit_task_assets(
     unexpected_violation_count = sum(
         len(row.unexpected_violations) for row in task_reports
     )
-    if unexpected_violation_count == 0 and violations:
-        # Overlay-contract failures and blocked/missing tasks are not expected
-        # pristine defects, even when task reports contain no unexpected index
-        # violation.
-        non_task_violations = [
-            value
-            for value in violations
-            if not value.startswith(tuple(f"{row.task}:" for row in task_reports))
-        ]
-        if non_task_violations:
-            status = "FAILED"
-        elif expected_defect_count:
-            status = "PASSED_WITH_EXPECTED_PRISTINE_DEFECT"
-        else:
-            status = "FAILED"
+    # A pristine run may contain only the explicitly documented plate defect.
+    # Everything else (including a missing/blocked task) is a hard failure.
+    # Keep this classification based on structured task reports rather than
+    # string-prefix heuristics: an overlay error is itself prefixed with the
+    # task name and could otherwise be mistaken for an expected defect.
+    task_has_unexpected_failure = any(
+        row.status == "BLOCKED"
+        or any(item not in row.expected_pristine_defects for item in row.violations)
+        for row in task_reports
+    )
+    if (
+        overlay_violation is None
+        and not task_has_unexpected_failure
+        and unexpected_violation_count == 0
+        and expected_defect_count > 0
+    ):
+        status = "PASSED_WITH_EXPECTED_PRISTINE_DEFECT"
+    elif (
+        overlay_violation is None
+        and not task_has_unexpected_failure
+        and unexpected_violation_count == 0
+        and not violations
+    ):
+        status = "PASSED"
     else:
-        status = "PASSED" if not violations else "FAILED"
+        status = "FAILED"
     # Invalid override sources are hard failures; an unused but valid override
     # is retained as a warning/provenance record because callers may audit a
     # task subset and intentionally provide a superset of overrides.
@@ -1405,6 +1419,52 @@ def audit_task_assets(
             if value not in violations:
                 violations.append(value)
             status = "FAILED"
+    actor_reference_count = sum(len(row.actors) for row in task_reports)
+    interaction_reference_count = sum(
+        len(row.interactions) for row in task_reports
+    )
+
+    def _relative_source(value: str) -> str:
+        try:
+            return Path(value).resolve().relative_to(benchmark).as_posix()
+        except (OSError, ValueError):
+            # Keep an out-of-tree source visible and hash-stable; callers may
+            # reject it as a provenance error rather than silently dropping it.
+            return str(Path(value).resolve())
+
+    # Dynamic references are intentionally not guessed.  Their exact ordered
+    # inventory is nevertheless part of the pinned source contract, so a
+    # future task edit cannot silently expand the set of unverified IDs while
+    # retaining a nominal ``PASSED`` status.
+    dynamic_inventory = []
+    for item in dynamic:
+        row = item.as_dict()
+        row["source"] = _relative_source(str(row["source"]))
+        dynamic_inventory.append(row)
+    unresolved_interactions = []
+    for task_report in task_reports:
+        for interaction in task_report.interactions:
+            if interaction.unresolved_reasons:
+                unresolved_interactions.append(
+                    {
+                        "task": interaction.task,
+                        "source": _relative_source(interaction.source),
+                        "line": interaction.line,
+                        "kind": interaction.kind,
+                        "actor_expression": interaction.actor_expression,
+                        "actor": interaction.actor,
+                        "index_expression": interaction.index_expression,
+                        "index_values": interaction.index_values,
+                        "index_defaulted": interaction.index_defaulted,
+                        "field": interaction.field,
+                        "unresolved_reasons": list(interaction.unresolved_reasons),
+                    }
+                )
+    dynamic_inventory_sha256 = _canonical_sha256(dynamic_inventory)
+    unresolved_interaction_inventory_sha256 = _canonical_sha256(
+        unresolved_interactions
+    )
+
     return {
         "schema": SCHEMA,
         "status": status,
@@ -1412,9 +1472,21 @@ def audit_task_assets(
         "assets_root": str(assets),
         "tasks": list(selected),
         "task_count": len(selected),
+        "actor_reference_count": actor_reference_count,
+        "interaction_reference_count": interaction_reference_count,
+        "references_checked": {
+            "tasks": len(selected),
+            "actors": actor_reference_count,
+            "interactions": interaction_reference_count,
+        },
         "task_reports": [row.as_dict(assets) for row in task_reports],
         "dynamic_items": [row.as_dict() for row in dynamic],
         "dynamic_item_count": len(dynamic),
+        "dynamic_inventory_sha256": dynamic_inventory_sha256,
+        "unresolved_interaction_count": len(unresolved_interactions),
+        "unresolved_interaction_inventory_sha256": (
+            unresolved_interaction_inventory_sha256
+        ),
         "violations": violations,
         "expected_pristine_defect_count": expected_defect_count,
         "unexpected_violation_count": unexpected_violation_count,

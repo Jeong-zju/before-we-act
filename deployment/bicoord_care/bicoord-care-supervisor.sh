@@ -20,7 +20,7 @@ fi
 export BICOORD_CARE_REPO="${BICOORD_CARE_REPO:-/workspace/repos/before-we-act}"
 export BICOORD_BENCH_REPO="${BICOORD_BENCH_REPO:-/workspace/repos/bicoord-bench}"
 export BICOORD_DATASET="${BICOORD_DATASET:-/workspace/repos/bicoord-bench/data}"
-export BICOORD_CARE_RUN="${BICOORD_CARE_RUN:-/workspace/runs/bicoord-care-v2}"
+export BICOORD_CARE_RUN="${BICOORD_CARE_RUN:-/workspace/runs/bicoord-care-v3}"
 export BICOORD_DINO_MODEL="${BICOORD_DINO_MODEL:-/workspace/artifacts/dinov3-vitb16-pretrain-lvd1689m}"
 export BICOORD_CARE_PYTHON="${BICOORD_CARE_PYTHON:-/venv/main/bin/python}"
 

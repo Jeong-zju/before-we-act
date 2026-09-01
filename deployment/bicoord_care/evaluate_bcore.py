@@ -138,7 +138,19 @@ def _make_env(root: Path, task: str, seed: int):
     cfg.update({"task_name": task, "task_config": "demo_clean", "seed": int(seed), "now_ep_num": 0, "is_test": True, "eval_mode": True, "render_freq": 0, "save_data": False, "save_path": str(root / "data"), "need_plan": False, "dual_arm": True, "data_type": {"rgb": True, "qpos": True, "endpose": False, "depth": False, "pointcloud": False, "third_view": False}})
     emb = cfg.get("embodiment", ["aloha-agilex"]); emb_cfg = yaml.safe_load((root / "task_config" / "_embodiment_config.yml").read_text()); robot = Path(emb_cfg[emb[0]]["file_path"]); robot = robot if robot.is_absolute() else root / robot
     robot_conf = yaml.safe_load((robot / "config.yml").read_text()); cfg.update({"left_robot_file": str(robot), "right_robot_file": str(robot), "left_embodiment_config": robot_conf, "right_embodiment_config": robot_conf, "dual_arm_embodied": True})
-    env.setup_demo(**cfg); return env
+    try:
+        env.setup_demo(**cfg)
+        from .asset_runtime import apply_configured_task_overlay
+
+        env._bicoord_asset_overlay = apply_configured_task_overlay(env, task)
+        return env
+    except BaseException:
+        try:
+            env.close_env()
+        except Exception:
+            try: env.close()
+            except Exception: pass
+        raise
 
 
 def _run_episode(runtime: Any, root: Path, task: str, seed: int, limit: int, progress: Path, belief_enabled: bool = True) -> dict[str, Any]:

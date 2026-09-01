@@ -29,7 +29,83 @@ def _git_revision(path: Path) -> str:
         raise RuntimeError(f"cannot inspect git revision: {path}") from error
     if len(value) != 40:
         raise RuntimeError(f"invalid git revision from {path}: {value!r}")
+    try:
+        int(value, 16)
+    except ValueError as error:
+        raise RuntimeError(
+            f"non-hexadecimal git revision from {path}: {value!r}"
+        ) from error
     return value
+
+
+def _expected_revision(value: str | None, *, label: str) -> str:
+    """Validate one immutable source pin before comparing a checkout to it."""
+
+    if value is None or len(value) != 40:
+        raise RuntimeError(
+            f"{label} source revision must be a pinned 40-character commit"
+        )
+    try:
+        int(value, 16)
+    except ValueError as error:
+        raise RuntimeError(
+            f"{label} source revision is not hexadecimal: {value!r}"
+        ) from error
+    return value
+
+
+def _tracked_tree_report(path: Path, *, label: str) -> dict[str, Any]:
+    """Fail closed on staged or unstaged changes to Git-tracked source.
+
+    BiCoord's installation contract intentionally places supplemental assets in
+    untracked directories below the benchmark checkout.  Those files are
+    verified by the asset/download receipts, not by the source-tree pin.  The
+    explicit ``--untracked-files=no`` therefore ignores them while retaining
+    staged changes, tracked worktree edits/deletions, and dirty submodules.
+    """
+
+    command = [
+        "git",
+        "-C",
+        str(path),
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=no",
+        "--ignore-submodules=untracked",
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError(
+            f"cannot inspect tracked {label} source tree: {path}"
+        ) from error
+    changes = [row for row in completed.stdout.splitlines() if row]
+    if changes:
+        preview = changes[:20]
+        suffix = (
+            ""
+            if len(changes) <= len(preview)
+            else f" (+{len(changes) - len(preview)} more)"
+        )
+        raise RuntimeError(
+            f"{label} tracked source tree is dirty at {path}: {preview!r}{suffix}"
+        )
+    return {
+        "status": "CLEAN",
+        "tracked_tree_clean": True,
+        "scope": "git_index_and_worktree_tracked_files",
+        "untracked_files_ignored": True,
+        "submodule_untracked_files_ignored": True,
+        "tracked_submodule_drift_ignored": False,
+        "porcelain": "v1",
+        "tracked_changes": [],
+    }
 
 
 def _gpu_report() -> dict[str, Any]:
@@ -91,22 +167,39 @@ def _source_report(repo: Path, benchmark_repo: Path) -> dict[str, Any]:
         raise RuntimeError(f"source checkout is incomplete: {missing}")
     care_revision = _git_revision(repo)
     bench_revision = _git_revision(benchmark_repo)
-    expected_care = os.environ.get("BICOORD_CARE_SOURCE_REVISION")
-    if expected_care and care_revision != expected_care:
+    expected_care = _expected_revision(
+        os.environ.get("BICOORD_CARE_SOURCE_REVISION"), label="CARE"
+    )
+    if care_revision != expected_care:
         raise RuntimeError(
             f"CARE source revision drift: {care_revision} != {expected_care}"
         )
-    expected_bench = os.environ.get("BICOORD_CODE_REVISION", EXPECTED_BENCHMARK_COMMIT)
-    if bench_revision != expected_bench and os.environ.get("BICOORD_ALLOW_UNPINNED_SOURCE") != "1":
+    expected_bench = _expected_revision(
+        os.environ.get("BICOORD_CODE_REVISION", EXPECTED_BENCHMARK_COMMIT),
+        label="BiCoord benchmark",
+    )
+    if bench_revision != expected_bench:
         raise RuntimeError(
             f"BiCoord benchmark revision drift: {bench_revision} != {expected_bench}"
         )
+    care_tree = _tracked_tree_report(repo, label="CARE")
+    benchmark_tree = _tracked_tree_report(benchmark_repo, label="BiCoord benchmark")
     return {
         "care_repo": str(repo.resolve()),
         "care_revision": care_revision,
+        "expected_care_revision": expected_care,
+        "care_tracked_tree_clean": True,
         "benchmark_repo": str(benchmark_repo.resolve()),
         "benchmark_revision": bench_revision,
         "expected_benchmark_revision": expected_bench,
+        "benchmark_tracked_tree_clean": True,
+        "tracked_source_contract": {
+            "status": "PASSED",
+            "scope": "tracked_files_only",
+            "untracked_supplemental_assets_allowed": True,
+            "care": care_tree,
+            "benchmark": benchmark_tree,
+        },
         "dataset_repo_id": DATASET_REPO_ID,
         "dataset_revision": DATASET_REVISION,
         "reference_policy": "B-core/TUNE",

@@ -29,7 +29,7 @@ from .data import (
     write_normalization_receipt,
 )
 from .hdf5_data import BiCoordHDF5Reader, load_stage_segments, validate_hdf5_schema
-from .stage_common import artifact, assert_common_paths, atomic_json, common_parser, publish_result, read_json, sha256_file, utc_now
+from .stage_common import artifact, assert_common_paths, atomic_json, common_parser, publish_result, read_json, require_stage_result, sha256_file, utc_now
 
 
 def _verify_download_receipt(dataset: Path) -> dict[str, Any]:
@@ -137,6 +137,10 @@ def _audit_numeric_ranges(episode) -> dict[str, Any]:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     assert_common_paths(args, need_dataset=True)
     formal = args.operation == "formal-audit"
+    if formal:
+        require_stage_result(
+            args.run, "asset_contract", config_sha256=args.config_sha256
+        )
     download_receipt = _verify_download_receipt(args.dataset) if formal else None
     episodes = discover_bicoord_episodes(
         args.dataset, require_formal=formal, verify_schema=False

@@ -206,6 +206,14 @@ def test_explicit_output_keeps_benchmark_metadata_untouched(tmp_path: Path) -> N
     }
     assert after_without_overlay == before
 
+    second = apply_contact_points_overlay(
+        small / MODEL_METADATA_NAME,
+        large / MODEL_METADATA_NAME,
+        output_path=output,
+    )
+    assert second["changed"] is False
+    assert second["idempotent"] is True
+
 
 @pytest.mark.parametrize(
     ("mutation", "match"),

@@ -437,6 +437,7 @@ def apply_contact_points_overlay(
 
     payload = copy.deepcopy(small)
     payload[CONTACT_KEY] = contacts
+    target_contacts_before = existing
     # The target can be a separate file.  When it exists, preserve its own
     # metadata only if it is byte-for-byte the current small record; otherwise
     # fail closed rather than overwriting an unrelated asset.
@@ -447,6 +448,7 @@ def apply_contact_points_overlay(
         target_existing = target_value.get(CONTACT_KEY)
         if target_existing not in ([], contacts):
             raise AssetContractError("existing overlay target has conflicting contact poses")
+        target_contacts_before = target_existing
         payload = copy.deepcopy(target_value)
         payload[CONTACT_KEY] = contacts
 
@@ -471,13 +473,13 @@ def apply_contact_points_overlay(
             "target_metadata_before_sha256": before_hash,
             "target_metadata_sha256": after_hash,
             "target_contact_points_pose_before_sha256": canonical_json_sha256(
-                existing
+                target_contacts_before
             ),
             "target_contact_points_pose_sha256": canonical_json_sha256(contacts),
             "contact_points_pose_count": len(contacts),
             "small_scale_preserved": payload.get(SCALE_KEY) == small.get(SCALE_KEY),
             "changed": bool(changed),
-            "idempotent": not changed and existing == contacts,
+            "idempotent": not changed and target_contacts_before == contacts,
         }
     )
     return result
