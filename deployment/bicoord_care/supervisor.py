@@ -51,6 +51,10 @@ from .config import (
     ACTION_DIM,
     ACTION_ENCODING,
     ACTION_HORIZON,
+    BRANCH_FAMILIES_PER_TASK,
+    BRANCH_SEED_EPISODES,
+    BRANCH_SEED_BUCKET,
+    BRANCH_SEEDS_PER_TASK,
     DATASET_REPO_ID,
     DATASET_REVISION,
     EFFECTIVE_BATCH,
@@ -87,7 +91,6 @@ GLOBAL_BATCH = EFFECTIVE_BATCH
 B0H_UPDATES = FORMAL_B0H_UPDATES
 BCORE_UPDATES = FORMAL_BCORE_UPDATES
 CARE_UPDATES = FORMAL_CARE_UPDATES
-BRANCH_FAMILIES_PER_TASK = 30
 BRANCHES_PER_FAMILY = 24
 BCORE_SEEDS = FORMAL_SEEDS
 CARE_SEEDS = (20260904, 20260905, 20260906)
@@ -203,7 +206,8 @@ STAGES: "OrderedDict[str, StageSpec]" = OrderedDict(
         StageSpec("bcore_select", ("bcore_train_3seeds",), "bcore_select", "offline-select", "cpu", "select B-core/TUNE using offline metrics only", "selection"),
         StageSpec("seed_discovery", ("bcore_select",), "seed_discovery", "discover-seeds", "seed_task_queue4", "freeze official expert-valid validation seeds before learned rollout", "seed_manifest"),
         StageSpec("bcore_validation20", ("bcore_select", "seed_discovery"), "bcore_evaluate", "validation20", "task_queue4", "selected B-core/TUNE Validation20 reference", "validation20"),
-        StageSpec("branch_collection", ("bcore_validation20", "seed_discovery"), "branch_collect", "formal", "sharded4", "collect formal counterfactual branch families on four GPUs", "branch"),
+        StageSpec("branch_seed_discovery", ("bcore_select", "seed_discovery"), "seed_discovery", "discover-branch-seeds", "seed_task_queue4", "freeze a disjoint official expert-valid training-branch seed pool", "seed_manifest"),
+        StageSpec("branch_collection", ("bcore_validation20", "branch_seed_discovery"), "branch_collect", "formal", "sharded4", "collect formal counterfactual branch families on four GPUs", "branch"),
         StageSpec("branch_prepare", ("branch_collection",), "branch_prepare", "prepare", "cpu", "prepare belief-head data without train/test splitting", "branch"),
         StageSpec("branch_signal_gate", ("branch_prepare",), "branch_audit", "signal-gate", "cpu", "reject degenerate counterfactual/event supervision", "gate"),
         StageSpec("belief_train", ("branch_signal_gate",), "belief_train", "formal-train", "care_grid", "four CARE variants by three seeds in four-GPU waves", "training_grid"),
@@ -1785,10 +1789,35 @@ class Supervisor:
                 "provider_policy": "B-core/TUNE",
                 "families": expected_families,
                 "branches_per_family": BRANCHES_PER_FAMILY,
-                "physical_simulator_outcomes": True,
-                "offline_demonstration_error_used": False,
-            },
+                    "physical_simulator_outcomes": True,
+                    "offline_demonstration_error_used": False,
+                    "seed_manifest": seed_manifest,
+                    "seed_manifest_sha256": seed_manifest_sha,
+                },
             f"{spec.name} result",
+        )
+        seed_stage = "seed_discovery_smoke" if smoke else "branch_seed_discovery"
+        seed_result = _read_json(self.result_path(seed_stage))
+        seed_manifest = str(seed_result.get("seed_manifest", ""))
+        seed_manifest_sha = seed_result.get("seed_manifest_sha256")
+        if not seed_manifest or not isinstance(seed_manifest_sha, str):
+            raise InvalidArtifact(f"{spec.name}: seed manifest provenance is missing")
+        expected_seed_rows = seed_result.get("valid_seeds")
+        if not isinstance(expected_seed_rows, Mapping) or tuple(expected_seed_rows) != TASKS:
+            raise InvalidArtifact("branch seed result task coverage differs")
+        if any(
+            not isinstance(expected_seed_rows[task], list)
+            or len(expected_seed_rows[task]) != families_per_task
+            for task in TASKS
+        ):
+            raise InvalidArtifact("branch seed result family coverage differs")
+        self._require_mapping_values(
+            result,
+            {
+                "seed_manifest": seed_manifest,
+                "seed_manifest_sha256": seed_manifest_sha,
+            },
+            f"{spec.name} seed manifest provenance",
         )
         manifests = [
             self._artifact_path(row).resolve()
@@ -1800,6 +1829,7 @@ class Supervisor:
         family_ids: set[int] = set()
         snapshot_ids: set[str] = set()
         task_counts: Counter[str] = Counter()
+        task_seeds: dict[str, set[int]] = {task: set() for task in TASKS}
         ranks: set[int] = set()
         overlay_expectations: Mapping[str, Mapping[str, Any]] | None = None
         for manifest_path in manifests:
@@ -1814,6 +1844,8 @@ class Supervisor:
                     "provider_policy": "B-core/TUNE",
                     "physical_simulator_outcomes": True,
                     "offline_demonstration_error_used": False,
+                    "seed_manifest": seed_manifest,
+                    "seed_manifest_sha256": seed_manifest_sha,
                 },
                 f"branch shard {manifest_path}",
             )
@@ -1849,14 +1881,24 @@ class Supervisor:
                         "action_clipping": False,
                         "candidate_transform_clipping": False,
                         "strict_lag_one": True,
+                        "seed_manifest": seed_manifest,
+                        "seed_manifest_sha256": seed_manifest_sha,
                     },
                     f"branch family {family_path}",
                 )
                 family_id = int(family.get("family_id", -1))
                 snapshot_id = str(family.get("snapshot_id", ""))
                 task = str(family.get("task", ""))
+                family_seed = int(family.get("seed", -1))
                 if family_id in family_ids or snapshot_id in snapshot_ids or task not in TASKS:
                     raise InvalidArtifact("branch family identity is duplicate/invalid")
+                local_family_id = family_id - TASKS.index(task) * families_per_task
+                if not 0 <= local_family_id < families_per_task:
+                    raise InvalidArtifact("branch family ID maps to the wrong task")
+                if family_seed != int(expected_seed_rows[task][local_family_id]):
+                    raise InvalidArtifact(
+                        "branch family seed differs from its frozen task/local mapping"
+                    )
                 if task in {"place_plate_and_cup", "sweep_block"}:
                     if overlay_expectations is None:
                         overlay_expectations = self._asset_runtime_expectations()
@@ -1871,6 +1913,9 @@ class Supervisor:
                 family_ids.add(family_id)
                 snapshot_ids.add(snapshot_id)
                 task_counts[task] += 1
+                if family_seed in task_seeds[task]:
+                    raise InvalidArtifact("branch family reused an expert-valid seed")
+                task_seeds[task].add(family_seed)
                 probe = family.get("restore_probe")
                 if (
                     not isinstance(probe, Mapping)
@@ -1917,6 +1962,11 @@ class Supervisor:
             raise InvalidArtifact("branch family ID coverage differs")
         if task_counts != Counter({task: families_per_task for task in TASKS}):
             raise InvalidArtifact(f"branch task coverage differs: {task_counts}")
+        for task in TASKS:
+            if task_seeds[task] != set(expected_seed_rows[task]):
+                raise InvalidArtifact(
+                    f"{task}: branch families differ from the frozen seed manifest"
+                )
 
     def _validate_paired_result(
         self,
@@ -2532,6 +2582,62 @@ class Supervisor:
             if observed.get(key) != value:
                 raise InvalidArtifact(
                     f"{context} differs at {key}: {observed.get(key)!r} != {value!r}"
+                )
+
+    @staticmethod
+    def _validate_seed_manifest_disjoint(
+        validation: Mapping[str, Any], branches: Mapping[str, Any]
+    ) -> None:
+        """Prove formal branch supervision cannot contain Validation20 seeds."""
+
+        expected = (
+            (
+                validation,
+                "validation seed manifest",
+                "seed_discovery",
+                0,
+                VALIDATION_EPISODES,
+            ),
+            (
+                branches,
+                "branch seed manifest",
+                "branch_seed_discovery",
+                BRANCH_SEED_BUCKET,
+                BRANCH_SEED_EPISODES,
+            ),
+        )
+        for value, label, stage, bucket, episodes in expected:
+            if value.get("stage") != stage:
+                raise InvalidArtifact(f"{label} stage differs")
+            if value.get("seed_bucket") != bucket:
+                raise InvalidArtifact(f"{label} bucket differs")
+            if value.get("episodes_per_task") != episodes:
+                raise InvalidArtifact(f"{label} episode coverage differs")
+            seeds = value.get("valid_seeds")
+            if not isinstance(seeds, Mapping) or tuple(seeds) != TASKS:
+                raise InvalidArtifact(f"{label} task coverage differs")
+            for task in TASKS:
+                rows = seeds[task]
+                if (
+                    not isinstance(rows, list)
+                    or len(rows) != episodes
+                    or len(set(rows)) != episodes
+                ):
+                    raise InvalidArtifact(f"{task}: {label} seed coverage differs")
+        for field_name in ("seed_manifest", "seed_manifest_sha256"):
+            first = validation.get(field_name)
+            second = branches.get(field_name)
+            if not isinstance(first, str) or not isinstance(second, str) or first == second:
+                raise InvalidArtifact(
+                    f"validation and branch manifest identity must be distinct at {field_name}"
+                )
+        validation_seeds = validation["valid_seeds"]
+        branch_seeds = branches["valid_seeds"]
+        for task in TASKS:
+            overlap = set(validation_seeds[task]).intersection(branch_seeds[task])
+            if overlap:
+                raise InvalidArtifact(
+                    f"{task}: validation and branch seeds overlap; pools must be disjoint"
                 )
 
     def _validate_model_contract(self, result: Mapping[str, Any]) -> None:
@@ -3706,6 +3812,18 @@ class Supervisor:
 
         if spec.result_kind == "seed_manifest":
             overlay_expectations = self._asset_runtime_expectations()
+            expected_seed_protocol = {
+                "seed_discovery_smoke": (1, 0, "validation"),
+                "seed_discovery": (VALIDATION_EPISODES, 0, "validation"),
+                "branch_seed_discovery": (
+                    BRANCH_SEED_EPISODES,
+                    BRANCH_SEED_BUCKET,
+                    "branch",
+                ),
+            }
+            expected_episodes, expected_bucket, expected_role = (
+                expected_seed_protocol[spec.name]
+            )
             if result.get("policy_independent") is not True:
                 raise InvalidArtifact("expert seed manifest is not policy-independent")
             if result.get("learned_policy_used") is not False:
@@ -3714,8 +3832,12 @@ class Supervisor:
                 raise InvalidArtifact("expert seed discovery used policy results")
             if result.get("structural_error_streak_limit") != 3:
                 raise InvalidArtifact("expert seed structural-error limit differs")
-            if int(result.get("episodes_per_task", -1)) not in {1, VALIDATION_EPISODES}:
+            if int(result.get("episodes_per_task", -1)) != expected_episodes:
                 raise InvalidArtifact("expert seed manifest episode count differs")
+            if result.get("seed_bucket") != expected_bucket:
+                raise InvalidArtifact("expert seed manifest bucket differs")
+            if result.get("seed_role") != expected_role:
+                raise InvalidArtifact("expert seed manifest role differs")
             valid = result.get("valid_seeds")
             if not isinstance(valid, Mapping) or tuple(valid) != TASKS:
                 raise InvalidArtifact("expert seed manifest task coverage/order differs")
@@ -3734,6 +3856,10 @@ class Supervisor:
             self._require_mapping_values(
                 manifest_value,
                 {
+                    "stage": spec.name,
+                    "seed_role": expected_role,
+                    "seed_bucket": expected_bucket,
+                    "episodes_per_task": expected_episodes,
                     "valid_seeds": valid,
                     "structural_error_streak_limit": 3,
                     "learned_policy_used": False,
@@ -3927,6 +4053,12 @@ class Supervisor:
                         },
                         f"{task} aggregate attempt receipt {index} diagnostics",
                     )
+            if spec.name == "branch_seed_discovery":
+                validation_path = self.result_path("seed_discovery")
+                if not validation_path.is_file():
+                    raise InvalidArtifact("Validation20 seed result is missing")
+                validation_result = _read_json(validation_path)
+                self._validate_seed_manifest_disjoint(validation_result, result)
 
         model_kinds = {
             "training",
@@ -4201,6 +4333,20 @@ class Supervisor:
         if extra:
             value.update(extra)
         if spec.name in {"branch_smoke", "branch_collection"}:
+            seed_stage = (
+                "seed_discovery_smoke"
+                if spec.name == "branch_smoke"
+                else "branch_seed_discovery"
+            )
+            seed_result = _read_json(self.result_path(seed_stage))
+            value.update(
+                {
+                    "seed_manifest": seed_result.get("seed_manifest"),
+                    "seed_manifest_sha256": seed_result.get(
+                        "seed_manifest_sha256"
+                    ),
+                }
+            )
             # Branch validation is deliberately performed on the aggregate
             # view so a missing family cannot be hidden in an individual
             # worker receipt.
@@ -4376,7 +4522,20 @@ class Supervisor:
 
         worker_root = self.s.run / "worker_results" / spec.name
         results: dict[str, Path] = {}
-        episodes = 1 if spec.name == "seed_discovery_smoke" else VALIDATION_EPISODES
+        episodes = {
+            "seed_discovery_smoke": 1,
+            "seed_discovery": VALIDATION_EPISODES,
+            "branch_seed_discovery": BRANCH_SEEDS_PER_TASK,
+        }.get(spec.name)
+        if episodes is None:
+            raise InvalidArtifact(f"unsupported seed-discovery stage: {spec.name}")
+        seed_bucket = BRANCH_SEED_BUCKET if spec.name == "branch_seed_discovery" else 0
+        worker_stage = (
+            "branch_seed_discovery_worker"
+            if spec.name == "branch_seed_discovery"
+            else "seed_discovery_worker"
+        )
+        seed_role = "branch" if spec.name == "branch_seed_discovery" else "validation"
         for first in range(0, len(TASKS), 4):
             wave = TASKS[first : first + 4]
             jobs = []
@@ -4389,7 +4548,14 @@ class Supervisor:
                         self._base_command(
                             spec,
                             path,
-                            ("--task", task, "--episodes", str(episodes)),
+                            (
+                                "--task",
+                                task,
+                                "--episodes",
+                                str(episodes),
+                                "--seed-bucket",
+                                str(seed_bucket),
+                            ),
                         ),
                         gpu,
                         self.s.run / "logs" / f"{spec.name}_{task}.log",
@@ -4416,7 +4582,7 @@ class Supervisor:
                 row,
                 {
                     "schema": RESULT_SCHEMA,
-                    "stage": "seed_discovery_worker",
+                    "stage": worker_stage,
                     "status": "PASSED",
                     "benchmark_adapter": "BiCoord",
                     "config_sha256": self.config_hash,
@@ -4424,6 +4590,9 @@ class Supervisor:
                     "episodes": episodes,
                     "completed": episodes,
                     "episodes_per_task": episodes,
+                    "seed_bucket": seed_bucket,
+                    "seed_role": seed_role,
+                    "stage_name": spec.name,
                     "tasks": [task],
                     "policy_independent": True,
                     "learned_policy_used": False,
@@ -4455,7 +4624,10 @@ class Supervisor:
                     "schema": "before-we-act.bicoord.expert-seed-manifest/1",
                     "status": "PASSED",
                     "policy_independent": True,
+                    "stage": spec.name,
+                    "seed_role": seed_role,
                     "episodes_per_task": episodes,
+                    "seed_bucket": seed_bucket,
                     "tasks": [task],
                     "valid_seeds": {task: seeds},
                     "learned_policy_used": False,
@@ -4675,7 +4847,9 @@ class Supervisor:
                 "official_expert_play_once_then_plan_success_and_check_success"
             ),
             "seed_protocol": "100000*(1+seed_bucket), increment by one",
-            "seed_bucket": 0,
+            "stage": spec.name,
+            "seed_role": seed_role,
+            "seed_bucket": seed_bucket,
             "seed_multiplier": 100_000,
             "episodes_per_task": episodes,
             "tasks": list(TASKS),
@@ -4704,6 +4878,9 @@ class Supervisor:
                 "manifest": str(aggregate_manifest.resolve()),
                 "manifest_sha256": _sha256(aggregate_manifest),
                 "episodes_per_task": episodes,
+                "stage": spec.name,
+                "seed_role": seed_role,
+                "seed_bucket": seed_bucket,
                 "task_counts": {task: len(valid_seeds[task]) for task in TASKS},
                 "exception_type_counts": exception_type_counts,
                 "exception_counts": exception_counts,
@@ -4741,6 +4918,8 @@ class Supervisor:
                 "workers": workers,
                 "artifacts": self._deduplicate_artifacts(artifacts),
                 "episodes_per_task": episodes,
+                "seed_role": seed_role,
+                "seed_bucket": seed_bucket,
                 "tasks": list(TASKS),
                 "valid_seeds": valid_seeds,
                 "seed_manifest": str(aggregate_manifest.resolve()),

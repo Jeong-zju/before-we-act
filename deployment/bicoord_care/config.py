@@ -97,6 +97,14 @@ VALIDATION_MAX_STEPS: Final[dict[str, int]] = {
 EPISODES_PER_TASK: Final[int] = 100
 TOTAL_EPISODES: Final[int] = len(TASKS) * EPISODES_PER_TASK
 VALIDATION_EPISODES: Final[int] = 20
+# Formal CARE branch supervision is training data.  Its expert-valid initial
+# states therefore live in a separate official seed bucket and may never
+# overlap the held-out Validation20 pool.
+BRANCH_FAMILIES_PER_TASK: Final[int] = 30
+BRANCH_SEEDS_PER_TASK: Final[int] = BRANCH_FAMILIES_PER_TASK
+# Descriptive alias used by the seed/branch protocol tests and receipts.
+BRANCH_SEED_EPISODES: Final[int] = BRANCH_SEEDS_PER_TASK
+BRANCH_SEED_BUCKET: Final[int] = 1
 VALIDATION_HORIZON_METHOD: Final[str] = "benchmark_fixed_per_task"
 # A learned-policy smoke is an interface test, not a competence evaluation.
 # Two controller ticks are the minimum which exercise reset/inference/act on
@@ -298,6 +306,10 @@ __all__ = [
     "ARM_COUNT",
     "BALANCE_CYCLE_UPDATES",
     "BASE_SAMPLES_PER_TASK",
+    "BRANCH_FAMILIES_PER_TASK",
+    "BRANCH_SEED_EPISODES",
+    "BRANCH_SEED_BUCKET",
+    "BRANCH_SEEDS_PER_TASK",
     "DATASET_COMMIT",
     "DATASET_REPO_ID",
     "DATASET_REVISION",

@@ -20,7 +20,13 @@ import sys
 import traceback
 from typing import Any, Mapping
 
-from .config import TASKS, VALIDATION_EPISODES, VALIDATION_MAX_STEPS
+from .config import (
+    BRANCH_SEED_BUCKET,
+    BRANCH_SEED_EPISODES,
+    TASKS,
+    VALIDATION_EPISODES,
+    VALIDATION_MAX_STEPS,
+)
 from .stage_common import (
     artifact,
     assert_common_paths,
@@ -750,7 +756,20 @@ def discover(
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     assert_common_paths(args)
-    smoke = args.operation == "smoke-discover" or bool(getattr(args, "smoke", False))
+    branch = args.operation == "discover-branch-seeds"
+    smoke = (
+        args.operation == "smoke-discover" or bool(getattr(args, "smoke", False))
+    )
+    if branch and smoke:
+        raise ValueError("formal branch seed discovery cannot be marked smoke")
+    seed_role = "branch" if branch else "validation"
+    stage_name = (
+        "seed_discovery_smoke"
+        if smoke
+        else "branch_seed_discovery"
+        if branch
+        else "seed_discovery"
+    )
     # Smoke runs follow the real smoke B-core interface and must not require
     # the formal B-core selection receipt (which is intentionally later in the
     # supervisor DAG).  Formal discovery remains downstream of offline select.
@@ -760,14 +779,32 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         config_sha256=args.config_sha256,
     )
     requested = getattr(args, "episodes", None)
-    episodes = int(requested if requested is not None else (1 if smoke else VALIDATION_EPISODES))
+    episodes = int(
+        requested
+        if requested is not None
+        else (
+            1
+            if smoke
+            else BRANCH_SEED_EPISODES
+            if branch
+            else VALIDATION_EPISODES
+        )
+    )
     if smoke and episodes != 1:
         raise ValueError("seed-discovery smoke requires one expert-valid seed")
-    if not smoke and episodes != VALIDATION_EPISODES:
+    if branch and episodes != BRANCH_SEED_EPISODES:
+        raise ValueError(
+            f"branch seed discovery requires {BRANCH_SEED_EPISODES} seeds"
+        )
+    if not branch and not smoke and episodes != VALIDATION_EPISODES:
         raise ValueError(f"formal seed discovery requires {VALIDATION_EPISODES} seeds")
-    seed_bucket = int(getattr(args, "seed_bucket", DEFAULT_SEED_BUCKET))
+    expected_bucket = BRANCH_SEED_BUCKET if branch else DEFAULT_SEED_BUCKET
+    raw_bucket = getattr(args, "seed_bucket", None)
+    seed_bucket = expected_bucket if raw_bucket is None else int(raw_bucket)
+    if seed_bucket != expected_bucket:
+        raise ValueError(f"seed bucket {seed_bucket} is not allowed for this stage")
     max_attempts = int(getattr(args, "max_attempts", DEFAULT_MAX_ATTEMPTS))
-    root = args.run / "artifacts" / ("seed_discovery_smoke" if smoke else "seed_discovery")
+    root = args.run / "artifacts" / stage_name
     root.mkdir(parents=True, exist_ok=True)
     manifest = discover(
         args.benchmark_repo,
@@ -776,6 +813,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         max_attempts=max_attempts,
         task=getattr(args, "task", None),
         progress_dir=root,
+    )
+    manifest.update(
+        {
+            "stage": stage_name,
+            "seed_role": seed_role,
+        }
     )
     progress_receipts = {
         task_name: str(_progress_path(root, task_name).resolve())
@@ -803,6 +846,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "manifest": str(manifest_path.resolve()),
             "manifest_sha256": digest,
             "episodes_per_task": episodes,
+            "stage": stage_name,
+            "seed_role": seed_role,
+            "seed_bucket": seed_bucket,
             "task_counts": {
                 name: len(values) for name, values in manifest["valid_seeds"].items()
             },
@@ -822,11 +868,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
     )
     if getattr(args, "task", None):
-        stage = "seed_discovery_worker"
+        stage = (
+            "branch_seed_discovery_worker" if branch else "seed_discovery_worker"
+        )
     else:
-        stage = "seed_discovery_smoke" if smoke else "seed_discovery"
+        stage = stage_name
     fields: dict[str, Any] = {
         "episodes_per_task": episodes,
+        "stage_name": stage_name,
+        "seed_role": seed_role,
+        "seed_bucket": seed_bucket,
         "tasks": list(manifest["tasks"]),
         "valid_seeds": manifest["valid_seeds"],
         "seed_manifest": str(manifest_path.resolve()),
@@ -872,8 +923,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = common_parser(__doc__, ("smoke-discover", "discover-seeds"))
-    parser.add_argument("--seed-bucket", type=int, default=DEFAULT_SEED_BUCKET)
+    parser = common_parser(
+        __doc__, ("smoke-discover", "discover-seeds", "discover-branch-seeds")
+    )
+    parser.add_argument("--seed-bucket", type=int)
     parser.add_argument("--max-attempts", type=int, default=DEFAULT_MAX_ATTEMPTS)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--task", choices=TASKS)

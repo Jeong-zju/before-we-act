@@ -37,7 +37,14 @@ from .bicoord_snapshot import (
     restore_state,
     state_sha256,
 )
-from .config import ACTION_DIM, ACTION_HORIZON, TASKS, VALIDATION_MAX_STEPS
+from .config import (
+    ACTION_DIM,
+    ACTION_HORIZON,
+    BRANCH_SEED_BUCKET,
+    BRANCH_SEEDS_PER_TASK,
+    TASKS,
+    VALIDATION_MAX_STEPS,
+)
 from .data import load_normalization_receipt, project_local_observation
 from .evaluate_bcore import _checkpoint, _make_env, _official_seeds, _runtime
 from .stage_common import (
@@ -569,8 +576,15 @@ def _targets(branches: Sequence[Mapping[str, Any]]) -> tuple[np.ndarray, np.ndar
 
 
 def _family_spec(task: str, local: int, families_per_task: int, seeds: Sequence[int]) -> dict[str, int]:
-    if len(seeds) < 1:
-        raise ValueError("CARE family construction requires expert-valid seeds")
+    if len(seeds) != families_per_task:
+        raise ValueError(
+            "CARE family construction requires one unique expert-valid seed "
+            f"per family ({len(seeds)} != {families_per_task})"
+        )
+    if len(set(int(seed) for seed in seeds)) != len(seeds):
+        raise ValueError("CARE family construction requires unique expert-valid seeds")
+    if not 0 <= local < families_per_task:
+        raise ValueError("CARE family index is outside seed coverage")
     # Frozen before any branch outcome: shallow anchors avoid terminal states,
     # while expert-valid seeds and both focal arms cover scene variation.
     task_index = TASKS.index(task)
@@ -585,6 +599,44 @@ def _family_spec(task: str, local: int, families_per_task: int, seeds: Sequence[
     }
 
 
+def _official_branch_seeds(
+    args: argparse.Namespace, task: str, *, count: int
+) -> list[int]:
+    """Load the disjoint branch seed manifest, never Validation20 seeds."""
+
+    dependency = require_stage_result(
+        args.run, "branch_seed_discovery", config_sha256=args.config_sha256
+    )
+    if dependency.get("stage") != "branch_seed_discovery":
+        raise RuntimeError("branch seed discovery result identity differs")
+    if dependency.get("seed_bucket") != BRANCH_SEED_BUCKET:
+        raise RuntimeError("branch seed discovery bucket differs")
+    if dependency.get("episodes_per_task") != BRANCH_SEEDS_PER_TASK:
+        raise RuntimeError("branch seed discovery coverage differs")
+    path = Path(str(dependency.get("seed_manifest", "")))
+    digest = dependency.get("seed_manifest_sha256")
+    if not path.is_file() or not isinstance(digest, str) or sha256_file(path) != digest:
+        raise RuntimeError("branch seed discovery manifest is missing or changed")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        value.get("schema") != "before-we-act.bicoord.expert-seed-manifest/1"
+        or value.get("status") != "PASSED"
+        or value.get("stage") != "branch_seed_discovery"
+        or value.get("policy_independent") is not True
+        or value.get("seed_bucket") != BRANCH_SEED_BUCKET
+        or value.get("episodes_per_task") != BRANCH_SEEDS_PER_TASK
+    ):
+        raise RuntimeError("branch seed manifest is not the frozen branch contract")
+    rows = value.get("valid_seeds", {}).get(task)
+    if (
+        not isinstance(rows, list)
+        or len(rows) != count
+        or len(set(rows)) != len(rows)
+    ):
+        raise RuntimeError(f"branch expert-valid seed coverage is incomplete for {task}")
+    return [int(seed) for seed in rows]
+
+
 def _collect_family(
     *,
     args: argparse.Namespace,
@@ -592,6 +644,8 @@ def _collect_family(
     checkpoint: Path,
     checkpoint_sha256: str,
     normalization: Mapping[str, Any],
+    seed_manifest: str,
+    seed_manifest_sha256: str,
     task: str,
     spec: Mapping[str, int],
     output_root: Path,
@@ -614,6 +668,8 @@ def _collect_family(
             existing.get("status") == "PASSED"
             and existing.get("snapshot_id") == snapshot_id
             and existing.get("checkpoint_sha256") == checkpoint_sha256
+            and existing.get("seed_manifest") == seed_manifest
+            and existing.get("seed_manifest_sha256") == seed_manifest_sha256
             and existing.get("physical_simulator_outcomes") is True
             and existing.get("npz_sha256") == sha256_file(npz_path)
         ):
@@ -787,6 +843,8 @@ def _collect_family(
             "provider_policy_family": "PredictiveTeamBeliefPolicy",
             "checkpoint": str(checkpoint.resolve()),
             "checkpoint_sha256": checkpoint_sha256,
+            "seed_manifest": seed_manifest,
+            "seed_manifest_sha256": seed_manifest_sha256,
             "branches_per_family": BRANCHES_PER_FAMILY,
             "candidate_count": CANDIDATES,
             "regimes": ["reactive", "replay"],
@@ -861,8 +919,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     checkpoint_sha = sha256_file(checkpoint)
     runtime = _runtime(checkpoint, args)
     normalization = _normalization_audit(args, runtime)
-    seed_count = 1 if smoke else 20
-    seed_rows = {task: _official_seeds(args, task, count=seed_count) for task in TASKS}
+    seed_count = 1 if smoke else BRANCH_SEEDS_PER_TASK
+    seed_rows = {
+        task: (
+            _official_seeds(args, task, count=seed_count)
+            if smoke
+            else _official_branch_seeds(args, task, count=seed_count)
+        )
+        for task in TASKS
+    }
+    seed_stage = "seed_discovery_smoke" if smoke else "branch_seed_discovery"
+    seed_dependency = require_stage_result(
+        args.run, seed_stage, config_sha256=args.config_sha256
+    )
+    seed_manifest_path = Path(str(seed_dependency.get("seed_manifest", ""))).resolve()
+    seed_manifest_sha = seed_dependency.get("seed_manifest_sha256")
+    if not seed_manifest_path.is_file() or sha256_file(seed_manifest_path) != seed_manifest_sha:
+        raise RuntimeError("branch seed manifest artifact/hash differs")
     output_root = args.run / "artifacts" / ("branch_smoke" if smoke else "branches") / f"rank_{rank}"
     output_root.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, Any]] = []
@@ -879,6 +952,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 normalization=normalization,
                 task=task,
                 spec=spec,
+                seed_manifest=str(seed_manifest_path),
+                seed_manifest_sha256=str(seed_manifest_sha),
                 output_root=output_root,
                 smoke=smoke,
             )
@@ -921,6 +996,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "provider_policy_family": "PredictiveTeamBeliefPolicy",
             "checkpoint": str(checkpoint.resolve()),
             "checkpoint_sha256": checkpoint_sha,
+            "seed_manifest": str(seed_manifest_path),
+            "seed_manifest_sha256": str(seed_manifest_sha),
             "physical_simulator_outcomes": True,
             "offline_demonstration_error_used": False,
             "care_memory_tokens": BICOORD_CARE_MEMORY_TOKENS,
@@ -949,6 +1026,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         care_memory_semantics=BICOORD_CARE_MEMORY_SEMANTICS,
         checkpoint=str(checkpoint.resolve()),
         checkpoint_sha256=checkpoint_sha,
+        seed_manifest=str(seed_manifest_path),
+        seed_manifest_sha256=str(seed_manifest_sha),
     )
 
 
