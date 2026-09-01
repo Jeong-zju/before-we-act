@@ -76,6 +76,20 @@ def test_settings_binds_a_valid_care_source_revision(tmp_path: Path) -> None:
         _settings(tmp_path / "bad", revision="not-a-commit").validate()
 
 
+def test_run_path_lock_rejects_concurrent_supervisors(tmp_path: Path) -> None:
+    first = sup.Supervisor(_settings(tmp_path))
+    second = sup.Supervisor(_settings(tmp_path))
+    first.s.run.mkdir(parents=True)
+    first._acquire_run_lock()
+    try:
+        with pytest.raises(sup.SupervisorError, match="already owns"):
+            second._acquire_run_lock()
+    finally:
+        first._release_run_lock()
+    second._acquire_run_lock()
+    second._release_run_lock()
+
+
 def test_base_commands_explicitly_isolate_smoke_cache_and_branch(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     # Avoid import discovery in this command-construction test.

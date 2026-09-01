@@ -16,6 +16,7 @@ import argparse
 from collections import Counter, OrderedDict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -1152,6 +1153,7 @@ class Supervisor:
         self._old_handlers: dict[int, Any] = {}
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
+        self._run_lock: Any | None = None
 
     @property
     def receipts(self) -> Path:
@@ -1229,6 +1231,46 @@ class Supervisor:
         if thread is not None and thread.is_alive():
             thread.join(timeout=2.0)
         self._heartbeat_thread = None
+
+    def _acquire_run_lock(self) -> None:
+        """Claim one run path for exactly one supervisor process."""
+
+        lock_path = self.s.run / "supervisor.lock"
+        stream = lock_path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            stream.close()
+            raise SupervisorError(
+                f"another supervisor already owns this run path: {self.s.run}"
+            ) from error
+        stream.seek(0)
+        stream.truncate()
+        json.dump(
+            {
+                "schema": "before-we-act.bicoord.supervisor-lock/1",
+                "pid": os.getpid(),
+                "run": str(self.s.run),
+                "config_sha256": self.config_hash,
+                "acquired_at": _utc_now(),
+            },
+            stream,
+            sort_keys=True,
+        )
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+        self._run_lock = stream
+
+    def _release_run_lock(self) -> None:
+        stream = self._run_lock
+        self._run_lock = None
+        if stream is None:
+            return
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
 
     def _set_status(self, state: str, stage: str | None, **detail: Any) -> None:
         self.state = state
@@ -5326,10 +5368,11 @@ class Supervisor:
         if stop_after is not None and stop_after not in STAGES:
             raise ValueError(f"unknown stop stage: {stop_after}")
         self.s.run.mkdir(parents=True, exist_ok=True)
-        _atomic_json(self.s.run / "frozen_config.json", self.config)
-        self._install_signals()
-        self._start_heartbeat()
+        self._acquire_run_lock()
         try:
+            _atomic_json(self.s.run / "frozen_config.json", self.config)
+            self._install_signals()
+            self._start_heartbeat()
             self.preflight()
             started = start_at is None
             outcomes: dict[str, str] = {}
@@ -5373,6 +5416,7 @@ class Supervisor:
         finally:
             self._stop_heartbeat()
             self._restore_signals()
+            self._release_run_lock()
 
 
 def plan_payload(settings: Settings) -> dict[str, Any]:
