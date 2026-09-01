@@ -166,3 +166,31 @@ def test_fidelity_diagnostic_exposes_discrete_and_continuous_differences() -> No
     assert diagnostic["active_label_difference_steps"] == [0]
     assert diagnostic["all_joint_changes_label_difference_steps"] == []
     assert diagnostic["utility_by_horizon"]["16"]["utility_abs_error"] > 0.03
+
+
+def test_fidelity_summary_rejects_hidden_physical_drift_even_when_utility_matches() -> None:
+    metrics = [
+        {
+            "qpos": [[0.0] * 7, [0.0] * 7],
+            "progress": 0.0,
+            "active": [False, False],
+            "all_joint_changes_below_0_02": True,
+        }
+    ]
+    row = {
+        "repeat_id": 0,
+        "executed_actions": [[[0.0] * 7, [0.0] * 7]],
+        "metrics": metrics,
+        "outcomes": {
+            str(horizon): {"utility_main": 0.0, "bounded_utility_vector": [0.0] * 8}
+            for horizon in module.HORIZONS
+        },
+    }
+    replay = {
+        **row,
+        "executed_actions": [[[1e-5] + [0.0] * 6, [0.0] * 7]],
+    }
+    summary = module._fidelity_summary(row, replay)
+    assert summary["utility_max_abs_error"] == 0.0
+    assert summary["executed_action_max_abs_error"] == pytest.approx(1e-5)
+    assert summary["passed"] is False

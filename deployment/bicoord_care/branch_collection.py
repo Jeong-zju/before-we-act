@@ -751,6 +751,40 @@ def _fidelity_diagnostic(
     }
 
 
+def _fidelity_summary(
+    reactive: Mapping[str, Any], replay: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Build a strict continuous and discrete reactive/replay fidelity gate."""
+
+    diagnostic = _fidelity_diagnostic(reactive, replay)
+    utility_error = max(
+        float(row["utility_abs_error"])
+        for row in diagnostic["utility_by_horizon"].values()
+    )
+    passed = bool(
+        utility_error <= SNAPSHOT_TOLERANCE
+        and float(diagnostic["executed_action_max_abs_error"]) <= SNAPSHOT_TOLERANCE
+        and float(diagnostic["qpos_max_abs_error"]) <= SNAPSHOT_TOLERANCE
+        and float(diagnostic["progress_max_abs_error"]) <= SNAPSHOT_TOLERANCE
+        and not diagnostic["active_label_difference_steps"]
+        and not diagnostic["all_joint_changes_label_difference_steps"]
+    )
+    return {
+        "repeat_id": int(reactive.get("repeat_id", -1)),
+        "utility_max_abs_error": utility_error,
+        "executed_action_max_abs_error": float(
+            diagnostic["executed_action_max_abs_error"]
+        ),
+        "qpos_max_abs_error": float(diagnostic["qpos_max_abs_error"]),
+        "progress_max_abs_error": float(diagnostic["progress_max_abs_error"]),
+        "active_labels_equal": not bool(diagnostic["active_label_difference_steps"]),
+        "stagnant_labels_equal": not bool(
+            diagnostic["all_joint_changes_label_difference_steps"]
+        ),
+        "passed": passed,
+    }
+
+
 def _targets(branches: Sequence[Mapping[str, Any]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     keyed = {
         (int(row["candidate_id"]), str(row["regime"]), int(row["repeat_id"])): row
@@ -1005,22 +1039,16 @@ def _collect_family(
                 env_factory=branch_env_factory,
             )
             branches.append(reference_replay)
-            difference = max(
-                abs(
-                    float(reference_reactive["outcomes"][str(horizon)]["utility_main"])
-                    - float(reference_replay["outcomes"][str(horizon)]["utility_main"])
-                )
-                for horizon in HORIZONS
-            )
-            fidelity.append({"repeat_id": repeat, "utility_max_abs_error": difference})
-            if difference > SNAPSHOT_TOLERANCE:
+            fidelity_row = _fidelity_summary(reference_reactive, reference_replay)
+            fidelity.append(fidelity_row)
+            if fidelity_row["passed"] is not True:
                 diagnostic = _fidelity_diagnostic(reference_reactive, reference_replay)
                 diagnostic["repeat_id"] = int(repeat)
                 diagnostic["snapshot_id"] = snapshot_id
                 diagnostic_path = output_root / f"family_{family_id:06d}.fidelity_diagnostic.json"
                 atomic_json(diagnostic_path, diagnostic)
                 raise RuntimeError(
-                    f"candidate-0 reactive/replay fidelity failed: {difference}; "
+                    f"candidate-0 reactive/replay fidelity failed: {fidelity_row}; "
                     f"diagnostic={diagnostic_path}"
                 )
             for candidate in range(1, CANDIDATES):

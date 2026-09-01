@@ -1930,11 +1930,16 @@ class Supervisor:
                     not isinstance(fidelity, list)
                     or len(fidelity) != 2
                     or any(
-                        float(row.get("utility_max_abs_error", float("inf"))) > 1e-6
+                        not isinstance(row, Mapping)
+                        or row.get("passed") is not True
+                        or float(row.get("utility_max_abs_error", float("inf"))) > 1e-6
+                        or float(row.get("executed_action_max_abs_error", float("inf"))) > 1e-6
+                        or float(row.get("qpos_max_abs_error", float("inf"))) > 1e-6
+                        or float(row.get("progress_max_abs_error", float("inf"))) > 1e-6
+                        or row.get("active_labels_equal") is not True
+                        or row.get("stagnant_labels_equal") is not True
                         for row in fidelity
-                        if isinstance(row, Mapping)
                     )
-                    or any(not isinstance(row, Mapping) for row in fidelity)
                 ):
                     raise InvalidArtifact("reference reactive/replay fidelity failed")
                 branches = family.get("branches")

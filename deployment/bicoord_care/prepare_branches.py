@@ -114,6 +114,23 @@ def _records(
             probe = family.get("restore_probe")
             if not isinstance(probe, Mapping) or probe.get("schema") != "before-we-act.bicoord.seed-replay-probe/1" or probe.get("rebuilt_anchor_state_exact_match") is not True or probe.get("passed") is not True or float(probe.get("max_abs_error", float("inf"))) > 1e-6:
                 raise ValueError(f"branch family restore probe failed: {manifest}")
+            fidelity = family.get("reference_reactive_replay_fidelity")
+            if (
+                not isinstance(fidelity, list)
+                or len(fidelity) != 2
+                or any(
+                    not isinstance(row, Mapping)
+                    or row.get("passed") is not True
+                    or float(row.get("utility_max_abs_error", float("inf"))) > 1e-6
+                    or float(row.get("executed_action_max_abs_error", float("inf"))) > 1e-6
+                    or float(row.get("qpos_max_abs_error", float("inf"))) > 1e-6
+                    or float(row.get("progress_max_abs_error", float("inf"))) > 1e-6
+                    or row.get("active_labels_equal") is not True
+                    or row.get("stagnant_labels_equal") is not True
+                    for row in fidelity
+                )
+            ):
+                raise ValueError(f"branch family strict fidelity failed: {manifest}")
             keys = {
                 (int(branch.get("candidate_id", -1)), str(branch.get("regime", "")), int(branch.get("repeat_id", -1)))
                 for branch in family.get("branches", [])
