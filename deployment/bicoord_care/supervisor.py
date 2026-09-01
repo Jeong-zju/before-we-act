@@ -212,7 +212,7 @@ STAGES: "OrderedDict[str, StageSpec]" = OrderedDict(
         StageSpec("branch_signal_gate", ("branch_prepare",), "branch_audit", "signal-gate", "cpu", "reject degenerate counterfactual/event supervision", "gate"),
         StageSpec("belief_train", ("branch_signal_gate",), "belief_train", "formal-train", "care_grid", "four CARE variants by three seeds in four-GPU waves", "training_grid"),
         StageSpec("offline_selection_calibration", ("belief_train",), "care_select", "select-calibrate", "cpu", "offline selection and calibration with no closed-loop leakage", "selection"),
-        StageSpec("paired_validation20", ("offline_selection_calibration",), "paired_evaluate", "validation20-paired", "task_queue4", "paired selector-off/CARE Validation20 on all 18 tasks", "validation20"),
+        StageSpec("paired_validation20", ("offline_selection_calibration", "seed_discovery"), "paired_evaluate", "validation20-paired", "task_queue4", "paired selector-off/CARE Validation20 on all 18 tasks", "validation20"),
     )
 )
 
@@ -2084,6 +2084,42 @@ class Supervisor:
         expected_operation = (
             "smoke-paired" if episodes == 1 else "validation20-paired"
         )
+        expected_seed_manifest: str | None = None
+        expected_seed_manifest_sha: str | None = None
+        expected_seed_rows: Mapping[str, Any] | None = None
+        if stage_name is not None:
+            seed_stage = (
+                "seed_discovery_smoke"
+                if episodes == 1
+                else "seed_discovery"
+            )
+            seed_result = _read_json(self.result_path(seed_stage))
+            self._require_mapping_values(
+                seed_result,
+                {
+                    "schema": RESULT_SCHEMA,
+                    "stage": seed_stage,
+                    "status": "PASSED",
+                    "benchmark_adapter": "BiCoord",
+                    "config_sha256": self.config_hash,
+                    "seed_bucket": 0,
+                    "seed_role": "validation",
+                    "episodes_per_task": episodes,
+                },
+                f"{stage_name} validation seed result",
+            )
+            expected_seed_manifest = str(seed_result.get("seed_manifest", ""))
+            expected_seed_manifest_sha = seed_result.get("seed_manifest_sha256")
+            expected_seed_rows = seed_result.get("valid_seeds")
+            if (
+                not expected_seed_manifest
+                or not isinstance(expected_seed_manifest_sha, str)
+                or not isinstance(expected_seed_rows, Mapping)
+                or tuple(expected_seed_rows) != TASKS
+            ):
+                raise InvalidArtifact(
+                    f"{stage_name}: validation seed provenance is incomplete"
+                )
         for task in TASKS:
             expected_steps = int(horizon_map[task])
             task_row = tasks[task]
@@ -2130,6 +2166,10 @@ class Supervisor:
                 or any(not isinstance(seed, int) or seed < 0 for seed in seeds)
             ):
                 raise InvalidArtifact(f"{task}: paired seed coverage differs")
+            if expected_seed_rows is not None and seeds != expected_seed_rows[task]:
+                raise InvalidArtifact(
+                    f"{task}: paired seeds differ from the frozen Validation20 pool"
+                )
             receipt_path = _hashed_path(
                 task_row.get("progress_receipt"),
                 task_row.get("progress_receipt_sha256"),
@@ -2218,6 +2258,16 @@ class Supervisor:
                 seed_manifest_hash,
                 f"{task} seed manifest",
             )
+            if (
+                expected_seed_manifest is not None
+                and (
+                    receipt.get("seed_manifest") != expected_seed_manifest
+                    or seed_manifest_hash != expected_seed_manifest_sha
+                )
+            ):
+                raise InvalidArtifact(
+                    f"{task}: paired seed manifest differs from validation discovery"
+                )
             self._require_mapping_values(
                 task_row,
                 {
