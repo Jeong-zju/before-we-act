@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
 from deployment.bicoord_care import branch_collection as module
 
@@ -9,6 +10,40 @@ from deployment.bicoord_care import branch_collection as module
 class _Env:
     eval_success = False
     stage_eval_score = 0.0
+
+
+def test_restore_runtime_and_env_prefers_fresh_seed_rebuild_over_physx_unpack(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    def rebuild() -> None:
+        calls.append("rebuild")
+
+    env = SimpleNamespace(
+        _bicoord_rebuild_at_anchor=rebuild,
+        get_obs=lambda: {"anchor": True},
+    )
+
+    def forbidden_restore(*_args, **_kwargs):
+        raise AssertionError("opaque PhysX restore must not run for rebuilt branches")
+
+    monkeypatch.setattr(module, "restore_state", forbidden_restore)
+
+    class Runtime:
+        def restore_state(self, _state) -> None:
+            calls.append("runtime")
+
+    observed = module._restore_runtime_and_env(
+        env,
+        Runtime(),
+        {"unused": True},
+        {"runtime": True},
+        branch_seed=None,
+    )
+
+    assert calls == ["rebuild", "runtime"]
+    assert observed == {"anchor": True}
 
 
 def test_step_metrics_active_uses_command_against_pre_step_qpos(monkeypatch) -> None:

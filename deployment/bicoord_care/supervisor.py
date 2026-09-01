@@ -1879,6 +1879,8 @@ class Supervisor:
                         "action_clipping": False,
                         "candidate_transform_clipping": False,
                         "strict_lag_one": True,
+                        "schema": "before-we-act.bicoord.care-physical-branch-family/2",
+                        "simulator_restore_mode": "official_seed_plus_reference_prefix_replay",
                         "seed_manifest": seed_manifest,
                         "seed_manifest_sha256": seed_manifest_sha,
                     },
@@ -1917,6 +1919,8 @@ class Supervisor:
                 probe = family.get("restore_probe")
                 if (
                     not isinstance(probe, Mapping)
+                    or probe.get("schema") != "before-we-act.bicoord.seed-replay-probe/1"
+                    or probe.get("rebuilt_anchor_state_exact_match") is not True
                     or probe.get("passed") is not True
                     or float(probe.get("max_abs_error", float("inf"))) > 1e-6
                 ):
@@ -2350,6 +2354,7 @@ class Supervisor:
                         "execution_order": ["selector_off", "care"],
                         "same_initial_simulator_state": True,
                         "same_initial_observation": True,
+                        "paired_restore_mode": "fresh_official_seeded_environment",
                     },
                     f"paired row {task}/{seed}",
                 )

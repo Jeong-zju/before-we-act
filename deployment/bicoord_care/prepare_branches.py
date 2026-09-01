@@ -101,12 +101,18 @@ def _records(
                 )
             if family.get("physical_simulator_outcomes") is not True:
                 raise ValueError(f"branch family is not backed by physical simulator outcomes: {manifest}")
+            if (
+                family.get("schema") != "before-we-act.bicoord.care-physical-branch-family/2"
+                or family.get("simulator_restore_mode")
+                != "official_seed_plus_reference_prefix_replay"
+            ):
+                raise ValueError(f"branch family does not use exact seeded prefix reconstruction: {manifest}")
             if family.get("offline_demonstration_error_used") is not False or family.get("pseudo_labels_used") is not False:
                 raise ValueError(f"branch family contains a non-physical label path: {manifest}")
             if family.get("care_memory_semantics") != "PredictiveTeamBeliefPolicy.belief.mu+belief.event_memory":
                 raise ValueError(f"branch family memory semantics differ: {manifest}")
             probe = family.get("restore_probe")
-            if not isinstance(probe, Mapping) or probe.get("passed") is not True or float(probe.get("max_abs_error", float("inf"))) > 1e-6:
+            if not isinstance(probe, Mapping) or probe.get("schema") != "before-we-act.bicoord.seed-replay-probe/1" or probe.get("rebuilt_anchor_state_exact_match") is not True or probe.get("passed") is not True or float(probe.get("max_abs_error", float("inf"))) > 1e-6:
                 raise ValueError(f"branch family restore probe failed: {manifest}")
             keys = {
                 (int(branch.get("candidate_id", -1)), str(branch.get("regime", "")), int(branch.get("repeat_id", -1)))

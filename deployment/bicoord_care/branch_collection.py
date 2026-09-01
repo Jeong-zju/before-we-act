@@ -58,7 +58,7 @@ from .stage_common import (
 )
 
 
-BRANCH_SCHEMA = "before-we-act.bicoord.care-physical-branch-family/1"
+BRANCH_SCHEMA = "before-we-act.bicoord.care-physical-branch-family/2"
 SHARD_SCHEMA = "before-we-act.bicoord.care-physical-branch-shard/1"
 HORIZONS = (8, 16, 32, 64)
 CANDIDATES = 6
@@ -511,13 +511,16 @@ def _replay_reference_probe(
     prefix_actions: Sequence[np.ndarray],
     runtime: Any,
     runtime_state: Mapping[str, Any],
+    expected_anchor_state_sha256: str,
 ) -> dict[str, Any]:
     """Prove deterministic post-anchor rollouts using fresh official envs."""
 
     rows: list[Mapping[str, Any]] = []
+    anchor_hashes: list[str] = []
     for _ in range(2):
         env = _replay_anchor_environment(args, task, seed, prefix_actions)
         try:
+            anchor_hashes.append(state_sha256(capture_state(env)))
             runtime.restore_state(runtime_state)
             observation = env.get_obs()
             actions: list[np.ndarray] = []
@@ -546,13 +549,20 @@ def _replay_reference_probe(
     from .bicoord_snapshot import max_abs
 
     error = max((max_abs(rows[0], row) for row in rows[1:]), default=math.inf)
+    anchor_match = bool(
+        len(anchor_hashes) == 2
+        and all(value == expected_anchor_state_sha256 for value in anchor_hashes)
+    )
     return {
         "schema": "before-we-act.bicoord.seed-replay-probe/1",
         "repeats": 2,
         "max_abs_error": float(error),
         "tolerance": SNAPSHOT_TOLERANCE,
-        "passed": bool(error <= SNAPSHOT_TOLERANCE),
+        "passed": bool(error <= SNAPSHOT_TOLERANCE and anchor_match),
         "restore_mode": "official_seed_plus_reference_prefix_replay",
+        "expected_anchor_state_sha256": expected_anchor_state_sha256,
+        "rebuilt_anchor_state_sha256": anchor_hashes,
+        "rebuilt_anchor_state_exact_match": anchor_match,
     }
 
 
@@ -870,6 +880,9 @@ def _collect_family(
             and existing.get("seed_manifest") == seed_manifest
             and existing.get("seed_manifest_sha256") == seed_manifest_sha256
             and existing.get("physical_simulator_outcomes") is True
+            and existing.get("schema") == BRANCH_SCHEMA
+            and existing.get("simulator_restore_mode")
+            == "official_seed_plus_reference_prefix_replay"
             and existing.get("npz_sha256") == sha256_file(npz_path)
         ):
             return {
@@ -925,6 +938,7 @@ def _collect_family(
             prefix_actions=prefix_actions,
             runtime=runtime,
             runtime_state=runtime_state,
+            expected_anchor_state_sha256=simulator_state_hash,
         )
         if probe.get("passed") is not True:
             raise RuntimeError(f"BiCoord seed+prefix replay probe failed: {probe}")

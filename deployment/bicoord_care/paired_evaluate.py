@@ -544,7 +544,7 @@ def _paired_seed(
             progress_path=care_progress,
             action_min=action_min,
             action_max=action_max,
-            initial_observation=initial_observation,
+            initial_observation=restored_observation,
         )
         return {
             "task": task,
