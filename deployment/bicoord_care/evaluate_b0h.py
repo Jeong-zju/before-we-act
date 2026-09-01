@@ -132,14 +132,24 @@ def _reset_progress(progress: Path, receipt: Path) -> None:
 
 def _bench_env(benchmark_root: Path, task: str, seed: int):
     """Construct the official RoboTwin task without changing its source."""
-    if str(benchmark_root) not in sys.path:
-        sys.path.insert(0, str(benchmark_root))
+    benchmark_root = benchmark_root.expanduser().resolve(strict=True)
+    root_text = str(benchmark_root)
+    sys.path[:] = [root_text] + [entry for entry in sys.path if entry != root_text]
     env = None
     try:
         import importlib
         import yaml
 
+        cached = sys.modules.get("envs")
+        cached_file = getattr(cached, "__file__", None)
+        if cached_file is not None and benchmark_root not in Path(cached_file).expanduser().resolve().parents:
+            for name in list(sys.modules):
+                if name == "envs" or name.startswith("envs."):
+                    del sys.modules[name]
         module = importlib.import_module(f"envs.{task}")
+        module_file = getattr(module, "__file__", None)
+        if module_file is not None and benchmark_root not in Path(module_file).expanduser().resolve().parents:
+            raise RuntimeError(f"BiCoord task import escaped benchmark root: {module_file}")
         cls = getattr(module, task)
         env = cls()
         config_path = benchmark_root / "task_config" / "demo_clean.yml"

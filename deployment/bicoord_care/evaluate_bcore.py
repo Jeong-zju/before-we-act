@@ -148,9 +148,21 @@ def _official_seeds(args: argparse.Namespace, task: str, *, count: int) -> list[
 
 
 def _make_env(root: Path, task: str, seed: int):
-    if str(root) not in sys.path: sys.path.insert(0, str(root))
+    root = root.expanduser().resolve(strict=True)
+    root_text = str(root)
+    sys.path[:] = [root_text] + [entry for entry in sys.path if entry != root_text]
+    cached = sys.modules.get("envs")
+    cached_file = getattr(cached, "__file__", None)
+    if cached_file is not None and root not in Path(cached_file).expanduser().resolve().parents:
+        for name in list(sys.modules):
+            if name == "envs" or name.startswith("envs."):
+                del sys.modules[name]
     import importlib, yaml
-    module = importlib.import_module(f"envs.{task}"); cls = getattr(module, task); env = cls()
+    module = importlib.import_module(f"envs.{task}")
+    module_file = getattr(module, "__file__", None)
+    if module_file is not None and root not in Path(module_file).expanduser().resolve().parents:
+        raise RuntimeError(f"BiCoord task import escaped benchmark root: {module_file}")
+    cls = getattr(module, task); env = cls()
     cfg = yaml.safe_load((root / "task_config" / "demo_clean.yml").read_text())
     cfg.update({"task_name": task, "task_config": "demo_clean", "seed": int(seed), "now_ep_num": 0, "is_test": True, "eval_mode": True, "render_freq": 0, "save_data": False, "save_path": str(root / "data"), "need_plan": False, "dual_arm": True, "data_type": {"rgb": True, "qpos": True, "endpose": False, "depth": False, "pointcloud": False, "third_view": False}})
     emb = cfg.get("embodiment", ["aloha-agilex"]); emb_cfg = yaml.safe_load((root / "task_config" / "_embodiment_config.yml").read_text()); robot = Path(emb_cfg[emb[0]]["file_path"]); robot = robot if robot.is_absolute() else root / robot

@@ -383,12 +383,22 @@ def _asset_overlay_evidence(env: Any, task: str) -> dict[str, Any]:
 def _make_env(root: Path, task: str, seed: int) -> Any:
     """Construct a fresh official task environment using benchmark defaults."""
 
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    root = root.expanduser().resolve(strict=True)
+    root_text = str(root)
+    sys.path[:] = [root_text] + [entry for entry in sys.path if entry != root_text]
+    cached = sys.modules.get("envs")
+    cached_file = getattr(cached, "__file__", None)
+    if cached_file is not None and root not in Path(cached_file).expanduser().resolve().parents:
+        for name in list(sys.modules):
+            if name == "envs" or name.startswith("envs."):
+                del sys.modules[name]
     import importlib
     import yaml
 
     module = importlib.import_module(f"envs.{task}")
+    module_file = getattr(module, "__file__", None)
+    if module_file is not None and root not in Path(module_file).expanduser().resolve().parents:
+        raise RuntimeError(f"BiCoord task import escaped benchmark root: {module_file}")
     cls = getattr(module, task)
     env = cls()
     config_path = root / "task_config" / "demo_clean.yml"
