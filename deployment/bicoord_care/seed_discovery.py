@@ -325,25 +325,52 @@ def _write_progress(
 
 
 def _asset_overlay_evidence(env: Any, task: str) -> dict[str, Any]:
-    """Record the plate compatibility mapping on every plate-task attempt."""
+    """Record compatibility-overlay state on every affected-task attempt.
 
-    if task != "place_plate_and_cup":
+    This helper is deliberately called both from the normal expert result path
+    and from the outer ``discover`` exception/finally paths.  Consequently a
+    simulator/setup failure still leaves an explicit ``asset_overlay`` row;
+    missing evidence must never be mistaken for an overlay that was applied.
+    ``sweep_block`` uses the legacy model-3 shovel adapter in exactly the same
+    way as the plate task uses its contact-only adapter.
+    """
+
+    overlay_env = {
+        "place_plate_and_cup": "BICOORD_PLATE_ASSET_OVERLAY",
+        "sweep_block": "BICOORD_SHOVEL_ASSET_OVERLAY",
+    }.get(task)
+    if overlay_env is None:
         return {}
-    configured = os.environ.get("BICOORD_PLATE_ASSET_OVERLAY")
+    configured = os.environ.get(overlay_env)
     observed = getattr(env, "_bicoord_asset_overlay", None) if env is not None else None
     if isinstance(observed, Mapping):
-        overlay = dict(observed)
+        # Runtime adapters already emitted a complete, audited proof.  Keep
+        # it byte-for-byte stable: downstream aggregation compares the exact
+        # actor/hash evidence and older callers may intentionally provide a
+        # minimal fixture mapping.
+        return {"asset_overlay": dict(observed)}
     else:
         overlay = {
             "task": task,
             "applied": False,
             "reason": "environment_construction_failed_before_overlay_receipt",
         }
-    # These three fields are deliberately present even on a failed setup so a
-    # progress receipt never ambiguously omits the runtime asset state.
+    # These fields are deliberately present even on a failed setup so a
+    # progress receipt never ambiguously omits the runtime asset state.  Keep
+    # any richer runtime proof untouched (including actor-level hashes).
+    overlay.setdefault("task", task)
     overlay.setdefault("applied", False)
     overlay.setdefault("overlay", configured)
     overlay.setdefault("contact_points_pose_sha256", None)
+    overlay.setdefault("receipt", None)
+    overlay.setdefault("receipt_sha256", None)
+    overlay.setdefault("actors", {})
+    if task == "sweep_block":
+        overlay.setdefault("derived_fields", ["contact_points_pose"])
+        overlay.setdefault("source_fields", ["contact_pose", "trans_matrix"])
+        overlay.setdefault("legacy_conversion", True)
+    else:
+        overlay.setdefault("copied_fields", ["contact_points_pose"])
     return {"asset_overlay": overlay}
 
 

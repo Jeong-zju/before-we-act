@@ -8,7 +8,7 @@ import zipfile
 
 import pytest
 
-from deployment.bicoord_care import asset_stage
+from deployment.bicoord_care import asset_contract, asset_stage
 from deployment.bicoord_care.asset_runtime import (
     RuntimeAssetError,
     apply_task_overlay,
@@ -36,6 +36,30 @@ def _plate(*, contacts: list[object]) -> dict[str, object]:
     }
 
 
+def _legacy_shovel() -> dict[str, object]:
+    return {
+        "center": [0.0, 0.17515499716553293, -0.029588341057975368],
+        "contact_pose": [
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.15],
+                [0.0, 0.0, 1.0, -0.6],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        ],
+        "extents": [1.225306775101383, 0.7410235277713523, 1.716424184732401],
+        "scale": [0.167, 0.167, 0.167],
+        "stable": False,
+        "target_pose": [_pose(0.8)],
+        "trans_matrix": [
+            [0.0007963267107332633, 0.0, -0.9999996829318346, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.9999996829318346, 0.0, 0.0007963267107332633, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    }
+
+
 def _overlay_fixture(tmp_path: Path, value: dict[str, object]) -> Path:
     overlay = (
         tmp_path
@@ -46,6 +70,34 @@ def _overlay_fixture(tmp_path: Path, value: dict[str, object]) -> Path:
     )
     overlay.parent.mkdir(parents=True)
     overlay.write_text(json.dumps(value), encoding="utf-8")
+    pristine = (
+        tmp_path
+        / "benchmark"
+        / "assets"
+        / "objects"
+        / "003_plate"
+        / "model_data0.json"
+    )
+    pristine.parent.mkdir(parents=True)
+    pristine.write_text(json.dumps(_plate(contacts=[])), encoding="utf-8")
+    shovel_overlay = (
+        tmp_path
+        / "asset_contract"
+        / "overlay"
+        / "082_smallshovel"
+        / "model_data3.json"
+    )
+    shovel_overlay.parent.mkdir(parents=True)
+    shovel_overlay.write_text("{}\n", encoding="utf-8")
+    contact_hash = hashlib.sha256(
+        json.dumps(
+            value["contact_points_pose"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
     receipt = {
         "schema": "before-we-act.bicoord.asset-contract/1",
         "status": "PASSED",
@@ -61,8 +113,23 @@ def _overlay_fixture(tmp_path: Path, value: dict[str, object]) -> Path:
         "plate_overlay": {
             "overlay_metadata": str(overlay.resolve()),
             "target_metadata_sha256": hashlib.sha256(overlay.read_bytes()).hexdigest(),
+            "target_contact_points_pose_sha256": contact_hash,
+            "source_small_metadata": str(pristine.resolve()),
+            "source_small_metadata_sha256": hashlib.sha256(
+                pristine.read_bytes()
+            ).hexdigest(),
+            "pristine_small_metadata_sha256": hashlib.sha256(
+                pristine.read_bytes()
+            ).hexdigest(),
             "copied_fields": ["contact_points_pose"],
             "benchmark_asset_source_modified": False,
+            "mutation_scope": "run_artifact_and_actor_config_in_memory_only",
+        },
+        "shovel_overlay": {
+            "overlay_metadata": str(shovel_overlay.resolve()),
+            "target_metadata_sha256": hashlib.sha256(
+                shovel_overlay.read_bytes()
+            ).hexdigest(),
         },
     }
     (tmp_path / "asset_contract" / "asset_contract.json").write_text(
@@ -94,7 +161,10 @@ def test_runtime_overlay_rejects_non_contact_drift(tmp_path: Path) -> None:
     actor = SimpleNamespace(config=_plate(contacts=[]))
     env = SimpleNamespace(plate=actor, plate_2=SimpleNamespace(config=_plate(contacts=[])))
 
-    with pytest.raises(RuntimeAssetError, match="differs from overlay at center"):
+    with pytest.raises(
+        RuntimeAssetError,
+        match="(?:differs from overlay|overlay differs from pristine source) at center",
+    ):
         apply_task_overlay(env, "place_plate_and_cup", overlay)
 
 
@@ -192,6 +262,82 @@ def test_plate_stage_rejects_an_already_modified_source_asset(
         asset_stage._plate_overlay(
             tmp_path / "benchmark", tmp_path / "run" / "overlay"
         )
+
+
+def test_shovel_stage_builds_a_run_local_derived_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    benchmark = tmp_path / "benchmark"
+    object_root = benchmark / "assets" / "objects" / "082_smallshovel"
+    metadata = object_root / "model_data3.json"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text(json.dumps(_legacy_shovel()), encoding="utf-8")
+    monkeypatch.setattr(
+        asset_contract,
+        "PRISTINE_SHOVEL_METADATA_SHA256",
+        hashlib.sha256(metadata.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        asset_stage,
+        "PRISTINE_SHOVEL_METADATA_SHA256",
+        hashlib.sha256(metadata.read_bytes()).hexdigest(),
+    )
+    for relative, payload, size_name, hash_name in (
+        (
+            "collision/base3.glb",
+            b"official-collision-fixture",
+            "SHOVEL_COLLISION_BYTES",
+            "SHOVEL_COLLISION_SHA256",
+        ),
+        (
+            "visual/base3.glb",
+            b"official-visual-fixture",
+            "SHOVEL_VISUAL_BYTES",
+            "SHOVEL_VISUAL_SHA256",
+        ),
+    ):
+        path = object_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        monkeypatch.setattr(asset_contract, size_name, len(payload))
+        monkeypatch.setattr(
+            asset_contract, hash_name, hashlib.sha256(payload).hexdigest()
+        )
+    expected_overlay, proof = asset_contract.overlay_legacy_contact_metadata(
+        _legacy_shovel()
+    )
+    monkeypatch.setattr(
+        asset_stage,
+        "SHOVEL_CONTACT_POINTS_POSE_SHA256",
+        proof["contact_points_pose_sha256"],
+    )
+    monkeypatch.setattr(
+        asset_stage,
+        "SHOVEL_OVERLAY_METADATA_CANONICAL_SHA256",
+        asset_contract.canonical_json_sha256(expected_overlay),
+    )
+    source_before = metadata.read_bytes()
+    result = asset_stage._shovel_overlay(
+        benchmark, tmp_path / "run" / "asset_contract" / "overlay"
+    )
+
+    overlay = Path(result["overlay_metadata"])
+    value = json.loads(overlay.read_text(encoding="utf-8"))
+    assert metadata.read_bytes() == source_before
+    assert result["modelname"] == "082_smallshovel"
+    assert result["model_id"] == 3
+    assert result["added_fields"] == ["contact_points_pose"]
+    assert result["derived_fields"] == ["contact_points_pose"]
+    assert result["source_fields"] == ["contact_pose", "trans_matrix"]
+    assert result["contact_points_pose_count"] == 1
+    assert result["max_scale_equivalence_error"] <= 1e-12
+    assert result["mutation_scope"] == (
+        "run_artifact_and_actor_config_in_memory_only"
+    )
+    assert set(value) == set(_legacy_shovel()) | {"contact_points_pose"}
+    assert value["contact_pose"] == _legacy_shovel()["contact_pose"]
+    assert value["trans_matrix"] == _legacy_shovel()["trans_matrix"]
+    assert value["scale"] == [0.167, 0.167, 0.167]
 
 
 def test_supplemental_installer_is_safe_exact_and_idempotent(

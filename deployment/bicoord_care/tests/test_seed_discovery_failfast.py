@@ -461,6 +461,16 @@ def test_supervisor_aggregates_and_revalidates_structural_diagnostics(
     overlay.parent.mkdir(parents=True)
     overlay.write_text("{}\n", encoding="utf-8")
     contact_sha256 = "b" * 64
+    shovel_overlay = (
+        run_root
+        / "artifacts"
+        / "asset_contract"
+        / "overlay"
+        / "082_smallshovel"
+        / "model_data3.json"
+    )
+    shovel_overlay.parent.mkdir(parents=True)
+    shovel_overlay.write_text("{}\n", encoding="utf-8")
     asset_receipt = run_root / "artifacts" / "asset_contract" / "asset_contract.json"
     atomic_json(
         asset_receipt,
@@ -475,6 +485,30 @@ def test_supervisor_aggregates_and_revalidates_structural_diagnostics(
         supervisor.result_path("asset_contract"),
         {"asset_contract": str(asset_receipt.resolve())},
     )
+    receipt_sha256 = sha256_file(asset_receipt)
+    overlay_expectations = {
+        "place_plate_and_cup": {
+            "overlay": str(overlay.resolve()),
+            "contact_points_pose_sha256": contact_sha256,
+            "contact_points_pose_count": 4,
+            "receipt": str(asset_receipt.resolve()),
+            "receipt_sha256": receipt_sha256,
+        },
+        "sweep_block": {
+            "overlay": str(shovel_overlay.resolve()),
+            "contact_points_pose_sha256": (
+                supervisor_stage.SHOVEL_CONTACT_POINTS_POSE_SHA256
+            ),
+            "contact_points_pose_count": 1,
+            "receipt": str(asset_receipt.resolve()),
+            "receipt_sha256": receipt_sha256,
+        },
+    }
+    monkeypatch.setattr(
+        supervisor,
+        "_asset_runtime_expectations",
+        lambda: overlay_expectations,
+    )
 
     def make_env(_root: Path, task: str, seed: int) -> _OutcomeEnv:
         env = _OutcomeEnv(seed, "error" if seed == 100_000 else "success")
@@ -484,7 +518,43 @@ def test_supervisor_aggregates_and_revalidates_structural_diagnostics(
                 "applied": True,
                 "overlay": str(overlay.resolve()),
                 "contact_points_pose_sha256": contact_sha256,
+                "receipt": str(asset_receipt.resolve()),
+                "receipt_sha256": receipt_sha256,
+                "actors": {
+                    name: {
+                        "after_sha256": contact_sha256,
+                        "contact_points_pose_count": 4,
+                        "scale_preserved": True,
+                        "changed_fields": ["contact_points_pose"],
+                    }
+                    for name in ("plate", "plate_2")
+                },
                 "copied_fields": ["contact_points_pose"],
+                "task_source_modified": False,
+            }
+        elif task == "sweep_block":
+            shovel_contact_sha256 = (
+                supervisor_stage.SHOVEL_CONTACT_POINTS_POSE_SHA256
+            )
+            env._bicoord_asset_overlay = {
+                "task": task,
+                "applied": True,
+                "overlay": str(shovel_overlay.resolve()),
+                "contact_points_pose_sha256": shovel_contact_sha256,
+                "receipt": str(asset_receipt.resolve()),
+                "receipt_sha256": receipt_sha256,
+                "actors": {
+                    "shovel": {
+                        "after_sha256": shovel_contact_sha256,
+                        "contact_points_pose_count": 1,
+                        "scale_preserved": True,
+                        "changed_fields": ["contact_points_pose"],
+                    }
+                },
+                "copied_fields": ["contact_points_pose"],
+                "derived_fields": ["contact_points_pose"],
+                "source_fields": ["contact_pose", "trans_matrix"],
+                "legacy_conversion": True,
                 "task_source_modified": False,
             }
         return env

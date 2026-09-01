@@ -8,11 +8,13 @@ or another unsupported construct are reported as ``dynamic_items`` and are
 never guessed.  This keeps the audit useful without turning a static check
 into a source of false positives.
 
-The audit also performs an in-memory compatibility check for
-``place_plate_and_cup``.  It proves that the pristine small plate rejects
-contact index 2, then overlays the contact poses from the mesh-identical
-``003_plate_large`` metadata and proves that the same index is valid.  No
-benchmark file is written.
+The audit also performs in-memory compatibility checks for the two released
+schema-boundary defects.  For ``place_plate_and_cup`` it proves that the
+pristine small plate rejects contact index 2, then overlays the contact poses
+from the mesh-identical ``003_plate_large`` metadata.  For ``sweep_block`` an
+explicit model-3 shovel override is accepted only when its
+``contact_points_pose`` is the deterministic legacy conversion derived from
+``contact_pose`` and ``trans_matrix``.  No benchmark file is written.
 """
 
 from __future__ import annotations
@@ -27,6 +29,8 @@ import math
 import os
 from pathlib import Path
 from typing import Any, Final, Iterable, Mapping, Sequence
+
+from .asset_contract import AssetContractError, overlay_legacy_contact_metadata
 
 
 SCHEMA: Final[str] = "before-we-act.bicoord.task-asset-audit/1"
@@ -104,6 +108,8 @@ class OverrideRecord:
     pristine_metadata_sha256: str | None = None
     contract_status: str | None = None
     contract_reason: str | None = None
+    contract_type: str | None = None
+    contract_provenance: dict[str, Any] | None = None
     actor_uses: list[dict[str, Any]] = field(default_factory=list)
     interaction_uses: list[dict[str, Any]] = field(default_factory=list)
 
@@ -158,6 +164,8 @@ class OverrideRecord:
             "pristine_metadata_sha256": self.pristine_metadata_sha256,
             "contract_status": self.contract_status,
             "contract_reason": self.contract_reason,
+            "contract_type": self.contract_type,
+            "contract_provenance": copy.deepcopy(self.contract_provenance),
             "error": self.error,
             "used_by_actor_count": len(self.actor_uses),
             "used_by_interaction_count": len(self.interaction_uses),
@@ -691,13 +699,23 @@ def _validate_override_against_pristine(
     record: OverrideRecord,
     pristine: Mapping[str, Any] | None,
 ) -> None:
-    """Fail closed on a plate override that changes anything but contacts."""
+    """Fail closed on either released metadata compatibility contract."""
 
-    if record.error is not None:
-        return
-    if record.key != ("003_plate", 0):
+    if record.key == ("003_plate", 0):
+        record.contract_type = "contact_points_pose_only"
+    elif record.key == ("082_smallshovel", 3):
+        record.contract_type = "derived_legacy_contact"
+    else:
+        record.contract_type = "not_applicable"
         record.contract_status = "NOT_APPLICABLE"
         record.contract_reason = "no specialised compatibility contract for this key"
+        return
+    if record.error is not None:
+        record.contract_status = "FAILED"
+        record.contract_reason = record.error
+        return
+    if record.key == ("082_smallshovel", 3):
+        _validate_legacy_shovel_override(record, pristine)
         return
     if pristine is None or record.metadata is None:
         record.error = "plate override cannot be compared with pristine metadata"
@@ -728,6 +746,79 @@ def _validate_override_against_pristine(
     else:
         record.contract_status = "PASSED"
         record.contract_reason = "contact_points_pose-only overlay; index 2 now valid"
+
+
+def _validate_legacy_shovel_override(
+    record: OverrideRecord,
+    pristine: Mapping[str, Any] | None,
+) -> None:
+    """Prove that model-3 metadata is the exact legacy-derived overlay.
+
+    A present ``contact_points_pose`` list is not sufficient: a raw rename of
+    ``contact_pose`` silently loses the released ``trans_matrix`` orientation.
+    Re-derive the full expected record from the pristine metadata and require
+    semantic equality, so every legacy field remains present and unchanged.
+    """
+
+    if pristine is None or record.metadata is None:
+        record.error = "legacy shovel override cannot be compared with pristine metadata"
+        record.contract_status = "FAILED"
+        record.contract_reason = record.error
+        return
+    try:
+        expected, proof = overlay_legacy_contact_metadata(pristine)
+    except AssetContractError as error:
+        record.error = f"pristine legacy shovel contract is invalid: {error}"
+        record.contract_status = "FAILED"
+        record.contract_reason = record.error
+        return
+
+    changed = sorted(
+        key
+        for key in set(pristine) | set(record.metadata)
+        if pristine.get(key) != record.metadata.get(key)
+    )
+    before = _index_check(pristine, CONTACT_KEY, 0)
+    after = _index_check(record.metadata, CONTACT_KEY, 0)
+    provenance = copy.deepcopy(proof)
+    provenance.update(
+        {
+            "pristine_source_sha256": record.pristine_source_sha256,
+            "pristine_metadata_sha256": record.pristine_metadata_sha256,
+            "override_source_type": record.source_type,
+            "override_source_sha256": record.source_sha256,
+            "override_metadata_sha256": record.metadata_sha256,
+            "effective_contact_point_id": 0,
+            "effective_contact_index_check": after,
+            "legacy_fields_preserved": all(
+                record.metadata.get(key) == value for key, value in pristine.items()
+            ),
+        }
+    )
+    record.contract_provenance = provenance
+    if changed != [CONTACT_KEY]:
+        record.error = (
+            "legacy shovel override must derive only contact_points_pose; "
+            f"changed fields: {changed}"
+        )
+    elif record.metadata != expected:
+        record.error = (
+            "legacy shovel contact_points_pose is not the deterministic "
+            "scale(contact_pose) @ trans_matrix conversion"
+        )
+    elif before.get("status") != "FAILED":
+        record.error = "pristine legacy shovel unexpectedly already accepts contact index 0"
+    elif after.get("status") != "PASSED":
+        record.error = "legacy shovel override does not make contact index 0 valid"
+    if record.error is not None:
+        record.contract_status = "FAILED"
+        record.contract_reason = record.error
+    else:
+        record.contract_status = "PASSED"
+        record.contract_reason = (
+            "derived contact_points_pose from preserved contact_pose and "
+            "trans_matrix; index 0 now valid"
+        )
 
 
 def _prime_override_records(

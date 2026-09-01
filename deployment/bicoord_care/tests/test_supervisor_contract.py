@@ -45,6 +45,33 @@ def test_settings_binds_a_valid_care_source_revision(tmp_path: Path) -> None:
         "training_seeds": [20261904, 20261905, 20261906],
         "deployment_candidate": False,
     }
+    assert frozen["asset_contract"]["legacy_shovel"] == {
+        "task": "sweep_block",
+        "object": "082_smallshovel",
+        "model_id": 3,
+        "metadata": "model_data3.json",
+        "pristine_metadata_sha256": sup.PRISTINE_SHOVEL_METADATA_SHA256,
+        "legacy_fields": ["contact_pose", "trans_matrix"],
+        "derived_fields": ["contact_points_pose"],
+        "derived_contact_points_pose_sha256": (
+            sup.SHOVEL_CONTACT_POINTS_POSE_SHA256
+        ),
+        "conversion": (
+            "scale(contact_pose) @ trans_matrix -> scale(contact_points_pose)"
+        ),
+        "scale": [0.167, 0.167, 0.167],
+        "collision_mesh": {
+            "relative_path": "collision/base3.glb",
+            "bytes": sup.SHOVEL_COLLISION_BYTES,
+            "sha256": sup.SHOVEL_COLLISION_SHA256,
+        },
+        "visual_mesh": {
+            "relative_path": "visual/base3.glb",
+            "bytes": sup.SHOVEL_VISUAL_BYTES,
+            "sha256": sup.SHOVEL_VISUAL_SHA256,
+        },
+        "model_variant_replaced": False,
+    }
     with pytest.raises(ValueError, match="40-character"):
         _settings(tmp_path / "bad", revision="not-a-commit").validate()
 
@@ -101,7 +128,7 @@ def test_asset_contract_gates_dataset_audit_and_runtime_overlay(tmp_path: Path) 
     )
     supervisor = sup.Supervisor(_settings(tmp_path))
     environment = supervisor.scheduler.environment((0,))
-    expected = (
+    expected_plate = (
         supervisor.s.run
         / "artifacts"
         / "asset_contract"
@@ -109,7 +136,16 @@ def test_asset_contract_gates_dataset_audit_and_runtime_overlay(tmp_path: Path) 
         / "003_plate"
         / "model_data0.json"
     )
-    assert environment["BICOORD_PLATE_ASSET_OVERLAY"] == str(expected)
+    expected_shovel = (
+        supervisor.s.run
+        / "artifacts"
+        / "asset_contract"
+        / "overlay"
+        / "082_smallshovel"
+        / "model_data3.json"
+    )
+    assert environment["BICOORD_PLATE_ASSET_OVERLAY"] == str(expected_plate)
+    assert environment["BICOORD_SHOVEL_ASSET_OVERLAY"] == str(expected_shovel)
     assert environment["BICOORD_REQUIRE_ASSET_OVERLAY"] == "1"
 
 
@@ -171,6 +207,11 @@ def _minimal_asset_result(
         "dataset_archive_sha256": asset_stage.BICOORD_OBJECTS_SHA256,
         "base_archive_sha256": asset_stage.ROBOTWIN_OBJECTS_SHA256,
         "contact_points_pose_count": 4,
+        "shovel_contact_points_pose_count": 1,
+        "shovel_contact_points_pose_sha256": (
+            sup.SHOVEL_CONTACT_POINTS_POSE_SHA256
+        ),
+        "shovel_metadata_sha256": "b" * 64,
         "copied_fields": ["contact_points_pose"],
         "task_source_modified": False,
         "upstream_model_modified": False,
@@ -204,6 +245,21 @@ def test_asset_result_rejects_an_external_receipt(tmp_path: Path) -> None:
     )
 
     with pytest.raises(sup.InvalidArtifact, match="canonical run artifact"):
+        supervisor._validate_result(sup.STAGES["asset_contract"], candidate)
+
+
+def test_asset_result_requires_shovel_result_identity(tmp_path: Path) -> None:
+    supervisor = sup.Supervisor(_settings(tmp_path / "settings"))
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text("{}\n", encoding="utf-8")
+    value = _minimal_asset_result(supervisor, receipt)
+    value.pop("shovel_contact_points_pose_sha256")
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(
+        sup.InvalidArtifact, match="asset contract result shovel overlay/hash differs"
+    ):
         supervisor._validate_result(sup.STAGES["asset_contract"], candidate)
 
 
@@ -260,6 +316,171 @@ def test_asset_result_rejects_an_external_overlay(tmp_path: Path) -> None:
 
     with pytest.raises(sup.InvalidArtifact, match="canonical run artifact"):
         supervisor._validate_result(sup.STAGES["asset_contract"], candidate)
+
+
+def _runtime_overlay_expectations(tmp_path: Path) -> dict[str, dict[str, object]]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    receipt = tmp_path / "asset_contract.json"
+    receipt.write_text("{}\n", encoding="utf-8")
+    receipt_hash = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    return {
+        "place_plate_and_cup": {
+            "overlay": str(tmp_path / "003_plate" / "model_data0.json"),
+            "contact_points_pose_sha256": "a" * 64,
+            "contact_points_pose_count": 4,
+            "receipt": str(receipt),
+            "receipt_sha256": receipt_hash,
+        },
+        "sweep_block": {
+            "overlay": str(tmp_path / "082_smallshovel" / "model_data3.json"),
+            "contact_points_pose_sha256": (
+                sup.SHOVEL_CONTACT_POINTS_POSE_SHA256
+            ),
+            "contact_points_pose_count": 1,
+            "receipt": str(receipt),
+            "receipt_sha256": receipt_hash,
+        },
+    }
+
+
+def _runtime_overlay_attempts(
+    expectations: dict[str, dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    plate = expectations["place_plate_and_cup"]
+    shovel = expectations["sweep_block"]
+    return {
+        "place_plate_and_cup": {
+            "structural_error": False,
+            "asset_overlay": {
+                "task": "place_plate_and_cup",
+                "applied": True,
+                "overlay": plate["overlay"],
+                "receipt": plate["receipt"],
+                "receipt_sha256": plate["receipt_sha256"],
+                "contact_points_pose_sha256": plate[
+                    "contact_points_pose_sha256"
+                ],
+                "actors": {
+                    name: {
+                        "before_sha256": "0" * 64,
+                        "after_sha256": plate["contact_points_pose_sha256"],
+                        "contact_points_pose_count": 4,
+                        "scale_preserved": True,
+                        "changed_fields": ["contact_points_pose"],
+                    }
+                    for name in ("plate", "plate_2")
+                },
+                "copied_fields": ["contact_points_pose"],
+                "task_source_modified": False,
+            },
+        },
+        "sweep_block": {
+            "structural_error": False,
+            "asset_overlay": {
+                "task": "sweep_block",
+                "applied": True,
+                "overlay": shovel["overlay"],
+                "receipt": shovel["receipt"],
+                "receipt_sha256": shovel["receipt_sha256"],
+                "contact_points_pose_sha256": shovel[
+                    "contact_points_pose_sha256"
+                ],
+                "actors": {
+                    "shovel": {
+                        "before_sha256": "0" * 64,
+                        "after_sha256": shovel[
+                            "contact_points_pose_sha256"
+                        ],
+                        "contact_points_pose_count": 1,
+                        "scale_preserved": True,
+                        "changed_fields": ["contact_points_pose"],
+                    }
+                },
+                "copied_fields": ["contact_points_pose"],
+                "derived_fields": ["contact_points_pose"],
+                "source_fields": ["contact_pose", "trans_matrix"],
+                "legacy_conversion": True,
+                "task_source_modified": False,
+            },
+        },
+    }
+
+
+def test_seed_attempts_bind_both_runtime_overlays(tmp_path: Path) -> None:
+    supervisor = sup.Supervisor(_settings(tmp_path / "settings"))
+    expectations = _runtime_overlay_expectations(tmp_path / "evidence")
+    attempts = _runtime_overlay_attempts(expectations)
+    for task, attempt in attempts.items():
+        supervisor._validate_seed_asset_overlay(
+            task,
+            attempt,
+            expectations,
+            context=f"{task} attempt 1",
+        )
+
+
+@pytest.mark.parametrize(
+    ("task", "field", "value", "message"),
+    [
+        (
+            "place_plate_and_cup",
+            "overlay",
+            "/outside/plate.json",
+            "overlay path differs",
+        ),
+        (
+            "sweep_block",
+            "contact_points_pose_sha256",
+            "f" * 64,
+            "converted contact hash differs",
+        ),
+    ],
+)
+def test_seed_attempt_rejects_runtime_overlay_drift(
+    tmp_path: Path, task: str, field: str, value: object, message: str
+) -> None:
+    supervisor = sup.Supervisor(_settings(tmp_path / "settings"))
+    expectations = _runtime_overlay_expectations(tmp_path / "evidence")
+    attempt = _runtime_overlay_attempts(expectations)[task]
+    overlay = attempt["asset_overlay"]
+    assert isinstance(overlay, dict)
+    overlay[field] = value
+    with pytest.raises(sup.InvalidArtifact, match=message):
+        supervisor._validate_seed_asset_overlay(
+            task,
+            attempt,
+            expectations,
+            context=f"{task} attempt 1",
+        )
+
+
+def test_seed_attempt_retains_explicit_pre_overlay_structural_failure(
+    tmp_path: Path,
+) -> None:
+    supervisor = sup.Supervisor(_settings(tmp_path / "settings"))
+    expectations = _runtime_overlay_expectations(tmp_path / "evidence")
+    shovel = expectations["sweep_block"]
+    attempt = {
+        "valid": False,
+        "plan_success": False,
+        "expert_success": False,
+        "structural_error": True,
+        "error_type": "RuntimeError",
+        "error_signature": "a" * 64,
+        "asset_overlay": {
+            "task": "sweep_block",
+            "applied": False,
+            "overlay": shovel["overlay"],
+            "contact_points_pose_sha256": None,
+            "reason": "environment_construction_failed_before_overlay_receipt",
+        },
+    }
+    supervisor._validate_seed_asset_overlay(
+        "sweep_block",
+        attempt,
+        expectations,
+        context="sweep_block attempt 1",
+    )
 
 
 def test_interrupted_gpu_wave_is_terminal_not_retryable(tmp_path: Path) -> None:

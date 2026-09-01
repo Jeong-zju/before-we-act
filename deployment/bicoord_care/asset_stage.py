@@ -1,4 +1,4 @@
-"""Install and audit the official BiCoord asset compatibility contract.
+"""Install and audit the official BiCoord asset compatibility contracts.
 
 BiCoord publishes its demonstrations and its six benchmark-specific object
 overrides in the same immutable Hugging Face snapshot.  RoboTwin provides the
@@ -10,9 +10,14 @@ that base metadata contains no contact poses.  BiCoord's supplemental
 This stage restores that released data contract without changing task source,
 planner code, policy code, action/state ranges, or model capacity.  It first
 binds both official archives, installs the supplemental archive safely, then
-copies exactly ``contact_points_pose`` into the small-plate metadata.  Every
-input and output is recorded in a hashed stage receipt before dataset audit or
-training may start.
+copies exactly ``contact_points_pose`` into the small-plate metadata.
+
+The released ``sweep_block`` task also pins ``082_smallshovel`` model 3, whose
+metadata still uses RoboTwin-1.0's ``contact_pose`` plus ``trans_matrix``
+schema.  A second run-local overlay derives the equivalent current-format
+``contact_points_pose`` while retaining model 3, its meshes, scale, and every
+legacy field.  Every input and output is recorded in a hashed stage receipt
+before dataset audit or training may start.
 """
 
 from __future__ import annotations
@@ -30,10 +35,20 @@ from typing import Any, Mapping, Sequence
 
 from .asset_contract import (
     CONTACT_KEY,
+    LEGACY_CONTACT_KEY,
+    LEGACY_TRANSFORM_KEY,
     LARGE_OBJECT_NAME,
     MODEL_METADATA_NAME,
+    PRISTINE_SHOVEL_METADATA_SHA256,
+    SHOVEL_CONTACT_POINTS_POSE_SHA256,
+    SHOVEL_METADATA_NAME,
+    SHOVEL_MODEL_ID,
+    SHOVEL_OBJECT_NAME,
+    SHOVEL_OVERLAY_METADATA_CANONICAL_SHA256,
     SMALL_OBJECT_NAME,
     apply_contact_points_overlay,
+    apply_legacy_contact_overlay,
+    canonical_json_sha256,
     sha256_file,
 )
 from .config import (
@@ -501,8 +516,78 @@ def _plate_overlay(benchmark_repo: Path, overlay_root: Path) -> dict[str, Any]:
     }
 
 
+def _shovel_overlay(benchmark_repo: Path, overlay_root: Path) -> dict[str, Any]:
+    """Build the model-3 legacy-contact adapter without touching the checkout."""
+
+    source = _regular_file(
+        benchmark_repo
+        / "assets"
+        / "objects"
+        / SHOVEL_OBJECT_NAME
+        / SHOVEL_METADATA_NAME,
+        label="legacy small-shovel model-3 metadata",
+    )
+    source_sha256 = sha256_file(source)
+    if source_sha256 != PRISTINE_SHOVEL_METADATA_SHA256:
+        raise AssetStageError(
+            "small-shovel model-3 metadata is not the pristine released record"
+        )
+    overlay_path = overlay_root / SHOVEL_OBJECT_NAME / SHOVEL_METADATA_NAME
+    try:
+        overlay = apply_legacy_contact_overlay(source, output_path=overlay_path)
+    except Exception as error:
+        # Keep this stage's public error type stable while retaining the
+        # low-level contract failure as the causal exception.
+        raise AssetStageError("legacy small-shovel overlay failed") from error
+    if overlay.get("source_metadata_sha256") != source_sha256:
+        raise AssetStageError("legacy small-shovel source identity changed")
+    if overlay.get("contact_points_pose_count") != 1:
+        raise AssetStageError("legacy small-shovel contact count differs")
+    if (
+        overlay.get("contact_points_pose_sha256")
+        != SHOVEL_CONTACT_POINTS_POSE_SHA256
+    ):
+        raise AssetStageError("legacy small-shovel derived contact hash differs")
+    if overlay.get("added_fields") != [CONTACT_KEY]:
+        raise AssetStageError("legacy small-shovel overlay added unexpected fields")
+    if overlay.get("derived_fields") != [CONTACT_KEY]:
+        raise AssetStageError("legacy small-shovel overlay derivation differs")
+    if overlay.get("source_fields") != [LEGACY_CONTACT_KEY, LEGACY_TRANSFORM_KEY]:
+        raise AssetStageError("legacy small-shovel source fields differ")
+    if float(overlay.get("max_scale_equivalence_error", float("inf"))) > 1e-12:
+        raise AssetStageError("legacy small-shovel pose conversion is not equivalent")
+    try:
+        overlay_value = json.loads(
+            Path(overlay["target_metadata"]).read_text(encoding="utf-8")
+        )
+    except (KeyError, OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise AssetStageError("legacy small-shovel overlay cannot be audited") from error
+    if (
+        canonical_json_sha256(overlay_value)
+        != SHOVEL_OVERLAY_METADATA_CANONICAL_SHA256
+    ):
+        raise AssetStageError("legacy small-shovel overlay metadata hash differs")
+    return {
+        **overlay,
+        "overlay_metadata": str(Path(overlay["target_metadata"]).resolve()),
+        "pristine_source_metadata_sha256": PRISTINE_SHOVEL_METADATA_SHA256,
+        "overlay_metadata_canonical_sha256": (
+            SHOVEL_OVERLAY_METADATA_CANONICAL_SHA256
+        ),
+        "modelname": SHOVEL_OBJECT_NAME,
+        "model_id": SHOVEL_MODEL_ID,
+        "task_source_modified": False,
+        "planner_modified": False,
+        "model_modified": False,
+        "normalization_modified": False,
+        "benchmark_asset_source_modified": False,
+        "mutation_scope": "run_artifact_and_actor_config_in_memory_only",
+    }
+
+
 def _validate_task_asset_audit(
-    task_audit: Mapping[str, Any], *, overlay_metadata: Path
+    task_audit: Mapping[str, Any], *, plate_overlay_metadata: Path,
+    shovel_overlay_metadata: Path,
 ) -> None:
     """Bind a nominal audit PASS to the complete pinned 18-task evidence."""
 
@@ -525,9 +610,10 @@ def _validate_task_asset_audit(
         "violations": [],
         "expected_pristine_defect_count": 0,
         "unexpected_violation_count": 0,
-        "metadata_override_count": 1,
+        "metadata_override_count": 2,
         "metadata_override_keys": [
-            {"modelname": SMALL_OBJECT_NAME, "model_id": 0}
+            {"modelname": SMALL_OBJECT_NAME, "model_id": 0},
+            {"modelname": SHOVEL_OBJECT_NAME, "model_id": SHOVEL_MODEL_ID},
         ],
         "read_only_benchmark": True,
         "benchmark_files_written": False,
@@ -552,29 +638,52 @@ def _validate_task_asset_audit(
     ):
         raise AssetStageError("18-task object point-index report coverage differs")
     override_rows = task_audit.get("metadata_overrides")
-    if not isinstance(override_rows, list) or len(override_rows) != 1:
+    if not isinstance(override_rows, list) or len(override_rows) != 2:
         raise AssetStageError("18-task asset audit overlay provenance is missing")
-    override = override_rows[0]
-    if not isinstance(override, Mapping):
-        raise AssetStageError("18-task asset audit overlay provenance is invalid")
-    expected_override = {
-        "key": {"modelname": SMALL_OBJECT_NAME, "model_id": 0},
-        "status": "USED",
-        "source_type": "file",
-        "source_path": str(overlay_metadata.resolve()),
-        "source_sha256": sha256_file(overlay_metadata),
-        "pristine_source_sha256": PRISTINE_SMALL_METADATA_SHA256,
-        "contract_status": "PASSED",
-        "error": None,
-        "used_by_actor_count": 2,
-        "used_by_interaction_count": 4,
+    overrides = {
+        (str(row.get("key", {}).get("modelname")), row.get("key", {}).get("model_id")): row
+        for row in override_rows
+        if isinstance(row, Mapping) and isinstance(row.get("key"), Mapping)
     }
-    for key, expected in expected_override.items():
-        if override.get(key) != expected:
-            raise AssetStageError(
-                f"18-task asset audit overlay differs at {key}: "
-                f"{override.get(key)!r} != {expected!r}"
-            )
+    expected_overrides = {
+        (SMALL_OBJECT_NAME, 0): {
+            "key": {"modelname": SMALL_OBJECT_NAME, "model_id": 0},
+            "status": "USED",
+            "source_type": "file",
+            "source_path": str(plate_overlay_metadata.resolve()),
+            "source_sha256": sha256_file(plate_overlay_metadata),
+            "pristine_source_sha256": PRISTINE_SMALL_METADATA_SHA256,
+            "contract_status": "PASSED",
+            "error": None,
+            "used_by_actor_count": 2,
+            "used_by_interaction_count": 4,
+        },
+        (SHOVEL_OBJECT_NAME, SHOVEL_MODEL_ID): {
+            "key": {
+                "modelname": SHOVEL_OBJECT_NAME,
+                "model_id": SHOVEL_MODEL_ID,
+            },
+            "status": "USED",
+            "source_type": "file",
+            "source_path": str(shovel_overlay_metadata.resolve()),
+            "source_sha256": sha256_file(shovel_overlay_metadata),
+            "pristine_source_sha256": PRISTINE_SHOVEL_METADATA_SHA256,
+            "contract_status": "PASSED",
+            "error": None,
+            "used_by_actor_count": 1,
+            "used_by_interaction_count": 1,
+        },
+    }
+    if set(overrides) != set(expected_overrides):
+        raise AssetStageError("18-task asset audit overlay keys differ")
+    for override_key, expected_override in expected_overrides.items():
+        override = overrides[override_key]
+        for key, expected in expected_override.items():
+            if override.get(key) != expected:
+                raise AssetStageError(
+                    f"18-task asset audit overlay {override_key!r} differs at {key}: "
+                    f"{override.get(key)!r} != {expected!r}"
+                )
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -594,6 +703,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.benchmark_repo,
         args.run / "artifacts" / "asset_contract" / "overlay",
     )
+    shovel = _shovel_overlay(
+        args.benchmark_repo,
+        args.run / "artifacts" / "asset_contract" / "overlay",
+    )
 
     # Import after installation/overlay so the task audit sees the exact
     # metadata that the official simulator will load in the next stage.
@@ -605,10 +718,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         tasks=TASKS,
         metadata_overrides={
             (SMALL_OBJECT_NAME, 0): Path(plate["overlay_metadata"]),
+            (SHOVEL_OBJECT_NAME, SHOVEL_MODEL_ID): Path(
+                shovel["overlay_metadata"]
+            ),
         },
     )
     _validate_task_asset_audit(
-        task_audit, overlay_metadata=Path(plate["overlay_metadata"])
+        task_audit,
+        plate_overlay_metadata=Path(plate["overlay_metadata"]),
+        shovel_overlay_metadata=Path(shovel["overlay_metadata"]),
     )
     value = {
         "schema": ASSET_STAGE_SCHEMA,
@@ -627,6 +745,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "benchmark_tracked_source_before_install": tracked_source_before,
         "benchmark_tracked_source_after_install": tracked_source_after,
         "plate_overlay": plate,
+        "shovel_overlay": shovel,
         "task_asset_audit": task_audit,
         "tasks": list(TASKS),
         "task_source_modified": False,
@@ -645,6 +764,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         dataset_archive_sha256=BICOORD_OBJECTS_SHA256,
         base_archive_sha256=ROBOTWIN_OBJECTS_SHA256,
         plate_metadata_sha256=plate["target_metadata_sha256"],
+        shovel_metadata_sha256=shovel["target_metadata_sha256"],
+        shovel_contact_points_pose_sha256=shovel[
+            "contact_points_pose_sha256"
+        ],
+        shovel_contact_points_pose_count=shovel["contact_points_pose_count"],
         contact_points_pose_count=plate["contact_points_pose_count"],
         copied_fields=[CONTACT_KEY],
         task_asset_references_checked=task_audit["references_checked"],

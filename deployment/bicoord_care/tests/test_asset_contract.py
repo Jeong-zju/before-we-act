@@ -10,10 +10,15 @@ import pytest
 from deployment.bicoord_care.asset_contract import (
     AssetContractError,
     CONTACT_KEY,
+    LEGACY_CONTACT_KEY,
+    LEGACY_TRANSFORM_KEY,
     MODEL_METADATA_NAME,
     SCHEMA,
     apply_contact_points_overlay,
+    apply_legacy_contact_overlay,
+    legacy_contact_points_pose,
     main,
+    overlay_legacy_contact_metadata,
     overlay_metadata,
     sha256_file,
     validate_asset_pair,
@@ -46,6 +51,46 @@ def _metadata(*, scale: float, contacts: list[object]) -> dict[str, object]:
         "target_point_discription": ["The center point of the plate"],
         "target_pose": [_pose(0.0743)],
         "transform_matrix": _pose(0.0),
+    }
+
+
+def _legacy_shovel_metadata(
+    *,
+    scale: float = 0.167,
+    contact_pose: list[object] | None = None,
+    trans_matrix: list[list[float]] | None = None,
+) -> dict[str, object]:
+    return {
+        "center": [0.0, 0.17515499716553293, -0.029588341057975368],
+        LEGACY_CONTACT_KEY: contact_pose
+        if contact_pose is not None
+        else [
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.15],
+                [0.0, 0.0, 1.0, -0.6],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        ],
+        "extents": [1.225306775101383, 0.7410235277713523, 1.716424184732401],
+        "scale": [scale, scale, scale],
+        "stable": False,
+        "target_pose": [
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, -0.15],
+                [0.0, 0.0, 1.0, 0.8],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        ],
+        LEGACY_TRANSFORM_KEY: trans_matrix
+        if trans_matrix is not None
+        else [
+            [0.0007963267107332633, -0.0, -0.9999996829318346, 0.0],
+            [0.0, 1.0, -0.0, 0.0],
+            [0.9999996829318346, 0.0, 0.0007963267107332633, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
     }
 
 
@@ -145,6 +190,127 @@ def test_in_memory_overlay_is_contact_only_and_does_not_mutate_inputs() -> None:
     assert large == large_before
     assert result is not small
     assert result[CONTACT_KEY] is not large[CONTACT_KEY]
+
+
+def test_legacy_shovel_conversion_preserves_old_scaled_matrix() -> None:
+    metadata = _legacy_shovel_metadata()
+
+    converted, proof = legacy_contact_points_pose(metadata)
+
+    assert len(converted) == 1
+    assert proof["schema"] == "before-we-act.bicoord.legacy-contact-overlay/1"
+    assert proof["conversion"] == (
+        "scale(contact_pose) @ trans_matrix -> scale(contact_points_pose)"
+    )
+    # The current Actor loader scales only the translation of each local point.
+    # Reconstruct the old expression explicitly and compare all matrix entries.
+    old = metadata[LEGACY_CONTACT_KEY][0]
+    transform = metadata[LEGACY_TRANSFORM_KEY]
+    scale = metadata["scale"]
+    old_scaled = [[float(item) for item in row] for row in old]
+    for axis in range(3):
+        old_scaled[axis][3] *= scale[axis]
+    expected = [
+        [sum(old_scaled[row][k] * transform[k][column] for k in range(4)) for column in range(4)]
+        for row in range(4)
+    ]
+    reconstructed = [[float(item) for item in row] for row in converted[0]]
+    for axis in range(3):
+        reconstructed[axis][3] *= scale[axis]
+    assert all(
+        reconstructed[row][column] == pytest.approx(expected[row][column], abs=1e-12)
+        for row in range(4)
+        for column in range(4)
+    )
+    assert proof["max_scale_equivalence_error"] <= 1e-12
+
+
+def test_legacy_shovel_overlay_adds_only_current_contact_field() -> None:
+    metadata = _legacy_shovel_metadata()
+    before = copy.deepcopy(metadata)
+
+    output, proof = overlay_legacy_contact_metadata(metadata)
+
+    assert set(output) == set(metadata) | {CONTACT_KEY}
+    assert output[LEGACY_CONTACT_KEY] == before[LEGACY_CONTACT_KEY]
+    assert output[LEGACY_TRANSFORM_KEY] == before[LEGACY_TRANSFORM_KEY]
+    assert output["scale"] == [0.167, 0.167, 0.167]
+    assert proof["changed_fields"] == [CONTACT_KEY]
+    assert proof["source_fields"] == [LEGACY_CONTACT_KEY, LEGACY_TRANSFORM_KEY]
+    assert proof["derived_fields"] == [CONTACT_KEY]
+    assert metadata == before
+
+
+def test_legacy_shovel_overlay_rejects_conflicting_current_field() -> None:
+    metadata = _legacy_shovel_metadata()
+    metadata[CONTACT_KEY] = [_pose(99.0)]
+
+    with pytest.raises(AssetContractError, match="conflicting legacy contact_points_pose"):
+        overlay_legacy_contact_metadata(metadata)
+
+
+def test_legacy_shovel_overlay_rejects_scale_or_transform_drift() -> None:
+    with pytest.raises(AssetContractError, match="legacy shovel scale drift"):
+        legacy_contact_points_pose(_legacy_shovel_metadata(scale=0.2))
+    bad_transform = _legacy_shovel_metadata()
+    bad_transform[LEGACY_TRANSFORM_KEY] = [
+        [2.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    with pytest.raises(AssetContractError, match="not orthonormal"):
+        legacy_contact_points_pose(bad_transform)
+
+
+def test_legacy_shovel_file_overlay_is_atomic_and_run_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_dir = tmp_path / "assets" / "objects" / "082_smallshovel"
+    source_dir.mkdir(parents=True)
+    source = source_dir / "model_data3.json"
+    source.write_text(json.dumps(_legacy_shovel_metadata()), encoding="utf-8")
+    # Use fixture identities while retaining the production function's
+    # fail-closed path/mesh checks.
+    monkeypatch.setattr(
+        "deployment.bicoord_care.asset_contract.PRISTINE_SHOVEL_METADATA_SHA256",
+        sha256_file(source),
+    )
+    for relative, payload in (
+        ("collision/base3.glb", b"collision"),
+        ("visual/base3.glb", b"visual"),
+    ):
+        path = source_dir / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        constant = (
+            "SHOVEL_COLLISION_BYTES"
+            if relative.startswith("collision")
+            else "SHOVEL_VISUAL_BYTES"
+        )
+        digest_constant = (
+            "SHOVEL_COLLISION_SHA256"
+            if relative.startswith("collision")
+            else "SHOVEL_VISUAL_SHA256"
+        )
+        monkeypatch.setattr(
+            f"deployment.bicoord_care.asset_contract.{constant}",
+            len(payload),
+        )
+        monkeypatch.setattr(
+            f"deployment.bicoord_care.asset_contract.{digest_constant}",
+            sha256_file(path),
+        )
+    target = tmp_path / "run" / "overlay" / "082_smallshovel" / "model_data3.json"
+    result = apply_legacy_contact_overlay(source, output_path=target)
+    assert result["status"] == "PASSED"
+    assert result["benchmark_asset_source_modified"] is False
+    assert result["mutation_scope"] == "run_artifact_only"
+    assert json.loads(source.read_text()) == _legacy_shovel_metadata()
+    assert json.loads(target.read_text())[CONTACT_KEY]
+    second = apply_legacy_contact_overlay(source, output_path=target)
+    assert second["changed"] is False
+    assert second["idempotent"] is True
 
 
 def test_in_place_overlay_changes_only_contact_field_and_is_idempotent(tmp_path: Path) -> None:

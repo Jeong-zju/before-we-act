@@ -15,6 +15,7 @@ from deployment.bicoord_care.task_asset_audit import (
     audit_task_assets,
     main,
 )
+from deployment.bicoord_care.asset_contract import overlay_legacy_contact_metadata
 
 
 def _pose(offset: float = 0.0) -> list[list[float]]:
@@ -32,6 +33,23 @@ def _metadata(scale: float, contacts: list[object]) -> dict[str, object]:
         CONTACT_KEY: contacts,
         "functional_matrix": [_pose(0.1)],
         "scale": [scale, scale, scale],
+    }
+
+
+def _legacy_shovel_metadata() -> dict[str, object]:
+    return {
+        "center": [0.0, 0.17515499716553293, -0.029588341057975368],
+        "contact_pose": [_pose(0.15)],
+        "extents": [1.225306775101383, 0.7410235277713523, 1.716424184732401],
+        "scale": [0.167, 0.167, 0.167],
+        "stable": False,
+        "target_pose": [_pose(0.8)],
+        "trans_matrix": [
+            [0.0007963267107332633, 0.0, -0.9999996829318346, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.9999996829318346, 0.0, 0.0007963267107332633, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
     }
 
 
@@ -85,6 +103,25 @@ class dynamic:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(payload)
     return benchmark, assets
+
+
+def _add_sweep_block_fixture(benchmark: Path, assets: Path) -> dict[str, object]:
+    (benchmark / "envs" / "sweep_block.py").write_text(
+        '''
+class sweep_block:
+    def load_actors(self):
+        self.shovel = create_actor(self, None, modelname="082_smallshovel", model_id=3)
+    def play_once(self):
+        self.move(self.grasp_actor(self.shovel, contact_point_id=0))
+''',
+        encoding="utf-8",
+    )
+    pristine = _legacy_shovel_metadata()
+    _write_json(
+        assets / "objects" / "082_smallshovel" / "model_data3.json",
+        pristine,
+    )
+    return pristine
 
 
 def test_static_audit_extracts_literals_and_proves_plate_overlay(tmp_path: Path) -> None:
@@ -237,6 +274,74 @@ def test_legacy_contact_field_is_dynamic_not_a_false_hard_failure(tmp_path: Path
     ]
     assert cup_interactions
     assert all(row["status"] == "UNRESOLVED" for row in cup_interactions)
+
+
+def test_legacy_shovel_override_is_derived_provenanced_and_resolved(
+    tmp_path: Path,
+) -> None:
+    benchmark, assets = _fixture(tmp_path)
+    pristine = _add_sweep_block_fixture(benchmark, assets)
+    overlay, expected_proof = overlay_legacy_contact_metadata(pristine)
+
+    report = audit_task_assets(
+        benchmark,
+        assets,
+        tasks=["sweep_block"],
+        metadata_overrides={("082_smallshovel", 3): overlay},
+    )
+
+    assert report["status"] == "PASSED"
+    assert report["dynamic_item_count"] == 0
+    assert report["unresolved_interaction_count"] == 0
+    empty_inventory_sha256 = hashlib.sha256(b"[]").hexdigest()
+    assert report["dynamic_inventory_sha256"] == empty_inventory_sha256
+    assert report["unresolved_interaction_inventory_sha256"] == empty_inventory_sha256
+    interaction = report["task_reports"][0]["interactions"][0]
+    assert interaction["status"] == "PASSED"
+    assert interaction["index_values"] == [0]
+    assert interaction["available_count"] == 1
+    assert interaction["override_used"] is True
+    assert interaction["unresolved_reasons"] == []
+
+    record = report["metadata_overrides"][0]
+    assert record["key"] == {"modelname": "082_smallshovel", "model_id": 3}
+    assert record["status"] == "USED"
+    assert record["contract_type"] == "derived_legacy_contact"
+    assert record["contract_status"] == "PASSED"
+    assert record["used_by_actor_count"] == 1
+    assert record["used_by_interaction_count"] == 1
+    provenance = record["contract_provenance"]
+    assert provenance["schema"] == "before-we-act.bicoord.legacy-contact-overlay/1"
+    assert provenance["source_fields"] == ["contact_pose", "trans_matrix"]
+    assert provenance["derived_fields"] == [CONTACT_KEY]
+    assert provenance["contact_points_pose_sha256"] == expected_proof[
+        "contact_points_pose_sha256"
+    ]
+    assert provenance["max_scale_equivalence_error"] <= 1e-12
+    assert provenance["legacy_fields_preserved"] is True
+    assert provenance["effective_contact_point_id"] == 0
+    assert provenance["effective_contact_index_check"]["status"] == "PASSED"
+
+
+def test_legacy_shovel_override_rejects_raw_contact_pose_copy(tmp_path: Path) -> None:
+    benchmark, assets = _fixture(tmp_path)
+    pristine = _add_sweep_block_fixture(benchmark, assets)
+    invalid = copy.deepcopy(pristine)
+    invalid[CONTACT_KEY] = copy.deepcopy(pristine["contact_pose"])
+
+    report = audit_task_assets(
+        benchmark,
+        assets,
+        tasks=["sweep_block"],
+        metadata_overrides={("082_smallshovel", 3): invalid},
+    )
+
+    assert report["status"] == "FAILED"
+    record = report["metadata_overrides"][0]
+    assert record["contract_type"] == "derived_legacy_contact"
+    assert record["contract_status"] == "FAILED"
+    assert "deterministic scale(contact_pose) @ trans_matrix" in record["error"]
+    assert record["status"] == "FAILED"
 
 
 def test_out_of_range_static_contact_is_a_hard_failure(tmp_path: Path) -> None:

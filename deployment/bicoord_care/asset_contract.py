@@ -1,4 +1,4 @@
-"""Fail-closed contract and compatibility overlay for the BiCoord plate asset.
+"""Fail-closed compatibility overlays for released BiCoord object metadata.
 
 The public BiCoord task ``place_plate_and_cup`` refers to ``003_plate`` and
 requests contact point ``2``.  The accompanying RoboTwin base asset contains
@@ -11,6 +11,16 @@ No simulator, task, model, or normalisation code is imported here.  The
 functions are consequently usable by a preflight process before SAPIEN is
 initialised.  Every write is atomic and all checks fail closed; in particular,
 an existing non-empty but different contact list is never silently replaced.
+
+The released ``sweep_block`` task exposes a second, independent schema-boundary
+defect.  It selects ``082_smallshovel/model_data3.json``, a RoboTwin-1.0 record
+whose grasp field is named ``contact_pose`` and whose pose convention includes
+a right-multiplied ``trans_matrix``.  Current RoboTwin consumes
+``contact_points_pose`` directly.  Merely renaming/copying ``contact_pose``
+would therefore rotate the grasp frame incorrectly.  The legacy adapter below
+preserves the old runtime matrix ``scale_translation(contact_pose) @
+trans_matrix`` under the current loader's scaling convention and adds only the
+current field to a run-local copy of the pristine record.
 """
 
 from __future__ import annotations
@@ -34,6 +44,33 @@ SCALE_KEY: Final[str] = "scale"
 DEFAULT_SMALL_SCALE: Final[tuple[float, float, float]] = (0.025, 0.025, 0.025)
 DEFAULT_LARGE_SCALE: Final[tuple[float, float, float]] = (0.035, 0.035, 0.035)
 MIN_CONTACT_POINTS: Final[int] = 3
+
+LEGACY_CONTACT_SCHEMA: Final[str] = (
+    "before-we-act.bicoord.legacy-contact-overlay/1"
+)
+SHOVEL_OBJECT_NAME: Final[str] = "082_smallshovel"
+SHOVEL_MODEL_ID: Final[int] = 3
+SHOVEL_METADATA_NAME: Final[str] = f"model_data{SHOVEL_MODEL_ID}.json"
+LEGACY_CONTACT_KEY: Final[str] = "contact_pose"
+LEGACY_TRANSFORM_KEY: Final[str] = "trans_matrix"
+DEFAULT_SHOVEL_SCALE: Final[tuple[float, float, float]] = (0.167, 0.167, 0.167)
+PRISTINE_SHOVEL_METADATA_SHA256: Final[str] = (
+    "61be803fb503312ce14856826d8a06b027971b7d7ed33b65b7bf87aa7dfdbf0e"
+)
+SHOVEL_CONTACT_POINTS_POSE_SHA256: Final[str] = (
+    "0c60f46ff0ee41427e9357256163cf0d26e0153cca6e182c8fbed2e7c74b5be3"
+)
+SHOVEL_OVERLAY_METADATA_CANONICAL_SHA256: Final[str] = (
+    "631f80ef76c02ddbeed2a163a6ca4621ae907b219fd9262a29e95638424f4a5a"
+)
+SHOVEL_COLLISION_BYTES: Final[int] = 455_048
+SHOVEL_COLLISION_SHA256: Final[str] = (
+    "574a9dec00d7712ee125665d04264f4d151a3cea5a56187ff009f8da645aba7e"
+)
+SHOVEL_VISUAL_BYTES: Final[int] = 1_872_352
+SHOVEL_VISUAL_SHA256: Final[str] = (
+    "c53c4dd1cfa855c1f18ad8f2e05c135751edcf4a98639ecbed4ffe834335cc9b"
+)
 
 
 class AssetContractError(RuntimeError):
@@ -224,6 +261,393 @@ def _validate_pose_list(value: object, *, name: str, minimum: int) -> list[list[
             raise AssetContractError(f"{name}[{pose_index}] has an invalid homogeneous row")
         poses.append(rows)
     return poses
+
+
+def _validate_matrix4(value: object, *, name: str) -> list[list[float]]:
+    """Validate and normalize one homogeneous 4x4 transform.
+
+    This deliberately mirrors :func:`_validate_pose_list` but is kept
+    separate because the legacy ``trans_matrix`` is a single matrix rather
+    than a list of contact poses.  Returning fresh Python floats also makes
+    the conversion deterministic across JSON number spellings and avoids a
+    dependency on NumPy in the preflight process.
+    """
+
+    if not isinstance(value, list) or len(value) != 4:
+        raise AssetContractError(f"{name} must be a 4x4 matrix")
+    rows: list[list[float]] = []
+    for row_index, row in enumerate(value):
+        if not isinstance(row, list) or len(row) != 4:
+            raise AssetContractError(f"{name}[{row_index}] is not a length-4 row")
+        numbers: list[float] = []
+        for item in row:
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                raise AssetContractError(f"{name} contains a non-numeric value")
+            number = float(item)
+            if not math.isfinite(number):
+                raise AssetContractError(f"{name} contains a non-finite value")
+            numbers.append(number)
+        rows.append(numbers)
+    if any(
+        not math.isclose(rows[3][column], (0.0, 0.0, 0.0, 1.0)[column], abs_tol=1e-9)
+        for column in range(4)
+    ):
+        raise AssetContractError(f"{name} has an invalid homogeneous row")
+    return rows
+
+
+def _validate_rigid_matrix4(value: object, *, name: str) -> list[list[float]]:
+    """Validate one finite, right-handed homogeneous rigid transform."""
+
+    rows = _validate_matrix4(value, name=name)
+    rotation = [row[:3] for row in rows[:3]]
+    for first in range(3):
+        for second in range(3):
+            dot = sum(
+                rotation[row][first] * rotation[row][second]
+                for row in range(3)
+            )
+            expected = 1.0 if first == second else 0.0
+            if not math.isclose(dot, expected, rel_tol=0.0, abs_tol=2e-5):
+                raise AssetContractError(
+                    f"{name} rotation is not orthonormal at ({first}, {second})"
+                )
+    determinant = (
+        rotation[0][0]
+        * (rotation[1][1] * rotation[2][2] - rotation[1][2] * rotation[2][1])
+        - rotation[0][1]
+        * (rotation[1][0] * rotation[2][2] - rotation[1][2] * rotation[2][0])
+        + rotation[0][2]
+        * (rotation[1][0] * rotation[2][1] - rotation[1][1] * rotation[2][0])
+    )
+    if not math.isclose(determinant, 1.0, rel_tol=0.0, abs_tol=2e-5):
+        raise AssetContractError(
+            f"{name} rotation determinant is not +1: {determinant}"
+        )
+    return rows
+
+
+def _matmul4(left: Sequence[Sequence[float]], right: Sequence[Sequence[float]]) -> list[list[float]]:
+    """Multiply two validated homogeneous 4x4 matrices without NumPy."""
+
+    return [
+        [
+            sum(float(left[row][inner]) * float(right[inner][column]) for inner in range(4))
+            for column in range(4)
+        ]
+        for row in range(4)
+    ]
+
+
+def _scale_pose_translation(
+    pose: Sequence[Sequence[float]], scale: Sequence[float]
+) -> list[list[float]]:
+    """Apply the benchmark metadata scale to a pose's translation only."""
+
+    value = [list(map(float, row)) for row in pose]
+    for axis in range(3):
+        value[axis][3] *= float(scale[axis])
+    return value
+
+
+def legacy_contact_points_pose(
+    metadata: Mapping[str, Any],
+    *,
+    expected_scale: Sequence[float] = DEFAULT_SHOVEL_SCALE,
+) -> tuple[list[list[list[float]]], dict[str, Any]]:
+    """Convert RoboTwin-1.0 ``contact_pose`` metadata exactly.
+
+    The old RoboTwin grasp helper evaluates each point as::
+
+        actor_pose @ scale_translation(contact_pose) @ trans_matrix
+
+    followed by its fixed gripper-axis conversion.  The current BiCoord
+    helper evaluates::
+
+        actor_pose @ scale_translation(contact_points_pose)
+
+    followed by the same conversion.  We therefore derive a current-format
+    point whose *scaled* matrix equals the old product.  This is more precise
+    than a field rename and remains correct even if a future legacy record has
+    a non-zero ``trans_matrix`` translation.  The returned proof dictionary is
+    suitable for a run receipt and records the two matrices' equivalence.
+    """
+
+    if not isinstance(metadata, Mapping):
+        raise AssetContractError("legacy shovel metadata must be a mapping")
+    scale = _vector(metadata.get(SCALE_KEY), name="legacy shovel scale")
+    _close_vector(scale, list(expected_scale), name="legacy shovel scale")
+    if LEGACY_CONTACT_KEY not in metadata:
+        raise AssetContractError(
+            f"legacy shovel metadata lacks {LEGACY_CONTACT_KEY}"
+        )
+    if LEGACY_TRANSFORM_KEY not in metadata:
+        raise AssetContractError(
+            f"legacy shovel metadata lacks {LEGACY_TRANSFORM_KEY}"
+        )
+    legacy_contacts = _validate_pose_list(
+        metadata[LEGACY_CONTACT_KEY],
+        name=f"legacy shovel {LEGACY_CONTACT_KEY}",
+        minimum=1,
+    )
+    legacy_contacts = [
+        _validate_rigid_matrix4(
+            pose,
+            name=f"legacy shovel {LEGACY_CONTACT_KEY}[{index}]",
+        )
+        for index, pose in enumerate(legacy_contacts)
+    ]
+    trans_matrix = _validate_rigid_matrix4(
+        metadata[LEGACY_TRANSFORM_KEY],
+        name=f"legacy shovel {LEGACY_TRANSFORM_KEY}",
+    )
+    # A zero scale axis cannot be represented by the current loader because
+    # it scales the derived translation at runtime.  Reject rather than
+    # silently inventing a coordinate value.
+    if any(abs(float(axis)) <= 1e-15 for axis in scale):
+        raise AssetContractError("legacy shovel scale axes must be non-zero")
+
+    converted: list[list[list[float]]] = []
+    equivalence_errors: list[float] = []
+    for index, legacy_pose in enumerate(legacy_contacts):
+        old_scaled = _scale_pose_translation(legacy_pose, scale)
+        old_local = _matmul4(old_scaled, trans_matrix)
+        # Undo the current loader's translation scaling so that applying it
+        # later reconstructs old_local exactly (within floating arithmetic).
+        current = [list(row) for row in old_local]
+        for axis in range(3):
+            current[axis][3] /= float(scale[axis])
+        # Keep homogeneous structure explicit; this catches accidental matrix
+        # arithmetic or malformed legacy data before a simulator is started.
+        current = _validate_rigid_matrix4(
+            current,
+            name=f"derived {CONTACT_KEY}[{index}]",
+        )
+        reconstructed = _scale_pose_translation(current, scale)
+        error = max(
+            abs(reconstructed[row][column] - old_local[row][column])
+            for row in range(4)
+            for column in range(4)
+        )
+        equivalence_errors.append(error)
+        if error > 1e-12:
+            raise AssetContractError(
+                f"legacy contact conversion is not scale-equivalent at index {index}: {error}"
+            )
+        converted.append(current)
+
+    return converted, {
+        "schema": LEGACY_CONTACT_SCHEMA,
+        "conversion": "scale(contact_pose) @ trans_matrix -> scale(contact_points_pose)",
+        "legacy_contact_pose_count": len(legacy_contacts),
+        "contact_points_pose_count": len(converted),
+        "legacy_contact_pose_sha256": canonical_json_sha256(legacy_contacts),
+        "trans_matrix_sha256": canonical_json_sha256(trans_matrix),
+        "contact_points_pose_sha256": canonical_json_sha256(converted),
+        "max_scale_equivalence_error": max(equivalence_errors, default=0.0),
+        "scale": list(scale),
+        "scale_preserved": True,
+    }
+
+
+def overlay_legacy_contact_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    expected_scale: Sequence[float] = DEFAULT_SHOVEL_SCALE,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return a legacy shovel record with only ``contact_points_pose`` added.
+
+    Existing current-format contacts are accepted only when they exactly equal
+    the deterministic conversion.  A conflicting list is never overwritten.
+    All legacy fields (including ``contact_pose`` and ``trans_matrix``) remain
+    in the returned actor config for provenance and backward compatibility.
+    """
+
+    converted, proof = legacy_contact_points_pose(
+        metadata,
+        expected_scale=expected_scale,
+    )
+    existing = metadata.get(CONTACT_KEY, [])
+    if not isinstance(existing, list):
+        raise AssetContractError(f"legacy metadata {CONTACT_KEY} must be a list if present")
+    if existing and existing != converted:
+        raise AssetContractError(
+            f"refusing to replace conflicting legacy {CONTACT_KEY}"
+        )
+    output = copy.deepcopy(dict(metadata))
+    output[CONTACT_KEY] = copy.deepcopy(converted)
+    changed_fields = sorted(
+        key for key in set(metadata) | set(output) if metadata.get(key) != output.get(key)
+    )
+    if changed_fields not in ([], [CONTACT_KEY]):
+        raise AssetContractError(
+            "legacy shovel overlay must add only contact_points_pose; "
+            f"changed fields: {changed_fields}"
+        )
+    proof = dict(proof)
+    proof.update(
+        {
+            # Keep the same receipt vocabulary as the plate overlay while
+            # separately stating that this field is *derived*, not copied
+            # byte-for-byte from the legacy record.
+            "copied_fields": [CONTACT_KEY],
+            "added_fields": [CONTACT_KEY] if changed_fields else [],
+            "derived_fields": [CONTACT_KEY],
+            "source_fields": [LEGACY_CONTACT_KEY, LEGACY_TRANSFORM_KEY],
+            "preserved_fields": "all_except_contact_points_pose",
+            "changed_fields": changed_fields,
+            "idempotent": not changed_fields,
+        }
+    )
+    return output, proof
+
+
+def validate_legacy_shovel_asset(
+    source_metadata_path: str | Path,
+) -> dict[str, Any]:
+    """Bind the conversion to the exact released model-3 record and meshes."""
+
+    source_path, source = _metadata(source_metadata_path)
+    if source_path.name != SHOVEL_METADATA_NAME or source_path.parent.name != SHOVEL_OBJECT_NAME:
+        raise AssetContractError(
+            f"legacy contact overlay must target {SHOVEL_OBJECT_NAME}/{SHOVEL_METADATA_NAME}"
+        )
+    source_sha256 = sha256_file(source_path)
+    if source_sha256 != PRISTINE_SHOVEL_METADATA_SHA256:
+        raise AssetContractError(
+            "legacy shovel metadata is not the pristine released record: "
+            f"{source_sha256} != {PRISTINE_SHOVEL_METADATA_SHA256}"
+        )
+    if CONTACT_KEY in source:
+        raise AssetContractError(
+            f"pristine legacy shovel metadata unexpectedly contains {CONTACT_KEY}"
+        )
+    meshes: list[dict[str, Any]] = []
+    for relative, expected_bytes, expected_sha256 in (
+        (
+            "collision/base3.glb",
+            SHOVEL_COLLISION_BYTES,
+            SHOVEL_COLLISION_SHA256,
+        ),
+        ("visual/base3.glb", SHOVEL_VISUAL_BYTES, SHOVEL_VISUAL_SHA256),
+    ):
+        candidate = _regular_file(
+            source_path.parent / relative,
+            label=f"legacy shovel {relative}",
+        )
+        observed_bytes = candidate.stat().st_size
+        observed_sha256 = sha256_file(candidate)
+        if observed_bytes != expected_bytes or observed_sha256 != expected_sha256:
+            raise AssetContractError(
+                f"legacy shovel {relative} identity drift: "
+                f"bytes={observed_bytes}, sha256={observed_sha256}"
+            )
+        meshes.append(
+            {
+                "relative_path": relative,
+                "path": str(candidate),
+                "bytes": observed_bytes,
+                "sha256": observed_sha256,
+            }
+        )
+    return {
+        "object": SHOVEL_OBJECT_NAME,
+        "model_id": SHOVEL_MODEL_ID,
+        "source_metadata": str(source_path),
+        "source_metadata_sha256": source_sha256,
+        "meshes": meshes,
+        "mesh_and_metadata_identity": "PASSED",
+    }
+
+
+def apply_legacy_contact_overlay(
+    source_metadata_path: str | Path,
+    *,
+    output_path: str | Path,
+    expected_scale: Sequence[float] = DEFAULT_SHOVEL_SCALE,
+) -> dict[str, Any]:
+    """Atomically write a run-local current-format shovel metadata overlay."""
+
+    identity = validate_legacy_shovel_asset(source_metadata_path)
+    source_path, source = _metadata(source_metadata_path)
+    payload, proof = overlay_legacy_contact_metadata(
+        source,
+        expected_scale=expected_scale,
+    )
+    converted = copy.deepcopy(payload[CONTACT_KEY])
+    target = Path(output_path).expanduser()
+    if target.exists() and target.is_symlink():
+        raise AssetContractError(f"legacy overlay target must not be a symlink: {target}")
+    # Resolve existing parent symlinks even when the final file does not yet
+    # exist.  Otherwise a lexical ``run/overlay/...`` path whose parent points
+    # into the benchmark checkout could evade the source-path comparison and
+    # overwrite the released metadata.
+    try:
+        target = target.resolve(strict=False)
+    except OSError as error:
+        raise AssetContractError(
+            f"legacy overlay target cannot be resolved: {target}"
+        ) from error
+    if target == source_path:
+        raise AssetContractError(
+            "legacy shovel overlay target must be run-local, not the benchmark source"
+        )
+    if target.exists() and not target.is_file():
+        raise AssetContractError(
+            f"legacy shovel overlay target is not a regular file: {target}"
+        )
+    before_hash = sha256_file(target) if target.is_file() else None
+    if target != source_path and target.is_file():
+        _, existing_target = _metadata(target)
+        # The target may have been produced by an earlier identical invocation,
+        # but it may not be an unrelated record with the same path.
+        target_without_contacts = {
+            key: value for key, value in existing_target.items() if key != CONTACT_KEY
+        }
+        source_without_contacts = {
+            key: value for key, value in source.items() if key != CONTACT_KEY
+        }
+        if target_without_contacts != source_without_contacts:
+            raise AssetContractError(
+                "existing legacy overlay target differs from pristine shovel metadata"
+            )
+        target_contacts = existing_target.get(CONTACT_KEY, [])
+        if target_contacts not in ([], payload[CONTACT_KEY]):
+            raise AssetContractError(
+                "existing legacy overlay target has conflicting contact points"
+            )
+        payload = copy.deepcopy(existing_target)
+        # Never trust a merely present target field; always restore the
+        # deterministic conversion derived from the pristine source.
+        payload[CONTACT_KEY] = converted
+    changed = not target.is_file()
+    if target.is_file():
+        try:
+            _, target_value = _metadata(target)
+            changed = target_value != payload
+        except AssetContractError:
+            changed = True
+    if changed:
+        mode = (target.stat().st_mode & 0o777) if target.exists() else 0o644
+        _atomic_write_json(target, payload, mode=mode)
+    after_hash = sha256_file(target)
+    result = dict(proof)
+    result.update(
+        {
+            "status": "PASSED",
+            "asset_identity": identity,
+            "source_metadata": str(source_path),
+            "source_metadata_sha256": sha256_file(source_path),
+            "target_metadata": str(target.resolve()),
+            "target_metadata_before_sha256": before_hash,
+            "target_metadata_sha256": after_hash,
+            "changed": bool(changed),
+            "idempotent": not changed,
+            "benchmark_asset_source_modified": False,
+            "mutation_scope": "run_artifact_only",
+        }
+    )
+    return result
 
 
 def _mesh_inventory(directory: str | Path, *, label: str) -> list[dict[str, Any]]:
@@ -523,15 +947,33 @@ __all__ = [
     "CONTACT_KEY",
     "DEFAULT_LARGE_SCALE",
     "DEFAULT_SMALL_SCALE",
+    "DEFAULT_SHOVEL_SCALE",
     "LARGE_OBJECT_NAME",
+    "LEGACY_CONTACT_KEY",
+    "LEGACY_CONTACT_SCHEMA",
+    "LEGACY_TRANSFORM_KEY",
     "MODEL_METADATA_NAME",
+    "PRISTINE_SHOVEL_METADATA_SHA256",
     "SCHEMA",
+    "SHOVEL_COLLISION_SHA256",
+    "SHOVEL_COLLISION_BYTES",
+    "SHOVEL_CONTACT_POINTS_POSE_SHA256",
+    "SHOVEL_METADATA_NAME",
+    "SHOVEL_MODEL_ID",
+    "SHOVEL_OBJECT_NAME",
+    "SHOVEL_OVERLAY_METADATA_CANONICAL_SHA256",
+    "SHOVEL_VISUAL_SHA256",
+    "SHOVEL_VISUAL_BYTES",
     "SMALL_OBJECT_NAME",
     "apply_contact_points_overlay",
+    "apply_legacy_contact_overlay",
     "canonical_json_sha256",
     "ensure_plate_contact_overlay",
+    "legacy_contact_points_pose",
+    "overlay_legacy_contact_metadata",
     "main",
     "sha256_file",
+    "validate_legacy_shovel_asset",
     "validate_asset_pair",
     "validate_plate_asset_pair",
 ]

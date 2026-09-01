@@ -177,13 +177,13 @@ FORMAL_SEEDS: Final[tuple[int, ...]] = (20260901, 20260902, 20260903)
 # harmless.  These hashes are over normalized (benchmark-relative) audit rows
 # and are checked by the supervisor before training.
 TASK_ASSET_DYNAMIC_INVENTORY_SHA256: Final[str] = (
-    "d96b43f4d4c18b07678060eb856d249e9052317d0331bf706562e61c545b264f"
+    "26983a0f867450a1e8a29f413c992d5bab25cb3df1761d4366d835c89f0a9a6a"
 )
 TASK_ASSET_UNRESOLVED_INTERACTION_INVENTORY_SHA256: Final[str] = (
-    "4173846225b0e5d0fdd79eea6069733ada71e47cd4e5767cabb25be85a070c73"
+    "f3849513e822aa266121672cbbd5973f5ca9bc5de4b3b2b1f2ac881de7e405b2"
 )
-TASK_ASSET_DYNAMIC_ITEM_COUNT: Final[int] = 93
-TASK_ASSET_UNRESOLVED_INTERACTION_COUNT: Final[int] = 82
+TASK_ASSET_DYNAMIC_ITEM_COUNT: Final[int] = 92
+TASK_ASSET_UNRESOLVED_INTERACTION_COUNT: Final[int] = 81
 
 
 @dataclass(frozen=True)

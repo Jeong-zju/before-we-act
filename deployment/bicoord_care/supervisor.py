@@ -30,6 +30,23 @@ import time
 import traceback
 from typing import Any, Callable, Mapping, Sequence
 
+from .asset_contract import (
+    CONTACT_KEY,
+    DEFAULT_SHOVEL_SCALE,
+    canonical_json_sha256,
+    LEGACY_CONTACT_KEY,
+    LEGACY_TRANSFORM_KEY,
+    PRISTINE_SHOVEL_METADATA_SHA256,
+    SHOVEL_CONTACT_POINTS_POSE_SHA256,
+    SHOVEL_OVERLAY_METADATA_CANONICAL_SHA256,
+    SHOVEL_COLLISION_BYTES,
+    SHOVEL_COLLISION_SHA256,
+    SHOVEL_METADATA_NAME,
+    SHOVEL_MODEL_ID,
+    SHOVEL_OBJECT_NAME,
+    SHOVEL_VISUAL_BYTES,
+    SHOVEL_VISUAL_SHA256,
+)
 from .config import (
     ACTION_DIM,
     ACTION_ENCODING,
@@ -161,7 +178,7 @@ STAGES: "OrderedDict[str, StageSpec]" = OrderedDict(
         StageSpec("source_preflight", (), "source_preflight", "source-preflight", "all", "pin CARE/BiCoord source and prove four RTX 5090 GPUs"),
         StageSpec("environment", ("source_preflight",), "environment", "install-and-audit", "all", "install the pinned runtime and simulator dependencies"),
         StageSpec("dataset_download", ("environment",), "dataset_download", "download", "cpu", "download the immutable 18-task Hugging Face snapshot"),
-        StageSpec("asset_contract", ("dataset_download",), "asset_contract", "verify-and-overlay", "cpu", "bind both official object archives and build the contact-only small-plate runtime overlay", "asset"),
+        StageSpec("asset_contract", ("dataset_download",), "asset_contract", "verify-and-overlay", "cpu", "bind both official object archives and build the plate and legacy-shovel contact runtime overlays", "asset"),
         StageSpec("dataset_audit", ("asset_contract",), "dataset_audit", "formal-audit", "cpu", "audit 1800 HDF5 demos, native ranges, alignment, instructions, and stages", "dataset"),
         StageSpec("dino_cache", ("dataset_audit",), "dino_cache", "cache-all", "sharded4", "cache frozen DINOv3 ViT-B/16 head and local-wrist features"),
         StageSpec("b0h_smoke_train", ("dino_cache",), "b0h_train", "smoke-train", "all", "five-update four-GPU B0-H training smoke", "training"),
@@ -625,6 +642,36 @@ class Settings:
                 "small_object": "003_plate",
                 "contact_donor": "003_plate_large",
                 "copied_fields": ["contact_points_pose"],
+                "legacy_shovel": {
+                    "task": "sweep_block",
+                    "object": SHOVEL_OBJECT_NAME,
+                    "model_id": SHOVEL_MODEL_ID,
+                    "metadata": SHOVEL_METADATA_NAME,
+                    "pristine_metadata_sha256": (
+                        PRISTINE_SHOVEL_METADATA_SHA256
+                    ),
+                    "legacy_fields": [LEGACY_CONTACT_KEY, LEGACY_TRANSFORM_KEY],
+                    "derived_fields": [CONTACT_KEY],
+                    "derived_contact_points_pose_sha256": (
+                        SHOVEL_CONTACT_POINTS_POSE_SHA256
+                    ),
+                    "conversion": (
+                        "scale(contact_pose) @ trans_matrix -> "
+                        "scale(contact_points_pose)"
+                    ),
+                    "scale": list(DEFAULT_SHOVEL_SCALE),
+                    "collision_mesh": {
+                        "relative_path": "collision/base3.glb",
+                        "bytes": SHOVEL_COLLISION_BYTES,
+                        "sha256": SHOVEL_COLLISION_SHA256,
+                    },
+                    "visual_mesh": {
+                        "relative_path": "visual/base3.glb",
+                        "bytes": SHOVEL_VISUAL_BYTES,
+                        "sha256": SHOVEL_VISUAL_SHA256,
+                    },
+                    "model_variant_replaced": False,
+                },
                 "runtime_scope": "actor_config_in_memory_only",
                 "supplemental_assets_installed": True,
                 "task_source_modified": False,
@@ -696,9 +743,10 @@ class GpuScheduler:
                 # the frozen supervisor config, even when the parent was
                 # instantiated directly rather than through the environment.
                 "BICOORD_CARE_SOURCE_REVISION": self.settings.care_source_revision,
-                # The compatibility file is a hashed output of the
-                # ``asset_contract`` DAG stage.  Simulator adapters apply it
-                # only to the two small-plate actor configs in memory.
+                # Both compatibility files are hashed outputs of the
+                # ``asset_contract`` DAG stage.  Simulator adapters apply each
+                # one only to the corresponding official actor config in
+                # memory.
                 "BICOORD_PLATE_ASSET_OVERLAY": str(
                     self.settings.run
                     / "artifacts"
@@ -706,6 +754,14 @@ class GpuScheduler:
                     / "overlay"
                     / "003_plate"
                     / "model_data0.json"
+                ),
+                "BICOORD_SHOVEL_ASSET_OVERLAY": str(
+                    self.settings.run
+                    / "artifacts"
+                    / "asset_contract"
+                    / "overlay"
+                    / SHOVEL_OBJECT_NAME
+                    / SHOVEL_METADATA_NAME
                 ),
                 "BICOORD_REQUIRE_ASSET_OVERLAY": "1",
             }
@@ -2652,6 +2708,253 @@ class Supervisor:
         if require_success and successes <= 0:
             raise Blocked("reference policy has zero successes; downstream CARE is unsafe")
 
+    def _asset_runtime_expectations(self) -> dict[str, dict[str, Any]]:
+        """Return the two runtime overlay identities proved by asset_contract.
+
+        Seed discovery runs in separate child processes and records the
+        selected asset metadata on *every* attempt.  Re-read and validate the
+        asset stage here instead of trusting an environment variable or a
+        worker-supplied path; this keeps a resumed supervisor fail-closed when
+        either overlay or its receipt has drifted.
+        """
+
+        asset_result_path = self.result_path("asset_contract")
+        if not asset_result_path.is_file():
+            raise InvalidArtifact("asset contract result is missing for runtime overlay evidence")
+        # This is intentionally a full validation.  It binds both source
+        # revisions, receipt hashes, metadata overrides, and mesh provenance
+        # before any seed evidence is accepted.
+        self._validate_result(STAGES["asset_contract"], asset_result_path)
+        asset_result = _read_json(asset_result_path)
+        receipt_path = _canonical_stage_path(
+            asset_result.get("asset_contract"),
+            self.s.run / "artifacts" / "asset_contract" / "asset_contract.json",
+            label="asset contract receipt",
+        )
+        if (
+            not receipt_path.is_file()
+            or asset_result.get("asset_contract_sha256") != _sha256(receipt_path)
+        ):
+            raise InvalidArtifact("asset contract receipt/hash differs for runtime overlay evidence")
+        receipt = _read_json(receipt_path)
+        plate = receipt.get("plate_overlay")
+        shovel = receipt.get("shovel_overlay")
+        if not isinstance(plate, Mapping) or not isinstance(shovel, Mapping):
+            raise InvalidArtifact("asset contract does not contain both runtime overlays")
+        plate_path = _canonical_stage_path(
+            plate.get("overlay_metadata"),
+            self.s.run
+            / "artifacts"
+            / "asset_contract"
+            / "overlay"
+            / "003_plate"
+            / "model_data0.json",
+            label="plate runtime overlay",
+        )
+        shovel_path = _canonical_stage_path(
+            shovel.get("overlay_metadata"),
+            self.s.run
+            / "artifacts"
+            / "asset_contract"
+            / "overlay"
+            / SHOVEL_OBJECT_NAME
+            / SHOVEL_METADATA_NAME,
+            label="shovel runtime overlay",
+        )
+        for label, path, row in (
+            ("plate", plate_path, plate),
+            ("shovel", shovel_path, shovel),
+        ):
+            if not path.is_file() or row.get("target_metadata_sha256") != _sha256(path):
+                raise InvalidArtifact(f"{label} runtime overlay/hash differs")
+        plate_contacts = plate.get("target_contact_points_pose_sha256")
+        shovel_contacts = shovel.get("contact_points_pose_sha256")
+        if (
+            not isinstance(plate_contacts, str)
+            or len(plate_contacts) != 64
+            or not isinstance(shovel_contacts, str)
+            or shovel_contacts != SHOVEL_CONTACT_POINTS_POSE_SHA256
+        ):
+            raise InvalidArtifact("runtime overlay contact-pose identity is invalid")
+        try:
+            int(plate_contacts, 16)
+            int(shovel_contacts, 16)
+        except ValueError as error:
+            raise InvalidArtifact("runtime overlay contact-pose hash is not hexadecimal") from error
+        if shovel.get("contact_points_pose_count") != 1:
+            raise InvalidArtifact("shovel runtime overlay contact count differs")
+        return {
+            "place_plate_and_cup": {
+                "overlay": str(plate_path),
+                "contact_points_pose_sha256": plate_contacts,
+                "contact_points_pose_count": 4,
+                "receipt": str(receipt_path),
+                "receipt_sha256": _sha256(receipt_path),
+            },
+            "sweep_block": {
+                "overlay": str(shovel_path),
+                "contact_points_pose_sha256": shovel_contacts,
+                "contact_points_pose_count": 1,
+                "receipt": str(receipt_path),
+                "receipt_sha256": _sha256(receipt_path),
+            },
+        }
+
+    def _validate_seed_asset_overlay(
+        self,
+        task: str,
+        attempt: Mapping[str, Any],
+        expectations: Mapping[str, Mapping[str, Any]],
+        *,
+        context: str,
+    ) -> None:
+        """Validate per-attempt runtime overlay evidence for known defects."""
+
+        if task not in {"place_plate_and_cup", "sweep_block"}:
+            return
+        overlay = attempt.get("asset_overlay")
+        if not isinstance(overlay, Mapping):
+            raise InvalidArtifact(f"{context}: {task} attempt omitted asset overlay evidence")
+        expected = expectations.get(task)
+        if not isinstance(expected, Mapping):
+            raise InvalidArtifact(f"{context}: no expected overlay identity for {task}")
+        applied = overlay.get("applied")
+        if not isinstance(applied, bool):
+            raise InvalidArtifact(f"{context}: {task} overlay applied flag is invalid")
+        observed_path = overlay.get("overlay")
+        if applied and observed_path != expected.get("overlay"):
+            raise InvalidArtifact(
+                f"{context}: {task} overlay path differs: "
+                f"{observed_path!r} != {expected.get('overlay')!r}"
+            )
+        if not applied and observed_path not in (None, expected.get("overlay")):
+            raise InvalidArtifact(
+                f"{context}: {task} overlay path differs: "
+                f"{observed_path!r} != {expected.get('overlay')!r}"
+            )
+        if overlay.get("task") != task:
+            raise InvalidArtifact(f"{context}: {task} overlay task provenance differs")
+        if not applied:
+            # A construction failure must remain explicit and may not be
+            # converted into a nominal successful rollout.  It can be either
+            # structural or an ordinary seed rejection (for example an
+            # UnStableError during setup), but it must carry complete
+            # exception evidence and may claim no runtime receipt or actor
+            # mutation.
+            if (
+                attempt.get("valid") is not False
+                or attempt.get("plan_success") is True
+                or attempt.get("expert_success") is True
+                or not (
+                    attempt.get("structural_error") is True
+                    or attempt.get("expected_seed_rejection") is True
+                )
+            ):
+                raise InvalidArtifact(
+                    f"{context}: {task} unapplied overlay attempt outcome differs"
+                )
+            if overlay.get("contact_points_pose_sha256") is not None:
+                raise InvalidArtifact(
+                    f"{context}: {task} failed overlay must not claim a contact hash"
+                )
+            if overlay.get("receipt") is not None or overlay.get(
+                "receipt_sha256"
+            ) is not None:
+                raise InvalidArtifact(
+                    f"{context}: {task} failed overlay must not claim a receipt"
+                )
+            actors = overlay.get("actors", {})
+            if not isinstance(actors, Mapping) or actors:
+                raise InvalidArtifact(
+                    f"{context}: {task} failed overlay must not claim actor mutation"
+                )
+            reason = overlay.get("reason")
+            if not isinstance(reason, str) or not reason:
+                raise InvalidArtifact(f"{context}: {task} failed overlay lacks reason")
+            error_type = attempt.get("error_type")
+            error_signature = attempt.get("error_signature")
+            if (
+                not isinstance(error_type, str)
+                or not error_type
+                or not isinstance(error_signature, str)
+                or len(error_signature) != 64
+            ):
+                raise InvalidArtifact(
+                    f"{context}: {task} failed overlay lacks exception identity"
+                )
+            try:
+                int(error_signature, 16)
+            except ValueError as error:
+                raise InvalidArtifact(
+                    f"{context}: {task} failed overlay exception hash is invalid"
+                ) from error
+            return
+        if overlay.get("task_source_modified") is not False:
+            raise InvalidArtifact(f"{context}: {task} overlay source provenance differs")
+        if (
+            overlay.get("receipt") != expected.get("receipt")
+            or overlay.get("receipt_sha256") != expected.get("receipt_sha256")
+        ):
+            raise InvalidArtifact(f"{context}: {task} overlay receipt provenance differs")
+        if overlay.get("contact_points_pose_sha256") != expected.get(
+            "contact_points_pose_sha256"
+        ):
+            raise InvalidArtifact(f"{context}: {task} converted contact hash differs")
+        if task == "place_plate_and_cup":
+            self._require_mapping_values(
+                overlay,
+                {
+                    "copied_fields": [CONTACT_KEY],
+                },
+                f"{context}: plate runtime overlay",
+            )
+            if any(key in overlay for key in ("legacy_conversion", "derived_fields", "source_fields")):
+                raise InvalidArtifact(f"{context}: plate overlay carries legacy shovel provenance")
+            actors = overlay.get("actors")
+            if not isinstance(actors, Mapping) or set(actors) != {"plate", "plate_2"}:
+                raise InvalidArtifact(f"{context}: plate actor overlay coverage differs")
+            for actor_name in ("plate", "plate_2"):
+                actor = actors[actor_name]
+                if not isinstance(actor, Mapping):
+                    raise InvalidArtifact(f"{context}: plate actor evidence is invalid")
+                self._require_mapping_values(
+                    actor,
+                    {
+                        "after_sha256": expected["contact_points_pose_sha256"],
+                        "contact_points_pose_count": 4,
+                        "scale_preserved": True,
+                        "changed_fields": [CONTACT_KEY],
+                    },
+                    f"{context}: {actor_name} overlay evidence",
+                )
+        else:
+            self._require_mapping_values(
+                overlay,
+                {
+                    "copied_fields": [CONTACT_KEY],
+                    "derived_fields": [CONTACT_KEY],
+                    "source_fields": [LEGACY_CONTACT_KEY, LEGACY_TRANSFORM_KEY],
+                    "legacy_conversion": True,
+                },
+                f"{context}: shovel runtime overlay",
+            )
+            actors = overlay.get("actors")
+            if not isinstance(actors, Mapping) or set(actors) != {"shovel"}:
+                raise InvalidArtifact(f"{context}: shovel actor overlay coverage differs")
+            actor = actors["shovel"]
+            if not isinstance(actor, Mapping):
+                raise InvalidArtifact(f"{context}: shovel actor evidence is invalid")
+            self._require_mapping_values(
+                actor,
+                {
+                    "after_sha256": expected["contact_points_pose_sha256"],
+                    "contact_points_pose_count": 1,
+                    "scale_preserved": True,
+                    "changed_fields": [CONTACT_KEY],
+                },
+                f"{context}: shovel actor overlay evidence",
+            )
+
     def _validate_result(self, spec: StageSpec, path: Path) -> dict[str, Any]:
         result = _read_json(path)
         expected_head = {
@@ -2713,6 +3016,10 @@ class Supervisor:
         if spec.name == "asset_contract":
             from .asset_stage import (
                 BICOORD_OBJECTS_SHA256,
+                DONOR_METADATA_SHA256,
+                PLATE_COLLISION_SHA256,
+                PLATE_VISUAL_SHA256,
+                PRISTINE_SMALL_METADATA_SHA256,
                 ROBOTWIN_OBJECTS_SHA256,
             )
 
@@ -2722,6 +3029,7 @@ class Supervisor:
                     "dataset_archive_sha256": BICOORD_OBJECTS_SHA256,
                     "base_archive_sha256": ROBOTWIN_OBJECTS_SHA256,
                     "contact_points_pose_count": 4,
+                    "shovel_contact_points_pose_count": 1,
                     "copied_fields": ["contact_points_pose"],
                     "task_source_modified": False,
                     "upstream_model_modified": False,
@@ -2739,6 +3047,13 @@ class Supervisor:
                 },
                 "asset contract result",
             )
+            if (
+                not isinstance(result.get("shovel_metadata_sha256"), str)
+                or result.get("shovel_contact_points_pose_sha256")
+                != SHOVEL_CONTACT_POINTS_POSE_SHA256
+                or result.get("shovel_contact_points_pose_count") != 1
+            ):
+                raise InvalidArtifact("asset contract result shovel overlay/hash differs")
             receipt_path = _canonical_stage_path(
                 result.get("asset_contract"),
                 self.s.run
@@ -2773,21 +3088,6 @@ class Supervisor:
             plate = receipt.get("plate_overlay")
             if not isinstance(plate, Mapping):
                 raise InvalidArtifact("asset contract omitted plate overlay")
-            self._require_mapping_values(
-                plate,
-                {
-                    "copied_fields": ["contact_points_pose"],
-                    "small_scale_preserved": True,
-                    "contact_points_pose_count": 4,
-                    "task_source_modified": False,
-                    "planner_modified": False,
-                    "model_modified": False,
-                    "normalization_modified": False,
-                    "benchmark_asset_source_modified": False,
-                    "mutation_scope": "run_artifact_and_actor_config_in_memory_only",
-                },
-                "plate overlay receipt",
-            )
             overlay_path = _canonical_stage_path(
                 plate.get("overlay_metadata"),
                 self.s.run
@@ -2798,12 +3098,271 @@ class Supervisor:
                 / "model_data0.json",
                 label="plate runtime overlay",
             )
+            self._require_mapping_values(
+                plate,
+                {
+                    "copied_fields": ["contact_points_pose"],
+                    "small_scale_preserved": True,
+                    "contact_points_pose_count": 4,
+                    "source_small_metadata_sha256": (
+                        PRISTINE_SMALL_METADATA_SHA256
+                    ),
+                    "pristine_small_metadata_sha256": (
+                        PRISTINE_SMALL_METADATA_SHA256
+                    ),
+                    "donor_metadata_expected_sha256": DONOR_METADATA_SHA256,
+                    "donor_metadata_sha256": DONOR_METADATA_SHA256,
+                    "task_source_modified": False,
+                    "planner_modified": False,
+                    "model_modified": False,
+                    "normalization_modified": False,
+                    "benchmark_asset_source_modified": False,
+                    "mutation_scope": "run_artifact_and_actor_config_in_memory_only",
+                },
+                "plate overlay receipt",
+            )
+            plate_source_path = _canonical_stage_path(
+                plate.get("source_small_metadata"),
+                self.s.benchmark_repo
+                / "assets"
+                / "objects"
+                / "003_plate"
+                / "model_data0.json",
+                label="pristine plate source metadata",
+            )
+            plate_donor_path = _canonical_stage_path(
+                plate.get("large_metadata"),
+                self.s.benchmark_repo
+                / "assets"
+                / "objects"
+                / "003_plate_large"
+                / "model_data0.json",
+                label="plate contact donor metadata",
+            )
+            if (
+                not plate_source_path.is_file()
+                or _sha256(plate_source_path) != PRISTINE_SMALL_METADATA_SHA256
+                or not plate_donor_path.is_file()
+                or _sha256(plate_donor_path) != DONOR_METADATA_SHA256
+                or plate.get("target_contact_points_pose_sha256")
+                != plate.get("large_contact_points_pose_sha256")
+            ):
+                raise InvalidArtifact("plate source/donor contact provenance differs")
+            pristine_plate_value = _read_json(plate_source_path)
+            effective_plate_value = _read_json(overlay_path)
+            if (
+                pristine_plate_value.get(CONTACT_KEY) != []
+                or {
+                    key: value
+                    for key, value in effective_plate_value.items()
+                    if key != CONTACT_KEY
+                }
+                != pristine_plate_value
+                or canonical_json_sha256(effective_plate_value.get(CONTACT_KEY))
+                != plate.get("target_contact_points_pose_sha256")
+            ):
+                raise InvalidArtifact("plate overlay did not preserve pristine metadata")
+            plate_meshes = plate.get("small_meshes")
+            donor_meshes = plate.get("large_meshes")
+            if not isinstance(plate_meshes, list) or not isinstance(donor_meshes, list):
+                raise InvalidArtifact("plate mesh provenance is missing")
+            plate_mesh_hashes = {
+                str(row.get("relative_path")): str(row.get("sha256"))
+                for row in plate_meshes
+                if isinstance(row, Mapping)
+            }
+            donor_mesh_hashes = {
+                str(row.get("relative_path")): str(row.get("sha256"))
+                for row in donor_meshes
+                if isinstance(row, Mapping)
+            }
+            if plate_mesh_hashes != {
+                "collision/base0.glb": PLATE_COLLISION_SHA256,
+                "visual/base0.glb": PLATE_VISUAL_SHA256,
+            } or donor_mesh_hashes != plate_mesh_hashes:
+                raise InvalidArtifact("plate/donor mesh provenance differs")
             if (
                 not overlay_path.is_file()
                 or plate.get("target_metadata_sha256") != _sha256(overlay_path)
                 or result.get("plate_metadata_sha256") != _sha256(overlay_path)
             ):
                 raise InvalidArtifact("audited plate runtime overlay/hash differs")
+            shovel = receipt.get("shovel_overlay")
+            if not isinstance(shovel, Mapping):
+                raise InvalidArtifact("asset contract omitted shovel overlay")
+            self._require_mapping_values(
+                shovel,
+                {
+                    "status": "PASSED",
+                    "modelname": SHOVEL_OBJECT_NAME,
+                    "model_id": SHOVEL_MODEL_ID,
+                    "pristine_source_metadata_sha256": (
+                        PRISTINE_SHOVEL_METADATA_SHA256
+                    ),
+                    "source_metadata_sha256": PRISTINE_SHOVEL_METADATA_SHA256,
+                    "conversion": (
+                        "scale(contact_pose) @ trans_matrix -> "
+                        "scale(contact_points_pose)"
+                    ),
+                    "legacy_contact_pose_count": 1,
+                    "contact_points_pose_count": 1,
+                    "contact_points_pose_sha256": (
+                        SHOVEL_CONTACT_POINTS_POSE_SHA256
+                    ),
+                    "copied_fields": [CONTACT_KEY],
+                    "added_fields": [CONTACT_KEY],
+                    "derived_fields": [CONTACT_KEY],
+                    "source_fields": [LEGACY_CONTACT_KEY, LEGACY_TRANSFORM_KEY],
+                    "preserved_fields": "all_except_contact_points_pose",
+                    "changed_fields": [CONTACT_KEY],
+                    "scale": list(DEFAULT_SHOVEL_SCALE),
+                    "scale_preserved": True,
+                    "task_source_modified": False,
+                    "planner_modified": False,
+                    "model_modified": False,
+                    "normalization_modified": False,
+                    "benchmark_asset_source_modified": False,
+                    "mutation_scope": (
+                        "run_artifact_and_actor_config_in_memory_only"
+                    ),
+                },
+                "shovel overlay receipt",
+            )
+            equivalence_error = shovel.get("max_scale_equivalence_error")
+            if (
+                isinstance(equivalence_error, bool)
+                or not isinstance(equivalence_error, (int, float))
+                or not 0.0 <= float(equivalence_error) <= 1e-12
+            ):
+                raise InvalidArtifact(
+                    "shovel overlay scale-equivalence proof differs"
+                )
+            shovel_overlay_path = _canonical_stage_path(
+                shovel.get("overlay_metadata"),
+                self.s.run
+                / "artifacts"
+                / "asset_contract"
+                / "overlay"
+                / SHOVEL_OBJECT_NAME
+                / SHOVEL_METADATA_NAME,
+                label="shovel runtime overlay",
+            )
+            if (
+                not shovel_overlay_path.is_file()
+                or shovel.get("target_metadata_sha256")
+                != _sha256(shovel_overlay_path)
+                or result.get("shovel_metadata_sha256")
+                != _sha256(shovel_overlay_path)
+                or result.get("shovel_contact_points_pose_sha256")
+                != SHOVEL_CONTACT_POINTS_POSE_SHA256
+            ):
+                raise InvalidArtifact("audited shovel runtime overlay/hash differs")
+            shovel_source_path = _canonical_stage_path(
+                shovel.get("source_metadata"),
+                self.s.benchmark_repo
+                / "assets"
+                / "objects"
+                / SHOVEL_OBJECT_NAME
+                / SHOVEL_METADATA_NAME,
+                label="pristine shovel source metadata",
+            )
+            if (
+                not shovel_source_path.is_file()
+                or _sha256(shovel_source_path)
+                != PRISTINE_SHOVEL_METADATA_SHA256
+            ):
+                raise InvalidArtifact("pristine shovel source metadata/hash differs")
+            pristine_shovel = _read_json(shovel_source_path)
+            effective_shovel = _read_json(shovel_overlay_path)
+            if CONTACT_KEY in pristine_shovel:
+                raise InvalidArtifact(
+                    "pristine shovel source unexpectedly has current contact metadata"
+                )
+            if (
+                effective_shovel.get(LEGACY_CONTACT_KEY)
+                != pristine_shovel.get(LEGACY_CONTACT_KEY)
+                or effective_shovel.get(LEGACY_TRANSFORM_KEY)
+                != pristine_shovel.get(LEGACY_TRANSFORM_KEY)
+                or {
+                    key: value
+                    for key, value in effective_shovel.items()
+                    if key != CONTACT_KEY
+                }
+                != pristine_shovel
+            ):
+                raise InvalidArtifact(
+                    "shovel overlay did not preserve the pristine legacy record"
+                )
+            effective_contacts = effective_shovel.get(CONTACT_KEY)
+            if (
+                not isinstance(effective_contacts, list)
+                or len(effective_contacts) != 1
+                or canonical_json_sha256(effective_contacts)
+                != SHOVEL_CONTACT_POINTS_POSE_SHA256
+            ):
+                raise InvalidArtifact("shovel overlay converted pose differs")
+            identity = shovel.get("asset_identity")
+            if not isinstance(identity, Mapping):
+                raise InvalidArtifact("shovel overlay omitted asset identity")
+            self._require_mapping_values(
+                identity,
+                {
+                    "object": SHOVEL_OBJECT_NAME,
+                    "model_id": SHOVEL_MODEL_ID,
+                    "source_metadata": str(shovel_source_path),
+                    "source_metadata_sha256": PRISTINE_SHOVEL_METADATA_SHA256,
+                    "mesh_and_metadata_identity": "PASSED",
+                },
+                "shovel asset identity",
+            )
+            mesh_rows = identity.get("meshes")
+            expected_mesh_rows = (
+                (
+                    "collision/base3.glb",
+                    SHOVEL_COLLISION_BYTES,
+                    SHOVEL_COLLISION_SHA256,
+                ),
+                (
+                    "visual/base3.glb",
+                    SHOVEL_VISUAL_BYTES,
+                    SHOVEL_VISUAL_SHA256,
+                ),
+            )
+            if not isinstance(mesh_rows, list) or len(mesh_rows) != 2:
+                raise InvalidArtifact("shovel mesh identity coverage differs")
+            for row, (relative, expected_bytes, expected_sha) in zip(
+                mesh_rows, expected_mesh_rows, strict=True
+            ):
+                if not isinstance(row, Mapping):
+                    raise InvalidArtifact("shovel mesh identity row is invalid")
+                expected_mesh_path = (
+                    self.s.benchmark_repo
+                    / "assets"
+                    / "objects"
+                    / SHOVEL_OBJECT_NAME
+                    / relative
+                )
+                mesh_path = _canonical_stage_path(
+                    row.get("path"),
+                    expected_mesh_path,
+                    label=f"shovel {relative} mesh",
+                )
+                self._require_mapping_values(
+                    row,
+                    {
+                        "relative_path": relative,
+                        "path": str(mesh_path),
+                        "bytes": expected_bytes,
+                        "sha256": expected_sha,
+                    },
+                    f"shovel {relative} mesh identity",
+                )
+                if (
+                    not mesh_path.is_file()
+                    or mesh_path.stat().st_size != expected_bytes
+                    or _sha256(mesh_path) != expected_sha
+                ):
+                    raise InvalidArtifact(f"shovel {relative} mesh/hash differs")
             task_audit = receipt.get("task_asset_audit")
             if not isinstance(task_audit, Mapping):
                 raise InvalidArtifact("18-task object point-index audit did not pass")
@@ -2828,9 +3387,13 @@ class Supervisor:
                     "violations": [],
                     "expected_pristine_defect_count": 0,
                     "unexpected_violation_count": 0,
-                    "metadata_override_count": 1,
+                    "metadata_override_count": 2,
                     "metadata_override_keys": [
-                        {"modelname": "003_plate", "model_id": 0}
+                        {"modelname": "003_plate", "model_id": 0},
+                        {
+                            "modelname": SHOVEL_OBJECT_NAME,
+                            "model_id": SHOVEL_MODEL_ID,
+                        },
                     ],
                     "read_only_benchmark": True,
                     "benchmark_files_written": False,
@@ -2852,11 +3415,31 @@ class Supervisor:
             ):
                 raise InvalidArtifact("18-task object point-index report coverage differs")
             overrides = task_audit.get("metadata_overrides")
-            if not isinstance(overrides, list) or len(overrides) != 1:
-                raise InvalidArtifact("plate metadata override provenance is missing")
-            override = overrides[0]
-            if not isinstance(override, Mapping):
-                raise InvalidArtifact("plate metadata override provenance is invalid")
+            if not isinstance(overrides, list) or len(overrides) != 2:
+                raise InvalidArtifact("plate/shovel metadata override provenance is missing")
+            override_by_key: dict[tuple[str, int], Mapping[str, Any]] = {}
+            for item in overrides:
+                if not isinstance(item, Mapping) or not isinstance(item.get("key"), Mapping):
+                    raise InvalidArtifact("metadata override provenance is invalid")
+                key = item["key"]
+                modelname = key.get("modelname")
+                model_id = key.get("model_id")
+                if (
+                    not isinstance(modelname, str)
+                    or isinstance(model_id, bool)
+                    or not isinstance(model_id, int)
+                ):
+                    raise InvalidArtifact("metadata override key is invalid")
+                identity = (modelname, model_id)
+                if identity in override_by_key:
+                    raise InvalidArtifact("duplicate metadata override provenance key")
+                override_by_key[identity] = item
+            if set(override_by_key) != {
+                ("003_plate", 0),
+                (SHOVEL_OBJECT_NAME, SHOVEL_MODEL_ID),
+            }:
+                raise InvalidArtifact("metadata override provenance keys differ")
+            override = override_by_key[("003_plate", 0)]
             expected_source = overlay_path.resolve()
             self._require_mapping_values(
                 override,
@@ -2868,6 +3451,7 @@ class Supervisor:
                     "source_sha256": _sha256(expected_source),
                     "pristine_source_sha256": plate.get("source_small_metadata_sha256"),
                     "contract_status": "PASSED",
+                    "contract_type": "contact_points_pose_only",
                     "error": None,
                     "used_by_actor_count": 2,
                     "used_by_interaction_count": 4,
@@ -2910,6 +3494,63 @@ class Supervisor:
                 raise InvalidArtifact(
                     "plate metadata override interaction provenance differs"
                 )
+            shovel_override = override_by_key[(SHOVEL_OBJECT_NAME, SHOVEL_MODEL_ID)]
+            self._require_mapping_values(
+                shovel_override,
+                {
+                    "key": {
+                        "modelname": SHOVEL_OBJECT_NAME,
+                        "model_id": SHOVEL_MODEL_ID,
+                    },
+                    "status": "USED",
+                    "source_type": "file",
+                    "source_path": str(shovel_overlay_path.resolve()),
+                    "source_sha256": _sha256(shovel_overlay_path),
+                    "pristine_source_sha256": PRISTINE_SHOVEL_METADATA_SHA256,
+                    "contract_status": "PASSED",
+                    "error": None,
+                    "used_by_actor_count": 1,
+                    "used_by_interaction_count": 1,
+                    "contract_type": "derived_legacy_contact",
+                },
+                "shovel metadata override provenance",
+            )
+            shovel_actor_rows = shovel_override.get("used_by_actors")
+            if not isinstance(shovel_actor_rows, list) or {
+                (row.get("task"), row.get("actor"))
+                for row in shovel_actor_rows
+                if isinstance(row, Mapping)
+            } != {("sweep_block", "shovel")}:
+                raise InvalidArtifact("shovel metadata override actor provenance differs")
+            shovel_interaction_rows = shovel_override.get("used_by_interactions")
+            if not isinstance(shovel_interaction_rows, list) or {
+                (
+                    row.get("task"),
+                    row.get("actor"),
+                    row.get("kind"),
+                    tuple(row.get("index_values") or ()),
+                )
+                for row in shovel_interaction_rows
+                if isinstance(row, Mapping)
+            } != {("sweep_block", "shovel", "grasp_actor", (0,))}:
+                raise InvalidArtifact(
+                    "shovel metadata override interaction provenance differs"
+                )
+            provenance = shovel_override.get("contract_provenance")
+            if not isinstance(provenance, Mapping):
+                raise InvalidArtifact("shovel legacy conversion provenance is missing")
+            self._require_mapping_values(
+                provenance,
+                {
+                    "contact_points_pose_sha256": SHOVEL_CONTACT_POINTS_POSE_SHA256,
+                    "derived_fields": [CONTACT_KEY],
+                    "source_fields": [LEGACY_CONTACT_KEY, LEGACY_TRANSFORM_KEY],
+                    "scale_preserved": True,
+                    "max_scale_equivalence_error": 0.0,
+                    "legacy_fields_preserved": True,
+                },
+                "shovel legacy conversion provenance",
+            )
 
         if spec.result_kind == "dataset":
             if int(result.get("episodes", -1)) != FORMAL_EPISODES:
@@ -2938,6 +3579,7 @@ class Supervisor:
             self._require_mapping_values(numeric, expected_numeric, "numeric_contract")
 
         if spec.result_kind == "seed_manifest":
+            overlay_expectations = self._asset_runtime_expectations()
             if result.get("policy_independent") is not True:
                 raise InvalidArtifact("expert seed manifest is not policy-independent")
             if result.get("learned_policy_used") is not False:
@@ -3038,6 +3680,20 @@ class Supervisor:
                     or not task_attempts
                 ):
                     raise InvalidArtifact(f"{task}: expert attempt evidence differs")
+                if task in {"place_plate_and_cup", "sweep_block"}:
+                    for attempt_index, attempt_row in enumerate(
+                        task_attempts, start=1
+                    ):
+                        if not isinstance(attempt_row, Mapping):
+                            raise InvalidArtifact(
+                                f"{task}: aggregate attempt {attempt_index} is invalid"
+                            )
+                        self._validate_seed_asset_overlay(
+                            task,
+                            attempt_row,
+                            overlay_expectations,
+                            context=f"{task} aggregate attempt {attempt_index}",
+                        )
                 task_type_counts, task_error_counts = (
                     self._validated_seed_exception_diagnostics(
                         diagnostic_maps["exception_type_counts"][task],
@@ -3611,17 +4267,7 @@ class Supervisor:
         progress_receipt_sha256: dict[str, str] = {}
         seed_receipts: dict[str, list[str]] = {}
         seed_receipts_sha256: dict[str, list[str]] = {}
-        asset_result = _read_json(self.result_path("asset_contract"))
-        asset_receipt = _read_json(Path(str(asset_result.get("asset_contract", ""))))
-        plate_overlay = asset_receipt.get("plate_overlay")
-        if not isinstance(plate_overlay, Mapping):
-            raise InvalidArtifact("asset contract plate overlay is unavailable")
-        expected_plate_overlay = str(
-            Path(str(plate_overlay.get("overlay_metadata", ""))).resolve()
-        )
-        expected_plate_contacts = plate_overlay.get(
-            "target_contact_points_pose_sha256"
-        )
+        overlay_expectations = self._asset_runtime_expectations()
         for task in TASKS:
             row = _read_json(results[task])
             self._require_mapping_values(
@@ -3754,28 +4400,17 @@ class Supervisor:
                 },
                 f"{task} seed worker diagnostics",
             )
-            if task == "place_plate_and_cup":
-                for attempt_row in task_attempts:
-                    overlay = (
-                        attempt_row.get("asset_overlay")
-                        if isinstance(attempt_row, Mapping)
-                        else None
-                    )
-                    if not isinstance(overlay, Mapping):
+            if task in {"place_plate_and_cup", "sweep_block"}:
+                for attempt_index, attempt_row in enumerate(task_attempts, start=1):
+                    if not isinstance(attempt_row, Mapping):
                         raise InvalidArtifact(
-                            "place_plate_and_cup: attempt omitted asset overlay evidence"
+                            f"{task}: attempt {attempt_index} is not an object"
                         )
-                    self._require_mapping_values(
-                        overlay,
-                        {
-                            "task": task,
-                            "applied": True,
-                            "overlay": expected_plate_overlay,
-                            "contact_points_pose_sha256": expected_plate_contacts,
-                            "copied_fields": ["contact_points_pose"],
-                            "task_source_modified": False,
-                        },
-                        "place_plate_and_cup runtime asset overlay",
+                    self._validate_seed_asset_overlay(
+                        task,
+                        attempt_row,
+                        overlay_expectations,
+                        context=f"{task} attempt {attempt_index}",
                     )
             task_progress = row.get("progress_receipt")
             task_progress_sha = row.get("progress_receipt_sha256")
