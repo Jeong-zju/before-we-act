@@ -30,7 +30,7 @@ import numpy as np
 import torch
 
 
-SNAPSHOT_SCHEMA = "before-we-act.bicoord.exact-snapshot/2"
+SNAPSHOT_SCHEMA = "before-we-act.bicoord.exact-snapshot/3"
 SNAPSHOT_TOLERANCE = 1e-6
 
 
