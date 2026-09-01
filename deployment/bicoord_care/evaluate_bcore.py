@@ -116,15 +116,31 @@ def _runtime(checkpoint: Path, args: argparse.Namespace):
 def _official_seeds(args: argparse.Namespace, task: str, *, count: int) -> list[int]:
     """Load and hash-check the expert-valid seed manifest; never synthesize it."""
 
-    stage = "seed_discovery_smoke" if _is_smoke_operation(args) else "seed_discovery"
+    smoke = _is_smoke_operation(args)
+    stage = "seed_discovery_smoke" if smoke else "seed_discovery"
+    expected_count = 1 if smoke else VALIDATION_EPISODES
     dependency = require_stage_result(args.run, stage, config_sha256=args.config_sha256)
     path = Path(str(dependency.get("seed_manifest", "")))
     digest = dependency.get("seed_manifest_sha256")
     if not path.is_file() or not isinstance(digest, str) or sha256_file(path) != digest:
         raise RuntimeError("seed discovery manifest is missing or changed")
     value = json.loads(path.read_text(encoding="utf-8"))
-    if value.get("schema") != SEED_MANIFEST_SCHEMA or value.get("policy_independent") is not True:
+    if (
+        value.get("schema") != SEED_MANIFEST_SCHEMA
+        or value.get("policy_independent") is not True
+        or value.get("status") != "PASSED"
+        or value.get("stage") != stage
+        or value.get("seed_role") != "validation"
+        or value.get("seed_bucket") != 0
+        or value.get("episodes_per_task") != expected_count
+        or dependency.get("stage") != stage
+        or dependency.get("seed_role") != "validation"
+        or dependency.get("seed_bucket") != 0
+        or dependency.get("episodes_per_task") != expected_count
+    ):
         raise RuntimeError("seed manifest is not the frozen policy-independent contract")
+    if count != expected_count:
+        raise RuntimeError(f"{stage} requires exactly {expected_count} seeds")
     rows = value.get("valid_seeds", {}).get(task)
     if not isinstance(rows, list) or len(rows) < count or len(set(rows)) != len(rows):
         raise RuntimeError(f"expert-valid seed coverage is incomplete for {task}")

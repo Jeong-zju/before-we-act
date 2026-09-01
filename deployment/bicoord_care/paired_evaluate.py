@@ -560,12 +560,29 @@ def _paired_seed(
 
 
 def _seed_manifest_receipt(args: argparse.Namespace) -> tuple[str, str]:
-    stage = "seed_discovery_smoke" if args.operation == "smoke-paired" else "seed_discovery"
+    smoke = args.operation == "smoke-paired"
+    stage = "seed_discovery_smoke" if smoke else "seed_discovery"
+    expected_count = 1 if smoke else VALIDATION_EPISODES
     dependency = require_stage_result(args.run, stage, config_sha256=args.config_sha256)
     path = Path(str(dependency.get("seed_manifest", "")))
     digest = dependency.get("seed_manifest_sha256")
     if not path.is_file() or not isinstance(digest, str) or sha256_file(path) != digest:
         raise RuntimeError("paired evaluation seed manifest changed")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        value.get("schema") != "before-we-act.bicoord.expert-seed-manifest/1"
+        or value.get("status") != "PASSED"
+        or value.get("stage") != stage
+        or value.get("seed_role") != "validation"
+        or value.get("seed_bucket") != 0
+        or value.get("episodes_per_task") != expected_count
+        or dependency.get("stage") != stage
+        or dependency.get("seed_role") != "validation"
+        or dependency.get("seed_bucket") != 0
+        or dependency.get("episodes_per_task") != expected_count
+        or dependency.get("seed_manifest") != str(path.resolve())
+    ):
+        raise RuntimeError("paired evaluation seed manifest contract differs")
     return str(path.resolve()), digest
 
 
