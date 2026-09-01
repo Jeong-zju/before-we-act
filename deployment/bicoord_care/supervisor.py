@@ -3157,7 +3157,11 @@ class Supervisor:
                     for key, value in effective_plate_value.items()
                     if key != CONTACT_KEY
                 }
-                != pristine_plate_value
+                != {
+                    key: value
+                    for key, value in pristine_plate_value.items()
+                    if key != CONTACT_KEY
+                }
                 or canonical_json_sha256(effective_plate_value.get(CONTACT_KEY))
                 != plate.get("target_contact_points_pose_sha256")
             ):
