@@ -47,7 +47,11 @@ from .asset_contract import (
     SHOVEL_VISUAL_BYTES,
     SHOVEL_VISUAL_SHA256,
 )
-from .branch_fidelity import seed_replay_probe_valid, strict_fidelity_receipts_valid
+from .branch_fidelity import (
+    physical_branch_family_rows_valid,
+    seed_replay_probe_valid,
+    strict_fidelity_receipts_valid,
+)
 from .config import (
     ACTION_DIM,
     ACTION_ENCODING,
@@ -1053,13 +1057,27 @@ class GpuScheduler:
             for pid, item in tuple(remaining.items()):
                 poll = getattr(item.process, "poll", None)
                 if not callable(poll):
-                    raise TypeError("wave child process lacks poll()")
+                    cleanup_errors = self._terminate_and_reap(
+                        tuple(remaining.values())
+                    )
+                    raise SupervisorError(
+                        "wave child process lacks poll()"
+                        f"{self._format_cleanup_errors(cleanup_errors)}"
+                    )
                 try:
                     code = poll()
                 except ChildProcessError:
                     code = getattr(item.process, "returncode", None)
                     if code is None:
                         code = -1
+                except BaseException as error:
+                    cleanup_errors = self._terminate_and_reap(
+                        tuple(remaining.values())
+                    )
+                    raise SupervisorError(
+                        f"failed to poll GPU-wave child {item.name}: {error!r}"
+                        f"{self._format_cleanup_errors(cleanup_errors)}"
+                    ) from error
                 if code is None:
                     continue
                 remaining.pop(pid)
@@ -1976,8 +1994,8 @@ class Supervisor:
                 if not strict_fidelity_receipts_valid(fidelity):
                     raise InvalidArtifact("reference reactive/replay fidelity failed")
                 branches = family.get("branches")
-                if not isinstance(branches, list) or len(branches) != BRANCHES_PER_FAMILY:
-                    raise InvalidArtifact("branch family width differs")
+                if not physical_branch_family_rows_valid(branches):
+                    raise InvalidArtifact("branch family physical row contract differs")
                 keys = {
                     (
                         int(row.get("candidate_id", -1)),

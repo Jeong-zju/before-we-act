@@ -293,3 +293,65 @@ def test_fidelity_summary_rejects_truncated_or_missing_discrete_trace() -> None:
     diagnostic = module._fidelity_diagnostic(row, replay)
     assert diagnostic["trajectory_complete"] is False
     assert module._fidelity_summary(row, replay)["passed"] is False
+
+
+def test_fidelity_summary_rejects_missing_or_nonfinite_utility_vectors() -> None:
+    metrics = [
+        {
+            "branch_step": step,
+            "qpos": [[0.0] * 7, [0.0] * 7],
+            "progress": 0.0,
+            "success": False,
+            "active": [False, False],
+            "all_joint_changes_below_0_02": True,
+            "hard_safety_violation": False,
+            "collision_or_drop": False,
+            "robot_conflict": False,
+            "duplicate_work": False,
+            "safety": {
+                "drop": False,
+                "robot_collision": False,
+                "hard_safety_violation": False,
+                "dropped_actors": [],
+                "robot_robot_contacts": [],
+            },
+        }
+        for step in range(module.MAX_BRANCH_STEPS)
+    ]
+    outcomes = {
+        str(horizon): {
+            "requested_steps": horizon,
+            "observed_steps": horizon,
+            "hard_safety_violation": False,
+            "first_success_step": None,
+            "physical_simulator_outcome": True,
+            "utility_main": 0.0,
+            "bounded_utility_vector": [0.0] * len(module.ORDINARY_WEIGHTS),
+        }
+        for horizon in module.HORIZONS
+    }
+    row = {
+        "candidate_id": 0,
+        "repeat_id": 0,
+        "branch_seed": 1,
+        "status": "VALID",
+        "physical_simulator_outcome": True,
+        "simulator_steps": module.MAX_BRANCH_STEPS,
+        "intervention_steps": module.INTERVENTION_STEPS,
+        "candidate_transform_clipped": False,
+        "action_clipped": False,
+        "focal_policy_output_used": True,
+        "executed_actions": np.zeros((module.MAX_BRANCH_STEPS, 2, 7)).tolist(),
+        "metrics": metrics,
+        "outcomes": outcomes,
+    }
+    malformed = {**row, "outcomes": {key: dict(value) for key, value in outcomes.items()}}
+    malformed["outcomes"]["16"]["bounded_utility_vector"] = []
+    summary = module._fidelity_summary(malformed, malformed)
+    assert summary["bounded_utility_contract_valid"] is False
+    assert summary["passed"] is False
+
+    malformed["outcomes"]["16"]["bounded_utility_vector"] = [0.0] * 7 + [float("nan")]
+    summary = module._fidelity_summary(malformed, malformed)
+    assert summary["bounded_utility_contract_valid"] is False
+    assert summary["passed"] is False

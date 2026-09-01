@@ -980,6 +980,18 @@ def _fidelity_summary(
     bounded_utility_error = _finite_max(
         [row["bounded_vector_abs_error"] for row in diagnostic["utility_by_horizon"].values()]
     )
+    bounded_utility_contract_valid = all(
+        len(row["bounded_vector_reactive"]) == len(ORDINARY_WEIGHTS)
+        and len(row["bounded_vector_replay"]) == len(ORDINARY_WEIGHTS)
+        and all(
+            math.isfinite(float(value))
+            for value in (
+                *row["bounded_vector_reactive"],
+                *row["bounded_vector_replay"],
+            )
+        )
+        for row in diagnostic["utility_by_horizon"].values()
+    )
     outcome_discrete_equal = not any(
         diagnostic["outcome_discrete_difference_horizons"].values()
     )
@@ -994,6 +1006,7 @@ def _fidelity_summary(
     passed = bool(
         utility_error <= SNAPSHOT_TOLERANCE
         and bounded_utility_error <= SNAPSHOT_TOLERANCE
+        and bounded_utility_contract_valid
         and float(diagnostic["executed_action_max_abs_error"]) <= SNAPSHOT_TOLERANCE
         and float(diagnostic["qpos_max_abs_error"]) <= SNAPSHOT_TOLERANCE
         and float(diagnostic["progress_max_abs_error"]) <= SNAPSHOT_TOLERANCE
@@ -1005,6 +1018,7 @@ def _fidelity_summary(
         "repeat_id": int(reactive.get("repeat_id", -1)),
         "utility_max_abs_error": utility_error,
         "bounded_utility_max_abs_error": bounded_utility_error,
+        "bounded_utility_contract_valid": bounded_utility_contract_valid,
         "executed_action_max_abs_error": float(
             diagnostic["executed_action_max_abs_error"]
         ),
@@ -1468,7 +1482,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not seed_manifest_path.is_file() or sha256_file(seed_manifest_path) != seed_manifest_sha:
         raise RuntimeError("branch seed manifest artifact/hash differs")
     output_root = args.run / "artifacts" / ("branch_smoke" if smoke else "branches") / f"rank_{rank}"
-    output_root.mkdir(parents=True, exist_ok=True)
+    # A physical branch shard is deliberately single-attempt.  Re-entering a
+    # rank directory after any crash would mix simulator evidence from two
+    # process/runtime lifetimes.  Create the shared parent idempotently, then
+    # claim this rank atomically and fail if it was ever claimed before.
+    output_root.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        output_root.mkdir(exist_ok=False)
+    except FileExistsError as error:
+        raise RuntimeError(
+            f"physical branch rank output already exists; use a new run: {output_root}"
+        ) from error
     records: list[dict[str, Any]] = []
     for task in TASKS:
         for local in range(families_per_task):

@@ -11,7 +11,11 @@ import torch
 
 from .config import TASKS
 from .bcore_data import BICOORD_CARE_MEMORY_TOKENS, BICOORD_CARE_MEMORY_WIDTH
-from .branch_fidelity import seed_replay_probe_valid, strict_fidelity_receipts_valid
+from .branch_fidelity import (
+    physical_branch_family_rows_valid,
+    seed_replay_probe_valid,
+    strict_fidelity_receipts_valid,
+)
 from .data import load_normalization_receipt
 from .stage_common import artifact, assert_common_paths, atomic_json, common_parser, publish_result, require_stage_result, sha256_file
 
@@ -118,6 +122,8 @@ def _records(
             fidelity = family.get("reference_reactive_replay_fidelity")
             if not strict_fidelity_receipts_valid(fidelity):
                 raise ValueError(f"branch family strict fidelity failed: {manifest}")
+            if not physical_branch_family_rows_valid(family.get("branches")):
+                raise ValueError(f"branch family physical row contract failed: {manifest}")
             keys = {
                 (int(branch.get("candidate_id", -1)), str(branch.get("regime", "")), int(branch.get("repeat_id", -1)))
                 for branch in family.get("branches", [])
