@@ -37,6 +37,16 @@ from .bicoord_snapshot import (
     restore_state,
     state_sha256,
 )
+from before_we_act.care_behavior_candidates import BehaviorCandidateConfig
+from before_we_act.care_candidate_family import (
+    BEHAVIOR_FAMILY,
+    CANDIDATE_FAMILIES,
+    FIXED_FAMILY,
+    build_candidate,
+    candidate_count,
+    family_manifest,
+    validate_candidate_for_family,
+)
 from .config import ACTION_DIM, ACTION_HORIZON, TASKS, VALIDATION_MAX_STEPS
 from .data import load_normalization_receipt, project_local_observation
 from .evaluate_bcore import _checkpoint, _make_env, _official_seeds, _runtime
@@ -56,7 +66,10 @@ SHARD_SCHEMA = "before-we-act.bicoord.care-physical-branch-shard/1"
 HORIZONS = (8, 16, 32, 64)
 CANDIDATES = 6
 BRANCHES_PER_FAMILY = CANDIDATES * 2 * 2
-INTERVENTION_STEPS = 1
+# The archived protocol committed to a candidate for a single control step.
+# Behavior-level candidates need a window they cannot be re-planned out of.
+DEFAULT_INTERVENTION_STEPS = 1
+INTERVENTION_STEPS = DEFAULT_INTERVENTION_STEPS
 MAX_BRANCH_STEPS = max(HORIZONS)
 
 
@@ -167,18 +180,64 @@ def candidate_plan(
     return value.astype(np.float32, copy=False)
 
 
-def _candidate_set(context: Any, focal_arm: int) -> np.ndarray:
-    rows = [
-        candidate_plan(
-            candidate,
-            context.reference_plan[focal_arm],
-            context.base_plan[focal_arm],
-            context.current_qpos[focal_arm],
+def _behavior_config(
+    candidate_family: str, intervention_steps: int
+) -> BehaviorCandidateConfig | None:
+    """Behavior magnitudes scale with the window they are committed to."""
+
+    if candidate_family != BEHAVIOR_FAMILY:
+        return None
+    if intervention_steps < 4:
+        raise ValueError(
+            "behavior candidates need a commitment window of at least four "
+            f"steps to be distinguishable; got {intervention_steps}"
         )
-        for candidate in range(CANDIDATES)
-    ]
+    return BehaviorCandidateConfig(
+        action_horizon=ACTION_HORIZON,
+        action_dim=ACTION_DIM,
+        intervention_steps=intervention_steps,
+        wait_steps=max(1, intervention_steps // 2),
+        grip_shift_steps=max(1, intervention_steps // 2),
+    )
+
+
+def _candidate_set(
+    context: Any,
+    focal_arm: int,
+    *,
+    candidate_family: str = FIXED_FAMILY,
+    candidate_config: BehaviorCandidateConfig | None = None,
+) -> np.ndarray:
+    reference = context.reference_plan[focal_arm]
+    base = context.base_plan[focal_arm]
+    qpos = context.current_qpos[focal_arm]
+    # BiCoord carries the gripper as the last action coordinate, and the
+    # runtime hands us an action-shaped pose, so the current drive target is
+    # read from that same coordinate rather than passed separately.
+    grip = float(np.asarray(qpos, dtype=np.float32).reshape(-1)[ACTION_DIM - 1])
+    if candidate_family == FIXED_FAMILY:
+        # The archived family is BiCoord's own 7-dimensional implementation,
+        # not the shared 8-dimensional one; keep it byte-for-byte reproducible.
+        rows = [
+            candidate_plan(candidate, reference, base, qpos)
+            for candidate in range(CANDIDATES)
+        ]
+    else:
+        rows = [
+            build_candidate(
+                candidate_family,
+                candidate,
+                reference=reference,
+                base=base,
+                current_qpos=qpos,
+                current_grip=grip,
+                config=candidate_config,
+            )
+            for candidate in range(candidate_count(candidate_family))
+        ]
     result = np.stack(rows)
-    if result.shape != (CANDIDATES, ACTION_HORIZON, ACTION_DIM):
+    expected = (candidate_count(candidate_family), ACTION_HORIZON, ACTION_DIM)
+    if result.shape != expected:
         raise AssertionError("CARE candidate stack differs")
     return result
 
@@ -474,6 +533,7 @@ def _run_branch(
     runtime_state: Mapping[str, Any],
     baseline: Mapping[str, float],
     peer_replay: Sequence[np.ndarray] | None,
+    intervention_steps: int = DEFAULT_INTERVENTION_STEPS,
     start_progress: float,
 ) -> tuple[dict[str, Any], list[np.ndarray]]:
     if regime not in {"reactive", "replay"}:
@@ -489,7 +549,7 @@ def _run_branch(
         previous_qpos = _qpos(observation)
         context = runtime.act_with_context(observation, task, belief_enabled=True, commit=False)
         actual = context.reference_plan[:, 0].copy()
-        if step < INTERVENTION_STEPS:
+        if step < int(intervention_steps):
             actual[focal_arm] = candidate_chunks[candidate, step]
         if regime == "replay":
             if peer_replay is None or step >= len(peer_replay):
@@ -520,7 +580,7 @@ def _run_branch(
         "status": "VALID",
         "physical_simulator_outcome": True,
         "simulator_steps": MAX_BRANCH_STEPS,
-        "intervention_steps": INTERVENTION_STEPS,
+        "intervention_steps": int(intervention_steps),
         "candidate_transform_clipped": False,
         "action_clipped": False,
         "peer_action_source": "reactive_policy" if regime == "reactive" else "candidate0_reactive_replay_log",
@@ -598,6 +658,11 @@ def _collect_family(
     smoke: bool | None = None,
 ) -> dict[str, Any]:
     family_id = int(spec["family_id"])
+    candidate_family = str(getattr(args, "candidate_family", FIXED_FAMILY))
+    intervention_steps = int(
+        getattr(args, "intervention_steps", DEFAULT_INTERVENTION_STEPS)
+    )
+    candidate_config = _behavior_config(candidate_family, intervention_steps)
     if smoke is None:
         smoke = "branch_smoke" in output_root.parts
     seed = int(spec["seed"])
@@ -660,7 +725,12 @@ def _collect_family(
             raise RuntimeError("B-core CARE memory mask differs")
         memory = preview.memory[focal_arm].astype(np.float32, copy=True)
         memory_mask = preview.memory_mask[focal_arm].astype(bool, copy=True)
-        candidates = _candidate_set(preview, focal_arm)
+        candidates = _candidate_set(
+            preview,
+            focal_arm,
+            candidate_family=candidate_family,
+            candidate_config=candidate_config,
+        )
         action_min = np.asarray(normalization["action_min"], dtype=np.float32)
         action_max = np.asarray(normalization["action_max"], dtype=np.float32)
         out_of_source_range = int(
@@ -677,6 +747,7 @@ def _collect_family(
                 focal_arm=focal_arm,
                 candidate=0,
                 candidate_chunks=candidates,
+                intervention_steps=intervention_steps,
                 regime="reactive",
                 repeat=repeat,
                 snapshot_id=snapshot_id,
@@ -694,6 +765,7 @@ def _collect_family(
                 focal_arm=focal_arm,
                 candidate=0,
                 candidate_chunks=candidates,
+                intervention_steps=intervention_steps,
                 regime="replay",
                 repeat=repeat,
                 snapshot_id=snapshot_id,
@@ -714,7 +786,7 @@ def _collect_family(
             fidelity.append({"repeat_id": repeat, "utility_max_abs_error": difference})
             if difference > SNAPSHOT_TOLERANCE:
                 raise RuntimeError(f"candidate-0 reactive/replay fidelity failed: {difference}")
-            for candidate in range(1, CANDIDATES):
+            for candidate in range(1, candidate_count(candidate_family)):
                 reactive, _ = _run_branch(
                     env=env,
                     runtime=runtime,
@@ -722,6 +794,7 @@ def _collect_family(
                     focal_arm=focal_arm,
                     candidate=candidate,
                     candidate_chunks=candidates,
+                    intervention_steps=intervention_steps,
                     regime="reactive",
                     repeat=repeat,
                     snapshot_id=snapshot_id,
@@ -732,7 +805,7 @@ def _collect_family(
                     start_progress=start_progress,
                 )
                 branches.append(reactive)
-            for candidate in range(1, CANDIDATES):
+            for candidate in range(1, candidate_count(candidate_family)):
                 replay, _ = _run_branch(
                     env=env,
                     runtime=runtime,
@@ -740,6 +813,7 @@ def _collect_family(
                     focal_arm=focal_arm,
                     candidate=candidate,
                     candidate_chunks=candidates,
+                    intervention_steps=intervention_steps,
                     regime="replay",
                     repeat=repeat,
                     snapshot_id=snapshot_id,
@@ -779,12 +853,12 @@ def _collect_family(
             "checkpoint": str(checkpoint.resolve()),
             "checkpoint_sha256": checkpoint_sha256,
             "branches_per_family": BRANCHES_PER_FAMILY,
-            "candidate_count": CANDIDATES,
+            **family_manifest(candidate_family, candidate_config),
             "regimes": ["reactive", "replay"],
             "repeats": 2,
             "horizons": list(HORIZONS),
             "future_offsets_steps": list(BICOORD_FUTURE_OFFSETS_STEPS),
-            "intervention_steps": INTERVENTION_STEPS,
+            "intervention_steps": intervention_steps,
             "physical_simulator_outcomes": True,
             "offline_demonstration_error_used": False,
             "pseudo_labels_used": False,
@@ -948,6 +1022,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--world-size", type=int, default=1)
     parser.add_argument("--families-per-task", type=int)
     parser.add_argument("--branches-per-family", type=int, default=BRANCHES_PER_FAMILY)
+    parser.add_argument(
+        "--candidate-family",
+        choices=CANDIDATE_FAMILIES,
+        default=FIXED_FAMILY,
+        help="fixed keeps the archived transforms; behavior uses the "
+        "wait/retreat/grasp-timing family held across the commitment window",
+    )
+    parser.add_argument(
+        "--intervention-steps",
+        type=int,
+        default=DEFAULT_INTERVENTION_STEPS,
+    )
     parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args(argv)
     run(args)

@@ -42,9 +42,17 @@ from deployment.duo_care.branch_signal import (
     outcome_table,
     stable_tree_hash,
 )
+from before_we_act.care_behavior_candidates import BehaviorCandidateConfig
+from before_we_act.care_candidate_family import (
+    BEHAVIOR_FAMILY,
+    CANDIDATE_FAMILIES,
+    FIXED_FAMILY,
+)
 from deployment.duo_care.candidates import (
     ACTION_DIM,
+    ACTION_DIM,
     CandidateAudit,
+    behavior_candidate_family,
     candidate_family,
     canonicalize_encoded_chunk,
     decoded_absolute_chunk,
@@ -168,12 +176,35 @@ class KernelConfig:
     candidate0_tolerance: float = 1e-6
     active_joint_l2_threshold: float = 0.02
     fail_on_domain_canonicalization: bool = False
+    candidate_family: str = FIXED_FAMILY
+    intervention_steps: int = 1
 
     def __post_init__(self) -> None:
         if self.action_horizon < self.rollout_horizon:
             raise ValueError("CARE action horizon must cover the branch horizon")
         if self.rollout_horizon < max(HORIZONS):
             raise ValueError("CARE branch horizon must cover every registered outcome")
+        if self.candidate_family not in CANDIDATE_FAMILIES:
+            raise ValueError(f"unknown CARE candidate family: {self.candidate_family}")
+        if not 1 <= self.intervention_steps <= self.rollout_horizon:
+            raise ValueError("CARE commitment must lie inside the branch horizon")
+        if self.candidate_family == BEHAVIOR_FAMILY and self.intervention_steps < 4:
+            raise ValueError(
+                "behavior candidates need a commitment window of at least four "
+                f"steps to be distinguishable; got {self.intervention_steps}"
+            )
+
+    def behavior_config(self) -> BehaviorCandidateConfig | None:
+        """Behavior magnitudes scale with the window they are committed to."""
+        if self.candidate_family != BEHAVIOR_FAMILY:
+            return None
+        return BehaviorCandidateConfig(
+            action_horizon=self.action_horizon,
+            action_dim=ACTION_DIM,
+            intervention_steps=self.intervention_steps,
+            wait_steps=max(1, self.intervention_steps // 2),
+            grip_shift_steps=max(1, self.intervention_steps // 2),
+        )
 
 
 class ReferenceTerminatedBeforeAnchor(RuntimeError):
@@ -396,6 +427,7 @@ def _run_branch(
     replay_error = 0.0
     domain_violation = False
     status = "VALID"
+    frozen_absolute: np.ndarray | None = None
     for branch_step in range(config.rollout_horizon):
         proposal = provider.propose(observation, runtime, anchor.task)
         proposal.validate(agents=provider.agent_count, horizon=config.action_horizon)
@@ -409,14 +441,20 @@ def _run_branch(
                 raise RuntimeError(
                     f"restored provider proposal drifted by {provider_reference_error} for {anchor.snapshot_id}"
                 )
-            focal_absolute = decoded_absolute_chunk(
+            # Decode the whole candidate once, against the anchor pose it was
+            # encoded relative to, and replay it open loop for the commitment
+            # window. Re-decoding each step against a moving pose would let the
+            # policy's own re-planning erase the intervention, which is exactly
+            # what left the one-step protocol with no measurable advantage.
+            frozen_absolute = decoded_absolute_chunk(
                 candidate_chunks[candidate_id], proposal.qpos[anchor.focal_agent]
-            )[0]
-            action[anchor.focal_agent] = focal_absolute
+            )
             domain_violation = bool(
                 config.fail_on_domain_canonicalization
                 and candidate_audit.max_abs_canonicalization > config.candidate0_tolerance
             )
+        if frozen_absolute is not None and branch_step < int(config.intervention_steps):
+            action[anchor.focal_agent] = frozen_absolute[branch_step]
         if regime == "replay":
             if teammate_reference_actions is None or branch_step >= len(teammate_reference_actions):
                 status = "INVALID_REPLAY_LOG"
@@ -466,8 +504,8 @@ def _run_branch(
         "status": status,
         "candidate_valid": bool(candidate_audit.valid),
         "candidate_failures": list(candidate_audit.failures),
-        "intervention_steps_requested": 1,
-        "intervention_steps_applied": 1,
+        "intervention_steps_requested": int(config.intervention_steps),
+        "intervention_steps_applied": int(config.intervention_steps),
         "steps": len(metrics),
         "outcomes": outcomes,
         "success": bool(metrics[-1]["success"]),
@@ -496,14 +534,26 @@ def collect_from_anchor(
     preview.validate(agents=provider.agent_count, horizon=config.action_horizon)
     references, bases, canonicalization = _canonical_reference(preview, env)
     focal = anchor.focal_agent
-    chunks, candidate_audits = candidate_family(
-        references[focal],
-        bases[focal],
-        preview.qpos[focal],
-        joint_low=env.joint_low,
-        joint_high=env.joint_high,
-        current_gripper=float(preview.qpos[focal, 7]),
-    )
+    behavior_config = config.behavior_config()
+    if behavior_config is None:
+        chunks, candidate_audits = candidate_family(
+            references[focal],
+            bases[focal],
+            preview.qpos[focal],
+            joint_low=env.joint_low,
+            joint_high=env.joint_high,
+            current_gripper=float(preview.qpos[focal, 7]),
+        )
+    else:
+        chunks, candidate_audits = behavior_candidate_family(
+            references[focal],
+            bases[focal],
+            preview.qpos[focal],
+            joint_low=env.joint_low,
+            joint_high=env.joint_high,
+            config=behavior_config,
+            current_gripper=float(preview.qpos[focal, 7]),
+        )
     if not all(row.valid for row in candidate_audits):
         raise RuntimeError(f"illegal CARE candidate family {anchor.snapshot_id}: {candidate_audits}")
     branches: list[dict[str, Any]] = []
@@ -564,7 +614,10 @@ def collect_from_anchor(
         "snapshot_state_sha256": anchor.state_hash,
         "snapshot_local_observation_sha256": anchor.observation_hash,
         "start_progress": anchor.start_progress,
-        "intervention_contract": "single_focal_arm_one_control_step",
+        "intervention_contract": (
+            "single_focal_arm_open_loop_prefix_"
+            f"{int(config.intervention_steps)}_control_steps"
+        ),
         "candidate_contract": "reference_base_hold1_timewarp075_timewarp125_freeze_gripper",
         "proposal_provider_contract": "frozen_strict_local_model_independent_v1",
         "action_target_contract_id": ACTION_TARGET_CONTRACT_ID,

@@ -250,8 +250,69 @@ def candidate_family(
     return np.stack(rows).astype(np.float32), tuple(audits)
 
 
+def behavior_candidate_family(
+    reference_encoded: np.ndarray,
+    base_encoded: np.ndarray,
+    proposal_qpos: np.ndarray,
+    *,
+    joint_low: np.ndarray,
+    joint_high: np.ndarray,
+    config: "BehaviorCandidateConfig",
+    current_gripper: float | None = None,
+) -> tuple[np.ndarray, tuple[CandidateAudit, ...]]:
+    """Build the behavior-level family in DuoBench's encoded action space.
+
+    The shared transforms are defined on absolute joint targets, so each
+    candidate is decoded, transformed, re-encoded, and put through the same
+    controller canonicalization as the registered family. Emitting the same
+    ``(stack, audits)`` shape lets a collector switch families without changing
+    how it records legality.
+    """
+
+    from before_we_act.care_behavior_candidates import (
+        CANDIDATE_COUNT as BEHAVIOR_COUNT,
+        behavior_candidate_plan,
+    )
+
+    reference = _require_chunk(reference_encoded, "reference plan")
+    qpos = _require_qpos(proposal_qpos)
+    if config.action_dim != ACTION_DIM or config.action_horizon != len(reference):
+        raise ValueError("behavior candidate config does not match the Duo chunk")
+    absolute_reference = decoded_absolute_chunk(reference, qpos)
+    grip = (
+        float(current_gripper)
+        if current_gripper is not None
+        else float(qpos[JOINT_DIM])
+    )
+
+    rows: list[np.ndarray] = []
+    audits: list[CandidateAudit] = []
+    for candidate_id in range(BEHAVIOR_COUNT):
+        absolute = behavior_candidate_plan(
+            candidate_id, absolute_reference, qpos[:JOINT_DIM], grip, config
+        )
+        encoded, changed, maximum = canonicalize_encoded_chunk(
+            encoded_relative_chunk(absolute, qpos), qpos, joint_low, joint_high
+        )
+        first_delta = float(
+            np.max(np.abs(encoded[0, :JOINT_DIM] - reference[0, :JOINT_DIM]))
+        )
+        rows.append(encoded)
+        audits.append(
+            CandidateAudit(
+                valid=bool(np.isfinite(encoded).all()),
+                failures=(),
+                first_joint_delta_linf=first_delta,
+                changed_values=int(changed),
+                max_abs_canonicalization=float(maximum),
+            )
+        )
+    return np.stack(rows).astype(np.float32), tuple(audits)
+
+
 __all__ = [
     "ACTION_DIM",
+    "behavior_candidate_family",
     "CANDIDATE_COUNT",
     "CANDIDATE_NAMES",
     "CandidateAudit",
