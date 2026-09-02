@@ -306,6 +306,43 @@ def check_normalization_is_non_degenerate(
     )
 
 
+def check_corpus_completeness(
+    counts: Mapping[str, int],
+    expected: Mapping[str, int],
+    *,
+    label: str = "corpus",
+) -> CheckResult:
+    """Check episode counts up front instead of hours into the run.
+
+    The formal protocols require an exact corpus -- 1800 BiCoord episodes, 150
+    successes per MARS task, 50 DuoBench demos per task -- and each pipeline
+    enforces that where it happens to need the number: inside normalization, or
+    inside the training entry point. Both are reached long after the download
+    that would have to be fixed, so an incomplete corpus costs hours of GPU time
+    before it is named.
+
+    The requirement itself is worth keeping: training on a partial corpus
+    produces a number that is not comparable to the published baselines. Only
+    its timing is wrong.
+    """
+
+    missing = {
+        task: {"observed": int(counts.get(task, 0)), "expected": int(want)}
+        for task, want in expected.items()
+        if int(counts.get(task, 0)) != int(want)
+    }
+    if not missing:
+        return CheckResult(
+            label, True, f"all {len(expected)} tasks at their formal episode count"
+        )
+    return CheckResult(
+        label,
+        False,
+        f"corpus is incomplete before any GPU work: {missing}",
+        {"mismatched": missing},
+    )
+
+
 def check_paths_exist(paths: Mapping[str, Path]) -> list[CheckResult]:
     return [
         CheckResult(
@@ -353,6 +390,7 @@ __all__ = [
     "GIB",
     "REPORT_VERSION",
     "CheckResult",
+    "check_corpus_completeness",
     "check_disk_headroom",
     "check_git_revision",
     "check_gpu_inventory",

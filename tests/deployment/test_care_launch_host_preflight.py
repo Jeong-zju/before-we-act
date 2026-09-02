@@ -162,3 +162,30 @@ def test_non_finite_normalization_is_rejected() -> None:
         {"qpos_std": [0.5, float("nan")]}
     )
     assert not result.passed and "non-finite" in result.detail
+
+
+def test_corpus_completeness_is_checked_before_any_gpu_work() -> None:
+    """Each pipeline enforces its episode count deep inside training.
+
+    The requirement is right -- a partial corpus produces a number that is not
+    comparable to the published baselines -- but reaching it takes hours, so an
+    incomplete download is named only after the GPU time is already spent.
+    """
+    from deployment.care_launch.host_preflight import check_corpus_completeness
+
+    expected = {"ball_maze": 50, "bin_sort": 50, "carry_pot": 50}
+    assert check_corpus_completeness(expected, expected).passed
+
+    partial = check_corpus_completeness(
+        {"ball_maze": 50, "bin_sort": 47, "carry_pot": 50}, expected
+    )
+    assert not partial.passed
+    assert partial.data["mismatched"] == {"bin_sort": {"observed": 47, "expected": 50}}
+
+
+def test_a_missing_task_counts_as_zero_rather_than_passing() -> None:
+    from deployment.care_launch.host_preflight import check_corpus_completeness
+
+    result = check_corpus_completeness({"ball_maze": 50}, {"ball_maze": 50, "bin_sort": 50})
+    assert not result.passed
+    assert result.data["mismatched"]["bin_sort"]["observed"] == 0

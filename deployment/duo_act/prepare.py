@@ -154,10 +154,18 @@ def prepare_task(dataset: Path, output: Path, size: int, task: str):
         action_audit["out_of_controller_range_by_joint"]
         != FORMAL_CONTROLLER_CORRECTIONS_BY_TASK[task]
     ):
+        # The parquet hash matched one line above, so the source bytes are
+        # identical and the data cannot be what changed. These counts are a
+        # deterministic function of (parquet, controller bounds), which leaves
+        # exactly one explanation -- and blaming the dataset for it has cost
+        # real debugging time.
         raise RuntimeError(
-            f"{task}: controller correction counts drifted: "
-            f"{action_audit['out_of_controller_range_by_joint']} != "
-            f"{FORMAL_CONTROLLER_CORRECTIONS_BY_TASK[task]}"
+            f"{task}: the parquet hash matches, so the controller joint bounds "
+            f"in deployment.duo_act.action_target changed. Saturation counts "
+            f"per joint are now "
+            f"{action_audit['out_of_controller_range_by_joint']}, recorded as "
+            f"{FORMAL_CONTROLLER_CORRECTIONS_BY_TASK[task]}. Restore the bounds, "
+            f"or re-freeze the recorded counts if the change is intended."
         )
     actions = actions_local.reshape(-1, 16)
     if states.ndim != 2 or actions.ndim != 2 or states.shape[1] != 16 or actions.shape[1] != 16:
