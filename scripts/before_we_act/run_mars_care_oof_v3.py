@@ -29,7 +29,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from before_we_act.care_belief import CARE_HORIZONS
+from before_we_act.care_belief import CARE_HORIZONS, CARE_QUANTILES, CAREBeliefConfig
 from before_we_act.care_belief_v2 import CARELossV2Config, care_v2_training_loss
 from before_we_act.care_belief_v3 import CAREBeliefV3Config, CAREBeliefV3Head
 from before_we_act.care_training_data import (
@@ -66,6 +66,13 @@ DEFAULT_SEEDS = (20260904, 20260905, 20260906)
 DEFAULT_FOLDS = 5
 PRIMARY_HORIZON = 16
 PRIMARY_HORIZON_INDEX = CARE_HORIZONS.index(PRIMARY_HORIZON)
+# Candidate arity and head widths follow the scorer configuration rather than
+# a MARS-shaped literal, so another benchmark only changes the config.
+CANDIDATES = CAREBeliefConfig.candidates
+OUTCOME_COMPONENTS = CAREBeliefConfig.outcome_components
+QUANTILES = len(CARE_QUANTILES)
+QUANTILE_SHAPE = (CANDIDATES, OUTCOME_COMPONENTS, QUANTILES)
+TARGET_SHAPE = (CANDIDATES, OUTCOME_COMPONENTS)
 
 
 def utc_now() -> str:
@@ -212,7 +219,7 @@ def aggregate_repeat_rows(
         hard_safety = torch.stack(
             [torch.as_tensor(row["hard_safety"]).float() for row in family_rows]
         ).amax(0)
-        if quantiles.shape != (6, 3, 5) or target.shape != (6, 3):
+        if quantiles.shape != QUANTILE_SHAPE or target.shape != TARGET_SHAPE:
             raise ValueError(f"OOF family {family} tensor contract drifted")
         if not torch.equal(quantiles[0], torch.zeros_like(quantiles[0])):
             raise ValueError(f"OOF family {family} lost candidate-zero identity")
@@ -233,7 +240,7 @@ def aggregate_repeat_rows(
                 "hard_safety": hard_safety,
                 # The prepared formal corpus was admitted only after every
                 # fixed candidate passed the physical legality audit.
-                "candidate_legality": torch.ones(6, dtype=torch.bool),
+                "candidate_legality": torch.ones(CANDIDATES, dtype=torch.bool),
             }
         )
         if scales is not None:
@@ -369,12 +376,12 @@ def _horizon_family_maxima(
         task = int(row["task_id"])
         quantiles = np.asarray(row["quantiles"], dtype=np.float64)
         target = np.asarray(row["target"], dtype=np.float64)
-        if quantiles.shape != (6, 3, 5) or target.shape != (6, 3):
+        if quantiles.shape != QUANTILE_SHAPE or target.shape != TARGET_SHAPE:
             raise ValueError("OOF horizon prediction/target shape differs")
         legality = np.asarray(
-            row.get("candidate_legality", np.ones(6, dtype=bool)), dtype=bool
+            row.get("candidate_legality", np.ones(CANDIDATES, dtype=bool)), dtype=bool
         )
-        if legality.shape != (6,) or not bool(legality[0]):
+        if legality.shape != (CANDIDATES,) or not bool(legality[0]):
             raise ValueError("OOF horizon row has an invalid candidate-legality mask")
         # Illegal candidates must never influence the conformal correction.
         # They are not executable evidence and can otherwise inflate the
@@ -557,9 +564,11 @@ def train_fold(
         floor=config.scale_floor,
     )
     scales = scales_cpu.to(device)
-    raw_std = prepared.manifest.get("action_std", (1.0,) * 8)
+    raw_std = prepared.manifest.get("action_std")
+    if raw_std is None:
+        raise ValueError("OOF prepared manifest must carry fitted action_std")
     action_std = tuple(float(value) for value in raw_std)
-    if action_std == (1.0,) * 8:
+    if action_std == (1.0,) * len(action_std):
         raise ValueError("OOF prepared manifest must carry fitted action_std")
     model_config = CAREBeliefV3Config(
         variant="care",
@@ -713,9 +722,11 @@ def train_final(
         floor=config.scale_floor,
     )
     scales = scales_cpu.to(device)
-    raw_std = prepared.manifest.get("action_std", (1.0,) * 8)
+    raw_std = prepared.manifest.get("action_std")
+    if raw_std is None:
+        raise ValueError("final prepared manifest must carry fitted action_std")
     action_std = tuple(float(value) for value in raw_std)
-    if action_std == (1.0,) * 8:
+    if action_std == (1.0,) * len(action_std):
         raise ValueError("final prepared manifest must carry fitted action_std")
     model_config = CAREBeliefV3Config(
         variant="care",

@@ -1,4 +1,10 @@
-"""Local H-step candidate commitment semantics for CARE deployment."""
+"""Local H-step candidate commitment semantics for CARE deployment.
+
+The candidate arity and chunk shape are read from the candidate tensor that
+the caller already passes, so this module carries no benchmark-specific
+dimensions: RoboFactory and MARS act on ``[K, 100, 8]`` while BiCoord acts
+on ``[K, 100, 7]``.
+"""
 from __future__ import annotations
 
 from typing import Any, Sequence
@@ -19,9 +25,14 @@ def apply_chunk_commitments(
         candidate_id = int(state["candidate_id"])
         offset = int(state["next_step"])
         plan = np.asarray(state["plan"], dtype=np.float32)
-        if not 0 <= row < len(candidates) or not 1 <= candidate_id < 6:
+        if not 0 <= row < len(candidates):
             raise ValueError("CARE commitment identity is invalid")
-        if plan.shape != (100, 8) or not 0 <= offset < int(intervention_steps):
+        stack = np.asarray(candidates[row])
+        if stack.ndim != 3:
+            raise ValueError("CARE candidate stack must be [candidate,step,action]")
+        if not 1 <= candidate_id < stack.shape[0]:
+            raise ValueError("CARE commitment identity is invalid")
+        if plan.shape != stack.shape[1:] or not 0 <= offset < int(intervention_steps):
             raise ValueError("CARE commitment plan/offset drifted")
         selected[row] = candidate_id
         best_lower[row] = float(state["best_lower"])
