@@ -47,8 +47,12 @@ def test_reported_success_rate_is_produced_before_the_gate(tmp_path: Path) -> No
     pipeline = _pipeline(tmp_path)
     names = _names(pipeline)
 
-    assert names.index("reference_validation20") < names.index("care_headroom")
-    assert names.index("host_preflight") < names.index("reference_validation20")
+    validation = [name for name in names if name.startswith("reference_validation20")]
+    assert validation, "no reference Validation20 stage"
+    # The evaluator takes one task per invocation.
+    assert len(validation) == 4
+    assert max(names.index(name) for name in validation) < names.index("care_headroom")
+    assert names.index("host_preflight") < min(names.index(n) for n in validation)
 
 
 def test_headroom_precedes_every_training_stage(tmp_path: Path) -> None:

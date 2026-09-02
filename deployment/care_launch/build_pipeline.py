@@ -40,6 +40,13 @@ PIPELINE_VERSION = "before-we-act.care-launch-pipeline/1"
 # Rendering in SAPIEN is process-global in these containers: two renderers on
 # separate CUDA contexts can still lose the device. Rollout stages take one GPU.
 RENDER_GPUS = [0]
+# The evaluator takes one task per invocation.
+MARS_TASKS = (
+    "place_cube_in_cup",
+    "strike_cube_hard",
+    "three_robots_place_shoes",
+    "four_robots_stack_cube",
+)
 
 
 @dataclass(frozen=True)
@@ -190,30 +197,54 @@ def mars_stages(
             ),
         ),
         Stage(
-            name="reference_validation20",
+            name="reference_pipeline",
+            argv=[
+                "bash",
+                str(layout.repo / "scripts/before_we_act/run_mars_care_official_pipeline.sh"),
+            ],
+            gpus=list(layout.gpus),
+            artifacts=[
+                _json_artifact(run / "pipeline_status.json", stage="CARE_BRANCHES")
+            ],
+            note=(
+                "the existing shell pipeline: B0-H, the action-context cache, "
+                "three B-core seeds, selection, and the reference Validation20 "
+                "that produces the reported success rate. Wrapped rather than "
+                "re-expressed, so its own resume and gates keep working."
+            ),
+        ),
+    ] + [
+        Stage(
+            name=f"reference_validation20_{task}",
             argv=[
                 python,
                 "-m",
                 "before_we_act.evaluate_mars_temporal_policy",
                 "--checkpoint",
                 str(run / "reference_checkpoint.pt"),
+                "--dino-model",
+                str(layout.dino),
+                "--task",
+                task,
                 "--robofactory-root",
                 str(layout.benchmark_repo),
                 "--episodes",
                 "20",
                 "--output",
-                str(run / "validation20" / "reference" / "summary.json"),
+                str(run / "validation20" / "reference" / f"{task}.json"),
             ],
             gpus=RENDER_GPUS,
             artifacts=[
-                {"path": str(run / "validation20" / "reference" / "summary.json"),
+                {"path": str(run / "validation20" / "reference" / f"{task}.json"),
                  "kind": "json"}
             ],
             note=(
-                "the reported success rate, produced before the headroom gate "
-                "so a BLOCKED verdict cannot withhold it"
+                "the evaluator takes one task per invocation, and the renderer "
+                "is process-global, so tasks run as separate serial stages"
             ),
-        ),
+        )
+        for task in MARS_TASKS
+    ] + [
         Stage(
             name="care_branches",
             argv=collection,
@@ -275,7 +306,118 @@ def mars_stages(
     ]
 
 
-BENCHMARKS = {"mars": mars_stages}
+def _preflight_stage(layout: Layout, benchmark: str, *, normalization: Path | None) -> Stage:
+    argv = [
+        str(layout.python),
+        "-m",
+        "deployment.care_launch.run_preflight",
+        "--benchmark",
+        benchmark,
+        "--repo",
+        str(layout.repo),
+        "--benchmark-repo",
+        str(layout.benchmark_repo),
+        "--dataset",
+        str(layout.dataset),
+        "--dino",
+        str(layout.dino),
+        "--run",
+        str(layout.run),
+        "--output",
+        str(layout.run / "host_preflight.json"),
+    ]
+    if normalization is not None:
+        argv += ["--normalization", str(normalization)]
+    return Stage(
+        name="host_preflight",
+        argv=argv,
+        artifacts=[_json_artifact(layout.run / "host_preflight.json", status="PASSED")],
+        max_attempts=3,
+        note=(
+            "collects every host problem in one pass before any GPU work. A few "
+            "attempts absorb a briefly busy GPU; beyond that the fix needs a person."
+        ),
+    )
+
+
+def _native_supervisor_stages(
+    layout: Layout,
+    benchmark: str,
+    *,
+    module: str,
+    normalization: Path | None,
+) -> list[Stage]:
+    """Wrap a benchmark's own supervisor instead of re-expressing its DAG.
+
+    BiCoord and DuoBench each own a resumable stage DAG that already covers
+    download, caching, both training stages, selection, the reference
+    Validation20, branch collection, and the CARE tail. Re-expressing thirty
+    stages here would duplicate their receipt and resume logic and add a second
+    place for the protocol to drift.
+
+    The headroom decision does not need a stage of its own either: both DAGs
+    have a ``branch_signal_gate`` between preparation and scorer training, and
+    that gate now judges headroom. Running the supervisor as one stage keeps
+    the gate where it belongs.
+    """
+
+    return [
+        _preflight_stage(layout, benchmark, normalization=normalization),
+        Stage(
+            name=f"{benchmark}_pipeline",
+            argv=[str(layout.python), "-m", module, "run"],
+            gpus=list(layout.gpus),
+            artifacts=[
+                _json_artifact(layout.run / "status.json", stage="COMPLETE")
+            ],
+            note=(
+                "the benchmark's own resumable DAG. Its branch_signal_gate "
+                "stops the run before scorer training when the collected "
+                "candidate family leaves no room for the selector; the "
+                "reference Validation20 that produces the reported success "
+                "rate has already completed by then."
+            ),
+        ),
+    ]
+
+
+def duobench_stages(
+    layout: Layout,
+    *,
+    candidate_family: str,
+    intervention_steps: int,
+    reference_radius: float | None,
+    primary_horizon: int,
+) -> list[Stage]:
+    return _native_supervisor_stages(
+        layout,
+        "duobench",
+        module="deployment.duo_dino_reference.supervisor",
+        normalization=layout.run / "prepared" / "manifest.json",
+    )
+
+
+def bicoord_stages(
+    layout: Layout,
+    *,
+    candidate_family: str,
+    intervention_steps: int,
+    reference_radius: float | None,
+    primary_horizon: int,
+) -> list[Stage]:
+    return _native_supervisor_stages(
+        layout,
+        "bicoord",
+        module="deployment.bicoord_care.supervisor",
+        normalization=layout.run / "artifacts" / "normalization.json",
+    )
+
+
+BENCHMARKS = {
+    "mars": mars_stages,
+    "duobench": duobench_stages,
+    "bicoord": bicoord_stages,
+}
 
 
 def build(
