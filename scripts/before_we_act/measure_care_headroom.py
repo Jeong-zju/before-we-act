@@ -35,7 +35,11 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 
 from before_we_act.care_belief import CARE_HORIZONS
-from before_we_act.care_training_data import ordinary_utility
+from before_we_act.care_training_data import (
+    DEFAULT_UTILITY_WEIGHTING,
+    UTILITY_WEIGHTINGS,
+    ordinary_utility,
+)
 
 
 REPORT_VERSION = "before-we-act.care-headroom-report/1"
@@ -57,7 +61,10 @@ def _branch(
 
 
 def family_advantages(
-    family: Mapping[str, Any], horizon: int
+    family: Mapping[str, Any],
+    horizon: int,
+    *,
+    weighting: str = DEFAULT_UTILITY_WEIGHTING,
 ) -> dict[int, dict[int, dict[str, float]]]:
     """Return ``{repeat: {candidate: {direct, response, total}}}`` for one horizon."""
 
@@ -72,8 +79,8 @@ def family_advantages(
             continue
         if key not in reference_reactive["outcomes"] or key not in reference_replay["outcomes"]:
             continue
-        nominal_reactive = ordinary_utility(reference_reactive["outcomes"][key])
-        nominal_replay = ordinary_utility(reference_replay["outcomes"][key])
+        nominal_reactive = ordinary_utility(reference_reactive["outcomes"][key], weighting)
+        nominal_replay = ordinary_utility(reference_replay["outcomes"][key], weighting)
         rows: dict[int, dict[str, float]] = {}
         for candidate in candidates:
             if candidate == 0:
@@ -84,8 +91,8 @@ def family_advantages(
                 continue
             if key not in reactive["outcomes"] or key not in replay["outcomes"]:
                 continue
-            direct = ordinary_utility(replay["outcomes"][key]) - nominal_replay
-            total = ordinary_utility(reactive["outcomes"][key]) - nominal_reactive
+            direct = ordinary_utility(replay["outcomes"][key], weighting) - nominal_replay
+            total = ordinary_utility(reactive["outcomes"][key], weighting) - nominal_reactive
             rows[candidate] = {
                 "direct": direct,
                 "response": total - direct,
@@ -111,6 +118,7 @@ def horizon_summary(
     *,
     coverage: float,
     reference_radius: float | None,
+    weighting: str = DEFAULT_UTILITY_WEIGHTING,
 ) -> dict[str, Any]:
     totals: list[float] = []
     family_best: list[float] = []
@@ -121,7 +129,7 @@ def horizon_summary(
     used_families = 0
 
     for family in families:
-        advantages = family_advantages(family, horizon)
+        advantages = family_advantages(family, horizon, weighting=weighting)
         if not advantages:
             continue
         used_families += 1
@@ -206,6 +214,7 @@ def build_report(
     coverage: float,
     reference_radius: float | None,
     primary_horizon: int,
+    weighting: str = DEFAULT_UTILITY_WEIGHTING,
 ) -> dict[str, Any]:
     by_task: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for family in families:
@@ -213,13 +222,21 @@ def build_report(
 
     horizon_rows = {
         str(horizon): horizon_summary(
-            families, horizon, coverage=coverage, reference_radius=reference_radius
+            families,
+            horizon,
+            coverage=coverage,
+            reference_radius=reference_radius,
+            weighting=weighting,
         )
         for horizon in horizons
     }
     task_rows = {
         task: horizon_summary(
-            rows, primary_horizon, coverage=coverage, reference_radius=reference_radius
+            rows,
+            primary_horizon,
+            coverage=coverage,
+            reference_radius=reference_radius,
+            weighting=weighting,
         )
         for task, rows in sorted(by_task.items())
     }
@@ -250,8 +267,30 @@ def build_report(
                 f"{ratio:.1f}x the calibration radius"
             )
 
+    # The deployed horizon was fixed at 16 without measuring the alternatives.
+    # Recommend the horizon that admits the most overrides, so the choice is
+    # made from the corpus rather than inherited.
+    ranked = []
+    for row in horizon_rows.values():
+        if not row.get("candidate_rows"):
+            continue
+        against = row.get("against_reference_radius") or row["against_irreducible_radius"]
+        # Rank by how often an override is admissible, then by how far the best
+        # candidate clears the radius. Ties on rate would otherwise be broken by
+        # the horizon's numeric value, which carries no information.
+        ranked.append(
+            (
+                float(against["oracle_override_rate"]),
+                float(against["signal_to_radius"]),
+                int(row["horizon"]),
+            )
+        )
+    recommended = max(ranked)[2] if ranked else None
+
     return {
         "report_version": REPORT_VERSION,
+        "utility_weighting": weighting,
+        "recommended_primary_horizon": recommended,
         "families": len(families),
         "tasks": sorted(by_task),
         "coverage": coverage,
@@ -275,6 +314,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--coverage", type=float, default=0.90)
+    parser.add_argument(
+        "--utility-weighting",
+        choices=sorted(UTILITY_WEIGHTINGS),
+        default=DEFAULT_UTILITY_WEIGHTING,
+        help="archived drops the collision/drop component; safety_weighted "
+        "restores it",
+    )
     parser.add_argument("--primary-horizon", type=int, default=16)
     parser.add_argument(
         "--reference-radius",
@@ -301,6 +347,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         coverage=args.coverage,
         reference_radius=args.reference_radius,
         primary_horizon=args.primary_horizon,
+        weighting=args.utility_weighting,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

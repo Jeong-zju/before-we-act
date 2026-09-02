@@ -14,7 +14,14 @@ from torch.utils.data import Dataset
 from before_we_act.care_belief import CARE_HORIZONS
 
 
-ORDINARY_WEIGHTS = np.asarray(
+# The archived weighting drops the collision/drop component and renormalizes
+# over the remaining mass. That removed the most discriminative event in the
+# corpus from the advantage signal: collisions and drops are exactly the
+# outcomes a yielding or waiting candidate is supposed to avoid, and with a
+# weight of zero a candidate that prevents one scores no better than one that
+# causes it. Hard safety is still learned by a separate head, but the head
+# gates candidates rather than ranking them.
+ARCHIVED_WEIGHTS = np.asarray(
     (
         0.3409090909090909,
         0.3409090909090909,
@@ -27,6 +34,17 @@ ORDINARY_WEIGHTS = np.asarray(
     ),
     dtype=np.float64,
 )
+# The collector's own utility weighting, with collision/drop restored.
+SAFETY_WEIGHTED = np.asarray(
+    (0.30, 0.30, 0.12, 0.08, 0.06, 0.06, 0.03, 0.05), dtype=np.float64
+)
+UTILITY_WEIGHTINGS = {
+    "archived": ARCHIVED_WEIGHTS,
+    "safety_weighted": SAFETY_WEIGHTED,
+}
+DEFAULT_UTILITY_WEIGHTING = "archived"
+# Kept under its original name so archived corpora keep reproducing exactly.
+ORDINARY_WEIGHTS = ARCHIVED_WEIGHTS
 SPLIT_NAMES = ("train", "validation", "calibration", "test")
 SPLIT_IDS = {name: index for index, name in enumerate(SPLIT_NAMES)}
 
@@ -57,11 +75,22 @@ def atomic_json(path: str | Path, value: Any) -> None:
     temporary.replace(target)
 
 
-def ordinary_utility(outcome: Mapping[str, Any]) -> float:
+def utility_weights(weighting: str = DEFAULT_UTILITY_WEIGHTING) -> np.ndarray:
+    if weighting not in UTILITY_WEIGHTINGS:
+        raise ValueError(
+            f"unknown CARE utility weighting: {weighting}; "
+            f"available: {sorted(UTILITY_WEIGHTINGS)}"
+        )
+    return UTILITY_WEIGHTINGS[weighting]
+
+
+def ordinary_utility(
+    outcome: Mapping[str, Any], weighting: str = DEFAULT_UTILITY_WEIGHTING
+) -> float:
     vector = np.asarray(outcome["bounded_utility_vector"], dtype=np.float64)
     if vector.shape != (8,):
         raise ValueError("CARE outcome vector must contain eight entries")
-    return float(np.dot(ORDINARY_WEIGHTS, vector))
+    return float(np.dot(utility_weights(weighting), vector))
 
 
 def branch_by_key(
@@ -221,7 +250,11 @@ def family_indices(prepared: PreparedCAREData, split: str) -> list[int]:
 
 __all__ = [
     "CARETrainingDataset",
+    "ARCHIVED_WEIGHTS",
+    "DEFAULT_UTILITY_WEIGHTING",
     "ORDINARY_WEIGHTS",
+    "SAFETY_WEIGHTED",
+    "UTILITY_WEIGHTINGS",
     "PreparedCAREData",
     "SPLIT_IDS",
     "SPLIT_NAMES",
@@ -233,4 +266,5 @@ __all__ = [
     "load_prepared_care",
     "ordinary_utility",
     "sha256_file",
+    "utility_weights",
 ]

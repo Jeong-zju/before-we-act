@@ -160,3 +160,72 @@ def test_report_groups_by_task() -> None:
     per_task = report["by_task_primary_horizon"]
     assert per_task["lift_barrier"]["fraction_positive"] == pytest.approx(1.0)
     assert per_task["pass_shoe"]["fraction_positive"] == pytest.approx(0.0)
+
+
+def test_report_recommends_the_horizon_that_admits_most_overrides() -> None:
+    """The deployed horizon was fixed at 16 without measuring the alternatives."""
+    from scripts.before_we_act.measure_care_headroom import build_report
+
+    def family(snapshot: str, by_horizon: dict[int, float]) -> dict[str, Any]:
+        branches = []
+        for horizon, gain in by_horizon.items():
+            for regime in ("reactive", "replay"):
+                branches.append(
+                    {
+                        "candidate_id": 0,
+                        "regime": regime,
+                        "repeat_id": 0,
+                        "outcomes": {str(horizon): _outcome(0.0)},
+                    }
+                )
+                branches.append(
+                    {
+                        "candidate_id": 1,
+                        "regime": regime,
+                        "repeat_id": 0,
+                        "outcomes": {str(horizon): _outcome(gain / WEIGHT)},
+                    }
+                )
+        merged: dict[str, Any] = {}
+        for row in branches:
+            key = (row["candidate_id"], row["regime"], row["repeat_id"])
+            merged.setdefault(key, {**row, "outcomes": {}})["outcomes"].update(
+                row["outcomes"]
+            )
+        return {"snapshot_id": snapshot, "task": "t", "branches": list(merged.values())}
+
+    # H=32 clears the radius; H=16 does not.
+    families = [family(f"s{i}", {16: 0.001, 32: 0.5}) for i in range(12)]
+    report = build_report(
+        families,
+        horizons=(16, 32),
+        coverage=0.9,
+        reference_radius=0.02,
+        primary_horizon=16,
+    )
+
+    assert report["recommended_primary_horizon"] == 32
+
+
+def test_restoring_the_collision_weight_changes_the_utility() -> None:
+    """A candidate that avoids a collision must be able to score for it."""
+    from before_we_act.care_training_data import ordinary_utility
+
+    collided = {"bounded_utility_vector": [0.0] * 2 + [-1.0] + [0.0] * 5}
+
+    assert ordinary_utility(collided, "archived") == pytest.approx(0.0)
+    assert ordinary_utility(collided, "safety_weighted") == pytest.approx(-0.12)
+
+
+def test_weighting_is_recorded_in_the_report() -> None:
+    from scripts.before_we_act.measure_care_headroom import build_report
+
+    report = build_report(
+        [_family("s0", {1: 0.1})],
+        horizons=(HORIZON,),
+        coverage=0.9,
+        reference_radius=0.02,
+        primary_horizon=HORIZON,
+        weighting="safety_weighted",
+    )
+    assert report["utility_weighting"] == "safety_weighted"
