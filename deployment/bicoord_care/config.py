@@ -137,8 +137,12 @@ ACTION_ENCODING_DIMENSIONAL: Final[str] = (
 )
 GRIPPER_ENCODING: Final[str] = "continuous_absolute_drive_target"
 GRIPPER_NATIVE_RANGE: Final[tuple[float, float]] = (0.0, 1.0)
-IMAGE_HEIGHT: Final[int] = 224
-IMAGE_WIDTH: Final[int] = 224
+# BiCoord publishes 320x240 JPEG for every camera.  Feeding DINOv3 the native
+# frame keeps the full sensor signal and the true aspect ratio; both dimensions
+# are divisible by the ViT-B/16 patch size, giving a 15x20 patch grid instead of
+# the 14x14 grid produced by squashing the frame into 224x224.
+IMAGE_HEIGHT: Final[int] = 240
+IMAGE_WIDTH: Final[int] = 320
 
 # Frozen upstream model widths/depths.  These are metadata and constructor
 # defaults, not an invitation to shrink or replace any model module.

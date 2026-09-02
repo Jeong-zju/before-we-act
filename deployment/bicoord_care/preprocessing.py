@@ -21,17 +21,20 @@ import cv2
 import numpy as np
 import torch
 
+from .config import IMAGE_HEIGHT, IMAGE_WIDTH
+
 
 IMAGE_PREPROCESS_ID = (
     "bicoord_opencv_jpeg_source_order_torchvision_v2_uint8_bilinear_"
     "antialias_v1"
 )
+
 DINO_NORMALIZATION_ID = "dinov3_imagenet_rgb_mean_std_rescale_1_over_255_v1"
 DINO_IMAGE_MEAN = (0.485, 0.456, 0.406)
 DINO_IMAGE_STD = (0.229, 0.224, 0.225)
 DINO_RESCALE_FACTOR = 1.0 / 255.0
-DEFAULT_IMAGE_HEIGHT = 224
-DEFAULT_IMAGE_WIDTH = 224
+DEFAULT_IMAGE_HEIGHT = IMAGE_HEIGHT
+DEFAULT_IMAGE_WIDTH = IMAGE_WIDTH
 
 
 def coerce_rgb_frame(value: Any) -> np.ndarray:

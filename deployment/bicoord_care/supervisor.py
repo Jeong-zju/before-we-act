@@ -43,6 +43,8 @@ from .config import (
     FORMAL_CARE_UPDATES,
     FORMAL_SEEDS,
     HISTORY_STEPS,
+    IMAGE_HEIGHT,
+    IMAGE_WIDTH,
     MODEL_CONTRACT as FROZEN_MODEL_CONTRACT,
     SMOKE_INTERFACE_STEPS,
     STATE_DIM,
@@ -1062,8 +1064,8 @@ class Supervisor:
                 "strict_dino_contract": True,
                 "encoder": "dinov3_vitb16_frozen",
                 "feature_width": 768,
-                "image_height": 224,
-                "image_width": 224,
+                "image_height": IMAGE_HEIGHT,
+                "image_width": IMAGE_WIDTH,
                 "patch_size": 16,
             }
             self._require_mapping_values(receipt, expected, "DINO cache receipt")

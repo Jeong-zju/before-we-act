@@ -376,3 +376,25 @@ def test_bcore_sampler_rotation_cycle_and_cursor_receipt() -> None:
     assert BCORE_BALANCE_CYCLE_UPDATES == 3
     assert cursor["balance_cycle_updates"] == 3
     assert sampler.validate_cursor(cursor) == 1
+
+
+def test_dino_input_is_the_native_bicoord_frame() -> None:
+    """BiCoord publishes 320x240 JPEG; feed DINOv3 that frame, not a square crop.
+
+    Squashing to 224x224 both discarded signal and distorted the aspect ratio.
+    """
+    from deployment.bicoord_care.config import IMAGE_HEIGHT, IMAGE_WIDTH
+    from deployment.bicoord_care.preprocessing import (
+        DEFAULT_IMAGE_HEIGHT,
+        DEFAULT_IMAGE_WIDTH,
+    )
+
+    assert (IMAGE_HEIGHT, IMAGE_WIDTH) == (240, 320)
+    assert (DEFAULT_IMAGE_HEIGHT, DEFAULT_IMAGE_WIDTH) == (IMAGE_HEIGHT, IMAGE_WIDTH)
+
+    # ViT-B/16 needs both sides divisible by the patch size.
+    assert IMAGE_HEIGHT % 16 == 0 and IMAGE_WIDTH % 16 == 0
+    assert (IMAGE_HEIGHT // 16) * (IMAGE_WIDTH // 16) == 300
+
+    # The native frame is 4:3, so a square input would have distorted it.
+    assert IMAGE_WIDTH / IMAGE_HEIGHT == pytest.approx(320 / 240)

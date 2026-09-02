@@ -414,7 +414,10 @@ class BiCoordTeamBeliefDataset(Dataset):
         # B-core consumes frozen 768-D features and must never decode/re-resize
         # JPEGs on its hot training path.
         if int(image_height) != IMAGE_HEIGHT or int(image_width) != IMAGE_WIDTH:
-            raise ValueError("BiCoord B-core image contract must remain 224x224")
+            raise ValueError(
+                "BiCoord B-core image contract must remain "
+                f"{IMAGE_WIDTH}x{IMAGE_HEIGHT}"
+            )
         self.numeric = _BiCoordNumericCache(limit=max(8, cache_limit * 2))
         self._readers = {
             episode.source_identity: BiCoordHDF5Reader(
