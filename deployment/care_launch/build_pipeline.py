@@ -14,6 +14,15 @@ cost of the entire run. Here ``care_headroom`` sits immediately after branch
 collection and gates the training stages, so a family with no room to be
 selected costs one collection pass instead of a full pipeline.
 
+The gate deliberately sits *after* the reference policy's closed-loop
+evaluation. Reported success rate comes from that evaluation and does not
+depend on the selector at all -- when the selector never fires, CARE's number
+is the reference policy's number. Blocking headroom must therefore not block
+the number a paper reports; it only stops the CARE-specific stages, which
+produce nothing when no candidate can be selected. The orchestrator retries a
+failed stage indefinitely rather than skipping it, so anything that must
+survive a BLOCKED verdict has to be scheduled ahead of the gate.
+
 Physical branch collection is marked non-resumable. Retrying it silently mixes
 evidence from two different physical run paths into one corpus, which is worse
 than failing: infrastructure stages retry freely, this one does not.
@@ -173,6 +182,31 @@ def mars_stages(
             note="collects every host problem in one pass before any GPU work",
         ),
         Stage(
+            name="reference_validation20",
+            argv=[
+                python,
+                "-m",
+                "before_we_act.evaluate_mars_temporal_policy",
+                "--checkpoint",
+                str(run / "reference_checkpoint.pt"),
+                "--robofactory-root",
+                str(layout.benchmark_repo),
+                "--episodes",
+                "20",
+                "--output",
+                str(run / "validation20" / "reference" / "summary.json"),
+            ],
+            gpus=RENDER_GPUS,
+            artifacts=[
+                {"path": str(run / "validation20" / "reference" / "summary.json"),
+                 "kind": "json"}
+            ],
+            note=(
+                "the reported success rate, produced before the headroom gate "
+                "so a BLOCKED verdict cannot withhold it"
+            ),
+        ),
+        Stage(
             name="care_branches",
             argv=collection,
             gpus=RENDER_GPUS,
@@ -187,8 +221,9 @@ def mars_stages(
             argv=measure,
             artifacts=[_json_artifact(headroom, verdict="PASS")],
             note=(
-                "gate: fails the sweep unless the collected family leaves room "
-                "for the selector, before any scorer training is paid for"
+                "gate: stops the CARE-specific stages unless the collected "
+                "family leaves room for the selector. Everything a reported "
+                "success rate depends on has already run."
             ),
         ),
         Stage(

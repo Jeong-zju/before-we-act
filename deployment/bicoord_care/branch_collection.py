@@ -207,6 +207,8 @@ def _candidate_set(
     *,
     candidate_family: str = FIXED_FAMILY,
     candidate_config: BehaviorCandidateConfig | None = None,
+    action_min: np.ndarray | None = None,
+    action_max: np.ndarray | None = None,
 ) -> np.ndarray:
     reference = context.reference_plan[focal_arm]
     base = context.base_plan[focal_arm]
@@ -223,6 +225,8 @@ def _candidate_set(
             for candidate in range(CANDIDATES)
         ]
     else:
+        # BiCoord executes candidates without clipping, so a transform that
+        # leaves the reference's range must be bounded where it is generated.
         rows = [
             build_candidate(
                 candidate_family,
@@ -232,6 +236,8 @@ def _candidate_set(
                 current_qpos=qpos,
                 current_grip=grip,
                 config=candidate_config,
+                joint_low=action_min,
+                joint_high=action_max,
             )
             for candidate in range(candidate_count(candidate_family))
         ]
@@ -725,17 +731,30 @@ def _collect_family(
             raise RuntimeError("B-core CARE memory mask differs")
         memory = preview.memory[focal_arm].astype(np.float32, copy=True)
         memory_mask = preview.memory_mask[focal_arm].astype(bool, copy=True)
+        action_min = np.asarray(normalization["action_min"], dtype=np.float32)
+        action_max = np.asarray(normalization["action_max"], dtype=np.float32)
         candidates = _candidate_set(
             preview,
             focal_arm,
             candidate_family=candidate_family,
             candidate_config=candidate_config,
+            action_min=action_min,
+            action_max=action_max,
         )
-        action_min = np.asarray(normalization["action_min"], dtype=np.float32)
-        action_max = np.asarray(normalization["action_max"], dtype=np.float32)
         out_of_source_range = int(
             np.count_nonzero((candidates < action_min[None, None]) | (candidates > action_max[None, None]))
         )
+        # The archived family only resamples values the reference already
+        # visits, so it cannot leave the source range and this count is a
+        # diagnostic. A behavior candidate can, and BiCoord executes candidates
+        # unclipped, so an out-of-range chunk must fail the family rather than
+        # reach the controller.
+        if candidate_family != FIXED_FAMILY and out_of_source_range:
+            raise RuntimeError(
+                f"CARE {candidate_family} candidates left the source action range "
+                f"for {snapshot_id}: {out_of_source_range} values outside "
+                "[action_min, action_max]"
+            )
         baseline = _drop_baseline(env)
         branches: list[dict[str, Any]] = []
         fidelity: list[dict[str, Any]] = []

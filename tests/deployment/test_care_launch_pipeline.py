@@ -36,6 +36,21 @@ def _names(pipeline) -> list[str]:
     return [stage["name"] for stage in pipeline["stages"]]
 
 
+def test_reported_success_rate_is_produced_before_the_gate(tmp_path: Path) -> None:
+    """A BLOCKED verdict must not withhold the number a paper reports.
+
+    Closed-loop success does not depend on the selector: when the selector never
+    fires, CARE's number is the reference policy's number. The orchestrator
+    retries a failed stage forever rather than skipping it, so the evaluation
+    has to be scheduled ahead of the gate.
+    """
+    pipeline = _pipeline(tmp_path)
+    names = _names(pipeline)
+
+    assert names.index("reference_validation20") < names.index("care_headroom")
+    assert names.index("host_preflight") < names.index("reference_validation20")
+
+
 def test_headroom_precedes_every_training_stage(tmp_path: Path) -> None:
     pipeline = _pipeline(tmp_path)
     names = _names(pipeline)

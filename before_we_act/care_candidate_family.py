@@ -74,6 +74,8 @@ def build_candidate(
     current_qpos: np.ndarray,
     current_grip: float,
     config: BehaviorCandidateConfig | None = None,
+    joint_low: np.ndarray | None = None,
+    joint_high: np.ndarray | None = None,
 ) -> np.ndarray:
     """Return one candidate chunk from the requested family."""
 
@@ -85,7 +87,13 @@ def build_candidate(
         if config is None:
             raise ValueError("the behavior family needs a BehaviorCandidateConfig")
         return behavior_candidate_plan(
-            candidate_id, reference, current_qpos, current_grip, config
+            candidate_id,
+            reference,
+            current_qpos,
+            current_grip,
+            config,
+            joint_low=joint_low,
+            joint_high=joint_high,
         )
     raise ValueError(f"unknown CARE candidate family: {family}")
 

@@ -190,3 +190,73 @@ def test_unknown_candidate_is_rejected() -> None:
         behavior_candidate_plan(
             CANDIDATE_COUNT, reference, _pose(ROBOFACTORY), 0.0, ROBOFACTORY
         )
+
+
+@pytest.mark.parametrize("config", CONFIGS, ids=IDS)
+def test_retreat_is_bounded_where_it_is_generated(config) -> None:
+    """Retreat is the one transform that leaves the reference's range.
+
+    Every other candidate resamples values the nominal plan already visits, so
+    it cannot go out of range. Retreat extrapolates away from them, and some
+    benchmarks execute candidates without clipping, so the bound has to be
+    applied to the retreat target rather than to the finished chunk.
+    """
+    reference = _reference(config, rate=0.05)
+    pose = _pose(config)
+    low = np.full(config.action_dim, -0.05, dtype=np.float32)
+    high = np.full(config.action_dim, 10.0, dtype=np.float32)
+    window = config.intervention_steps
+
+    unbounded = behavior_candidate_plan(2, reference, pose, 0.0, config)
+    bounded = behavior_candidate_plan(
+        2, reference, pose, 0.0, config, joint_low=low, joint_high=high
+    )
+
+    assert unbounded[:window, : config.joints].min() < -0.05
+    assert bounded[:window, : config.joints].min() >= -0.05 - 1e-6
+
+
+@pytest.mark.parametrize("config", CONFIGS, ids=IDS)
+def test_a_bounded_retreat_still_opposes_the_nominal_direction(config) -> None:
+    """Clamping must shorten the yield, not reverse or cancel it."""
+    reference = _reference(config, rate=0.05)
+    pose = _pose(config)
+    low = np.full(config.action_dim, -0.05, dtype=np.float32)
+    high = np.full(config.action_dim, 10.0, dtype=np.float32)
+    window = config.intervention_steps
+
+    plan = behavior_candidate_plan(
+        2, reference, pose, 0.0, config, joint_low=low, joint_high=high
+    )
+    direction = reference[window - 1, : config.joints] - pose
+    displacement = plan[window - 1, : config.joints] - pose
+
+    assert float(displacement @ direction) < 0.0
+
+
+@pytest.mark.parametrize("config", CONFIGS, ids=IDS)
+def test_no_room_to_yield_degenerates_to_holding_position(config) -> None:
+    """Against a joint limit there is nowhere to retreat, and that is correct."""
+    reference = _reference(config, rate=0.05)
+    pose = _pose(config)
+    tight = np.zeros(config.action_dim, dtype=np.float32)
+    high = np.full(config.action_dim, 10.0, dtype=np.float32)
+    window = config.intervention_steps
+
+    plan = behavior_candidate_plan(
+        2, reference, pose, 0.0, config, joint_low=tight, joint_high=high
+    )
+    np.testing.assert_allclose(plan[:window, : config.joints], 0.0, atol=1e-6)
+
+
+@pytest.mark.parametrize("config", CONFIGS, ids=IDS)
+def test_bounds_must_be_consistent(config) -> None:
+    reference = _reference(config)
+    pose = _pose(config)
+    low = np.full(config.action_dim, 1.0, dtype=np.float32)
+    high = np.full(config.action_dim, -1.0, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="matching finite joint limits"):
+        behavior_candidate_plan(
+            2, reference, pose, 0.0, config, joint_low=low, joint_high=high
+        )

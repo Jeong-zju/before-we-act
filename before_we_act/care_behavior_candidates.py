@@ -138,6 +138,8 @@ def _retreat(
     pose: np.ndarray,
     grip: float,
     config: BehaviorCandidateConfig,
+    joint_low: np.ndarray | None = None,
+    joint_high: np.ndarray | None = None,
 ) -> np.ndarray:
     """Back away from where the nominal plan was heading, then rejoin it.
 
@@ -145,11 +147,25 @@ def _retreat(
     the commitment window, so a nearly stationary arm barely moves -- there is
     nothing to yield -- while a fast arm yields proportionally.  Backing off over
     the whole window keeps the executed rate below the nominal rate.
+
+    This is the one transform that leaves the convex hull of the nominal plan and
+    the current pose: every other candidate resamples values the reference
+    already visits.  Bounds are therefore applied to the retreat *target* rather
+    than to the finished chunk, so the candidate is in range by construction --
+    some benchmarks deliberately execute candidates without clipping.  Near a
+    joint limit the retreat shortens instead of being rejected, which is also
+    the physical answer: there is no room to yield into.
     """
 
     window = config.intervention_steps
     direction = plan[window - 1, : config.joints] - pose
     goal = pose - config.retreat_scale * direction
+    if joint_low is not None and joint_high is not None:
+        low = np.asarray(joint_low, dtype=np.float32).reshape(-1)[: config.joints]
+        high = np.asarray(joint_high, dtype=np.float32).reshape(-1)[: config.joints]
+        if low.shape != goal.shape or np.any(low > high):
+            raise ValueError("CARE retreat bounds must be matching finite joint limits")
+        goal = np.clip(goal, low, high)
 
     result = np.empty_like(plan)
     ramp = (np.arange(1, window + 1, dtype=np.float32) / float(window))[:, None]
@@ -230,6 +246,9 @@ def behavior_candidate_plan(
     current_qpos: np.ndarray,
     current_grip: float,
     config: BehaviorCandidateConfig,
+    *,
+    joint_low: np.ndarray | None = None,
+    joint_high: np.ndarray | None = None,
 ) -> np.ndarray:
     """Return one behavior-level candidate chunk.
 
@@ -243,7 +262,7 @@ def behavior_candidate_plan(
     if candidate_id == 1:
         result = _wait(plan, pose, grip, config)
     elif candidate_id == 2:
-        result = _retreat(plan, pose, grip, config)
+        result = _retreat(plan, pose, grip, config, joint_low, joint_high)
     elif candidate_id == 3:
         result = _grip_shift(plan, grip, config, steps=config.grip_shift_steps)
     elif candidate_id == 4:
@@ -262,12 +281,23 @@ def behavior_candidate_set(
     current_qpos: np.ndarray,
     current_grip: float,
     config: BehaviorCandidateConfig,
+    *,
+    joint_low: np.ndarray | None = None,
+    joint_high: np.ndarray | None = None,
 ) -> np.ndarray:
     """Return the whole family as ``[candidate, step, action]``."""
 
     return np.stack(
         [
-            behavior_candidate_plan(index, reference, current_qpos, current_grip, config)
+            behavior_candidate_plan(
+                index,
+                reference,
+                current_qpos,
+                current_grip,
+                config,
+                joint_low=joint_low,
+                joint_high=joint_high,
+            )
             for index in range(CANDIDATE_COUNT)
         ]
     )
