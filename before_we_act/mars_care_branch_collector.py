@@ -23,13 +23,21 @@ from before_we_act.care_branch_collector import (
     OUTCOME_HORIZONS,
     atomic_json,
     atomic_npz,
-    candidate_plan,
     canonicalize_policy_plans,
     clone_tree,
     numeric_tree_max_abs,
     outcome_at_horizon,
     sha256_file,
-    validate_candidate,
+)
+from before_we_act.care_behavior_candidates import BehaviorCandidateConfig
+from before_we_act.care_candidate_family import (
+    BEHAVIOR_FAMILY,
+    CANDIDATE_FAMILIES,
+    FIXED_FAMILY,
+    build_candidate,
+    candidate_count,
+    family_manifest,
+    validate_candidate_for_family,
 )
 from before_we_act.mars_care_runtime import (
     MarsCARERuntime,
@@ -50,7 +58,15 @@ from deployment.mars_care.common import TASK_BY_NAME
 FORMAT_VERSION = (
     "before-we-act.care-mars-branch-family/4-separate-rerender-diagnostic"
 )
+# MARS acts on 7 joints plus a gripper over a 100-step chunk.
+ACTION_HORIZON = 100
+ACTION_DIM = 8
+# candidates x {reactive, replay} x 2 matched repeats
 BRANCH_COUNT = 24
+
+
+def branch_count(family: str) -> int:
+    return candidate_count(family) * 2 * 2
 INTERVENTION_STEP_CHOICES = (1, 4, 8, 16)
 
 
@@ -164,7 +180,7 @@ def _canonical_plans(
 def _canonical_candidate(plan: np.ndarray, action_space: Any) -> np.ndarray:
     """Clip transformed candidates exactly as the MARS controller does."""
     value = np.asarray(plan, dtype=np.float32)
-    if value.shape != (100, 8) or not np.isfinite(value).all():
+    if value.shape != (ACTION_HORIZON, ACTION_DIM) or not np.isfinite(value).all():
         return value
     validate_action_space_bounds(action_space)
     return canonicalize_action(value)
@@ -192,7 +208,7 @@ def intervention_action(
         raise ValueError("MARS CARE branch step must be non-negative")
     reference = np.asarray(reference_action, dtype=np.float32)
     candidate = np.asarray(candidate_plan, dtype=np.float32)
-    if reference.shape != (8,) or candidate.shape != (100, 8):
+    if reference.shape != (ACTION_DIM,) or candidate.shape != (ACTION_HORIZON, ACTION_DIM):
         raise ValueError("MARS CARE intervention action shape differs")
     if not np.isfinite(reference).all() or not np.isfinite(candidate).all():
         raise ValueError("MARS CARE intervention action must be finite")
@@ -238,6 +254,8 @@ def run_branch(
     device: torch.device,
     horizon: int = 64,
     intervention_steps: int = 1,
+    candidate_family: str = FIXED_FAMILY,
+    candidate_config: BehaviorCandidateConfig | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, np.ndarray]]]:
     if regime not in {"reactive", "replay"}:
         raise ValueError("CARE response regime must be reactive or replay")
@@ -289,22 +307,26 @@ def run_branch(
                 if full_runtime.last_action is not None
                 else float(reference[key][0, 7])
             )
-            transformed = candidate_plan(
+            transformed = build_candidate(
+                candidate_family,
                 candidate_id,
-                reference[key],
-                base[key],
-                physical_qpos[focal_index],
-                current_grip,
+                reference=reference[key],
+                base=base[key],
+                current_qpos=physical_qpos[focal_index],
+                current_grip=current_grip,
+                config=candidate_config,
             )
             transformed = _canonical_candidate(transformed, env.action_space.spaces[key])
-            valid, step_failures = validate_candidate(
+            valid, step_failures = validate_candidate_for_family(
+                candidate_family,
                 candidate_id,
                 transformed,
-                reference[key],
-                base[key],
-                physical_qpos[focal_index],
-                current_grip,
-                env.action_space.spaces[key],
+                reference=reference[key],
+                base=base[key],
+                current_qpos=physical_qpos[focal_index],
+                current_grip=current_grip,
+                action_space=env.action_space.spaces[key],
+                config=candidate_config,
             )
             if valid:
                 intervention_plan = transformed
@@ -397,6 +419,8 @@ def collect_family(
     output_root: Path,
     checkpoint_identity_sha256: str | None = None,
     intervention_steps: int = 1,
+    candidate_family: str = FIXED_FAMILY,
+    candidate_config: BehaviorCandidateConfig | None = None,
 ) -> dict[str, Any]:
     if int(intervention_steps) not in INTERVENTION_STEP_CHOICES:
         raise ValueError("MARS CARE intervention steps must be one of 1/4/8/16")
@@ -449,23 +473,27 @@ def collect_family(
         else float(reference[focal_key][0, 7])
     )
     candidates: list[dict[str, Any]] = []
-    for candidate_id in range(6):
-        plan = candidate_plan(
+    for candidate_id in range(candidate_count(candidate_family)):
+        plan = build_candidate(
+            candidate_family,
             candidate_id,
-            reference[focal_key],
-            base[focal_key],
-            physical_qpos[focal_index],
-            current_grip,
+            reference=reference[focal_key],
+            base=base[focal_key],
+            current_qpos=physical_qpos[focal_index],
+            current_grip=current_grip,
+            config=candidate_config,
         )
         plan = _canonical_candidate(plan, env.action_space.spaces[focal_key])
-        valid, failures = validate_candidate(
+        valid, failures = validate_candidate_for_family(
+            candidate_family,
             candidate_id,
             plan,
-            reference[focal_key],
-            base[focal_key],
-            physical_qpos[focal_index],
-            current_grip,
-            env.action_space.spaces[focal_key],
+            reference=reference[focal_key],
+            base=base[focal_key],
+            current_qpos=physical_qpos[focal_index],
+            current_grip=current_grip,
+            action_space=env.action_space.spaces[focal_key],
+            config=candidate_config,
         )
         candidates.append(
             {
@@ -502,6 +530,8 @@ def collect_family(
             teammate_reference_actions=None,
             device=device,
             intervention_steps=intervention_steps,
+            candidate_family=candidate_family,
+            candidate_config=candidate_config,
         )
         branches.append(reference_reactive)
         reference_replay, _ = run_branch(
@@ -518,9 +548,11 @@ def collect_family(
             teammate_reference_actions=teammate_log,
             device=device,
             intervention_steps=intervention_steps,
+            candidate_family=candidate_family,
+            candidate_config=candidate_config,
         )
         branches.append(reference_replay)
-        for candidate_id in range(1, 6):
+        for candidate_id in range(1, candidate_count(candidate_family)):
             reactive, _ = run_branch(
                 env=env,
                 snapshot=snapshot,
@@ -535,9 +567,11 @@ def collect_family(
                 teammate_reference_actions=None,
                 device=device,
                 intervention_steps=intervention_steps,
+                candidate_family=candidate_family,
+                candidate_config=candidate_config,
             )
             branches.append(reactive)
-        for candidate_id in range(1, 6):
+        for candidate_id in range(1, candidate_count(candidate_family)):
             replay, _ = run_branch(
                 env=env,
                 snapshot=snapshot,
@@ -552,9 +586,11 @@ def collect_family(
                 teammate_reference_actions=teammate_log,
                 device=device,
                 intervention_steps=intervention_steps,
+                candidate_family=candidate_family,
+                candidate_config=candidate_config,
             )
             branches.append(replay)
-    if len(branches) != BRANCH_COUNT:
+    if len(branches) != branch_count(candidate_family):
         raise AssertionError(len(branches))
     snapshot_id = str(family["snapshot_id"])
     npz_path = output_root / task / f"{snapshot_id}.npz"
@@ -596,6 +632,7 @@ def collect_family(
         "branches": branches,
         "branch_count": len(branches),
         "intervention_steps": int(intervention_steps),
+        **family_manifest(candidate_family, candidate_config),
         "wall_seconds": time.perf_counter() - started,
         "npz_path": str(npz_path.resolve()),
     }
@@ -628,12 +665,36 @@ def main() -> None:
         help="fixed candidate prefix; default 1 preserves the main protocol",
     )
     parser.add_argument(
+        "--candidate-family",
+        choices=CANDIDATE_FAMILIES,
+        default=FIXED_FAMILY,
+        help=(
+            "fixed keeps the archived first-step transforms; behavior uses the "
+            "wait/retreat/grasp-timing family held across the commitment window"
+        ),
+    )
+    parser.add_argument(
         "--render-device",
         help="physical SAPIEN Vulkan device, e.g. cuda:1; defaults to --device",
     )
     args = parser.parse_args()
     if not 0 <= args.shard_index < args.shard_count:
         raise ValueError("invalid shard")
+    candidate_config = None
+    if args.candidate_family == BEHAVIOR_FAMILY:
+        prefix = int(args.intervention_steps)
+        if prefix < 4:
+            raise ValueError(
+                "behavior candidates need a commitment window of at least four "
+                f"steps to be distinguishable; got --intervention-steps {prefix}"
+            )
+        candidate_config = BehaviorCandidateConfig(
+            action_horizon=ACTION_HORIZON,
+            action_dim=ACTION_DIM,
+            intervention_steps=prefix,
+            wait_steps=max(1, prefix // 2),
+            grip_shift_steps=max(1, prefix // 2),
+        )
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     if manifest.get("format_version") != "before-we-act.care-mars-family-manifest/1":
         raise ValueError("wrong MARS CARE family manifest")
@@ -670,6 +731,8 @@ def main() -> None:
                         and existing.get("branch_count") == BRANCH_COUNT
                         and existing.get("checkpoint_sha256") == checkpoint_identity_sha256
                         and int(existing.get("intervention_steps", -1)) == args.intervention_steps
+                        and str(existing.get("candidate_family", FIXED_FAMILY))
+                        == args.candidate_family
                     ):
                         print(json.dumps({"snapshot_id": family["snapshot_id"], "reused": True}), flush=True)
                         continue
@@ -684,6 +747,8 @@ def main() -> None:
                     device=device,
                     output_root=args.output_root,
                     intervention_steps=args.intervention_steps,
+                    candidate_family=args.candidate_family,
+                    candidate_config=candidate_config,
                 )
                 print(
                     json.dumps(
