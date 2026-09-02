@@ -1,0 +1,40 @@
+{
+  "format_version": "before-we-act.care-mars-event-aware-ablation-spec/1",
+  "name": "event_aware_hybrid_v1",
+  "purpose": "Independent sampling ablation; never mutates or replaces the frozen stratified main protocol in the current run.",
+  "promotion_scope": "next_formal_run_only",
+  "sampling": {
+    "event_lead_steps": 4,
+    "smoothing_radius_steps": 2,
+    "critical_phase_range": [0.35, 0.80],
+    "uniform_phase_range": [0.10, 0.85],
+    "feature_weights": {
+      "visual_change": 0.30,
+      "action_transition": 0.25,
+      "joint_speed": 0.15,
+      "gripper_transition": 0.15,
+      "multi_arm_coordination": 0.15
+    },
+    "smoke_ordinals_within_stratum": {
+      "critical": [0, 9, 19],
+      "uniform": [4]
+    }
+  },
+  "signal_gate": {
+    "utility_epsilon": 0.01,
+    "minimum_absolute_density_gain": 0.05,
+    "minimum_relative_density_ratio": 1.25,
+    "minimum_effective_pair_ratio": 1.20,
+    "minimum_paired_bootstrap_lower_95": 0.0,
+    "maximum_per_task_density_regression": 0.02,
+    "bootstrap_samples": 20000,
+    "bootstrap_seed": 20260831
+  },
+  "final_success_gate": {
+    "minimum_overall_success_rate_gain": 0.05,
+    "maximum_per_task_success_rate_regression": 0.10,
+    "minimum_paired_bootstrap_lower_95": -0.025,
+    "bootstrap_samples": 20000,
+    "bootstrap_seed": 20260901
+  }
+}

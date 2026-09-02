@@ -1,0 +1,19 @@
+{
+  "schema": "before-we-act.duobench-care-pipeline.v1",
+  "benchmark_commit": "082a57cdafea9db115029e6fe9e03691e755f93f",
+  "rcs_commit": "4f78aeffae3bc4d0c02e7beab993e5406261dcf6",
+  "dataset": "RobotControlStack/duobench",
+  "tasks": ["ball_maze", "bin_sort", "block_balance", "carry_pot", "hinge_chest", "join_blocks", "pour_marbles", "spring_door", "transfer_cube", "transfer_gate", "transfer_reorient"],
+  "episodes_per_task": 50,
+  "policy_contract": "shared_weights_decentralized_local_head_rgb_wrist_rgb_qpos_to_local_action8",
+  "action_encoding": "joint_residual_gripper_absolute",
+  "control_rate_hz": 30,
+  "train_updates": 20000,
+  "train_batch_size_global": 256,
+  "validation_episodes_per_task": 20,
+  "validation_seed_start": 20260820,
+  "validation_sim_backend": "MuJoCo EGL; four task workers, one per GPU",
+  "training_split": "all 550 episodes; no held-out demonstrations",
+  "image_contract": "224x224 head plus 224x224 own wrist, concatenated to 224x448 without peer wrist",
+  "parameter_rationale": "5.12M local samples, matching the 120k x 40 ACT baseline within 6.7%; about 8.95 balanced traversals of 571,976 local frames"
+}

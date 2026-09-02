@@ -140,7 +140,10 @@ class PreparedCAREData:
 
 def load_prepared_care(path: str | Path) -> PreparedCAREData:
     value = torch.load(path, map_location="cpu", weights_only=False)
-    if value.get("format_version") != "before-we-act.care-robofactory-prepared-data/1":
+    if value.get("format_version") not in {
+        "before-we-act.care-robofactory-prepared-data/1",
+        "before-we-act.care-mars-prepared-data/1",
+    }:
         raise ValueError("wrong prepared CARE data format")
     return PreparedCAREData(
         memory=value["memory"].float(),
@@ -168,7 +171,7 @@ class CARETrainingDataset(Dataset):
         primary_horizon_only: bool = False,
         primary_horizon: int = 16,
     ) -> None:
-        if split not in SPLIT_IDS:
+        if split != "all" and split not in SPLIT_IDS:
             raise ValueError(f"unknown CARE split: {split}")
         rows: list[tuple[int, int, int]] = []
         allowed_horizons = (
@@ -177,7 +180,7 @@ class CARETrainingDataset(Dataset):
             else tuple(range(len(CARE_HORIZONS)))
         )
         for family_index in range(len(prepared.snapshot_ids)):
-            if int(prepared.split_id[family_index]) != SPLIT_IDS[split]:
+            if split != "all" and int(prepared.split_id[family_index]) != SPLIT_IDS[split]:
                 continue
             for horizon_index in allowed_horizons:
                 if not bool(prepared.usable[family_index, horizon_index]):

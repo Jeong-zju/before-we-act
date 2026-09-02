@@ -15,7 +15,15 @@ from typing import Any
 import numpy as np
 import torch
 
-from before_we_act.mars_temporal_data import local_task_text
+from before_we_act.mars_temporal_data import TASK_TEXT, local_task_text
+from before_we_act.mars_action_contract import (
+    ACTION_CONTRACT_VERSION,
+    canonicalize_action,
+    normalization_stats_hash,
+    validate_action_space_bounds,
+    validate_action_stats,
+    validate_checkpoint_action_contract,
+)
 from before_we_act.temporal_history_data import HISTORY_STEPS, TASK_TEXT_BYTES, task_text_tensor
 from before_we_act.temporal_history_policy import TemporalHistoryPolicy
 from deployment.mars_care.common import TASK_BY_NAME, local_observation, make_env
@@ -27,7 +35,16 @@ def scalar(value: Any) -> bool:
 
 def load_policy(checkpoint: Path, dino_model: str, device: torch.device):
     saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    contract = validate_checkpoint_action_contract(saved)
+    stats_payload = saved.get("stats")
+    validate_action_stats(stats_payload)
+    annotations = contract.get("annotations", {})
+    expected_stats_hash = normalization_stats_hash(stats_payload)
+    if annotations.get("normalization_sha256") != expected_stats_hash:
+        raise ValueError("checkpoint action statistics hash differs")
     config = saved["config"]
+    if config.get("action_contract_version") != ACTION_CONTRACT_VERSION:
+        raise ValueError("checkpoint config is missing the shared MARS action contract")
     if config.get("strict_local") is not True or config.get("vision") != "dinov3_vitb16_frozen":
         raise ValueError("checkpoint is not the strict-local MARS DINO reference policy")
     model = TemporalHistoryPolicy(
@@ -47,7 +64,7 @@ class LocalHistory:
         self.qpos = {arm: deque(maxlen=HISTORY_STEPS-1) for arm in self.arms}
         self.action = {arm: deque(maxlen=HISTORY_STEPS) for arm in self.arms}
 
-    def batch(self, current_qpos: torch.Tensor, task: str, device: torch.device):
+    def batch(self, current_qpos: torch.Tensor, task: str, device: torch.device, role_context: bool):
         n=len(self.arms); visual=torch.zeros(n,HISTORY_STEPS,2,768,device=device)
         qpos=torch.zeros(n,HISTORY_STEPS,9,device=device)
         action=torch.zeros(n,HISTORY_STEPS,8,device=device)
@@ -64,7 +81,7 @@ class LocalHistory:
             if aa:
                 first=HISTORY_STEPS-len(aa); action[row,first:]=torch.stack(aa).to(device); amask[row,first:]=True
             reset.append(not vv and not aa)
-        texts=[task_text_tensor(local_task_text(task,arm)) for arm in self.arms]
+        texts=[task_text_tensor(local_task_text(task,arm) if role_context else TASK_TEXT[task]) for arm in self.arms]
         text=torch.stack([x[0] for x in texts]); text_mask=torch.stack([x[1] for x in texts])
         return {"history_visual_raw":visual,"history_qpos":qpos,"history_action":action,
                 "history_mask":hmask,"action_history_mask":amask,
@@ -100,7 +117,10 @@ def run_episode(model, stats, task, robofactory_root: Path, seed: int, device: t
     if root not in sys.path: sys.path.insert(0,root)
     env=make_env(task,robofactory_root); observation,_=env.reset(seed=seed)
     arms=tuple(range(task.arms)); history=LocalHistory(arms); ensemble=ChunkEnsembler(arms,ensemble_decay)
+    role_context=action_encoding.endswith("+role")
+    action_encoding=action_encoding.removesuffix("+role")
     inference=[]; trace=hashlib.sha256(); success=False
+    movement=np.zeros(len(arms),dtype=np.float64); ever_flags={}
     try:
         for step in range(max_steps):
             images=[]; qposes=[]
@@ -110,29 +130,35 @@ def run_episode(model, stats, task, robofactory_root: Path, seed: int, device: t
                 images.append(image); qposes.append(qpos.reshape(-1))
             rgb=torch.as_tensor(np.stack(images),device=device).permute(0,3,1,2).float().div_(255)
             qpos=torch.as_tensor(np.stack(qposes),device=device).float(); qnorm=(qpos-stats["q_mean"])/stats["q_std"]
-            temporal=history.batch(qnorm,task.name,device); started=time.perf_counter()
+            temporal=history.batch(qnorm,task.name,device,role_context); started=time.perf_counter()
             with torch.autocast("cuda",dtype=torch.bfloat16):
                 chunks,_mu,_logvar,current_visual=model(rgb,rgb,**temporal,return_current_visual=True)
             history.append_observation(current_visual,qnorm)
             decoded=(chunks*stats["a_std"]+stats["a_mean"]).float().cpu().numpy()
             rows=ensemble.select(step,decoded); action={}; normalized={}
             for arm,row in rows.items():
-                if action_encoding == "joint_residual_gripper_absolute":
-                    row=row.copy(); row[:7] += qposes[arms.index(arm)][:7]
+                if action_encoding not in ("absolute", "absolute_pd_joint_pos"):
+                    raise ValueError(f"official MARS CARE requires absolute pd_joint_pos, got {action_encoding}")
                 space=env.action_space.spaces[f"panda-{arm}"]
-                row=np.clip(row,np.asarray(space.low),np.asarray(space.high)).astype(np.float32)
+                validate_action_space_bounds(space)
+                row=canonicalize_action(row)
                 action[f"panda-{arm}"]=row; trace.update(row.tobytes())
-                encoded=row.copy()
-                if action_encoding == "joint_residual_gripper_absolute":
-                    encoded[:7] -= qposes[arms.index(arm)][:7]
-                normalized[arm]=(torch.as_tensor(encoded,device=device)-stats["a_mean"])/stats["a_std"]
+                movement[arms.index(arm)]+=float(np.linalg.norm(row[:7]-qposes[arms.index(arm)][:7]))
+                normalized[arm]=(torch.as_tensor(row,device=device)-stats["a_mean"])/stats["a_std"]
             history.append_action(normalized); inference.append(time.perf_counter()-started)
             observation,_reward,terminated,truncated,info=env.step(action)
             success=scalar(info.get("success",False))
+            for key,value in info.items():
+                try:
+                    flag=scalar(value)
+                except Exception:
+                    continue
+                ever_flags[str(key)]=bool(ever_flags.get(str(key),False) or flag)
             if success or scalar(terminated) or scalar(truncated): break
     finally: env.close()
     return {"task":task.name,"seed":seed,"success":success,"steps":step+1,
-            "mean_inference_seconds":float(np.mean(inference)),"action_trace_sha256":trace.hexdigest()}
+            "mean_inference_seconds":float(np.mean(inference)),"action_trace_sha256":trace.hexdigest(),
+            "mean_command_delta_by_arm":(movement/(step+1)).tolist(),"ever_info_flags":ever_flags}
 
 
 def main():
@@ -150,7 +176,9 @@ def main():
             except Exception: pass
     rows=[]
     for seed in range(args.seed_start,args.seed_start+args.episodes):
-        row=recovered.get(seed) or run_episode(model,stats,task,args.robofactory_root,seed,device,args.max_steps or task.max_steps,args.ensemble_decay,str(config.get("action_encoding","absolute")))
+        encoding=str(config.get("action_encoding","absolute"))
+        if config.get("role_context")=="own_base_xy_in_task_context": encoding += "+role"
+        row=recovered.get(seed) or run_episode(model,stats,task,args.robofactory_root,seed,device,args.max_steps or task.max_steps,args.ensemble_decay,encoding)
         rows.append(row)
         if seed not in recovered:
             args.output.parent.mkdir(parents=True,exist_ok=True)

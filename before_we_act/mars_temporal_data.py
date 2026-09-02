@@ -25,6 +25,17 @@ from before_we_act.temporal_history_data import (
     TeamTemporalRequest,
     task_text_tensor,
 )
+from before_we_act.mars_action_contract import (
+    ACTION_CONTRACT_VERSION,
+    PD_ACTION_HIGH,
+    PD_ACTION_LOW,
+    action_contract_hash,
+    audit_action_array,
+    canonicalize_action,
+    contract_metadata,
+    normalization_stats_hash,
+    validate_checkpoint_action_contract,
+)
 
 
 MARS_TASKS = (
@@ -59,6 +70,10 @@ BASE_XY = {
 }
 EFFECTIVE_BATCH = 48
 SAMPLES_PER_TASK = EFFECTIVE_BATCH // len(MARS_TASKS)
+def clip_pd_action(value: np.ndarray) -> np.ndarray:
+    """Compatibility wrapper around the shared action contract."""
+
+    return canonicalize_action(value)
 
 
 def local_task_text(task: str, arm: int) -> str:
@@ -129,28 +144,74 @@ def load_mars_episodes(root: str | Path) -> list[MarsTemporalEpisode]:
 def compute_normalization(episodes: Sequence[MarsTemporalEpisode], output: Path) -> dict:
     q_sum = np.zeros(9, np.float64); q_sq = np.zeros(9, np.float64); q_n = 0
     a_sum = np.zeros(8, np.float64); a_sq = np.zeros(8, np.float64); a_n = 0
+    raw_action_values = 0; out_of_bounds_values = 0; max_abs_change = 0.0
+    out_of_bounds_by_dimension = np.zeros(8, dtype=np.int64)
     for episode in episodes:
         with h5py.File(episode.path, "r") as handle:
             group = handle[episode.trajectory]
             for arm in episode.arms:
                 q = np.asarray(group[f"obs/agent/panda-{arm}/qpos"][:episode.length], np.float64)
-                a = np.asarray(group[f"actions/panda-{arm}"][:episode.length], np.float64)
-                a[:, :7] -= q[:, :7]
+                raw_action = np.asarray(
+                    group[f"actions/panda-{arm}"][:episode.length], np.float32
+                )
+                canonical, audit = audit_action_array(raw_action)
+                a = canonical.astype(np.float64)
+                raw_action_values += int(audit["raw_values"])
+                out_of_bounds_values += int(audit["out_of_bounds_values"])
+                max_abs_change = max(max_abs_change, float(audit["max_abs_change"]))
+                out_of_bounds_by_dimension += np.asarray(
+                    audit["out_of_bounds_by_dimension"], dtype=np.int64
+                )
                 q_sum += q.sum(0); q_sq += np.square(q).sum(0); q_n += len(q)
                 a_sum += a.sum(0); a_sq += np.square(a).sum(0); a_n += len(a)
     q_mean = q_sum / q_n; a_mean = a_sum / a_n
     q_std = np.sqrt(np.maximum(q_sq / q_n - q_mean ** 2, 1e-8))
     a_std = np.sqrt(np.maximum(a_sq / a_n - a_mean ** 2, 1e-8))
     value = {
-        "format_version": "before-we-act.mars.normalization-residual/2",
+        "format_version": "before-we-act.mars.normalization-absolute/4-action-contract",
+        "action_contract_version": ACTION_CONTRACT_VERSION,
+        "action_contract": contract_metadata(),
         "episodes": len(episodes), "local_q_steps": q_n, "local_action_steps": a_n,
         "q_mean": q_mean.tolist(), "q_std": q_std.tolist(),
         "a_mean": a_mean.tolist(), "a_std": a_std.tolist(),
-        "action_encoding": "joint_residual_gripper_absolute",
+        "action_encoding": "absolute_pd_joint_pos",
+        "action_canonicalization": {
+            "source": "immutable_raw_hdf5_read_time_projection",
+            "raw_values": raw_action_values,
+            "out_of_bounds_values": out_of_bounds_values,
+            "out_of_bounds_fraction": (
+                float(out_of_bounds_values / raw_action_values)
+                if raw_action_values else 0.0
+            ),
+            "max_abs_change": max_abs_change,
+            "out_of_bounds_by_dimension": out_of_bounds_by_dimension.tolist(),
+        },
     }
+    value["normalization_sha256"] = normalization_stats_hash(value)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(value, indent=2) + "\n")
     return value
+
+
+def validate_mars_normalization(stats: Mapping) -> None:
+    """Reject stale or hand-edited MARS normalization artifacts."""
+
+    if stats.get("format_version") != (
+        "before-we-act.mars.normalization-absolute/4-action-contract"
+    ):
+        raise ValueError("MARS normalization predates the shared action contract")
+    if stats.get("action_encoding") != "absolute_pd_joint_pos":
+        raise ValueError("MARS action encoding differs from the shared contract")
+    validate_checkpoint_action_contract(
+        {"action_contract": stats.get("action_contract")}
+    )
+    if stats.get("action_contract_version") != ACTION_CONTRACT_VERSION:
+        raise ValueError("MARS normalization action contract version differs")
+    if stats["action_contract"].get("sha256") != action_contract_hash():
+        raise ValueError("MARS normalization action contract hash differs")
+    expected = normalization_stats_hash(stats)
+    if stats.get("normalization_sha256") != expected:
+        raise ValueError("MARS normalization statistics hash differs")
 
 
 class MarsVisualCache:
@@ -183,6 +244,7 @@ class MarsTemporalDataset(Dataset):
     })
     def __init__(self, episodes: Sequence[MarsTemporalEpisode], stats: Mapping,
                  visual_cache_root: str | Path):
+        validate_mars_normalization(stats)
         self.episodes = list(episodes); self.cache = MarsVisualCache(visual_cache_root)
         self.q_mean = torch.tensor(stats["q_mean"], dtype=torch.float32)
         self.q_std = torch.tensor(stats["q_std"], dtype=torch.float32)
@@ -207,17 +269,13 @@ class MarsTemporalDataset(Dataset):
             group = handle[episode.trajectory]
             image = np.asarray(group[f"obs/sensor_data/head_camera_agent{arm}/rgb"][t])
             q = np.asarray(group[f"obs/agent/panda-{arm}/qpos"][obs_idx], np.float32)
-            past = np.asarray(group[f"actions/panda-{arm}"][action_idx], np.float32)
-            past_q = np.asarray(group[f"obs/agent/panda-{arm}/qpos"][action_idx], np.float32)
-            future = np.asarray(group[f"actions/panda-{arm}"][t:min(t+ACTION_HORIZON, episode.length)], np.float32)
-            future_q = np.asarray(group[f"obs/agent/panda-{arm}/qpos"][t:min(t+ACTION_HORIZON, episode.length)], np.float32)
+            past = clip_pd_action(np.asarray(group[f"actions/panda-{arm}"][action_idx], np.float32))
+            future = clip_pd_action(np.asarray(group[f"actions/panda-{arm}"][t:min(t+ACTION_HORIZON, episode.length)], np.float32))
         if image.shape != (240, 320, 3): raise ValueError(f"MARS RGB drift: {image.shape}")
         qhist[obs_offset:] = (torch.from_numpy(q) - self.q_mean) / self.q_std; hmask[obs_offset:] = True
         if action_idx:
-            past[:, :7] -= past_q[:, :7]
             ahist[action_offset:] = (torch.from_numpy(past) - self.a_mean) / self.a_std
             amask[action_offset:] = True
-        future[:, :7] -= future_q[:, :7]
         normalized = (torch.from_numpy(future) - self.a_mean) / self.a_std
         target = torch.empty(ACTION_HORIZON, 8); target[:len(normalized)] = normalized
         target[len(normalized):] = normalized[-1]
@@ -239,34 +297,42 @@ class MarsBalancedDistributedBatchSampler(Sampler[list[TeamTemporalRequest]]):
         self.episodes=list(episodes); self.updates=updates; self.seed=seed
         self.rank=rank; self.world_size=world_size; self.start_update=start_update
         self.by_task=defaultdict(list)
-        self.active_by_task=defaultdict(list)
         for i,e in enumerate(episodes): self.by_task[e.task].append(i)
-        for i,e in enumerate(episodes):
-            with h5py.File(e.path,"r") as handle:
-                group=handle[e.trajectory]
-                for arm in e.arms:
-                    action=np.asarray(group[f"actions/panda-{arm}"][:e.length],np.float32)
-                    qpos=np.asarray(group[f"obs/agent/panda-{arm}/qpos"][:e.length],np.float32)
-                    active=np.linalg.norm(action[:,:7]-qpos[:,:7],axis=1)>.01
-                    active |= np.abs(action[:,7])<.95
-                    active[1:] |= np.abs(np.diff(action[:,7]))>.05
-                    self.active_by_task[e.task].extend((i,arm,int(t)) for t in np.flatnonzero(active))
         if EFFECTIVE_BATCH % world_size: raise ValueError("world size must divide 48")
     def __len__(self): return self.updates-self.start_update
+    def requests_for_update(self, update: int) -> list[TeamTemporalRequest]:
+        if not 1 <= update <= self.updates:
+            raise IndexError(update)
+        rng=random.Random(self.seed+1_000_003*update); rows=[]
+        for task in MARS_TASKS:
+            for _ in range(SAMPLES_PER_TASK):
+                i=rng.choice(self.by_task[task]); e=self.episodes[i]
+                arm=rng.choice(e.arms); t=rng.randrange(e.length)
+                key=hashlib.sha256(f"{e.cache_key}:{arm}:{t}".encode()).hexdigest()
+                rows.append(TeamTemporalRequest(i,arm,t,key,task))
+        rng.shuffle(rows)
+        return rows
+    def cursor_receipt(self, completed_update: int) -> dict:
+        next_update=completed_update+1
+        keys=(
+            [row.sample_key for row in self.requests_for_update(next_update)]
+            if next_update <= self.updates else []
+        )
+        return {
+            "format_version":"before-we-act.mars.b0h-cursor/1",
+            "seed":self.seed,"completed_update":completed_update,
+            "next_update":next_update if keys else None,"next_sample_keys":keys,
+            "effective_batch":EFFECTIVE_BATCH,"samples_per_task":SAMPLES_PER_TASK,
+        }
+    def validate_cursor(self, receipt: Mapping) -> None:
+        expected=self.cursor_receipt(int(receipt["completed_update"]))
+        if dict(receipt) != expected:
+            raise ValueError("MARS B0-H resume sample cursor drifted")
     def __iter__(self) -> Iterator[list[TeamTemporalRequest]]:
-        for update in range(self.start_update+1, self.updates+1):
-            rng=random.Random(self.seed+1_000_003*update); rows=[]
-            for task in MARS_TASKS:
-                for _ in range(SAMPLES_PER_TASK):
-                    if rng.random()<.5 and self.active_by_task[task]:
-                        i,arm,t=rng.choice(self.active_by_task[task]); e=self.episodes[i]
-                    else:
-                        i=rng.choice(self.by_task[task]); e=self.episodes[i]
-                        arm=rng.choice(e.arms); t=rng.randrange(e.length)
-                    key=hashlib.sha256(f"{e.cache_key}:{arm}:{t}".encode()).hexdigest()
-                    rows.append(TeamTemporalRequest(i,arm,t,key,task))
-            rng.shuffle(rows); yield rows[self.rank::self.world_size]
+        for update in range(self.start_update+1,self.updates+1):
+            yield self.requests_for_update(update)[self.rank::self.world_size]
 
 
 __all__ = ["MARS_TASKS", "MarsBalancedDistributedBatchSampler", "MarsTemporalDataset",
-           "MarsTemporalEpisode", "load_mars_episodes", "compute_normalization", "local_task_text"]
+           "MarsTemporalEpisode", "load_mars_episodes", "compute_normalization", "local_task_text",
+           "PD_ACTION_LOW", "PD_ACTION_HIGH", "clip_pd_action", "validate_mars_normalization"]

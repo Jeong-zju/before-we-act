@@ -1,0 +1,53 @@
+{
+  "format_version": "before-we-act.care-mars-bench-port/1",
+  "migration_scope": "RoboFactory CARE unchanged; MARS-Control benchmark adapters only",
+  "image": {
+    "width": 320,
+    "height": 240,
+    "layout": "HWC in HDF5; CHW at the model boundary",
+    "resize": false,
+    "vision": "frozen DINOv3 ViT-B/16"
+  },
+  "dataset": {
+    "episodes_per_task": 150,
+    "episodes_total": 600,
+    "policy_training_split": "all episodes",
+    "action_encoding": "absolute_pd_joint_pos",
+    "source_frequency_hz": 20
+  },
+  "tasks": {
+    "place_cube_in_cup": {"agents": 2, "max_steps": 500},
+    "strike_cube_hard": {"agents": 2, "max_steps": 500},
+    "three_robots_place_shoes": {"agents": 3, "max_steps": 1200},
+    "four_robots_stack_cube": {"agents": 4, "max_steps": 800}
+  },
+  "deployment": {
+    "shared_policy": true,
+    "per_robot_independent_inference": true,
+    "runtime_inputs": [
+      "own head_camera RGB",
+      "own qpos and executed-action history",
+      "task text",
+      "own fixed base x/y embodiment context"
+    ],
+    "forbidden_runtime_inputs": [
+      "other robot RGB/qpos/action",
+      "global camera",
+      "episode or frame identity",
+      "future or simulator truth"
+    ]
+  },
+  "care_recipe": {
+    "b0h_updates": 120000,
+    "belief_updates": 120000,
+    "belief_seeds": [20260815, 20260816, 20260817],
+    "belief_residual_target": "expert_action - frozen_base_prediction",
+    "care_candidates": 6,
+    "care_branches_per_family": 24,
+    "care_horizons": [8, 16, 32, 64],
+    "care_variants": ["care", "reactive_only", "replay_only", "capacity"],
+    "care_seeds": [20260818, 20260819, 20260820],
+    "care_updates": 4000,
+    "validation_episodes_per_task": 20
+  }
+}

@@ -4,13 +4,22 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
+from before_we_act.mars_action_contract import (
+    ACTION_CONTRACT_VERSION,
+    action_contract_hash,
+    audit_action_array,
+    canonicalize_action,
+    contract_metadata,
+    normalization_stats_hash,
+    validate_action_stats,
+)
 from .common import TASKS
 
 
@@ -53,6 +62,9 @@ def audit_raw(raw_root: Path, expected: int = 150) -> dict[str, Any]:
 def compute_normalization(raw_root: Path, output: Path) -> dict[str, Any]:
     action_parts, qpos_parts = [], []
     episodes = steps = 0
+    raw_values = out_of_bounds_values = 0
+    max_abs_change = 0.0
+    out_of_bounds_by_dimension = np.zeros(8, dtype=np.int64)
     for task in TASKS:
       for path in h5_files(raw_root, task):
         with h5py.File(path, "r") as handle:
@@ -60,8 +72,15 @@ def compute_normalization(raw_root: Path, output: Path) -> dict[str, Any]:
                 episodes += 1
                 group = handle[trajectory]
                 for arm in range(task.arms):
-                    actions = np.asarray(group[f"actions/panda-{arm}"], dtype=np.float32)
+                    raw_actions = np.asarray(group[f"actions/panda-{arm}"], dtype=np.float32)
                     qpos = np.asarray(group[f"obs/agent/panda-{arm}/qpos"], dtype=np.float32)
+                    actions, audit = audit_action_array(raw_actions)
+                    raw_values += int(audit["raw_values"])
+                    out_of_bounds_values += int(audit["out_of_bounds_values"])
+                    max_abs_change = max(max_abs_change, float(audit["max_abs_change"]))
+                    out_of_bounds_by_dimension += np.asarray(
+                        audit["out_of_bounds_by_dimension"], dtype=np.int64
+                    )
                     actions = actions.reshape(len(actions), -1)
                     qpos = qpos.reshape(len(qpos), -1)
                     n = min(len(actions), len(qpos))
@@ -77,16 +96,51 @@ def compute_normalization(raw_root: Path, output: Path) -> dict[str, Any]:
     actions = np.concatenate(action_parts)
     qpos = np.concatenate(qpos_parts)
     value = {
-        "format": "mars-care-normalization-v2-residual", "episodes": episodes, "local_steps": steps,
+        "format": "mars-care-normalization-v3-residual-action-contract", "episodes": episodes, "local_steps": steps,
         "action_encoding": "joint_residual_gripper_absolute",
+        "action_contract_version": ACTION_CONTRACT_VERSION,
+        "action_contract": contract_metadata(),
         "action_mean": actions.mean(0).tolist(), "action_std": np.maximum(actions.std(0), 1e-4).tolist(),
         "qpos_mean": qpos.mean(0).tolist(), "qpos_std": np.maximum(qpos.std(0), 1e-4).tolist(),
+        "action_canonicalization": {
+            "source": "immutable_raw_hdf5_read_time_projection",
+            "raw_values": raw_values,
+            "out_of_bounds_values": out_of_bounds_values,
+            "out_of_bounds_fraction": out_of_bounds_values / max(raw_values, 1),
+            "max_abs_change": max_abs_change,
+            "out_of_bounds_by_dimension": out_of_bounds_by_dimension.tolist(),
+        },
     }
+    value["normalization_sha256"] = normalization_stats_hash(
+        value, mean_key="action_mean", std_key="action_std"
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n")
     os.replace(temporary, output)
     return value
+
+
+def validate_care_normalization(stats: Mapping[str, Any]) -> None:
+    """Fail closed on pre-contract CARE residual normalization artifacts."""
+
+    if stats.get("format") != "mars-care-normalization-v3-residual-action-contract":
+        raise ValueError("CARE normalization predates the shared MARS action contract")
+    if stats.get("action_encoding") != "joint_residual_gripper_absolute":
+        raise ValueError("CARE residual action encoding differs")
+    contract = stats.get("action_contract")
+    if not isinstance(contract, Mapping):
+        raise ValueError("CARE normalization is missing action contract")
+    if contract.get("sha256") != action_contract_hash():
+        raise ValueError("CARE normalization action contract hash differs")
+    if stats.get("action_contract_version") != ACTION_CONTRACT_VERSION:
+        raise ValueError("CARE normalization action contract version differs")
+    validate_action_stats(stats, mean_key="action_mean", std_key="action_std")
+    expected = normalization_stats_hash(
+        stats, mean_key="action_mean", std_key="action_std"
+    )
+    if stats.get("normalization_sha256") != expected:
+        raise ValueError("CARE normalization statistics hash differs")
 
 
 class MarsLocalDataset(Dataset):
@@ -95,6 +149,7 @@ class MarsLocalDataset(Dataset):
     def __init__(self, raw_root: Path, normalization: Path, horizon: int = 16, image_size: int = 224, history: int = 16):
         self.raw_root, self.horizon, self.image_size, self.history = raw_root, horizon, image_size, history
         self.norm = json.loads(normalization.read_text())
+        validate_care_normalization(self.norm)
         self.action_encoding = self.norm.get("action_encoding")
         if self.action_encoding != "joint_residual_gripper_absolute":
             raise RuntimeError("CARE repair requires residual-action normalization v2")
@@ -109,7 +164,9 @@ class MarsLocalDataset(Dataset):
                 for trajectory in trajectory_names(handle):
                     length = int(handle[trajectory]["actions/panda-0"].shape[0])
                     for arm in range(task.arms):
-                        action_array = np.asarray(handle[trajectory][f"actions/panda-{arm}"], dtype=np.float32)
+                        action_array = canonicalize_action(
+                            np.asarray(handle[trajectory][f"actions/panda-{arm}"], dtype=np.float32)
+                        )
                         qpos_array = np.asarray(handle[trajectory][f"obs/agent/panda-{arm}/qpos"][:length], dtype=np.float32)
                         moving = np.linalg.norm(action_array[:, :7] - qpos_array[:, :7], axis=1) > 0.01
                         grip_transition = np.abs(action_array[:, 7]) < 0.95
@@ -144,7 +201,9 @@ class MarsLocalDataset(Dataset):
         if image.ndim == 4: image = image[0]
         length = int(actions_ds.shape[0])
         end = min(length, step + self.horizon)
-        actions = np.asarray(actions_ds[step:end], dtype=np.float32).reshape(end - step, -1)
+        actions = canonicalize_action(
+            np.asarray(actions_ds[step:end], dtype=np.float32)
+        ).reshape(end - step, -1)
         action_qpos = np.asarray(qpos_ds[step:end], dtype=np.float32).reshape(end - step, -1)
         if self.action_encoding == "joint_residual_gripper_absolute":
             actions[:, :7] -= action_qpos[:, :7]
@@ -167,7 +226,9 @@ class MarsLocalDataset(Dataset):
         for offset, state_step in enumerate(range(begin, step + 1)):
             if state_step == 0:
                 continue
-            previous = np.asarray(actions_ds[state_step - 1], dtype=np.float32).reshape(-1).copy()
+            previous = canonicalize_action(
+                np.asarray(actions_ds[state_step - 1], dtype=np.float32)
+            ).reshape(-1).copy()
             if self.action_encoding == "joint_residual_gripper_absolute":
                 previous[:7] -= np.asarray(qpos_ds[state_step - 1], dtype=np.float32).reshape(-1)[:7]
             history[-len(states) + offset, 9:] = (previous - self.a_mean) / self.a_std

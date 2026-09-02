@@ -1,0 +1,39 @@
+{
+  "schema": "before-we-act.mars-action-contract-config/1",
+  "status": "frozen",
+  "contract_version": "before-we-act.mars-action-contract/1",
+  "contract_sha256": "6bd22cd6ee2e4f7923fbc9c319c3ad45fae9f9db466834a3d94c59a3eb6ed109",
+  "single_source_of_truth": "before_we_act.mars_action_contract",
+  "action_encoding": "absolute_pd_joint_pos",
+  "per_arm_action_dimension": 8,
+  "action_chunk_horizon": 100,
+  "canonicalization": {
+    "domain": "physical pd_joint_pos",
+    "operation": "reject non-finite or wrong-width values, then element-wise clip to the shared float32 Panda bounds",
+    "raw_hdf5_policy": "immutable; canonicalize on read",
+    "training_statistics": "compute from canonicalized actions over all 600 episodes and all local arm streams",
+    "history_actions": "canonicalize executed actions before normalization",
+    "training_targets": "canonicalize before normalization and repeat padding",
+    "runtime": "validate live action-space bounds exactly, temporal-ensemble decoded chunks, then canonicalize the selected physical action",
+    "checkpoint": "embed contract version/hash and action-statistics hash; reject missing or mismatched metadata"
+  },
+  "retraining_invalidation": {
+    "act": [
+      "checkpoint",
+      "action normalization"
+    ],
+    "care": [
+      "B-core/TUNE reference checkpoint",
+      "action-context cache",
+      "reference-dependent belief artifacts",
+      "learned-proposal bootstrap checkpoint",
+      "branch outcomes",
+      "scorer and calibration artifacts"
+    ]
+  },
+  "fair_comparison": {
+    "policy_training_data": "all 600 successful episodes; no policy train/test split",
+    "paired_validation": "ACT, selector-off, and CARE must share the same task-indexed seed manifest",
+    "legacy_checkpoint_policy": "read-only audit only; never mix legacy checkpoints or branch labels into a contract-v1 formal run"
+  }
+}
