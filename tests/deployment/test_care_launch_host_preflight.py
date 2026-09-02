@@ -115,3 +115,50 @@ def test_report_is_written_atomically(tmp_path: Path) -> None:
 
 def test_gib_constant_is_binary() -> None:
     assert GIB == 1024**3
+
+
+def test_a_floored_standard_deviation_is_rejected() -> None:
+    """The existing audits assert std >= 1e-4, which is the floor itself.
+
+    A dimension that is constant in the corpus lands exactly on the floor and
+    passes that check, then divides by it during normalization.
+    """
+    from deployment.care_launch.host_preflight import (
+        check_normalization_is_non_degenerate,
+    )
+
+    healthy = check_normalization_is_non_degenerate(
+        {"qpos_std": [0.5, 0.3], "action_std": [0.2, 0.4]}
+    )
+    assert healthy.passed
+
+    floored = check_normalization_is_non_degenerate(
+        {"qpos_std": [0.5, 1e-4], "action_std": [0.2]}
+    )
+    assert not floored.passed
+    assert floored.data["floored_dimensions"] == {"qpos_std": [1]}
+    # The old guard would have accepted this.
+    assert min([0.5, 1e-4]) >= 1e-4
+
+
+def test_normalization_guard_accepts_both_key_conventions() -> None:
+    from deployment.care_launch.host_preflight import (
+        check_normalization_is_non_degenerate,
+    )
+
+    # MARS names them q_std/a_std; DuoBench and BiCoord use qpos_std/action_std.
+    assert check_normalization_is_non_degenerate({"q_std": [0.5], "a_std": [0.3]}).passed
+    assert not check_normalization_is_non_degenerate(
+        {"q_std": [0.5], "a_std": [1e-4]}
+    ).passed
+
+
+def test_non_finite_normalization_is_rejected() -> None:
+    from deployment.care_launch.host_preflight import (
+        check_normalization_is_non_degenerate,
+    )
+
+    result = check_normalization_is_non_degenerate(
+        {"qpos_std": [0.5, float("nan")]}
+    )
+    assert not result.passed and "non-finite" in result.detail

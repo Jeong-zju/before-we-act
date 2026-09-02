@@ -23,6 +23,7 @@ from deployment.care_launch.host_preflight import (
     check_git_revision,
     check_gpu_inventory,
     check_no_foreign_gpu_processes,
+    check_normalization_is_non_degenerate,
     check_offscreen_render,
     check_paths_exist,
     check_pinned_distributions,
@@ -70,6 +71,20 @@ def build_checks(args: argparse.Namespace) -> list[Callable[[], CheckResult]]:
             {"repo": args.repo, "dataset": args.dataset, "dino": args.dino}
         )
     )
+    if args.normalization is not None:
+        def normalization_check() -> CheckResult:
+            import json
+
+            path = Path(args.normalization)
+            if not path.is_file():
+                return CheckResult(
+                    "normalization", False, f"missing normalization receipt {path}"
+                )
+            return check_normalization_is_non_degenerate(
+                json.loads(path.read_text(encoding="utf-8"))
+            )
+
+        checks.append(normalization_check)
     if args.token is not None:
         checks.append(lambda: check_token_file(args.token))
     if not args.skip_render:
@@ -88,6 +103,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--python", default=None)
     parser.add_argument("--gpus", type=int, default=4)
+    parser.add_argument(
+        "--normalization",
+        type=Path,
+        default=None,
+        help="normalization receipt to check for dimensions the std floor rescued",
+    )
     parser.add_argument(
         "--token",
         type=Path,

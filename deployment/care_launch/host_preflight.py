@@ -26,6 +26,8 @@ import shutil
 import subprocess
 from typing import Any, Callable, Mapping, Sequence
 
+import numpy as np
+
 
 REPORT_VERSION = "before-we-act.care-host-preflight/1"
 GIB = 1024**3
@@ -259,6 +261,51 @@ def check_offscreen_render(*, python: str | None = None) -> CheckResult:
     )
 
 
+def check_normalization_is_non_degenerate(
+    normalization: Mapping[str, Any],
+    *,
+    floor: float = 1e-4,
+    label: str = "normalization",
+) -> CheckResult:
+    """Reject statistics whose standard deviation was rescued by the floor.
+
+    Every corpus here clamps the standard deviation to ``1e-4`` so a constant
+    dimension cannot divide by zero, and the existing audits then assert
+    ``std >= 1e-4``. That check can never fail on the case it exists for: a
+    dimension that is constant in the corpus lands exactly on the floor and
+    passes. Normalizing it divides by the floor, so any small deviation at
+    deployment becomes an enormous normalized value far outside anything the
+    policy saw in training.
+
+    Require a strict margin above the floor instead, and name the dimensions
+    that failed rather than only reporting that something did.
+    """
+
+    rows: dict[str, list[int]] = {}
+    for key in ("qpos_std", "action_std", "q_std", "a_std"):
+        if key not in normalization:
+            continue
+        values = np.asarray(normalization[key], dtype=np.float64)
+        if values.size == 0 or not np.isfinite(values).all():
+            return CheckResult(
+                f"{label}:{key}", False, f"{key} is empty or non-finite"
+            )
+        floored = np.flatnonzero(values <= floor * (1.0 + 1e-9))
+        if floored.size:
+            rows[key] = [int(index) for index in floored]
+    if not rows:
+        return CheckResult(
+            label, True, "every normalized dimension varies in the corpus"
+        )
+    return CheckResult(
+        label,
+        False,
+        "dimensions are constant in the corpus and were rescued by the "
+        f"{floor:g} floor, so normalizing them divides by it: {rows}",
+        {"floored_dimensions": rows, "floor": floor},
+    )
+
+
 def check_paths_exist(paths: Mapping[str, Path]) -> list[CheckResult]:
     return [
         CheckResult(
@@ -310,6 +357,7 @@ __all__ = [
     "check_git_revision",
     "check_gpu_inventory",
     "check_no_foreign_gpu_processes",
+    "check_normalization_is_non_degenerate",
     "check_offscreen_render",
     "check_paths_exist",
     "check_pinned_distributions",
