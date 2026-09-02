@@ -262,19 +262,42 @@ def main() -> None:
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
     backoff = 15
+    # Consecutive failures per stage. Retrying forever is right for a stage
+    # waiting on a transient fault, and wrong for one that can never succeed: a
+    # missing dataset, or a verdict that will not change on re-measurement,
+    # otherwise spins for the whole rental at one attempt every five minutes,
+    # burning the host without ever saying why. A stage opts into a budget with
+    # "max_attempts"; without one the historical unlimited behavior stands.
+    failures: dict[str, int] = {}
     while not _stop:
         try:
             config = json.loads(PIPELINE.read_text())
             stages = config["stages"]
+            default_budget = config.get("stall_after_attempts")
             pending = False
             for stage in stages:
                 if _stop:
                     break
                 if not stage.get("enabled", True):
                     continue
-                if not run_stage(stage):
-                    pending = True
-                    break
+                name = stage["name"]
+                if run_stage(stage):
+                    failures.pop(name, None)
+                    continue
+                failures[name] = failures.get(name, 0) + 1
+                budget = stage.get("max_attempts", default_budget)
+                if budget is not None and failures[name] >= int(budget):
+                    atomic_json(STATE_ROOT / "state.json", {
+                        "status": "stalled", "stage": name,
+                        "attempts": failures[name], "max_attempts": int(budget),
+                        "detail": "stage exhausted its attempt budget; retrying "
+                                  "further would only burn the host",
+                        "updated_at": utcnow()})
+                    print(json.dumps({"event": "stalled", "stage": name,
+                                      "attempts": failures[name]}), flush=True)
+                    raise SystemExit(2)
+                pending = True
+                break
             if _stop:
                 break
             if pending:
@@ -288,6 +311,8 @@ def main() -> None:
                 # Keep foreground ownership and re-read the pipeline so newly
                 # deployed stages can be appended without a loose process.
                 time.sleep(30)
+        except SystemExit:
+            raise
         except Exception as exc:
             atomic_json(STATE_ROOT / "state.json", {"status": "supervisor_error", "error": str(exc),
                         "updated_at": utcnow()})

@@ -83,6 +83,7 @@ class Stage:
     cwd: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     note: str = ""
+    max_attempts: int | None = None
 
     def to_dict(self, layout: Layout) -> dict[str, Any]:
         row: dict[str, Any] = {
@@ -93,6 +94,8 @@ class Stage:
             "gpus": self.gpus,
             "artifacts": self.artifacts,
         }
+        if self.max_attempts is not None:
+            row["max_attempts"] = int(self.max_attempts)
         if self.note:
             row["note"] = self.note
         return row
@@ -179,7 +182,12 @@ def mars_stages(
                 str(preflight),
             ],
             artifacts=[_json_artifact(preflight, status="PASSED")],
-            note="collects every host problem in one pass before any GPU work",
+            max_attempts=3,
+            note=(
+                "collects every host problem in one pass before any GPU work. "
+                "A few attempts absorb a briefly busy GPU; beyond that the fix "
+                "needs a person."
+            ),
         ),
         Stage(
             name="reference_validation20",
@@ -211,6 +219,7 @@ def mars_stages(
             argv=collection,
             gpus=RENDER_GPUS,
             artifacts=[{"path": str(families), "kind": "dir"}],
+            max_attempts=1,
             note=(
                 "non-resumable: a retry would mix two physical run paths into "
                 "one corpus. Serial Vulkan on one GPU."
@@ -220,10 +229,13 @@ def mars_stages(
             name="care_headroom",
             argv=measure,
             artifacts=[_json_artifact(headroom, verdict="PASS")],
+            max_attempts=1,
             note=(
                 "gate: stops the CARE-specific stages unless the collected "
                 "family leaves room for the selector. Everything a reported "
-                "success rate depends on has already run."
+                "success rate depends on has already run. One attempt only -- "
+                "re-measuring the same corpus returns the same verdict, so a "
+                "retry loop would burn the host to learn nothing."
             ),
         ),
         Stage(
@@ -292,6 +304,11 @@ def build(
         "candidate_family": candidate_family,
         "intervention_steps": intervention_steps,
         "non_resumable_stages": ["care_branches"],
+        # A stage that keeps failing on a rented host is burning it. Six
+        # attempts spans roughly fifteen minutes of backoff, which absorbs a
+        # transient fault; past that the run stops and says which stage stalled
+        # rather than retrying until the rental ends.
+        "stall_after_attempts": 6,
         "stages": [stage.to_dict(layout) for stage in stages],
     }
 

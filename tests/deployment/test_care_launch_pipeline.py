@@ -151,3 +151,26 @@ def test_cli_writes_a_pipeline_the_orchestrator_can_read(tmp_path: Path) -> None
     for stage in pipeline["stages"]:
         assert {"name", "argv", "cwd", "env", "gpus", "artifacts"} <= set(stage)
         assert isinstance(stage["argv"], list) and stage["argv"]
+
+
+def test_stages_that_can_never_succeed_stop_instead_of_burning_the_host(
+    tmp_path: Path,
+) -> None:
+    """The orchestrator retries forever; an impossible stage would spin all rental.
+
+    A missing dataset, a hash audit that will not match, or a headroom verdict
+    that re-measurement cannot change are deterministic failures. Each gets an
+    attempt budget so the run stops and names the stage instead.
+    """
+    pipeline = _pipeline(tmp_path)
+    budgets = {
+        stage["name"]: stage.get("max_attempts") for stage in pipeline["stages"]
+    }
+
+    assert pipeline["stall_after_attempts"] == 6
+    # Re-measuring the same corpus returns the same verdict.
+    assert budgets["care_headroom"] == 1
+    # Retrying physical collection mixes two run paths into one corpus.
+    assert budgets["care_branches"] == 1
+    # A few attempts absorb a briefly busy GPU.
+    assert budgets["host_preflight"] == 3
