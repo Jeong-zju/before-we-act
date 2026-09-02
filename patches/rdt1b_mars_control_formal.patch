@@ -1,0 +1,1247 @@
+diff --git a/configs/dataset_control_freq.json b/configs/dataset_control_freq.json
+index 70b9f0e..5d741b2 100644
+--- a/configs/dataset_control_freq.json
++++ b/configs/dataset_control_freq.json
+@@ -1,65 +1,66 @@
+ {
+-    "fractal20220817_data": 3,
+-    "taco_play": 15,
+-    "jaco_play": 10,
+-    "berkeley_cable_routing": 10,
+-    "nyu_door_opening_surprising_effectiveness": 3,
+-    "viola": 20,
+-    "berkeley_autolab_ur5": 5,
+-    "toto": 30,
+-    "kuka": 10,
+-    "language_table": 10,
+-    "columbia_cairlab_pusht_real": 10,
+-    "stanford_kuka_multimodal_dataset_converted_externally_to_rlds": 20,
+-    "nyu_rot_dataset_converted_externally_to_rlds":3,
+-    "stanford_hydra_dataset_converted_externally_to_rlds": 10,
+-    "austin_buds_dataset_converted_externally_to_rlds": 20,
+-    "nyu_franka_play_dataset_converted_externally_to_rlds": 3,
+-    "maniskill_dataset_converted_externally_to_rlds": 20,
+-    "furniture_bench_dataset_converted_externally_to_rlds": 10,
+-    "ucsd_kitchen_dataset_converted_externally_to_rlds": 2,
+-    "ucsd_pick_and_place_dataset_converted_externally_to_rlds": 3,
+-    "austin_sailor_dataset_converted_externally_to_rlds": 20,
+-    "austin_sirius_dataset_converted_externally_to_rlds": 20,
+-    "bc_z": 10,
+-    "utokyo_pr2_opening_fridge_converted_externally_to_rlds": 10,
+-    "utokyo_pr2_tabletop_manipulation_converted_externally_to_rlds": 10,
+-    "utokyo_xarm_pick_and_place_converted_externally_to_rlds": 10,
+-    "utokyo_xarm_bimanual_converted_externally_to_rlds": 10,
+-    "berkeley_mvp_converted_externally_to_rlds": 5,
+-    "berkeley_rpt_converted_externally_to_rlds": 30,
+-    "kaist_nonprehensile_converted_externally_to_rlds": 10,
+-    "stanford_mask_vit_converted_externally_to_rlds": 0,
+-    "tokyo_u_lsmo_converted_externally_to_rlds": 10,
+-    "dlr_sara_pour_converted_externally_to_rlds": 10,
+-    "dlr_sara_grid_clamp_converted_externally_to_rlds": 10,
+-    "dlr_edan_shared_control_converted_externally_to_rlds": 5,
+-    "asu_table_top_converted_externally_to_rlds": 12.5,
+-    "stanford_robocook_converted_externally_to_rlds": 5,
+-    "eth_agent_affordances": 66.6,
+-    "imperialcollege_sawyer_wrist_cam": 10,
+-    "iamlab_cmu_pickup_insert_converted_externally_to_rlds": 20,
+-    "uiuc_d3field": 1,
+-    "utaustin_mutex": 20,
+-    "berkeley_fanuc_manipulation": 10,
+-    "cmu_play_fusion": 5,
+-    "cmu_stretch": 10,
+-    "berkeley_gnm_recon": 3,
+-    "berkeley_gnm_cory_hall": 5,
+-    "berkeley_gnm_sac_son": 10,
+-    "robo_net": 1,
+-    "roboturk_real_towercreation": 10,
+-    "roboturk_real_laundrylayout": 10,
+-    "roboturk_real_objectsearch": 10,
+-    "aloha_mobile": 50,
+-    "aloha_static": 50,
+-    "roboset": 5,
+-    "droid": 15,
+-    "fmb": 10,
+-    "dobbe": 30,
+-    "qut_dexterous_manpulation": 30,
+-    "agilex": 25,
+-    "rh20t": 10,
+-    "calvin": 30,
+-    "bridgev2": 5
+-}
+\ No newline at end of file
++  "fractal20220817_data": 3,
++  "taco_play": 15,
++  "jaco_play": 10,
++  "berkeley_cable_routing": 10,
++  "nyu_door_opening_surprising_effectiveness": 3,
++  "viola": 20,
++  "berkeley_autolab_ur5": 5,
++  "toto": 30,
++  "kuka": 10,
++  "language_table": 10,
++  "columbia_cairlab_pusht_real": 10,
++  "stanford_kuka_multimodal_dataset_converted_externally_to_rlds": 20,
++  "nyu_rot_dataset_converted_externally_to_rlds": 3,
++  "stanford_hydra_dataset_converted_externally_to_rlds": 10,
++  "austin_buds_dataset_converted_externally_to_rlds": 20,
++  "nyu_franka_play_dataset_converted_externally_to_rlds": 3,
++  "maniskill_dataset_converted_externally_to_rlds": 20,
++  "furniture_bench_dataset_converted_externally_to_rlds": 10,
++  "ucsd_kitchen_dataset_converted_externally_to_rlds": 2,
++  "ucsd_pick_and_place_dataset_converted_externally_to_rlds": 3,
++  "austin_sailor_dataset_converted_externally_to_rlds": 20,
++  "austin_sirius_dataset_converted_externally_to_rlds": 20,
++  "bc_z": 10,
++  "utokyo_pr2_opening_fridge_converted_externally_to_rlds": 10,
++  "utokyo_pr2_tabletop_manipulation_converted_externally_to_rlds": 10,
++  "utokyo_xarm_pick_and_place_converted_externally_to_rlds": 10,
++  "utokyo_xarm_bimanual_converted_externally_to_rlds": 10,
++  "berkeley_mvp_converted_externally_to_rlds": 5,
++  "berkeley_rpt_converted_externally_to_rlds": 30,
++  "kaist_nonprehensile_converted_externally_to_rlds": 10,
++  "stanford_mask_vit_converted_externally_to_rlds": 0,
++  "tokyo_u_lsmo_converted_externally_to_rlds": 10,
++  "dlr_sara_pour_converted_externally_to_rlds": 10,
++  "dlr_sara_grid_clamp_converted_externally_to_rlds": 10,
++  "dlr_edan_shared_control_converted_externally_to_rlds": 5,
++  "asu_table_top_converted_externally_to_rlds": 12.5,
++  "stanford_robocook_converted_externally_to_rlds": 5,
++  "eth_agent_affordances": 66.6,
++  "imperialcollege_sawyer_wrist_cam": 10,
++  "iamlab_cmu_pickup_insert_converted_externally_to_rlds": 20,
++  "uiuc_d3field": 1,
++  "utaustin_mutex": 20,
++  "berkeley_fanuc_manipulation": 10,
++  "cmu_play_fusion": 5,
++  "cmu_stretch": 10,
++  "berkeley_gnm_recon": 3,
++  "berkeley_gnm_cory_hall": 5,
++  "berkeley_gnm_sac_son": 10,
++  "robo_net": 1,
++  "roboturk_real_towercreation": 10,
++  "roboturk_real_laundrylayout": 10,
++  "roboturk_real_objectsearch": 10,
++  "aloha_mobile": 50,
++  "aloha_static": 50,
++  "roboset": 5,
++  "droid": 15,
++  "fmb": 10,
++  "dobbe": 30,
++  "qut_dexterous_manpulation": 30,
++  "agilex": 25,
++  "rh20t": 10,
++  "calvin": 30,
++  "bridgev2": 5,
++  "mars_control": 20
++}
+diff --git a/configs/dataset_stat.json b/configs/dataset_stat.json
+index 226a5f4..fa3548e 100644
+--- a/configs/dataset_stat.json
++++ b/configs/dataset_stat.json
+@@ -26882,5 +26882,528 @@
+             0.0,
+             0.0
+         ]
++    },
++    "mars_control": {
++        "dataset_name": "mars_control",
++        "state_mean": [
++            0.11225829286267601,
++            0.3689824648079141,
++            0.02052340440328479,
++            -1.8641464506557406,
++            -0.0268723142309899,
++            2.2864631929513446,
++            1.02159517655445,
++            0.0,
++            0.0,
++            0.0,
++            0.8048505386750737,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0
++        ],
++        "state_std": [
++            0.4905307393132729,
++            0.43857000083037495,
++            0.3270419032680301,
++            0.5113185923382052,
++            0.24430876811416452,
++            0.5586827561592085,
++            0.9499651563546213,
++            0.0,
++            0.0,
++            0.0,
++            0.31126450239985365,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0
++        ],
++        "state_min": [
++            -0.9567267298698425,
++            -1.536747694015503,
++            -1.4630541801452637,
++            -3.071882486343384,
++            -1.4972423315048218,
++            1.0955958366394043,
++            -2.8973004817962646,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0
++        ],
++        "state_max": [
++            1.3417633771896362,
++            1.5603667497634888,
++            1.0637935400009155,
++            -0.06979773938655853,
++            0.5882615447044373,
++            3.7573697566986084,
++            2.8975231647491455,
++            0.0,
++            0.0,
++            0.0,
++            1.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0,
++            0.0
++        ]
+     }
+ }
+\ No newline at end of file
+diff --git a/configs/finetune_datasets.json b/configs/finetune_datasets.json
+index 851cd96..c4c560c 100644
+--- a/configs/finetune_datasets.json
++++ b/configs/finetune_datasets.json
+@@ -1,3 +1,3 @@
+ [
+-    "agilex"
+-]
+\ No newline at end of file
++  "mars_control"
++]
+diff --git a/configs/finetune_sample_weights.json b/configs/finetune_sample_weights.json
+index d16b603..96ba063 100644
+--- a/configs/finetune_sample_weights.json
++++ b/configs/finetune_sample_weights.json
+@@ -1,3 +1,3 @@
+-{
+-    "agilex": 100
+-}
+\ No newline at end of file
++[
++  1.0
++]
+diff --git a/data/empty_lang_embed.pt b/data/empty_lang_embed.pt
+index 39a3f6ae5491e5e2a31eefa2e6acef42cc26e4c5..50fa8b10b90f92acbd68f3f798e829d15773e00f 100644
+GIT binary patch
+literal 9832
+zcmeI2&5P4O7{;gV_G2R~i<jN*L5izxSG3!tZQ2SV1j!|c-HKAYgfty%Fl{=?w6dNA
+zalyM65k&CdAK<}%!;gyxZ=O8q!GlL<+HT25gZ3!A1Cyl9%=13;%X@rUT51iUTn<G>
+z9<3uh7||o$Hims254yN_&@-q}8a=R8C5`U#@i=Kx$2ISl^f9$;PtaZ59b0x!r+DZ&
+zu0D|jf{MjXmg#$JrP0SEG20?2s_ht5lyA-c7f7;`V9UxR)k(3tIU19-8)%b~^r42d
+z1baLt8FtkY$0YmAG#%T<CbgWQC){*<*u}l;mPrMY+i#O~N`y8!RcdM3+_{%;-@Rsn
+ze70iGTR^9y=PliH+<`&$33feJNL4mw$DW>@UqoKu{g1CtxN|<^3+$rOk^*xmx?x-W
+z;Q$Y*s$2}!SQK0GAXmA8YY)lyBrDEmyn!7gM-6n3D0VnKRgqSxdt$}5D77*7@bv1p
+ze1_HMGv31%szp8Ut~w~IinzJ~RtyFZ00KY&2mk>f00e*l5C8%|00;m9AOHk_01yBI
+zKmZ5;0U!VbfB+Bx0zd!=00AKIpA+E8gXb@PeL)3w5H{nJ2ixdMG<mSdb;zqn52g`_
+ziohLweAU1G_x!~k+K)OYO~Vf!b}g0wd1UZ7i*EH)<@~=H5^Hs-AvT*eQEb$za<x*H
+z<gzSP>di(|sx&L*MztYJ^$K^n`T5PH$T0EQ(h}V8BKhOb$mIEpz=+KOg=PFnm_k6}
+zC;JtV3B_x|YW`TuZb0pjMQx&Lkt|JE(4SG+2?%~#Cb-DPgmwHKw-wO2!>C4#&GIc_
+z5r5Nc2Sh%cT_Q4X)v${HqwWP%+6-C5%JOz=X_?HW`Q|gJ%L^Hv+T!EnzA^0?gnrMz
+b2HQ7%mANom#~`xKO7jR1+ml6n{cP<YV()kN
+
+literal 9432
+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
+Y!J+ieeR`BBJ#ynvM*fw4{$HQ{U)>!Y%>V!Z
+
+diff --git a/data/hdf5_vla_dataset.py b/data/hdf5_vla_dataset.py
+index 7717cfa..2fc6209 100644
+--- a/data/hdf5_vla_dataset.py
++++ b/data/hdf5_vla_dataset.py
+@@ -1,323 +1,72 @@
+-import os
+-import fnmatch
+-import json
+-
+-import h5py
+-import yaml
+-import cv2
+-import numpy as np
++"""RDT-1B adapter for the four MARS-Control HDF5 corpora.
+ 
++Each trajectory/arm is exposed as an independent stream.  No peer state,
++global image, arm id, or split label reaches the policy.  The RDT unified
++128-D state contains the local 7 joints and gripper only.
++"""
++from __future__ import annotations
++import glob, json, os
++from pathlib import Path
++import h5py, numpy as np, yaml
+ from configs.state_vec import STATE_VEC_IDX_MAPPING
+ 
++TASKS = ("place_cube_in_cup", "strike_cube_hard", "three_robots_place_shoes", "four_robots_stack_cube")
++ARMS = {"place_cube_in_cup": 2, "strike_cube_hard": 2, "three_robots_place_shoes": 3, "four_robots_stack_cube": 4}
+ 
+ class HDF5VLADataset:
+-    """
+-    This class is used to sample episodes from the embododiment dataset
+-    stored in HDF5.
+-    """
+     def __init__(self) -> None:
+-        # [Modify] The path to the HDF5 dataset directory
+-        # Each HDF5 file contains one episode
+-        HDF5_DIR = "data/datasets/agilex/rdt_data/"
+-        self.DATASET_NAME = "agilex"
+-        
+-        self.file_paths = []
+-        for root, _, files in os.walk(HDF5_DIR):
+-            for filename in fnmatch.filter(files, '*.hdf5'):
+-                file_path = os.path.join(root, filename)
+-                self.file_paths.append(file_path)
+-                
+-        # Load the config
+-        with open('configs/base.yaml', 'r') as file:
+-            config = yaml.safe_load(file)
+-        self.CHUNK_SIZE = config['common']['action_chunk_size']
+-        self.IMG_HISORY_SIZE = config['common']['img_history_size']
+-        self.STATE_DIM = config['common']['state_dim']
+-    
+-        # Get each episode's len
+-        episode_lens = []
+-        for file_path in self.file_paths:
+-            valid, res = self.parse_hdf5_file_state_only(file_path)
+-            _len = res['state'].shape[0] if valid else 0
+-            episode_lens.append(_len)
+-        self.episode_sample_weights = np.array(episode_lens) / np.sum(episode_lens)
+-    
+-    def __len__(self):
+-        return len(self.file_paths)
+-    
+-    def get_dataset_name(self):
+-        return self.DATASET_NAME
+-    
+-    def get_item(self, index: int=None, state_only=False):
+-        """Get a training sample at a random timestep.
+-
+-        Args:
+-            index (int, optional): the index of the episode.
+-                If not provided, a random episode will be selected.
+-            state_only (bool, optional): Whether to return only the state.
+-                In this way, the sample will contain a complete trajectory rather
+-                than a single timestep. Defaults to False.
+-
+-        Returns:
+-           sample (dict): a dictionary containing the training sample.
+-        """
+-        while True:
+-            if index is None:
+-                file_path = np.random.choice(self.file_paths, p=self.episode_sample_weights)
+-            else:
+-                file_path = self.file_paths[index]
+-            valid, sample = self.parse_hdf5_file(file_path) \
+-                if not state_only else self.parse_hdf5_file_state_only(file_path)
+-            if valid:
+-                return sample
+-            else:
+-                index = np.random.randint(0, len(self.file_paths))
+-    
+-    def parse_hdf5_file(self, file_path):
+-        """[Modify] Parse a hdf5 file to generate a training sample at
+-            a random timestep.
+-
+-        Args:
+-            file_path (str): the path to the hdf5 file
+-        
+-        Returns:
+-            valid (bool): whether the episode is valid, which is useful for filtering.
+-                If False, this episode will be dropped.
+-            dict: a dictionary containing the training sample,
+-                {
+-                    "meta": {
+-                        "dataset_name": str,    # the name of your dataset.
+-                        "#steps": int,          # the number of steps in the episode,
+-                                                # also the total timesteps.
+-                        "instruction": str      # the language instruction for this episode.
+-                    },                           
+-                    "step_id": int,             # the index of the sampled step,
+-                                                # also the timestep t.
+-                    "state": ndarray,           # state[t], (1, STATE_DIM).
+-                    "state_std": ndarray,       # std(state[:]), (STATE_DIM,).
+-                    "state_mean": ndarray,      # mean(state[:]), (STATE_DIM,).
+-                    "state_norm": ndarray,      # norm(state[:]), (STATE_DIM,).
+-                    "actions": ndarray,         # action[t:t+CHUNK_SIZE], (CHUNK_SIZE, STATE_DIM).
+-                    "state_indicator", ndarray, # indicates the validness of each dim, (STATE_DIM,).
+-                    "cam_high": ndarray,        # external camera image, (IMG_HISORY_SIZE, H, W, 3)
+-                                                # or (IMG_HISORY_SIZE, 0, 0, 0) if unavailable.
+-                    "cam_high_mask": ndarray,   # indicates the validness of each timestep, (IMG_HISORY_SIZE,) boolean array.
+-                                                # For the first IMAGE_HISTORY_SIZE-1 timesteps, the mask should be False.
+-                    "cam_left_wrist": ndarray,  # left wrist camera image, (IMG_HISORY_SIZE, H, W, 3).
+-                                                # or (IMG_HISORY_SIZE, 0, 0, 0) if unavailable.
+-                    "cam_left_wrist_mask": ndarray,
+-                    "cam_right_wrist": ndarray, # right wrist camera image, (IMG_HISORY_SIZE, H, W, 3).
+-                                                # or (IMG_HISORY_SIZE, 0, 0, 0) if unavailable.
+-                                                # If only one wrist, make it right wrist, plz.
+-                    "cam_right_wrist_mask": ndarray
+-                } or None if the episode is invalid.
+-        """
+-        with h5py.File(file_path, 'r') as f:
+-            qpos = f['observations']['qpos'][:]
+-            num_steps = qpos.shape[0]
+-            # [Optional] We drop too-short episode
+-            if num_steps < 128:
+-                return False, None
+-            
+-            # [Optional] We skip the first few still steps
+-            EPS = 1e-2
+-            # Get the idx of the first qpos whose delta exceeds the threshold
+-            qpos_delta = np.abs(qpos - qpos[0:1])
+-            indices = np.where(np.any(qpos_delta > EPS, axis=1))[0]
+-            if len(indices) > 0:
+-                first_idx = indices[0]
+-            else:
+-                raise ValueError("Found no qpos that exceeds the threshold.")
+-            
+-            # We randomly sample a timestep
+-            step_id = np.random.randint(first_idx-1, num_steps)
+-            
+-            # Load the instruction
+-            dir_path = os.path.dirname(file_path)
+-            with open(os.path.join(dir_path, 'expanded_instruction_gpt-4-turbo.json'), 'r') as f_instr:
+-                instruction_dict = json.load(f_instr)
+-            # We have 1/3 prob to use original instruction,
+-            # 1/3 to use simplified instruction,
+-            # and 1/3 to use expanded instruction.
+-            instruction_type = np.random.choice([
+-                'instruction', 'simplified_instruction', 'expanded_instruction'])
+-            instruction = instruction_dict[instruction_type]
+-            if isinstance(instruction, list):
+-                instruction = np.random.choice(instruction)
+-            # You can also use precomputed language embeddings (recommended)
+-            # instruction = "path/to/lang_embed.pt"
+-            
+-            # Assemble the meta
+-            meta = {
+-                "dataset_name": self.DATASET_NAME,
+-                "#steps": num_steps,
+-                "step_id": step_id,
+-                "instruction": instruction
+-            }
+-            
+-            # Rescale gripper to [0, 1]
+-            qpos = qpos / np.array(
+-               [[1, 1, 1, 1, 1, 1, 4.7908, 1, 1, 1, 1, 1, 1, 4.7888]] 
+-            )
+-            target_qpos = f['action'][step_id:step_id+self.CHUNK_SIZE] / np.array(
+-               [[1, 1, 1, 1, 1, 1, 11.8997, 1, 1, 1, 1, 1, 1, 13.9231]] 
+-            )
+-            
+-            # Parse the state and action
+-            state = qpos[step_id:step_id+1]
+-            state_std = np.std(qpos, axis=0)
+-            state_mean = np.mean(qpos, axis=0)
+-            state_norm = np.sqrt(np.mean(qpos**2, axis=0))
+-            actions = target_qpos
+-            if actions.shape[0] < self.CHUNK_SIZE:
+-                # Pad the actions using the last action
+-                actions = np.concatenate([
+-                    actions,
+-                    np.tile(actions[-1:], (self.CHUNK_SIZE-actions.shape[0], 1))
+-                ], axis=0)
+-            
+-            # Fill the state/action into the unified vector
+-            def fill_in_state(values):
+-                # Target indices corresponding to your state space
+-                # In this example: 6 joints + 1 gripper for each arm
+-                UNI_STATE_INDICES = [
+-                    STATE_VEC_IDX_MAPPING[f"left_arm_joint_{i}_pos"] for i in range(6)
+-                ] + [
+-                    STATE_VEC_IDX_MAPPING["left_gripper_open"]
+-                ] + [
+-                    STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(6)
+-                ] + [
+-                    STATE_VEC_IDX_MAPPING["right_gripper_open"]
+-                ]
+-                uni_vec = np.zeros(values.shape[:-1] + (self.STATE_DIM,))
+-                uni_vec[..., UNI_STATE_INDICES] = values
+-                return uni_vec
+-            state = fill_in_state(state)
+-            state_indicator = fill_in_state(np.ones_like(state_std))
+-            state_std = fill_in_state(state_std)
+-            state_mean = fill_in_state(state_mean)
+-            state_norm = fill_in_state(state_norm)
+-            # If action's format is different from state's,
+-            # you may implement fill_in_action()
+-            actions = fill_in_state(actions)
+-            
+-            # Parse the images
+-            def parse_img(key):
+-                imgs = []
+-                for i in range(max(step_id-self.IMG_HISORY_SIZE+1, 0), step_id+1):
+-                    img = f['observations']['images'][key][i]
+-                    imgs.append(cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR))
+-                imgs = np.stack(imgs)
+-                if imgs.shape[0] < self.IMG_HISORY_SIZE:
+-                    # Pad the images using the first image
+-                    imgs = np.concatenate([
+-                        np.tile(imgs[:1], (self.IMG_HISORY_SIZE-imgs.shape[0], 1, 1, 1)),
+-                        imgs
+-                    ], axis=0)
+-                return imgs
+-            # `cam_high` is the external camera image
+-            cam_high = parse_img('cam_high')
+-            # For step_id = first_idx - 1, the valid_len should be one
+-            valid_len = min(step_id - (first_idx - 1) + 1, self.IMG_HISORY_SIZE)
+-            cam_high_mask = np.array(
+-                [False] * (self.IMG_HISORY_SIZE - valid_len) + [True] * valid_len
+-            )
+-            cam_left_wrist = parse_img('cam_left_wrist')
+-            cam_left_wrist_mask = cam_high_mask.copy()
+-            cam_right_wrist = parse_img('cam_right_wrist')
+-            cam_right_wrist_mask = cam_high_mask.copy()
+-            
+-            # Return the resulting sample
+-            # For unavailable images, return zero-shape arrays, i.e., (IMG_HISORY_SIZE, 0, 0, 0)
+-            # E.g., return np.zeros((self.IMG_HISORY_SIZE, 0, 0, 0)) for the key "cam_left_wrist",
+-            # if the left-wrist camera is unavailable on your robot
+-            return True, {
+-                "meta": meta,
+-                "state": state,
+-                "state_std": state_std,
+-                "state_mean": state_mean,
+-                "state_norm": state_norm,
+-                "actions": actions,
+-                "state_indicator": state_indicator,
+-                "cam_high": cam_high,
+-                "cam_high_mask": cam_high_mask,
+-                "cam_left_wrist": cam_left_wrist,
+-                "cam_left_wrist_mask": cam_left_wrist_mask,
+-                "cam_right_wrist": cam_right_wrist,
+-                "cam_right_wrist_mask": cam_right_wrist_mask
+-            }
+-
+-    def parse_hdf5_file_state_only(self, file_path):
+-        """[Modify] Parse a hdf5 file to generate a state trajectory.
+-
+-        Args:
+-            file_path (str): the path to the hdf5 file
+-        
+-        Returns:
+-            valid (bool): whether the episode is valid, which is useful for filtering.
+-                If False, this episode will be dropped.
+-            dict: a dictionary containing the training sample,
+-                {
+-                    "state": ndarray,           # state[:], (T, STATE_DIM).
+-                    "action": ndarray,          # action[:], (T, STATE_DIM).
+-                } or None if the episode is invalid.
+-        """
+-        with h5py.File(file_path, 'r') as f:
+-            qpos = f['observations']['qpos'][:]
+-            num_steps = qpos.shape[0]
+-            # [Optional] We drop too-short episode
+-            if num_steps < 128:
+-                return False, None
+-            
+-            # [Optional] We skip the first few still steps
+-            EPS = 1e-2
+-            # Get the idx of the first qpos whose delta exceeds the threshold
+-            qpos_delta = np.abs(qpos - qpos[0:1])
+-            indices = np.where(np.any(qpos_delta > EPS, axis=1))[0]
+-            if len(indices) > 0:
+-                first_idx = indices[0]
+-            else:
+-                raise ValueError("Found no qpos that exceeds the threshold.")
+-            
+-            # Rescale gripper to [0, 1]
+-            qpos = qpos / np.array(
+-               [[1, 1, 1, 1, 1, 1, 4.7908, 1, 1, 1, 1, 1, 1, 4.7888]] 
+-            )
+-            target_qpos = f['action'][:] / np.array(
+-               [[1, 1, 1, 1, 1, 1, 11.8997, 1, 1, 1, 1, 1, 1, 13.9231]] 
+-            )
+-            
+-            # Parse the state and action
+-            state = qpos[first_idx-1:]
+-            action = target_qpos[first_idx-1:]
+-            
+-            # Fill the state/action into the unified vector
+-            def fill_in_state(values):
+-                # Target indices corresponding to your state space
+-                # In this example: 6 joints + 1 gripper for each arm
+-                UNI_STATE_INDICES = [
+-                    STATE_VEC_IDX_MAPPING[f"left_arm_joint_{i}_pos"] for i in range(6)
+-                ] + [
+-                    STATE_VEC_IDX_MAPPING["left_gripper_open"]
+-                ] + [
+-                    STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(6)
+-                ] + [
+-                    STATE_VEC_IDX_MAPPING["right_gripper_open"]
+-                ]
+-                uni_vec = np.zeros(values.shape[:-1] + (self.STATE_DIM,))
+-                uni_vec[..., UNI_STATE_INDICES] = values
+-                return uni_vec
+-            state = fill_in_state(state)
+-            action = fill_in_state(action)
+-            
+-            # Return the resulting sample
+-            return True, {
+-                "state": state,
+-                "action": action
+-            }
++        root = Path(os.environ.get("RDT_MARS_DATASET", "/workspace/datasets/mars_control"))
++        with open("configs/base.yaml", encoding="utf-8") as f: cfg = yaml.safe_load(f)
++        self.DATASET_NAME = "mars_control"; self.CHUNK_SIZE = int(cfg["common"]["action_chunk_size"])
++        self.IMG_HISTORY_SIZE = int(cfg["common"]["img_history_size"]); self.STATE_DIM = int(cfg["common"]["state_dim"])
++        self.file_paths = []; self._episode_lengths = {}; expected = found = 0
++        for task in TASKS:
++            paths = sorted(glob.glob(str(root / task / "motionplanning" / "*.shard*.h5")))
++            if len(paths) != 10: raise RuntimeError(f"{task}: expected 10 shards, found {len(paths)}")
++            for path in paths:
++                with h5py.File(path, "r") as f:
++                    for key in sorted((k for k in f if k.startswith("traj_")), key=lambda x: int(x.rsplit("_",1)[-1])):
++                        expected += 1; tr = f[key]; n = min(len(tr[f"actions/panda-{a}"]) for a in range(ARMS[task]))
++                        if not bool(np.asarray(tr["success"])[-1]): raise RuntimeError(f"unsuccessful trajectory: {path}:{key}")
++                        if n < 1: raise RuntimeError(f"empty trajectory: {path}:{key}")
++                        found += 1; ident = f"{path}::{key}"; self._episode_lengths[ident] = n
++                        self.file_paths.extend((path, key, arm, task) for arm in range(ARMS[task]))
++        if os.environ.get("RDT_ALLOW_INCOMPLETE_DATASET") != "1" and (expected != 600 or found != 600):
++            raise RuntimeError(f"formal MARS RDT requires 600 successful episodes; found {found}/{expected}")
++        if not self.file_paths: raise RuntimeError(f"no MARS HDF5 under {root}")
++        self._episodes = sorted(self._episode_lengths); self._tasks = list(TASKS)
++        self._task_episodes = {t: [x for x in self._episodes if f"/{t}/" in x] for t in TASKS}
++        self._episode_to_items = {x: [i for i,r in enumerate(self.file_paths) if f"{r[0]}::{r[1]}" == x] for x in self._episodes}
++        self._task_weights = {t: np.asarray([self._episode_lengths[x] for x in xs], float) / sum(self._episode_lengths[x] for x in xs) for t,xs in self._task_episodes.items()}
++    def __len__(self): return len(self.file_paths)
++    def get_dataset_name(self): return self.DATASET_NAME
++    def _indices(self): return [STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(7)] + [STATE_VEC_IDX_MAPPING["right_gripper_open"]]
++    def _unified(self, values, action=False):
++        out = np.zeros(values.shape[:-1] + (self.STATE_DIM,), np.float32); ids = self._indices(); out[..., ids[:7]] = values[..., :7]
++        out[..., ids[7]] = (values[..., 7] + 1.0) / 2.0 if action else values[..., 7:9].mean(-1) / 0.04
++        return out
++    def _trajectory(self, path, key, arm):
++        with h5py.File(path, "r") as f:
++            tr=f[key]; q=np.asarray(tr[f"obs/agent/panda-{arm}/qpos"], np.float32); a=np.asarray(tr[f"actions/panda-{arm}"], np.float32)
++            # RoboFactory records the post-action observation, hence qpos has
++            # one extra row in most shards.  RDT samples aligned (q_t, a_t)
++            # pairs and must never index a state without a target action.
++            n=min(len(q),len(a)); q=q[:n]; a=a[:n]
++            text=f"MARS-Control task {Path(path).parent.parent.name.replace('_',' ')}"
++        return self._unified(q), self._unified(a, action=True), text
++    def get_item(self, index=None, state_only=False):
++        if index is None:
++            task = str(np.random.choice(self._tasks)); ep = str(np.random.choice(self._task_episodes[task], p=self._task_weights[task])); index = int(np.random.choice(self._episode_to_items[ep]))
++        path,key,arm,task=self.file_paths[int(index)]; state,action,text=self._trajectory(path,key,arm); n=len(state); t=int(np.random.randint(0,n)); acts=action[t:t+self.CHUNK_SIZE]
++        if len(acts)<self.CHUNK_SIZE: acts=np.concatenate([acts,np.repeat(acts[-1:],self.CHUNK_SIZE-len(acts),0)],0)
++        with h5py.File(path,"r") as f: frames=np.asarray(f[key][f"obs/sensor_data/head_camera_agent{arm}/rgb"][max(0,t-self.IMG_HISTORY_SIZE+1):t+1],np.uint8)
++        valid=len(frames)
++        if valid<self.IMG_HISTORY_SIZE: frames=np.concatenate([np.repeat(frames[:1],self.IMG_HISTORY_SIZE-valid,0),frames],0)
++        mask=np.zeros(self.IMG_HISTORY_SIZE,bool); mask[-valid:]=True; ids=self._indices(); ind=np.zeros(self.STATE_DIM,np.float32); ind[ids]=1
++        embed=Path(path).parents[1]/"lang_embed.pt"; instruction=str(embed) if embed.is_file() else text
++        if state_only:return {"state":state,"action":action}
++        empty=np.zeros((self.IMG_HISTORY_SIZE,0,0,0),np.uint8)
++        return {"meta":{"dataset_name":self.DATASET_NAME,"#steps":n,"step_id":t,"instruction":instruction,"task":task,"agent":arm},"state":state[t:t+1],"state_std":state.std(0).clip(1e-4),"state_mean":state.mean(0),"state_norm":np.sqrt(np.mean(state**2,0)),"actions":acts,"state_indicator":ind,"cam_high":frames,"cam_high_mask":mask,"cam_right_wrist":empty,"cam_right_wrist_mask":np.zeros(self.IMG_HISTORY_SIZE,bool),"cam_left_wrist":empty,"cam_left_wrist_mask":np.zeros(self.IMG_HISTORY_SIZE,bool)}
+ 
+ if __name__ == "__main__":
+-    ds = HDF5VLADataset()
+-    for i in range(len(ds)):
+-        print(f"Processing episode {i}/{len(ds)}...")
+-        ds.get_item(i)
++    d=HDF5VLADataset(); s=d.get_item(0); print(json.dumps({"streams":len(d),"episodes":len(d._episodes),"tasks":d._tasks,"state":s["state"].shape,"actions":s["actions"].shape,"image":s["cam_high"].shape}, default=list))

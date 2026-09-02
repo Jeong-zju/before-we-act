@@ -1,5 +1,33 @@
 # Reproducibility patches
 
+## RDT-1B / MARS-Control
+
+`rdt1b_mars_control_formal.patch` is the exact upstream RDT-1B checkout patch
+used by the formal MARS-Control run. It applies to RDT commit
+`cd79363a1387e8f81c7724d070ef7e45fd23150f` and captures the benchmark-specific
+changes that are otherwise easy to miss: the 20 Hz dataset registration,
+full-corpus normalization statistics, MARS dataset/weight registration, the
+generated empty language embedding, and the strict local-arm HDF5 adapter
+(including aligned state/action sampling and terminal-chunk padding). It also
+contains the binary embedding artifact used by the run.
+
+To reproduce the patched upstream checkout:
+
+```bash
+git clone https://github.com/thu-ml/RoboticsDiffusionTransformer.git /workspace/repos/rdt-1b
+git -C /workspace/repos/rdt-1b checkout cd79363a1387e8f81c7724d070ef7e45fd23150f
+git -C /workspace/repos/rdt-1b apply \
+  /workspace/repos/before-we-act/patches/rdt1b_mars_control_formal.patch
+```
+
+Patch SHA-256: `feadc05c9e081d82dc6421635d7a53a9e4d21055788a06b23a6bfafd22309b7b`.
+The higher-level downloader, configuration generator, four-GPU launcher,
+checkpoint audit, supervisor, and strict Validation20 evaluator are in
+`deployment/rdt_mars/`; the complete resolved parameter contract is in
+`configs/rdt/mars_control_rdt1b_full_data_v1.json`. The launcher regenerates
+the language embeddings and dataset statistics when needed, so the patch is a
+provenance artifact rather than a secret-bearing snapshot.
+
 ## OpenVLA-OFT / MARS-Control
 
 `openvla_oft_mars_control_formal.patch` is the exact five-file source patch
