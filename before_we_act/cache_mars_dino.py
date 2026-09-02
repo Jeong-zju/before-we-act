@@ -1,4 +1,9 @@
-"""Build the frozen local-view DINOv3 cache for MARS-Control."""
+"""Build the frozen dual-view DINOv3 cache for MARS-Control.
+
+MARS records a shared third-person ``head_camera_global`` alongside each
+arm's ``head_camera_agent{arm}``.  Both are cached so the dual-view fusion
+receives two genuinely different views instead of one view duplicated.
+"""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +18,12 @@ import torch
 import torch.distributed as dist
 from transformers import AutoImageProcessor, AutoModel
 
-from before_we_act.mars_temporal_data import MarsVisualCache, load_mars_episodes
+from before_we_act.mars_temporal_data import (
+    GLOBAL_VIEW_KEY,
+    MARS_VIEW_CONTRACT,
+    MarsVisualCache,
+    load_mars_episodes,
+)
 
 
 def main() -> None:
@@ -39,8 +49,14 @@ def main() -> None:
         arrays = {}
         with h5py.File(episode.path, "r") as handle:
             group = handle[episode.trajectory]
-            for arm in episode.arms:
-                source = group[f"obs/sensor_data/head_camera_agent{arm}/rgb"]
+
+            def pooled_features(dataset_path: str) -> np.ndarray:
+                if dataset_path not in group:
+                    raise KeyError(
+                        f"{episode.path}/{episode.trajectory} has no {dataset_path}; "
+                        "the dual-view MARS cache requires the shared global camera"
+                    )
+                source = group[dataset_path]
                 chunks = []
                 for first in range(0, episode.length, args.batch_size):
                     raw = np.asarray(source[first:min(first+args.batch_size, episode.length)])
@@ -51,7 +67,15 @@ def main() -> None:
                         first_patch = 1 + int(getattr(model.config, "num_register_tokens", 0))
                         pooled = tokens[:, first_patch:].mean(1)
                     chunks.append(pooled.float().cpu().numpy().astype(np.float16))
-                arrays[f"agent_{arm}"] = np.concatenate(chunks)
+                return np.concatenate(chunks)
+
+            arrays[GLOBAL_VIEW_KEY] = pooled_features(
+                "obs/sensor_data/head_camera_global/rgb"
+            )
+            for arm in episode.arms:
+                arrays[f"agent_{arm}"] = pooled_features(
+                    f"obs/sensor_data/head_camera_agent{arm}/rgb"
+                )
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(f".rank{rank}.tmp.npz")
         np.savez_compressed(temporary, **arrays); os.replace(temporary, path)
@@ -62,7 +86,7 @@ def main() -> None:
     if rank == 0:
         files = list(args.output.glob("*/*.npz"))
         receipt = {"status":"PASSED" if len(files)==600 else "INCOMPLETE", "episodes":len(files),
-                   "tasks":4, "views":"strict local duplicated at CARE dual-view boundary",
+                   "tasks":4, "views": MARS_VIEW_CONTRACT,
                    "image_height":240, "image_width":320, "feature_dim":768}
         (args.output/"cache_receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
         print(json.dumps(receipt), flush=True)

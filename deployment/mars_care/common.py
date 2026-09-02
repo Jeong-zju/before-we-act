@@ -43,6 +43,18 @@ def local_observation(observation: dict[str, Any], arm: int) -> tuple[np.ndarray
     return image[..., :3].astype(np.uint8, copy=False), qpos.astype(np.float32, copy=False)
 
 
+def global_observation(observation: dict[str, Any]) -> np.ndarray:
+    """The shared third-person view every arm may legally read.
+
+    This is scene context, not a teammate's private observation: it carries no
+    peer proprioception, action, or simulator state.
+    """
+    image = as_numpy(observation["sensor_data"]["head_camera_global"]["rgb"])
+    if image.ndim == 4:
+        image = image[0]
+    return image[..., :3].astype(np.uint8, copy=False)
+
+
 def make_env(
     task: TaskSpec,
     robofactory_root: Path,

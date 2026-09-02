@@ -16,6 +16,7 @@ from torch.utils.data import Dataset, Sampler
 from before_we_act.mars_action_contract import action_contract_hash, normalization_stats_hash
 from before_we_act.mars_temporal_data import (
     EFFECTIVE_BATCH,
+    GLOBAL_VIEW_KEY,
     MARS_TASKS,
     MarsTemporalEpisode,
     MarsVisualCache,
@@ -112,7 +113,8 @@ class MarsTeamBeliefDataset(Dataset):
         qhist=torch.zeros(HISTORY_STEPS,9); ahist=torch.zeros(HISTORY_STEPS,8)
         amask=torch.zeros(HISTORY_STEPS,dtype=torch.bool); reset=torch.zeros(HISTORY_STEPS,dtype=torch.bool)
         own=torch.from_numpy(np.array(cached[f"agent_{ego}"][obs_idx],dtype=np.float32,copy=True))
-        runtime[offset:,0,0]=own; runtime[offset:,1,0]=own; hmask[offset:]=True; reset[offset]=True
+        shared=torch.from_numpy(np.array(cached[GLOBAL_VIEW_KEY][obs_idx],dtype=np.float32,copy=True))
+        runtime[offset:,0,0]=shared; runtime[offset:,1,0]=own; hmask[offset:]=True; reset[offset]=True
         q=np.asarray(group[f"obs/agent/panda-{ego}/qpos"][obs_idx],np.float32)
         qhist[offset:]=(torch.from_numpy(q)-self.q_mean)/self.q_std
         if action_idx:

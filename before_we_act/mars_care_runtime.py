@@ -19,7 +19,12 @@ from before_we_act.mars_action_contract import canonicalize_action
 from before_we_act.care_branch_collector import ConsolidatedChunkEnsembler
 from before_we_act.evaluate_mars_predictive_team_belief import load_policy
 from before_we_act.evaluate_mars_temporal_policy import LocalHistory
-from deployment.mars_care.common import TASK_BY_NAME, local_observation, make_env
+from deployment.mars_care.common import (
+    TASK_BY_NAME,
+    global_observation,
+    local_observation,
+    make_env,
+)
 
 
 MARS_TASKS = tuple(TASK_BY_NAME)
@@ -112,6 +117,9 @@ def policy_plan(
             raise ValueError(f"MARS CARE RGB drift: {image.shape}")
         images.append(image)
         qposes.append(qpos.reshape(-1))
+    shared = global_observation(dict(observation))
+    if shared.shape != (240, 320, 3):
+        raise ValueError(f"MARS CARE global RGB drift: {shared.shape}")
     qpos = torch.as_tensor(np.stack(qposes), device=device).float()
     qnorm = (qpos - stats["q_mean"]) / stats["q_std"]
     rgb = (
@@ -120,9 +128,17 @@ def policy_plan(
         .float()
         .div_(255)
     )
+    # One shared third-person view, broadcast to every arm row.  Rows still
+    # never attend to each other; the global camera carries no peer state.
+    shared_rgb = (
+        torch.as_tensor(np.stack([shared] * len(runtime.arms)), device=device)
+        .permute(0, 3, 1, 2)
+        .float()
+        .div_(255)
+    )
     temporal = runtime.history.batch(qnorm, task, device, True)
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
-        output = model(rgb, rgb, **temporal)
+        output = model(shared_rgb, rgb, **temporal)
     runtime.history.append_observation(output.current_visual_raw, qnorm)
     reference_chunks = (
         output.prediction * stats["a_std"] + stats["a_mean"]
@@ -198,10 +214,15 @@ def local_observation_tree(
             for arm in arms
         },
         "sensor_data": {
-            f"head_camera_agent{arm}": {
-                "rgb": local_observation(dict(observation), arm)[0].copy()
-            }
-            for arm in arms
+            "head_camera_global": {
+                "rgb": global_observation(dict(observation)).copy()
+            },
+            **{
+                f"head_camera_agent{arm}": {
+                    "rgb": local_observation(dict(observation), arm)[0].copy()
+                }
+                for arm in arms
+            },
         },
     }
 

@@ -78,9 +78,14 @@ def test_restore_separates_consumed_qpos_parity_from_rerender_noise(monkeypatch)
     captured = {
         "agent": {"panda-0": {"qpos": np.full((1, 8), 0.25, dtype=np.float32)}},
         "sensor_data": {
+            # MARS records a shared third-person camera alongside each arm's own
+            # view; both reach the dual-view policy boundary.
+            "head_camera_global": {
+                "rgb": np.full((1, 2, 3, 3), 4, dtype=np.uint8)
+            },
             "head_camera_agent0": {
                 "rgb": np.zeros((1, 2, 3, 3), dtype=np.uint8)
-            }
+            },
         },
     }
     rerendered = deepcopy(captured)

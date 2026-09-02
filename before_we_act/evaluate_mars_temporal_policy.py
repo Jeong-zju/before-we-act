@@ -26,7 +26,12 @@ from before_we_act.mars_action_contract import (
 )
 from before_we_act.temporal_history_data import HISTORY_STEPS, TASK_TEXT_BYTES, task_text_tensor
 from before_we_act.temporal_history_policy import TemporalHistoryPolicy
-from deployment.mars_care.common import TASK_BY_NAME, local_observation, make_env
+from deployment.mars_care.common import (
+    TASK_BY_NAME,
+    global_observation,
+    local_observation,
+    make_env,
+)
 
 
 def scalar(value: Any) -> bool:
@@ -128,11 +133,15 @@ def run_episode(model, stats, task, robofactory_root: Path, seed: int, device: t
                 image,qpos=local_observation(observation,arm)
                 if image.shape!=(240,320,3): raise ValueError(f"MARS validation RGB drift: {image.shape}")
                 images.append(image); qposes.append(qpos.reshape(-1))
+            shared=global_observation(observation)
+            if shared.shape!=(240,320,3): raise ValueError(f"MARS validation global RGB drift: {shared.shape}")
             rgb=torch.as_tensor(np.stack(images),device=device).permute(0,3,1,2).float().div_(255)
+            # One shared third-person view, broadcast to every arm row.
+            shared_rgb=torch.as_tensor(np.stack([shared]*len(arms)),device=device).permute(0,3,1,2).float().div_(255)
             qpos=torch.as_tensor(np.stack(qposes),device=device).float(); qnorm=(qpos-stats["q_mean"])/stats["q_std"]
             temporal=history.batch(qnorm,task.name,device,role_context); started=time.perf_counter()
             with torch.autocast("cuda",dtype=torch.bfloat16):
-                chunks,_mu,_logvar,current_visual=model(rgb,rgb,**temporal,return_current_visual=True)
+                chunks,_mu,_logvar,current_visual=model(shared_rgb,rgb,**temporal,return_current_visual=True)
             history.append_observation(current_visual,qnorm)
             decoded=(chunks*stats["a_std"]+stats["a_mean"]).float().cpu().numpy()
             rows=ensemble.select(step,decoded); action={}; normalized={}

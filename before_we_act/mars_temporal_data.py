@@ -214,6 +214,10 @@ def validate_mars_normalization(stats: Mapping) -> None:
         raise ValueError("MARS normalization statistics hash differs")
 
 
+GLOBAL_VIEW_KEY = "global"
+MARS_VIEW_CONTRACT = "shared head_camera_global plus own head_camera_agent{arm}"
+
+
 class MarsVisualCache:
     def __init__(self, root: str | Path, limit: int = 16):
         self.root = Path(root); self.limit = limit
@@ -227,7 +231,13 @@ class MarsVisualCache:
         path = self.path_for(episode)
         if not path.is_file(): raise FileNotFoundError(f"missing MARS DINO cache: {path}")
         with np.load(path, allow_pickle=False) as source:
+            if GLOBAL_VIEW_KEY not in source:
+                raise ValueError(
+                    f"MARS DINO cache {path} predates the dual-view contract "
+                    f"({MARS_VIEW_CONTRACT}); rebuild it with cache_mars_dino"
+                )
             result = {f"agent_{arm}": np.asarray(source[f"agent_{arm}"]) for arm in episode.arms}
+            result[GLOBAL_VIEW_KEY] = np.asarray(source[GLOBAL_VIEW_KEY])
         for name, value in result.items():
             if value.shape != (episode.length, 768) or value.dtype != np.float16:
                 raise ValueError(f"invalid cache {path}/{name}: {value.shape}/{value.dtype}")
@@ -262,16 +272,20 @@ class MarsTemporalDataset(Dataset):
         qhist = torch.zeros(HISTORY_STEPS, 9); ahist = torch.zeros(HISTORY_STEPS, 8)
         hmask = torch.zeros(HISTORY_STEPS, dtype=torch.bool)
         amask = torch.zeros(HISTORY_STEPS, dtype=torch.bool)
-        cached = self.cache.load(episode)[f"agent_{arm}"]
-        own = torch.from_numpy(cached[obs_idx])
-        visual[obs_offset:, 0] = own; visual[obs_offset:, 1] = own
+        cached = self.cache.load(episode)
+        own = torch.from_numpy(cached[f"agent_{arm}"][obs_idx])
+        shared = torch.from_numpy(cached[GLOBAL_VIEW_KEY][obs_idx])
+        visual[obs_offset:, 0] = shared; visual[obs_offset:, 1] = own
         with h5py.File(episode.path, "r") as handle:
             group = handle[episode.trajectory]
             image = np.asarray(group[f"obs/sensor_data/head_camera_agent{arm}/rgb"][t])
+            shared_image = np.asarray(group["obs/sensor_data/head_camera_global/rgb"][t])
             q = np.asarray(group[f"obs/agent/panda-{arm}/qpos"][obs_idx], np.float32)
             past = clip_pd_action(np.asarray(group[f"actions/panda-{arm}"][action_idx], np.float32))
             future = clip_pd_action(np.asarray(group[f"actions/panda-{arm}"][t:min(t+ACTION_HORIZON, episode.length)], np.float32))
         if image.shape != (240, 320, 3): raise ValueError(f"MARS RGB drift: {image.shape}")
+        if shared_image.shape != (240, 320, 3):
+            raise ValueError(f"MARS global RGB drift: {shared_image.shape}")
         qhist[obs_offset:] = (torch.from_numpy(q) - self.q_mean) / self.q_std; hmask[obs_offset:] = True
         if action_idx:
             ahist[action_offset:] = (torch.from_numpy(past) - self.a_mean) / self.a_std
@@ -282,8 +296,9 @@ class MarsTemporalDataset(Dataset):
         target_mask = torch.zeros(ACTION_HORIZON, dtype=torch.bool); target_mask[:len(normalized)] = True
         task_bytes, text_mask = task_text_tensor(local_task_text(episode.task,arm))
         rgb = torch.from_numpy(image).permute(2, 0, 1).contiguous()
+        shared_rgb = torch.from_numpy(shared_image).permute(2, 0, 1).contiguous()
         return {
-            "global_rgb": rgb, "local_rgb": rgb.clone(), "history_visual_raw": visual,
+            "global_rgb": shared_rgb, "local_rgb": rgb, "history_visual_raw": visual,
             "history_qpos": qhist, "history_action": ahist, "history_mask": hmask,
             "action_history_mask": amask, "task_bytes": task_bytes,
             "task_text_mask": text_mask, "episode_reset": torch.tensor(t == 0),
