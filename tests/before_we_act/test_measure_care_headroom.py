@@ -229,3 +229,80 @@ def test_weighting_is_recorded_in_the_report() -> None:
         weighting="safety_weighted",
     )
     assert report["utility_weighting"] == "safety_weighted"
+
+
+class TestPreparedTargets:
+    """The branch signal gate already sits where headroom must be judged.
+
+    It runs after preparation and before the twelve scorer runs, and its
+    existing degeneracy check only rejects a corpus whose candidates are
+    bit-identical -- which says nothing about whether any of them could be
+    selected.
+    """
+
+    @staticmethod
+    def _targets(advantage: float, families: int = 12) -> tuple[np.ndarray, np.ndarray]:
+        # [family, horizon, candidate, repeat, component]; component 2 is total.
+        targets = np.zeros((families, 4, 6, 2, 3), dtype=np.float64)
+        targets[:, 1, 1:, :, 2] = advantage
+        return targets, np.ones((families, 4), dtype=bool)
+
+    def test_a_corpus_below_the_radius_is_blocked(self) -> None:
+        from scripts.before_we_act.measure_care_headroom import (
+            summarize_prepared_targets,
+        )
+
+        targets, usable = self._targets(0.001)
+        summary = summarize_prepared_targets(
+            targets, usable, horizon_index=1, reference_radius=0.02
+        )
+        assert summary["verdict"] == "BLOCKED"
+        assert summary["against_reference_radius"]["oracle_override_rate"] == 0.0
+
+    def test_a_corpus_that_clears_the_radius_passes(self) -> None:
+        from scripts.before_we_act.measure_care_headroom import (
+            summarize_prepared_targets,
+        )
+
+        targets, usable = self._targets(0.5)
+        summary = summarize_prepared_targets(
+            targets, usable, horizon_index=1, reference_radius=0.02
+        )
+        assert summary["verdict"] == "PASS"
+        assert summary["against_reference_radius"]["signal_to_radius"] > 1.0
+
+    def test_candidate_zero_is_excluded_from_the_best_alternative(self) -> None:
+        """Candidate zero's advantage is a structural zero, not a competitor."""
+        from scripts.before_we_act.measure_care_headroom import (
+            summarize_prepared_targets,
+        )
+
+        targets, usable = self._targets(0.0)
+        targets[:, 1, 0, :, 2] = 99.0  # would dominate if it were counted
+        summary = summarize_prepared_targets(
+            targets, usable, horizon_index=1, reference_radius=0.02
+        )
+        assert summary["max_best_candidate"] == pytest.approx(0.0)
+        assert summary["verdict"] == "BLOCKED"
+
+    def test_unusable_horizons_are_dropped(self) -> None:
+        from scripts.before_we_act.measure_care_headroom import (
+            summarize_prepared_targets,
+        )
+
+        targets, usable = self._targets(0.5, families=6)
+        usable[:3, 1] = False
+        summary = summarize_prepared_targets(
+            targets, usable, horizon_index=1, reference_radius=0.02
+        )
+        assert summary["families"] == 3
+
+    def test_a_malformed_tensor_is_rejected(self) -> None:
+        from scripts.before_we_act.measure_care_headroom import (
+            summarize_prepared_targets,
+        )
+
+        with pytest.raises(ValueError, match=r"\[family,horizon,candidate,repeat,component\]"):
+            summarize_prepared_targets(
+                np.zeros((3, 4)), np.ones((3, 4), bool), horizon_index=0
+            )

@@ -207,6 +207,99 @@ def load_families(roots: Iterable[Path]) -> list[dict[str, Any]]:
     return families
 
 
+def verdict_for(summary: Mapping[str, Any]) -> tuple[str, str]:
+    """Turn one horizon's clearance numbers into a gate verdict."""
+
+    if not summary.get("candidate_rows"):
+        return "NO_DATA", "no usable branch family was found"
+    against = summary.get("against_reference_radius") or summary["against_irreducible_radius"]
+    ratio = float(against["signal_to_radius"])
+    rate = float(against["oracle_override_rate"])
+    if ratio <= 1.0:
+        return "BLOCKED", (
+            "the best realized candidate never reaches the calibration radius, "
+            "so even a perfect scorer would never override"
+        )
+    if rate < 0.05:
+        return "MARGINAL", (
+            f"only {rate:.1%} of decision points admit any override; the "
+            "candidate family leaves too little room to measure a gain"
+        )
+    return "PASS", (
+        f"{rate:.1%} of decision points admit an override with headroom "
+        f"{ratio:.1f}x the calibration radius"
+    )
+
+
+def summarize_prepared_targets(
+    targets: Any,
+    usable: Any,
+    *,
+    horizon_index: int,
+    coverage: float = 0.90,
+    reference_radius: float | None = None,
+) -> dict[str, Any]:
+    """Headroom for one horizon of an already-prepared CARE target tensor.
+
+    ``targets`` is ``[family, horizon, candidate, repeat, component]`` with
+    component two holding the total advantage, which is the tensor the branch
+    signal gate already loads. Reading it there lets the gate answer whether the
+    corpus can be selected from at the point in the DAG where it sits -- after
+    preparation, before the scorer runs it would otherwise pay for.
+    """
+
+    values = np.asarray(targets, dtype=np.float64)
+    if values.ndim != 5 or values.shape[4] < 3:
+        raise ValueError(
+            "prepared targets must be [family,horizon,candidate,repeat,component]"
+        )
+    mask = np.asarray(usable, dtype=bool)
+    if mask.shape != values.shape[:2]:
+        raise ValueError("usable mask must be [family,horizon]")
+    if not 0 <= horizon_index < values.shape[1]:
+        raise ValueError("horizon index is outside the prepared tensor")
+
+    rows = values[mask[:, horizon_index], horizon_index, 1:, :, 2]
+    if not rows.size:
+        return {"horizon_index": horizon_index, "families": 0, "candidate_rows": 0}
+
+    # Best alternative per family, averaged over matched repeats.
+    best = rows.max(axis=1).mean(axis=1)
+    # Half the gap between matched repeats is the noise a perfect predictor
+    # still has to cover.
+    spread = (0.5 * (rows.max(axis=2) - rows.min(axis=2))).max(axis=1)
+    irreducible = _conformal_quantile(spread.tolist(), coverage)
+
+    def clearance(radius: float) -> dict[str, Any]:
+        if not math.isfinite(radius):
+            return {"radius": radius, "oracle_override_rate": 0.0, "signal_to_radius": 0.0}
+        return {
+            "radius": radius,
+            "oracle_override_rate": float(np.mean(best > radius)),
+            "signal_to_radius": float(best.max() / radius) if radius > 0 else math.inf,
+        }
+
+    flat = np.abs(rows).reshape(-1)
+    summary: dict[str, Any] = {
+        "horizon_index": horizon_index,
+        "families": int(best.size),
+        "candidate_rows": int(flat.size),
+        "mean_abs_total": float(flat.mean()),
+        "max_abs_total": float(flat.max()),
+        "fraction_exactly_zero": float(np.mean(flat == 0.0)),
+        "mean_best_candidate": float(best.mean()),
+        "max_best_candidate": float(best.max()),
+        "irreducible_radius": irreducible,
+        "against_irreducible_radius": clearance(irreducible),
+    }
+    if reference_radius is not None:
+        summary["against_reference_radius"] = clearance(reference_radius)
+    verdict, reason = verdict_for(summary)
+    summary["verdict"] = verdict
+    summary["reason"] = reason
+    return summary
+
+
 def build_report(
     families: Sequence[Mapping[str, Any]],
     *,
@@ -242,30 +335,7 @@ def build_report(
     }
 
     primary = horizon_rows.get(str(primary_horizon), {})
-    verdict = "NO_DATA"
-    reason = "no usable branch family was found"
-    if primary.get("candidate_rows"):
-        against = primary.get("against_reference_radius") or primary["against_irreducible_radius"]
-        ratio = float(against["signal_to_radius"])
-        rate = float(against["oracle_override_rate"])
-        if ratio <= 1.0:
-            verdict = "BLOCKED"
-            reason = (
-                "the best realized candidate never reaches the calibration radius, "
-                "so even a perfect scorer would never override"
-            )
-        elif rate < 0.05:
-            verdict = "MARGINAL"
-            reason = (
-                f"only {rate:.1%} of decision points admit any override; the "
-                "candidate family leaves too little room to measure a gain"
-            )
-        else:
-            verdict = "PASS"
-            reason = (
-                f"{rate:.1%} of decision points admit an override with headroom "
-                f"{ratio:.1f}x the calibration radius"
-            )
+    verdict, reason = verdict_for(primary)
 
     # The deployed horizon was fixed at 16 without measuring the alternatives.
     # Recommend the horizon that admits the most overrides, so the choice is

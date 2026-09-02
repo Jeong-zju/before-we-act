@@ -10,7 +10,12 @@ import numpy as np
 
 from .config import TASKS
 from .bcore_data import BICOORD_CARE_MEMORY_TOKENS, BICOORD_CARE_MEMORY_WIDTH
+from .branch_collection import HORIZONS
+from .select_calibrate import REGISTERED_CALIBRATION
 from .stage_common import artifact, assert_common_paths, atomic_json, common_parser, publish_result, require_stage_result, sha256_file
+
+
+PRIMARY_HORIZON = int(REGISTERED_CALIBRATION["primary_horizon"])
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -53,6 +58,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # belief head that can only memorize candidate IDs.
     if checks["candidate_delta_min"] <= 1e-7 or checks["target_delta_min"] <= 1e-9 or checks["usable_horizon_rate"] <= 0.0:
         raise RuntimeError(f"CARE branch signal is degenerate: {checks}")
+    # A tensor whose candidates differ at all passes the degeneracy check above,
+    # which says nothing about whether any of them could be *selected*. The
+    # selector needs the best candidate to clear a calibration radius, and every
+    # corpus measured so far failed that by a factor of four while passing here.
+    # Ask the question at the point in the DAG that already exists for it,
+    # before the twelve scorer runs that follow.
+    from scripts.before_we_act.measure_care_headroom import summarize_prepared_targets
+
+    primary_index = HORIZONS.index(PRIMARY_HORIZON)
+    headroom = summarize_prepared_targets(
+        targets.numpy(),
+        usable.numpy(),
+        horizon_index=primary_index,
+        reference_radius=args.reference_radius,
+    )
+    checks["headroom_primary_horizon"] = headroom
+    if headroom.get("verdict") == "BLOCKED":
+        raise RuntimeError(
+            "CARE branch corpus leaves no room for the selector at horizon "
+            f"{PRIMARY_HORIZON}: {headroom['reason']}. "
+            f"max|A|={headroom['max_abs_total']:.6g} against radius "
+            f"{(headroom.get('against_reference_radius') or headroom['against_irreducible_radius'])['radius']:.6g}. "
+            "Training a scorer on this corpus cannot produce an override."
+        )
     report = args.run / "artifacts" / ("branch_signal_gate_smoke.json" if smoke else "branch_signal_gate.json")
     atomic_json(report, {"schema": "before-we-act.bicoord.branch-signal-gate/1", "status": "PASSED", "downstream_authorized": True, **checks})
     stage = "branch_signal_gate_smoke" if smoke else "branch_signal_gate"
@@ -60,7 +89,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = common_parser(__doc__, ("signal-gate-smoke", "signal-gate")); args = parser.parse_args(argv); run(args); return 0
+    parser = common_parser(__doc__, ("signal-gate-smoke", "signal-gate"))
+    parser.add_argument(
+        "--reference-radius",
+        type=float,
+        default=None,
+        help=(
+            "calibration radius to judge headroom against; omit to use the "
+            "irreducible radius implied by matched repeats"
+        ),
+    )
+    args = parser.parse_args(argv); run(args); return 0
 
 
 if __name__ == "__main__": raise SystemExit(main())
