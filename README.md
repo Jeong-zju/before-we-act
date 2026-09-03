@@ -34,9 +34,6 @@ uv run python -m pytest tests   # 全部测试应通过
 - `scripts/before_we_act/` — 两条封存流水线（supervisor conf + shell 入口）
   及其数据准备 / 选择 / 校准 / 汇总脚本。
 - `deployment/mars_care/` — MARS-Control 官方专家数据采集与本地部署工具。
-- `deployment/<baseline>/` — 论文对比基线（ACT、DP、GauDP、LatentToM、
-  ManiFlow、OpenVLA-OFT、π0.5、RDT-1B）的可复现适配，逐目录含 README。
-- `benchmarks/robofactory_baselines.py` — RoboFactory 六任务统一评测协议。
 - `stereo_core/` + `vendor/stereo-core/` — 上游 Stereo-CoRE（MIT）的适配
   子树与原始 checkout；`scripts/before_we_act/validate_upstream_core.py`
   按 `UPSTREAM_CORE_MANIFEST.json` 校验其完整性。
