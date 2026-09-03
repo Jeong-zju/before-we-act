@@ -1,4 +1,4 @@
-"""Prepared-data contract for the owner-authorized A6 CARE diagnostic."""
+"""Prepared-data contract for CARE scorer training."""
 from __future__ import annotations
 
 from dataclasses import dataclass

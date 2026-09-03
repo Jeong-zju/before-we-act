@@ -16,6 +16,7 @@ MUTABLE_R9 = {
     "stereo_decoder_variants.py",
     "train_stereo_act.py",
     "train_act.py",
+    "five_task_contract.py",
 }
 
 

@@ -1,57 +1,151 @@
 {
-  "schema_version": 1,
-  "imported_at_utc": "2026-08-04T05:00:58Z",
-  "local_parent_commit": "f37c68ab6f3cadf12da25bba7ef23b651342105a",
-  "import_commit": "SELF",
-  "upstream_release": {
-    "repository": "https://github.com/YananZHOU5555/Stereo-CoRE",
-    "subtree_commit": "f60995c082a18cc849fcf3537ac4b89f1ac9b19f",
-    "source_root": "vendor/stereo-core/stereo_core",
-    "license_source": "vendor/stereo-core/LICENSE",
-    "license": "MIT",
-    "license_sha256": "19e67a9e6c8954565bcb686542cc866420be912337a29d8945809966a831293f"
+ "schema_version": 1,
+ "imported_at_utc": "2026-08-04T05:00:58Z",
+ "local_parent_commit": "f37c68ab6f3cadf12da25bba7ef23b651342105a",
+ "import_commit": "SELF",
+ "upstream_release": {
+  "repository": "https://github.com/YananZHOU5555/Stereo-CoRE",
+  "subtree_commit": "f60995c082a18cc849fcf3537ac4b89f1ac9b19f",
+  "source_root": "vendor/stereo-core/stereo_core",
+  "license_source": "vendor/stereo-core/LICENSE",
+  "license": "MIT",
+  "license_sha256": "19e67a9e6c8954565bcb686542cc866420be912337a29d8945809966a831293f"
+ },
+ "import_root": "stereo_core",
+ "files": [
+  {
+   "path": "__init__.py",
+   "sha256": "29ea3e8cf81b786bcb54b41a00edc7690bd8682dbd349da315d07ceb03ce76f6"
   },
-  "import_root": "stereo_core",
-  "files": [
-    {"path": "__init__.py", "sha256": "29ea3e8cf81b786bcb54b41a00edc7690bd8682dbd349da315d07ceb03ce76f6"},
-    {"path": "aggregate_core_takephoto_recovery.py", "sha256": "9d3eee14378a6467e00c9543db18024936ecd495cf13dccc09bcb9d087f38d3a"},
-    {"path": "audit_local_arca_routes.py", "sha256": "b39b498167f9390956e4c63ebfcb0502eaa410b39351e87ce0db2e3828a60be2"},
-    {"path": "audit_lpd_first_deviation.py", "sha256": "6126c60c64d77acd1f19fbec4cbf0622c66a0f868ef91bb4c5a797e0d9984a30"},
-    {"path": "audit_strict640x480_corpus.py", "sha256": "5a9e19b3f96ebec85be4975d3daef7d0a2d77b87d7bfa76a66dc29ad9d762942"},
-    {"path": "collect_wrist_task_dataset.py", "sha256": "aa19c8f8c325460411147f85b7b7024244a84d68b2bffe6698af62f1299e06f3"},
-    {"path": "evaluate_no_wrist_pair.py", "sha256": "be474a410bb40bd116942997592e279942a2f8f200347ee4b5c48fdc418519b6"},
-    {"path": "evaluate_stereo_act.py", "sha256": "7de736adbdc8b8f5c34fa2a1a9582bd7fcfb1fd9f4de14ac7cbacce6fb35325b"},
-    {"path": "five_task_contract.py", "sha256": "b1e6a9d8771a7c5749cf09ef2a815ae7e07d46627cc2ce0f9ce1c971c91e843d"},
-    {"path": "history_pair_model.py", "sha256": "61b4bbef5865def071445b66bb272b629df65f60e5176e8703c372e19bc0d0f5"},
-    {"path": "inspect_h5_depth_contract.py", "sha256": "675160c2ee3f897fd718c3412866e7adf2da28f73229528ea7343ada7c659b4e"},
-    {"path": "make_five_task_heldout_seeds.py", "sha256": "d42ecf239340a0b05f31a89343199e92ebffe4e26b6ffeb57d5c8ff8a942d652"},
-    {"path": "make_strict640x480_result_table.py", "sha256": "b5354edd912c1ec2e96c3415091571a866955639da8996027d5c4e01a3dc145a"},
-    {"path": "no_wrist_pair_model.py", "sha256": "056fae41f2da17767c3b6af54fc0373324fec4972fc8a7ffa0fae07a95ae8673"},
-    {"path": "pair_predictive_model.py", "sha256": "142cf0b70184d793e3ac2d0d5599c82731976b211e4191a8ac592b7e56725354"},
-    {"path": "pair_residual_model.py", "sha256": "557b337e01d1730dc0f035c871f287ca48f44b8255ee524e17791a846fa9cb11"},
-    {"path": "pair_route_model.py", "sha256": "10b1d7d14ce3b70894aa6e4eddee31493f92bf5c5de60f7f0cffec66d7a1faa0"},
-    {"path": "rgbd_patch_fusion.py", "sha256": "699805b5b038c4545a99c2c72c7234eb67f62c869645569dd0efa4f701ff5a8b"},
-    {"path": "role_observability_teacher.py", "sha256": "fe21c1fd250f33dd9de1887844ad0abd6cacc0e5105fc286bf9940626fa48bc0"},
-    {"path": "stereo_decoder_variants.py", "sha256": "9328f356f8884ac111c73a0f27f2240244b5f2a2ce3b1064de043849e8ec2956"},
-    {"path": "train_act.py", "sha256": "76eaa6900e057ca53ed168be00820bc351c0e2bb14477089a634135ce95faf34"},
-    {"path": "train_no_wrist_pair.py", "sha256": "ba9d07fa5c3a69ca2deb344b43dcd6788ef4f0a5c15cb77086e54aef33a99b20"},
-    {"path": "train_pair_dataparallel.py", "sha256": "b9a8415097d6ad31c0ed011270945d127eec0b7d1503ef68de8b73daf76fb074"},
-    {"path": "train_pair_route_from_scratch_dp.py", "sha256": "a05df6ad91dc476d9ec831cf8382eb3b4019ed933ad24fd228378e8d6f6b521e"},
-    {"path": "train_pair_route_single_b40_120k.py", "sha256": "b906f7f684a2e041dfebcf375c7653e293a9d0615970788ecfefee2aeae26b1b"},
-    {"path": "train_pair_route_spec_cap_single_b40_120k.py", "sha256": "bb38dbac9a263c38175e0944c2b93881b61a37f3422aefd9928c52f6d38d9c1f"},
-    {"path": "train_stereo_act.py", "sha256": "b30801772730a4bc06de660137b6fe66a08ac2435babba30cb6ca288a3eb4aac"},
-    {"path": "train_stereo_variants.py", "sha256": "d125acb439ab543873af884c96e7ba013ac0b279e9290996867d5c02e9529948"},
-    {"path": "two_three_task_manifest.py", "sha256": "752309949b4a31061babc06aac387ac0fa605f0859660cb784b09cd3988907fb"},
-    {"path": "wrist_camera_patch.py", "sha256": "48c11446af25dff03899e4b99a989d96adba20667c1873cc57b434baa61597bb"},
-    {"path": "LICENSE", "sha256": "19e67a9e6c8954565bcb686542cc866420be912337a29d8945809966a831293f"}
-  ],
-  "r9_local_changes": {
-    "allowed": [
-      "stereo_core/bwa_contracts.py",
-      "stereo_core/no_wrist_pair_model.py",
-      "stereo_core/evaluate_no_wrist_pair.py",
-      "package-compatible import fallbacks"
-    ],
-    "invariant": "no parent parameter/persistent-buffer/state-dict semantic changes"
+  {
+   "path": "aggregate_core_takephoto_recovery.py",
+   "sha256": "9d3eee14378a6467e00c9543db18024936ecd495cf13dccc09bcb9d087f38d3a"
+  },
+  {
+   "path": "audit_local_arca_routes.py",
+   "sha256": "b39b498167f9390956e4c63ebfcb0502eaa410b39351e87ce0db2e3828a60be2"
+  },
+  {
+   "path": "audit_lpd_first_deviation.py",
+   "sha256": "6126c60c64d77acd1f19fbec4cbf0622c66a0f868ef91bb4c5a797e0d9984a30"
+  },
+  {
+   "path": "audit_strict640x480_corpus.py",
+   "sha256": "5a9e19b3f96ebec85be4975d3daef7d0a2d77b87d7bfa76a66dc29ad9d762942"
+  },
+  {
+   "path": "collect_wrist_task_dataset.py",
+   "sha256": "aa19c8f8c325460411147f85b7b7024244a84d68b2bffe6698af62f1299e06f3"
+  },
+  {
+   "path": "evaluate_no_wrist_pair.py",
+   "sha256": "be474a410bb40bd116942997592e279942a2f8f200347ee4b5c48fdc418519b6"
+  },
+  {
+   "path": "evaluate_stereo_act.py",
+   "sha256": "7de736adbdc8b8f5c34fa2a1a9582bd7fcfb1fd9f4de14ac7cbacce6fb35325b"
+  },
+  {
+   "path": "five_task_contract.py",
+   "sha256": "b1e6a9d8771a7c5749cf09ef2a815ae7e07d46627cc2ce0f9ce1c971c91e843d"
+  },
+  {
+   "path": "history_pair_model.py",
+   "sha256": "61b4bbef5865def071445b66bb272b629df65f60e5176e8703c372e19bc0d0f5"
+  },
+  {
+   "path": "inspect_h5_depth_contract.py",
+   "sha256": "675160c2ee3f897fd718c3412866e7adf2da28f73229528ea7343ada7c659b4e"
+  },
+  {
+   "path": "make_five_task_heldout_seeds.py",
+   "sha256": "d42ecf239340a0b05f31a89343199e92ebffe4e26b6ffeb57d5c8ff8a942d652"
+  },
+  {
+   "path": "make_strict640x480_result_table.py",
+   "sha256": "b5354edd912c1ec2e96c3415091571a866955639da8996027d5c4e01a3dc145a"
+  },
+  {
+   "path": "no_wrist_pair_model.py",
+   "sha256": "056fae41f2da17767c3b6af54fc0373324fec4972fc8a7ffa0fae07a95ae8673"
+  },
+  {
+   "path": "pair_predictive_model.py",
+   "sha256": "142cf0b70184d793e3ac2d0d5599c82731976b211e4191a8ac592b7e56725354"
+  },
+  {
+   "path": "pair_residual_model.py",
+   "sha256": "557b337e01d1730dc0f035c871f287ca48f44b8255ee524e17791a846fa9cb11"
+  },
+  {
+   "path": "pair_route_model.py",
+   "sha256": "10b1d7d14ce3b70894aa6e4eddee31493f92bf5c5de60f7f0cffec66d7a1faa0"
+  },
+  {
+   "path": "rgbd_patch_fusion.py",
+   "sha256": "699805b5b038c4545a99c2c72c7234eb67f62c869645569dd0efa4f701ff5a8b"
+  },
+  {
+   "path": "role_observability_teacher.py",
+   "sha256": "fe21c1fd250f33dd9de1887844ad0abd6cacc0e5105fc286bf9940626fa48bc0"
+  },
+  {
+   "path": "stereo_decoder_variants.py",
+   "sha256": "9328f356f8884ac111c73a0f27f2240244b5f2a2ce3b1064de043849e8ec2956"
+  },
+  {
+   "path": "train_act.py",
+   "sha256": "76eaa6900e057ca53ed168be00820bc351c0e2bb14477089a634135ce95faf34"
+  },
+  {
+   "path": "train_no_wrist_pair.py",
+   "sha256": "ba9d07fa5c3a69ca2deb344b43dcd6788ef4f0a5c15cb77086e54aef33a99b20"
+  },
+  {
+   "path": "train_pair_dataparallel.py",
+   "sha256": "b9a8415097d6ad31c0ed011270945d127eec0b7d1503ef68de8b73daf76fb074"
+  },
+  {
+   "path": "train_pair_route_from_scratch_dp.py",
+   "sha256": "a05df6ad91dc476d9ec831cf8382eb3b4019ed933ad24fd228378e8d6f6b521e"
+  },
+  {
+   "path": "train_pair_route_single_b40_120k.py",
+   "sha256": "b906f7f684a2e041dfebcf375c7653e293a9d0615970788ecfefee2aeae26b1b"
+  },
+  {
+   "path": "train_pair_route_spec_cap_single_b40_120k.py",
+   "sha256": "bb38dbac9a263c38175e0944c2b93881b61a37f3422aefd9928c52f6d38d9c1f"
+  },
+  {
+   "path": "train_stereo_act.py",
+   "sha256": "b30801772730a4bc06de660137b6fe66a08ac2435babba30cb6ca288a3eb4aac"
+  },
+  {
+   "path": "train_stereo_variants.py",
+   "sha256": "d125acb439ab543873af884c96e7ba013ac0b279e9290996867d5c02e9529948"
+  },
+  {
+   "path": "two_three_task_manifest.py",
+   "sha256": "752309949b4a31061babc06aac387ac0fa605f0859660cb784b09cd3988907fb"
+  },
+  {
+   "path": "wrist_camera_patch.py",
+   "sha256": "48c11446af25dff03899e4b99a989d96adba20667c1873cc57b434baa61597bb"
+  },
+  {
+   "path": "LICENSE",
+   "sha256": "19e67a9e6c8954565bcb686542cc866420be912337a29d8945809966a831293f"
   }
+ ],
+ "r9_local_changes": {
+  "allowed": [
+   "stereo_core/bwa_contracts.py",
+   "stereo_core/no_wrist_pair_model.py",
+   "stereo_core/evaluate_no_wrist_pair.py",
+   "stereo_core/five_task_contract.py",
+   "package-compatible import fallbacks"
+  ],
+  "invariant": "no parent parameter/persistent-buffer/state-dict semantic changes"
+ }
 }

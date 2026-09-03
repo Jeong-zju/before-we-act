@@ -20,7 +20,7 @@ Every transform reads only the nominal chunk, the acting robot's current joint
 pose, and its current gripper command.  No teammate state, no privileged
 simulator state, and no benchmark-specific dimension: the layout is
 ``[joint_0 .. joint_{d-2}, gripper]``, so ``joints = action_dim - 1`` covers
-RoboFactory and MARS (8) as well as BiCoord (7).
+RoboFactory and MARS (8) as well as any other arm with a trailing gripper.
 """
 from __future__ import annotations
 

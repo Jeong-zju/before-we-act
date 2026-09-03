@@ -30,6 +30,19 @@ from before_we_act.temporal_history_data import ACTION_HORIZON, HISTORY_STEPS, t
 from before_we_act.temporal_history_policy import TemporalHistoryPolicy
 
 
+ACTION_CONTEXT_CACHE_VERSION = "before-we-act.mars-action-context-cache/2"
+DECODED_DTYPE = np.dtype(np.float32)
+BASE_ACTION_DTYPE = np.dtype(np.float16)
+
+
+def require_finite(name: str, value: np.ndarray) -> None:
+    finite = np.isfinite(value)
+    if not bool(finite.all()):
+        raise FloatingPointError(
+            f"non-finite {name}: {int((~finite).sum())}/{value.size} values"
+        )
+
+
 def atomic_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary=path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -137,10 +150,19 @@ def main() -> None:
         directory=args.output/episode.task; decoded_path=directory/f"{episode.cache_key}.decoded.npy"
         base_path=directory/f"{episode.cache_key}.base_action.npy"; marker=directory/f"{episode.cache_key}.complete.json"
         if marker.is_file() and decoded_path.is_file() and base_path.is_file():
-            completed+=1; samples+=episode.length*len(episode.arms); continue
+            cached_marker=json.loads(marker.read_text())
+            if (cached_marker.get("status")=="PASSED"
+                    and cached_marker.get("decoded_dtype")==DECODED_DTYPE.name
+                    and cached_marker.get("base_action_dtype")==BASE_ACTION_DTYPE.name
+                    and cached_marker.get("all_finite") is True):
+                completed+=1; samples+=episode.length*len(episode.arms); continue
         shape=(episode.length,len(episode.arms),ACTION_HORIZON,384)
-        decoded=np.empty(shape,dtype=np.float16)
-        base=np.empty((episode.length,len(episode.arms),ACTION_HORIZON,8),dtype=np.float16)
+        # B0-H hidden activations are not normalized model inputs and may
+        # legitimately exceed float16's finite range late in formal training.
+        # Keeping this cache in float32 preserves the exact finite activation
+        # instead of silently converting it to +/-Inf before B-core sees it.
+        decoded=np.empty(shape,dtype=DECODED_DTYPE)
+        base=np.empty((episode.length,len(episode.arms),ACTION_HORIZON,8),dtype=BASE_ACTION_DTYPE)
         rows=[(t,arm) for t in range(episode.length) for arm in episode.arms]
         with h5py.File(episode.path,"r") as handle:
             for first in range(0,len(rows),args.batch_size):
@@ -151,12 +173,20 @@ def main() -> None:
                     prediction=model.out(context.decoded)
                     history=context.history_summary[:,None].expand(-1,ACTION_HORIZON,-1)
                     prediction=prediction+model.hidden_residual(torch.cat((context.decoded,history),-1))
+                decoded_batch=context.decoded.float().cpu().numpy()
+                prediction_batch=prediction.float().cpu().numpy()
+                require_finite("decoded action context",decoded_batch)
+                require_finite("base action prediction",prediction_batch)
                 for local_row,(t,arm) in enumerate(selected):
-                    decoded[t,arm]=context.decoded[local_row].float().cpu().numpy().astype(np.float16)
-                    base[t,arm]=prediction[local_row].float().cpu().numpy().astype(np.float16)
+                    decoded[t,arm]=decoded_batch[local_row]
+                    base[t,arm]=prediction_batch[local_row].astype(BASE_ACTION_DTYPE)
+        require_finite("episode decoded action context",decoded)
+        require_finite("episode base action prediction",base)
         atomic_npy(decoded_path,decoded); atomic_npy(base_path,base)
         atomic_json(marker,{"status":"PASSED","cache_key":episode.cache_key,"task":episode.task,
-            "samples":episode.length*len(episode.arms),"b0h_checkpoint_sha256":checkpoint_sha})
+            "samples":episode.length*len(episode.arms),"b0h_checkpoint_sha256":checkpoint_sha,
+            "decoded_dtype":DECODED_DTYPE.name,"base_action_dtype":BASE_ACTION_DTYPE.name,
+            "all_finite":True})
         completed+=1; samples+=episode.length*len(episode.arms)
         if ordinal==1 or ordinal%5==0:
             print(json.dumps({"rank":rank,"episodes":completed,"assigned":len(episodes[rank::world]),
@@ -192,18 +222,29 @@ def main() -> None:
                         or value.get("action_contract_sha256")!=action_contract_hash()): break
                 receipts.append(value)
             markers=list(args.output.glob("*/*.complete.json"))
-            if len(receipts)==world and len(markers)==len(episodes):
-                total=sum(int(json.loads(p.read_text())["samples"]) for p in markers)
+            marker_values=[]
+            for path in markers:
+                try: marker_values.append(json.loads(path.read_text()))
+                except (OSError,json.JSONDecodeError): marker_values=[]; break
+            markers_valid=(len(marker_values)==len(episodes) and all(
+                value.get("status")=="PASSED"
+                and value.get("decoded_dtype")==DECODED_DTYPE.name
+                and value.get("base_action_dtype")==BASE_ACTION_DTYPE.name
+                and value.get("all_finite") is True
+                for value in marker_values))
+            if len(receipts)==world and markers_valid:
+                total=sum(int(value["samples"]) for value in marker_values)
                 if total==expected: break
             if time.time()>=deadline:
                 raise RuntimeError(f"action cache coordinator timeout: receipts={len(receipts)}/{world}, markers={len(markers)}/{len(episodes)}")
             time.sleep(5)
         total=expected
         atomic_json(args.output/"cache_receipt.json",{
-            "format_version":"before-we-act.mars-action-context-cache/1","status":"PASSED",
+            "format_version":ACTION_CONTEXT_CACHE_VERSION,"status":"PASSED",
             "created_at_utc":datetime.now(timezone.utc).isoformat(),"episodes":len(episodes),"samples":total,
             "decoded_shape_per_sample":[ACTION_HORIZON,384],"base_action_shape_per_sample":[ACTION_HORIZON,8],
-            "dtype":"float16","action_encoding":"absolute_pd_joint_pos",
+            "decoded_dtype":DECODED_DTYPE.name,"base_action_dtype":BASE_ACTION_DTYPE.name,
+            "all_finite":True,"action_encoding":"absolute_pd_joint_pos",
             "action_contract_version":ACTION_CONTRACT_VERSION,
             "action_contract_sha256":action_contract_hash(),
             "b0h_checkpoint":str(args.temporal_checkpoint.resolve()),"b0h_checkpoint_sha256":checkpoint_sha,

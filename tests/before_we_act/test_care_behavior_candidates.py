@@ -21,9 +21,9 @@ from before_we_act.care_behavior_candidates import (
 
 
 ROBOFACTORY = BehaviorCandidateConfig(action_horizon=100, action_dim=8)
-BICOORD = BehaviorCandidateConfig(action_horizon=100, action_dim=7)
-CONFIGS = [ROBOFACTORY, BICOORD]
-IDS = ["robofactory_mars_8d", "bicoord_7d"]
+SEVEN_DOF = BehaviorCandidateConfig(action_horizon=100, action_dim=7)
+CONFIGS = [ROBOFACTORY, SEVEN_DOF]
+IDS = ["robofactory_mars_8d", "generic_7d"]
 
 
 def _reference(config: BehaviorCandidateConfig, *, rate: float = 0.01) -> np.ndarray:

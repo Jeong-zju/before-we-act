@@ -14,7 +14,7 @@ uv sync
 
 ```bash
 uv run pytest
-uv run python scripts/train_action_prior.py --help
+uv run python -m before_we_act.evaluate_mars_care_closed_loop --help
 ```
 
 不要在 `.venv` 中直接执行 `pip install`。新增运行依赖使用 `uv add <package>`，新增测试或开发依赖使用 `uv add --dev <package>`，并提交更新后的 `pyproject.toml` 与 `uv.lock`。

@@ -30,14 +30,19 @@ from before_we_act.team_belief.predictive_core import FUTURE_OFFSETS_STEPS
 
 TEAMMATE_ACTION_HORIZON=16
 SAMPLES_PER_TASK=EFFECTIVE_BATCH//len(MARS_TASKS)
+ACTION_CONTEXT_CACHE_VERSION="before-we-act.mars-action-context-cache/2"
 
 
 class MarsActionContextCache:
     def __init__(self,root: str|Path,stats: Mapping,limit: int=4):
         self.root=Path(root); self.limit=limit
         receipt=json.loads((self.root/"cache_receipt.json").read_text())
-        if receipt.get("format_version")!="before-we-act.mars-action-context-cache/1" or receipt.get("status")!="PASSED":
+        if receipt.get("format_version")!=ACTION_CONTEXT_CACHE_VERSION or receipt.get("status")!="PASSED":
             raise ValueError("MARS action-context cache is incomplete")
+        if (receipt.get("decoded_dtype")!="float32"
+                or receipt.get("base_action_dtype")!="float16"
+                or receipt.get("all_finite") is not True):
+            raise ValueError("MARS action-context cache lacks the finite FP32 hidden-state contract")
         if receipt.get("action_contract_sha256")!=action_contract_hash():
             raise ValueError("MARS action-context cache action contract differs")
         if receipt.get("normalization_semantic_sha256")!=normalization_stats_hash(stats):
@@ -57,8 +62,8 @@ class MarsActionContextCache:
         expected=(episode.length,len(episode.arms),ACTION_HORIZON)
         if decoded.shape!=(*expected,384) or base.shape!=(*expected,8):
             raise ValueError(f"MARS action context shape drift: {key}")
-        if decoded.dtype!=np.float16 or base.dtype!=np.float16:
-            raise ValueError("MARS action context must be float16")
+        if decoded.dtype!=np.float32 or base.dtype!=np.float16:
+            raise ValueError("MARS action context must use float32 hidden state and float16 base action")
         self.values[key]=(decoded,base)
         while len(self.values)>self.limit: self.values.popitem(last=False)
         return decoded,base
@@ -154,13 +159,16 @@ class MarsTeamBeliefDataset(Dataset):
         action_mask=torch.zeros(ACTION_HORIZON,dtype=torch.bool); action_mask[:len(source)]=True
         decoded,base=self.context.load(episode)
         phase=float(t/max(episode.length-1,1))
+        decoded_action_hidden=torch.from_numpy(np.array(decoded[t,ego],dtype=np.float32,copy=True))
+        base_action=torch.from_numpy(np.array(base[t,ego],dtype=np.float32,copy=True))
+        if not torch.isfinite(decoded_action_hidden).all() or not torch.isfinite(base_action).all():
+            raise FloatingPointError(f"non-finite cached action context: {episode.cache_key}:{ego}:{t}")
         return {
             "runtime_visual_tokens":runtime,"runtime_visual_mask":hmask[:,None,None].expand(-1,2,1).clone(),
             "history_qpos":qhist,"history_action":ahist,"history_mask":hmask,
             "action_history_mask":amask,"episode_reset_mask":reset,
             "task_token":self.context.task_tokens[f"{episode.task}:{ego}"].clone(),
-            "decoded_action_hidden":torch.from_numpy(np.array(decoded[t,ego],dtype=np.float32,copy=True)),
-            "base_action":torch.from_numpy(np.array(base[t,ego],dtype=np.float32,copy=True)),
+            "decoded_action_hidden":decoded_action_hidden,"base_action":base_action,
             "teacher_current_visual_tokens":current,"teacher_current_visual_mask":current_mask,
             "teacher_future_visual_tokens":future,"teacher_future_visual_mask":future_mask,
             "teacher_future_anchor_mask":anchor_mask,"teacher_agent_state":agent_state,

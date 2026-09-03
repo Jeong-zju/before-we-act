@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT="${BWA_CARE_REPO_ROOT:-/workspace/fe-pc-wam}"
+ROOT="${BWA_CARE_REPO_ROOT:-/workspace/repos/before-we-act}"
 RUN_ROOT="${BWA_CARE_RUN_ROOT:-/workspace/bwa_runs/care-robofactory-reproduction}"
 PYTHON="${BWA_CARE_PYTHON:-/venv/robofactory-act/bin/python}"
 ROBOFACTORY_ROOT="${BWA_ROBOFACTORY_ROOT:-/workspace/RoboFactory}"

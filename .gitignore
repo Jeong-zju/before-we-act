@@ -12,14 +12,14 @@ __pycache__/
 .uv-cache/
 .uv-python/
 
-# Reproducible evaluation and diagnostic outputs
+# Run outputs
 /outputs
 /logs
 /checkpoints
 wandb/
 runs/
 
-# data
+# Data
 /datasets
 *.hdf5
 *.h5
@@ -34,25 +34,9 @@ backups/
 /archive/
 /artifacts
 
-# refs
+# Local reference material
 refs/
 
-# Documentation remains local to the paper-writing workspace.
-/docs/
-
-docs/experiments/
-
-# Local CARE branch/pilot evidence is archived outside the tracked workflow.
-docs/archive/contracts/care-history/**
-!docs/archive/contracts/care-history/
-!docs/archive/contracts/care-history/README.md
-
-# Superseded CARE contract generations are archived outside the active workflow.
-docs/plans/contracts/care/a4*/
-docs/plans/contracts/care/a5*/
-docs/plans/contracts/care/a6r1/
-docs/plans/contracts/b_core/
-
-# Generated CARE collection logs and branch arrays are not source artifacts.
-docs/plans/contracts/care/**/*.log
-docs/plans/contracts/care/**/*.npz
+# Local working notes stay untracked; docs/reproducibility is tracked.
+/docs/*
+!/docs/reproducibility/
