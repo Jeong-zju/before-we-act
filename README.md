@@ -34,9 +34,6 @@ uv run python -m pytest tests   # 全部测试应通过
 - `scripts/before_we_act/` — 两条封存流水线（supervisor conf + shell 入口）
   及其数据准备 / 选择 / 校准 / 汇总脚本。
 - `deployment/mars_care/` — MARS-Control 官方专家数据采集与本地部署工具。
-- `stereo_core/` + `vendor/stereo-core/` — 上游 Stereo-CoRE（MIT）的适配
-  子树与原始 checkout；`scripts/before_we_act/validate_upstream_core.py`
-  按 `UPSTREAM_CORE_MANIFEST.json` 校验其完整性。
 - `configs/` — 各流程的冻结配置（含 sha 与版本钉定）。
 - `docs/reproducibility/` — 封存结果的复现记录（CARE 与各基线）。
 
@@ -51,5 +48,5 @@ sha256 为准；下载后可直接进入对应文档的评测阶段，无需重�
 uv run python -m pytest tests
 ```
 
-测试覆盖动作契约、缓存契约、冻结配置、监督器入口与核心模型的位精确
-前向。任何配置漂移都会在测试或各流水线的前置校验中报错。
+测试覆盖动作契约、缓存契约、冻结配置、监督器入口与核心模型前向的
+确定性。任何配置漂移都会在测试或各流水线的前置校验中报错。

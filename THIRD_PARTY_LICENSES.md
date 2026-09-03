@@ -1,3 +1,10 @@
+# Third-party licenses
+
+Portions of the perception and reference-policy implementation in
+`before_we_act/` derive from an MIT-licensed upstream project. As required
+by the MIT license, its notice is reproduced below.
+
+```
 MIT License
 
 Copyright (c) 2025 MARS-EAI
@@ -19,3 +26,4 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```

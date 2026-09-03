@@ -14,7 +14,7 @@ manifest=${run}/contract/care_family_manifest.json
 status=${run}/pipeline_status.json
 logs=${run}/logs/formal
 
-export PYTHONPATH=${repo}/stereo_core:${repo}${PYTHONPATH:+:${PYTHONPATH}}
+export PYTHONPATH=${repo}${PYTHONPATH:+:${PYTHONPATH}}
 mkdir -p "${logs}"
 cd "${repo}"
 

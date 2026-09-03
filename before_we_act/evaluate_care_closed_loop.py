@@ -12,7 +12,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import torch
 
-from two_three_task_manifest import TASKS, get_task
+from before_we_act.task_manifest import TASKS, get_task
 
 from before_we_act.care_belief import (
     CAREBeliefConfig,

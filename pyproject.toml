@@ -18,7 +18,6 @@ dependencies = [
     "safetensors>=0.8.0",
     "torch>=2.11.0",
     "transformers==5.12.1",
-    "zarr>=3.1.6",
 ]
 
 [dependency-groups]

@@ -9,7 +9,7 @@ checkpoint=${MARS_CARE_BELIEF_CHECKPOINT:-${run}/belief_smoke/deployment_checkpo
 output=${run}/care_branch_smoke/families
 logs=${run}/care_branch_smoke/logs
 robofactory=/workspace/repos/RoboFactory
-export PYTHONPATH=${repo}/stereo_core:${repo}${PYTHONPATH:+:${PYTHONPATH}}
+export PYTHONPATH=${repo}${PYTHONPATH:+:${PYTHONPATH}}
 
 mkdir -p "${output}" "${logs}"
 cd "${repo}"

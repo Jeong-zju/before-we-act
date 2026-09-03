@@ -1,4 +1,1 @@
-# Preserve byte-identical verified S10 reproduction sources.
-vendor/stereo-core/deployment/bootstrap_download_env.sh whitespace=-blank-at-eof
-vendor/stereo-core/deployment/download_user_dataset.sh whitespace=-blank-at-eof
-vendor/stereo-core/stereo_core/no_wrist_pair_model.py whitespace=-blank-at-eof
+* text=auto

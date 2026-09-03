@@ -13,7 +13,7 @@ import numpy as np
 import torch
 
 import robofactory  # noqa: F401
-from two_three_task_manifest import TASKS, get_task
+from before_we_act.task_manifest import TASKS, get_task
 
 from before_we_act.temporal_history_policy import TemporalHistoryPolicy
 from before_we_act.temporal_history_data import (

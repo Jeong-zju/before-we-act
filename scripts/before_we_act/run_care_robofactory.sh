@@ -19,7 +19,7 @@ SEED_ROOT="${RUN_ROOT}/tests/seeds"
 TEST_ROOT="${RUN_ROOT}/tests"
 SUMMARY="${TEST_ROOT}/summary.json"
 
-export PYTHONPATH="${ROOT}:${ROOT}/vendor/stereo-core/stereo_core:${ROBOFACTORY_ROOT}:${PYTHONPATH:-}"
+export PYTHONPATH="${ROOT}:${ROBOFACTORY_ROOT}:${PYTHONPATH:-}"
 cd "${ROOT}"
 mkdir -p "${RUN_ROOT}/logs" "${RUN_ROOT}/data" "${TRAIN_ROOT}" "${OFFLINE_ROOT}" "${TEST_ROOT}"
 "${PYTHON}" scripts/before_we_act/verify_frozen_settings.py \

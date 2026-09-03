@@ -1,9 +1,9 @@
 """Project-local temporal action backbone with the frozen B0-H computation graph.
 
-This module deliberately has no runtime dependency on Stereo-CoRE.  Its tensor
-operations and public parameter names preserve the already evaluated B0-H/N2
-signal flow so historical checkpoints remain loadable without changing the
-belief residual or the action distribution represented by the model.
+This module is self-contained.  Its tensor operations and public parameter
+names preserve the already evaluated B0-H signal flow so existing checkpoints
+remain loadable without changing the belief residual or the action
+distribution represented by the model.
 """
 from __future__ import annotations
 

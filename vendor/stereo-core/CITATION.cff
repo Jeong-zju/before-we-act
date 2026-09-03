@@ -1,8 +1,0 @@
-cff-version: 1.2.0
-message: Please cite the Stereo-CoRE paper.
-title: Stereo-CoRE
-type: software
-authors:
-  - family-names: Zhou
-repository-code: https://github.com/YananZHOU5555/Stereo-CoRE
-license: MIT

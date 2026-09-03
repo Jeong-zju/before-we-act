@@ -10,7 +10,7 @@ dino=/workspace/artifacts/dinov3-vitb16-pretrain-lvd1689m
 status=${run}/pipeline_status.json
 mkdir -p "${run}/logs"
 cd "${repo}"
-export PYTHONPATH=${repo}:${repo}/stereo_core${PYTHONPATH:+:${PYTHONPATH}}
+export PYTHONPATH=${repo}${PYTHONPATH:+:${PYTHONPATH}}
 export HF_HOME=/workspace/.hf_home TOKENIZERS_PARALLELISM=false WANDB_MODE=disabled
 
 set_status() {

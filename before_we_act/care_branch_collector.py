@@ -22,7 +22,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-from two_three_task_manifest import get_task
+from before_we_act.task_manifest import get_task
 
 from before_we_act.deployment_safety import (
     DeploymentProgressWatchdog,

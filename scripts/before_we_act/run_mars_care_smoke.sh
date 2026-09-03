@@ -12,7 +12,7 @@ cache=${MARS_VISUAL_CACHE:-/workspace/runs/care_dino_mars/dino_cache}
 manifest=${run}/contract/care_family_manifest.json
 logs=${run}/logs/smoke
 
-export PYTHONPATH=${repo}:${repo}/stereo_core${PYTHONPATH:+:${PYTHONPATH}}
+export PYTHONPATH=${repo}${PYTHONPATH:+:${PYTHONPATH}}
 mkdir -p "${run}/contract" "${logs}"
 cd "${repo}"
 
