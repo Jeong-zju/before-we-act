@@ -468,7 +468,9 @@ class Settings:
 
     @property
     def data(self) -> Path:
-        return self.run / "prepared_data"
+        # Keep the native DAG aligned with care_launch.build_pipeline and the
+        # standalone host-preflight contract.
+        return self.run / "prepared"
 
     @property
     def cache(self) -> Path:
@@ -881,9 +883,21 @@ class Pipeline:
             receipt.get("schema") != "before-we-act.duobench.dataset-download/1"
             or receipt.get("status") != "PASSED"
             or receipt.get("revision") != "b741bc915d942ecadaefb4e3de6bbd716c1b8b1b"
+            or receipt.get("resolved_revision") != "b741bc915d942ecadaefb4e3de6bbd716c1b8b1b"
             or receipt.get("credential_recorded") is not False
+            or not isinstance(receipt.get("tree_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", receipt["tree_sha256"]) is None
+            or isinstance(receipt.get("snapshot_files"), bool)
+            or not isinstance(receipt.get("snapshot_files"), int)
+            or receipt["snapshot_files"] <= 0
+            or isinstance(receipt.get("snapshot_bytes"), bool)
+            or not isinstance(receipt.get("snapshot_bytes"), int)
+            or receipt["snapshot_bytes"] <= 0
         ):
             raise InvalidArtifact("dataset download receipt is invalid")
+        local_receipt = self.s.dataset / "dataset_download_receipt.json"
+        if not local_receipt.is_file() or _sha256(local_receipt) != _sha256(receipt_path):
+            raise InvalidArtifact("run and dataset download receipts differ")
         details = {}
         for task in TASKS:
             root = self.s.dataset / task / "sim"
@@ -2218,38 +2232,11 @@ class Pipeline:
                 str(self.s.dataset),
                 "--revision",
                 "b741bc915d942ecadaefb4e3de6bbd716c1b8b1b",
+                "--run",
+                str(self.s.run),
             ],
             (0,),
             retries=3,
-        )
-        # Freeze a small local receipt after snapshot_download completes.  It
-        # contains paths/counts only; no credential or raw command environment.
-        rows: dict[str, Any] = {}
-        for task in TASKS:
-            root = self.s.dataset / task / "sim"
-            parquet = sorted((root / "data").glob("**/*.parquet"))
-            videos = {
-                key: sorted((root / "videos" / key).glob("**/*.mp4"))
-                for key in (
-                    "observation.images.head",
-                    "observation.images.left_wrist",
-                    "observation.images.right_wrist",
-                )
-            }
-            rows[task] = {
-                "parquet": str(parquet[0]) if len(parquet) == 1 else None,
-                "video_counts": {key: len(value) for key, value in videos.items()},
-            }
-        _atomic_json(
-            self.s.run / "dataset_download_receipt.json",
-            {
-                "schema": "before-we-act.duobench.dataset-download/1",
-                "status": "PASSED",
-                "revision": "b741bc915d942ecadaefb4e3de6bbd716c1b8b1b",
-                "tasks": rows,
-                "credential_recorded": False,
-                "completed_at_utc": _utc_now(),
-            },
         )
 
     def action_data_audit(self) -> None:
@@ -2389,8 +2376,16 @@ class Pipeline:
             str(updates if stage == "smoke" else 5000),
             "--seed",
             "20260830",
+            # Uniform, matching RoboFactory, MARS and BiCoord, none of which
+            # weight the action loss along the chunk.  A decay of 16 supervised
+            # position t by exp(-t/16), so the tail of a 100-step chunk was
+            # almost unsupervised -- measured at 6.8x the head's error -- while
+            # the deployed ensembler weights by exp(-0.01*age) and draws 51% of
+            # every executed action from positions trained below a tenth of the
+            # first step's weight.  The logged action_loss is that same weighted
+            # mean, so the gap never showed up during training.
             "--action-loss-decay",
-            "16",
+            "0",
             "--gripper-loss-weight",
             "0.20",
             "--gripper-logit-scale",

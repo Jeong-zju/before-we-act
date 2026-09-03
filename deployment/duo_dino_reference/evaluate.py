@@ -207,6 +207,41 @@ def run_episode(
     }
 
 
+def require_matched_chunk_weighting(
+    action_loss_decay: float, ensemble_decay: float, *, tolerance: float = 2.0
+) -> None:
+    """Refuse to score a policy through an ensembler its training disagrees with.
+
+    Training weights chunk position ``t`` by ``exp(-t / action_loss_decay)``;
+    the deployed ensembler weights a chunk read at offset ``age`` by
+    ``exp(-ensemble_decay * age)``. The two curves therefore have scales
+    ``action_loss_decay`` and ``1 / ensemble_decay``, and when they disagree the
+    executed action is drawn largely from positions training barely supervised.
+
+    A run at scale 16 against an ensembler at scale 100 produced 1.36% success
+    while its logged action loss -- the same weighted mean -- looked healthy, so
+    nothing surfaced the mismatch until a closed-loop sweep had been paid for.
+    A decay of zero is uniform supervision and constrains nothing.
+    """
+
+    decay = float(action_loss_decay or 0.0)
+    if decay <= 0.0:
+        return
+    if ensemble_decay <= 0.0:
+        raise ValueError("ensemble decay must be positive to compare weightings")
+    ensemble_scale = 1.0 / float(ensemble_decay)
+    ratio = max(decay, ensemble_scale) / min(decay, ensemble_scale)
+    if ratio > tolerance:
+        raise ValueError(
+            "training and evaluation weight the action chunk on different "
+            f"scales: training exp(-t/{decay:g}) against ensembling "
+            f"exp(-age/{ensemble_scale:g}), a factor of {ratio:.1f}. The "
+            "executed action would come mostly from chunk positions training "
+            "barely supervised. Retrain with --action-loss-decay 0, or set "
+            f"--ensemble-decay {1.0 / decay:g} to match."
+        )
+
+
 def evaluate_task(
     checkpoint: Path,
     prepared_data: Path,
@@ -225,6 +260,9 @@ def evaluate_task(
         raise ValueError(task)
     manifest = load_manifest(prepared_data, require_formal=True)
     saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    require_matched_chunk_weighting(
+        saved.get("config", {}).get("action_loss_decay", 0.0), ensemble_decay
+    )
     runtime = DuoB0HRuntime.from_checkpoint(
         checkpoint,
         device=torch.device(device),
